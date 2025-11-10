@@ -1,3 +1,20 @@
+// ==============================================================================
+// TELA DE EDIÇÃO DE PERFIL
+// ==============================================================================
+// Função: Editar informações do perfil do usuário logado
+// 
+// Funcionalidades:
+// - Formulário pré-preenchido com dados atuais do usuário
+// - Campos editáveis: nome, email, telefone, foto de perfil
+// - Atualização via API (/api/bff/users/{userId}) com método PUT
+// - Validações de campos (email válido, telefone, etc.)
+// - Confirmação antes de salvar alterações
+// - Opção de cancelar edição
+// - Atualização do Provider (HomePageData) após edição bem-sucedida
+// - SnackBars para feedback de sucesso/erro
+// - Navegação de volta para tela principal após salvar
+// ==============================================================================
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'telaHomePage.dart'; // HomePageData
