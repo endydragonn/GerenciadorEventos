@@ -32,7 +32,9 @@ docker compose ps
 ```
 
 **Serviços disponíveis:**
+
 - `db` - PostgreSQL 16 (porta 5433)
+  
 - `backend` - API Spring Boot (porta 8081)
 
 ### Parar o Ambiente
@@ -66,12 +68,14 @@ docker compose up -d --build
 ```
 
 **O que este script faz:**
+
 - ✅ Executa todos os testes dentro do Docker
 - ✅ Não baixa dependências na sua máquina
 - ✅ Exibe resultados formatados com estatísticas
 - ✅ Mostra tempo de execução
 
 **Saída esperada:**
+
 ```
 ==================================================
    🧪 EXECUTANDO TESTES NO DOCKER
@@ -107,7 +111,7 @@ docker run --rm --network gerenciador-net --env-file .env \
   mvn -q -Dtest=UserTest test
 ```
 
-  ### Exportar resultado dos testes (arquivo texto)
+### Exportar resultado dos testes (arquivo texto)
 
   ```bash
   # Executa os testes no Docker e gera um arquivo formatado (tests-report-<timestamp>.txt)
@@ -121,9 +125,10 @@ docker run --rm --network gerenciador-net --env-file .env \
   ```
 
   O relatório contém:
-  - Listagem por classe com tempo e status
-  - Resumo total (testes, sucesso, tempo total)
-  - Caminho para relatórios completos do Surefire
+
+- Listagem por classe com tempo e status
+- Resumo total (testes, sucesso, tempo total)
+- Caminho para relatórios completos do Surefire
 
 ---
 
@@ -166,6 +171,7 @@ docker compose exec -T db psql -U admin -d meu_banco < db/seed-data.sql
 ```
 
 **O seed (db/seed-data.sql) faz:**
+
 - ✅ Insere 5 usuários
 - ✅ Insere 5 eventos (presenciais e EAD)
 - ✅ Cria carteiras automaticamente (via trigger)
@@ -174,6 +180,7 @@ docker compose exec -T db psql -U admin -d meu_banco < db/seed-data.sql
 - ✅ Exibe resumo com total de registros
 
 **Usuários criados:**
+
 - João Silva (criador de eventos)
 - Maria Santos
 - Pedro Oliveira
@@ -181,6 +188,7 @@ docker compose exec -T db psql -U admin -d meu_banco < db/seed-data.sql
 - Carlos Souza (admin)
 
 **Eventos criados:**
+
 - Workshop de Java (presencial, 100 vagas)
 - Conferência de DevOps (presencial, 200 vagas)
 - Hackathon 2025 (presencial, 50 vagas)
@@ -230,6 +238,7 @@ docker compose logs --tail=50 db
 **Problema:** `Connection refused` ou timeout
 
 **Solução:**
+
 ```bash
 # 1. Verificar se o banco está rodando
 docker compose ps
@@ -251,6 +260,7 @@ sleep 15
 **Causa:** Scripts de inicialização não foram executados
 
 **Solução:**
+
 ```bash
 # Recriar banco completamente
 docker compose down -v
@@ -264,6 +274,7 @@ sleep 15
 **Problema:** `port is already allocated`
 
 **Solução:**
+
 ```bash
 # Encontrar processo usando a porta
 sudo lsof -i :5433  # ou :8081
@@ -353,6 +364,7 @@ Se os problemas persistirem:
 4. Tente um reset completo (seção "Resetar Ambiente")
 
 **Estrutura esperada do .env:**
+
 ```env
 SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/meu_banco
 SPRING_DATASOURCE_USERNAME=admin
