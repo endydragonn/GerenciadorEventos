@@ -39,7 +39,8 @@ public class SecurityConfig {
                     "/bff/users/login",
                     "/bff/users", // permitir criação
                     "/bff/events/search",
-                    "/actuator/health"
+                    "/actuator/health",
+                    "/api/seed" // endpoint de seed público
                 ).permitAll()
                 .anyRequest().authenticated()
             )
