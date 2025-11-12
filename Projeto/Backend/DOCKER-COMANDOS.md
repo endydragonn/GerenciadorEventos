@@ -4,16 +4,25 @@ Este guia contém todos os comandos necessários para trabalhar com o projeto us
 
 ---
 
-## � Início Rápido (3 passos)
+## 🚀 Início Rápido (4 passos)
 
-```bash
-# 1. Subir os containers
-docker compose up -d
+```powershell
+# 1. Subir os containers (banco + backend)
+docker compose up -d --build
 
-# 2. Rodar os testes
-./run-tests.sh
+# 2. Aguardar inicialização (15 segundos)
+Start-Sleep -Seconds 15
 
-# 3. Parar os containers
+# 3. Popular banco via API (senhas criptografadas)
+.\populate-data.ps1
+
+# 4. (Opcional) Exportar dados para arquivo
+wsl ./export-data.sh
+```
+
+**Para parar:**
+
+```powershell
 docker compose down
 ```
 
@@ -159,20 +168,67 @@ docker compose exec db psql -U admin -d meu_banco \
 
 ### Popular Banco com Dados de Exemplo
 
+#### ✅ Método Recomendado: Via API (PowerShell)
+
+**Vantagens:**
+
+- ✅ Senhas são **criptografadas automaticamente** via BCrypt
+- ✅ Passa pelas validações do backend (UserService, EventService)
+- ✅ Funciona nativamente no Windows PowerShell
+- ✅ Carteiras criadas automaticamente via trigger do banco
+
+```powershell
+# PowerShell (Windows) - popular via API
+.\populate-data.ps1
+```
+
+**O script faz:**
+
+- Cria 5 usuários com senhas criptografadas (BCrypt)
+- Cria 5 eventos (3 presenciais, 2 EAD)
+- Cria 6 inscrições em eventos
+- Exibe resumo detalhado com avisos e erros
+
+**Pré-requisitos:**
+
+- Backend rodando: `docker compose up -d`
+- Porta 8081 acessível
+
+---
+
+#### ⚠️ Método Alternativo: SQL Direto (sem criptografia)
+
+**Atenção:** Este método insere dados diretamente no banco **SEM** criptografar senhas. Use apenas para testes básicos de estrutura.
+
 ```bash
-# Opção 1 (Recomendado): Popular e já exportar para arquivo formatado
+# Opção 1 (Recomendado): Popular e já exportar para arquivo formatado (Unix / WSL / Git Bash)
 ./export-data.sh --populate
 
-# Opção 2: Apenas popular (sem exportar)
+# Opção 1 (PowerShell - via WSL ou Git Bash)
+# Use WSL (recomendado no Windows) ou Git Bash para executar o script sem alterações:
+wsl ./export-data.sh --populate
+# ou, se tiver Git Bash instalado
+bash ./export-data.sh --populate
+
+# Opção 2: Apenas popular (sem exportar) - Unix style
 docker compose exec -T db psql -U admin -d meu_banco < db/seed-data.sql
 
-# (Opcional) Exportar depois
+# Opção 2 (PowerShell nativo): pipe do arquivo para o psql dentro do container
+Get-Content db/seed-data.sql -Raw | docker compose exec -T db psql -U admin -d meu_banco
+
+# (Opcional) Exportar depois (o script gera um arquivo com timestamp)
 ./export-data.sh
+
+# Exportar em PowerShell (se preferir abrir o arquivo no Windows):
+# - usando WSL/Git Bash (gera o arquivo no diretório do projeto)
+wsl ./export-data.sh
+# - ou executar o script via Git Bash
+bash ./export-data.sh
 ```
 
 **O seed (db/seed-data.sql) faz:**
 
-- ✅ Insere 5 usuários
+- ✅ Insere 5 usuários (⚠️ **senhas em texto plano**)
 - ✅ Insere 5 eventos (presenciais e EAD)
 - ✅ Cria carteiras automaticamente (via trigger)
 - ✅ Insere 6 inscrições em eventos
@@ -194,6 +250,42 @@ docker compose exec -T db psql -U admin -d meu_banco < db/seed-data.sql
 - Hackathon 2025 (presencial, 50 vagas)
 - Meetup de Spring Boot (EAD, 500 vagas)
 - Curso de Docker (presencial, 30 vagas)
+
+### Exportar Dados do Banco para Arquivo
+
+O script `export-data.sh` gera um relatório completo do banco em formato texto, **incluindo as senhas criptografadas (hash BCrypt)**.
+
+```bash
+# Unix / WSL / Git Bash
+./export-data.sh
+
+# PowerShell (via WSL - recomendado)
+wsl ./export-data.sh
+
+# PowerShell (via Git Bash)
+bash ./export-data.sh
+```
+
+**O export inclui:**
+
+- 👥 Usuários (com **senha hash BCrypt completa**)
+- 🎫 Eventos
+- 💰 Carteiras
+- 📝 Inscrições
+- 📊 Estatísticas
+- 🏆 Eventos mais populares
+
+**Arquivo gerado:** `database-export-<timestamp>.txt`
+
+**Visualizar o arquivo:**
+
+```powershell
+# PowerShell - ver arquivo mais recente
+Get-Content (Get-ChildItem database-export-*.txt | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name
+
+# Abrir no VS Code
+code (Get-ChildItem database-export-*.txt | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name
+```
 
 ### Consultas Úteis
 
