@@ -8,7 +8,6 @@ Pense no sistema como um clube de eventos: o back-end é a administração nos b
 
 ## Sumário
 
-- [Introdução ao Projeto](#introdução-ao-projeto)
 - [Back-end](#back-end)
   - [Introdução ao Sistema](#introdução-ao-sistema)
   - [Classes de Dados (POJOs)](#classes-de-dados-pojos)
@@ -595,7 +594,7 @@ Se o banco for como uma casa, as tabelas são cômodos, funções são empregado
 
 ## Front-end
 
-# Documentação do Front-end do Aplicativo de Gerenciamento de Eventos
+# Front-end do Gerenciamento de Eventos
 
 Esta documentação explica o funcionamento da parte visível do aplicativo (chamada front-end), que é o que você vê e toca na tela do celular, tablet ou navegador. O app é feito com uma ferramenta chamada Flutter, que cria telas bonitas e fáceis de usar para gerenciar eventos como festas, palestras ou shows.
 
