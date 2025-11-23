@@ -40,7 +40,7 @@ Pense no sistema como um clube de eventos: o back-end é a administração nos b
 
 ## Back-end
 
-# Documentação Completa do Back-end do Sistema de Gerenciamento de Eventos
+# Documentação Back-end
 
 Esta documentação completa reúne todas as partes do back-end do sistema de gerenciamento de eventos, incluindo gerenciamento de usuários, eventos, carteiras de inscrições, segurança, configuração do banco de dados, inicialização, seeding de dados e setup com Docker. O sistema é construído em Java com Spring Boot, focando em uma API REST para gerenciar eventos como palestras, shows ou workshops.
 
@@ -594,7 +594,7 @@ Se o banco for como uma casa, as tabelas são cômodos, funções são empregado
 
 ## Front-end
 
-# Front-end do Gerenciamento de Eventos
+# Documentação  Front-end
 
 Esta documentação explica o funcionamento da parte visível do aplicativo (chamada front-end), que é o que você vê e toca na tela do celular, tablet ou navegador. O app é feito com uma ferramenta chamada Flutter, que cria telas bonitas e fáceis de usar para gerenciar eventos como festas, palestras ou shows.
 
