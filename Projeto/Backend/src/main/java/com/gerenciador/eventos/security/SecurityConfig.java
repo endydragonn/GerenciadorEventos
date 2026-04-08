@@ -42,7 +42,8 @@ public class SecurityConfig {
                     "/api/users/verify-email",
                     "/api/users/resend-verification-code",
                     "/bff/events/search",
-                    "/actuator/health"
+                    "/actuator/health",
+                    "/api/seed" // endpoint de seed público
                 ).permitAll()
                 .anyRequest().authenticated()
             )

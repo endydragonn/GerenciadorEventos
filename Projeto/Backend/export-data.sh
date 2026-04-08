@@ -95,10 +95,25 @@ COMPOSE_FILE="$SCRIPT_DIR/../docker-compose.yml"
                         fone as Telefone,
                         TO_CHAR(birthdate, 'DD/MM/YYYY') as Nascimento,
                         CASE WHEN admin THEN 'Sim' ELSE 'Não' END as Admin,
-                        CASE WHEN isactive THEN 'Ativo' ELSE 'Inativo' END as Status
+                        CASE WHEN isactive THEN 'Ativo' ELSE 'Inativo' END as Status,
+                        SUBSTRING(password, 1, 60) as \"Senha (hash BCrypt)\"
                 FROM users 
                 ORDER BY user_id;
         "
+    
+        echo ""
+        echo "🔐 ═══════════════ SENHAS DE EXEMPLO (seed) ═══════════════"
+        echo "AVISO: Senhas BCrypt são unidirecionais (não podem ser revertidas)"
+        echo "Senhas usadas no populate-data.ps1:"
+        echo ""
+        echo "  • joao.silva@email.com     → senha123"
+        echo "  • maria.santos@email.com   → senha456"
+        echo "  • pedro.oliveira@email.com → senha789"
+        echo "  • ana.costa@email.com      → senha321"
+        echo "  • carlos.souza@email.com   → admin123"
+        echo ""
+        echo "Nota: Estas senhas só são válidas se os dados foram populados"
+        echo "      via script populate-data.ps1"
     
         echo ""
         echo "🎫 ═══════════════════ EVENTOS ═══════════════════"
