@@ -31,6 +31,7 @@ public class MyWalletTest {
         User u = new User();
         u.setName("Wallet User");
         u.setEmail("wallet@example.com");
+        u.setFone("11900000000");
         u = userService.createUser(u);
         assertNotNull(u.getId());
 

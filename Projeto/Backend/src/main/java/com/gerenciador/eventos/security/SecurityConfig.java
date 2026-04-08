@@ -37,7 +37,10 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                     "/bff/users/login",
-                    "/bff/users", // permitir criação
+                    "/bff/users",
+                    "/api/users/request-verification",
+                    "/api/users/verify-email",
+                    "/api/users/resend-verification-code",
                     "/bff/events/search",
                     "/actuator/health"
                 ).permitAll()

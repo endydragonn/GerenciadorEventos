@@ -45,6 +45,7 @@ public class EventWalletTest {
         User u = new User();
         u.setName("Wallet Owner");
         u.setEmail("owner@example.com");
+        u.setFone("11911111111");
         u = userService.createUser(u);
         assertNotNull(u.getId());
         myWalletService.ensureExists(u.getId()); // idempotente

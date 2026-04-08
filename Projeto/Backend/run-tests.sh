@@ -8,9 +8,11 @@ echo "=================================================="
 echo ""
 
 # Rodar tudo dentro do Docker, copiando fonte para /tmp dentro do container
-docker run --rm --network gerenciador-net --env-file .env \
-  -v "$(pwd)":/workspace-src:ro \
-  -v "$(pwd)/target":/workspace-output \
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+docker run --rm --network gerenciador-net --env-file "$PROJECT_ROOT/.env" \
+  -v "$SCRIPT_DIR":/workspace-src:ro \
+  -v "$SCRIPT_DIR/target":/workspace-output \
   maven:3.9.7-eclipse-temurin-21-jammy \
   bash -c '
     # Copiar código fonte para /tmp dentro do container

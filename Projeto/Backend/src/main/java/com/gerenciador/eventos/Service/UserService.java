@@ -132,6 +132,9 @@ public class UserService {
         if (user.getEmail() == null || user.getEmail().trim().isEmpty()) {
             throw new IllegalArgumentException("Email não pode estar vazio");
         }
+        if (user.getFone() == null || user.getFone().trim().isEmpty()) {
+            throw new IllegalArgumentException("Telefone não pode estar vazio");
+        }
     }
 
     private void validateDuplicates(User user) {

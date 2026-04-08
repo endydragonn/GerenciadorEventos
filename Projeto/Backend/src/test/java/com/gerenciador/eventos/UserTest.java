@@ -54,6 +54,7 @@ public class UserTest {
         User objUser = new User();
         objUser.setName("John Doe");
         objUser.setEmail("john.doe@example.com");
+        objUser.setFone("11999999999");
         User savedUser = userService.createUser(objUser);
         assertNotNull(savedUser.getId());  // Verifica se foi gerado pelo banco
     }
@@ -112,6 +113,7 @@ public class UserTest {
         User objUser = new User();
         objUser.setName("John Doe");
         objUser.setEmail("john.doe@example.com");
+        objUser.setFone("11999999998");
         User savedUser = userService.createUser(objUser);
         assertNotNull(savedUser.getCreatedAt());  // Verifica se foi gerado pelo banco
     }
@@ -121,6 +123,7 @@ public class UserTest {
         User objUser = new User();
         objUser.setName("John Doe");
         objUser.setEmail("john.doe@example.com");
+        objUser.setFone("11999999997");
         User savedUser = userService.createUser(objUser);
         assertNotNull(savedUser.getUpdatedAt());  // Verifica se foi gerado pelo banco
     }
@@ -132,12 +135,14 @@ public class UserTest {
         User firstUser = new User();
         firstUser.setName("John Doe");
         firstUser.setEmail("john.doe@example.com");
+        firstUser.setFone("11988888888");
         userService.createUser(firstUser);
 
         // Tenta criar um segundo usuário com o mesmo nome e email
         User secondUser = new User();
         secondUser.setName("John Doe");
         secondUser.setEmail("john.doe@example.com");
+        secondUser.setFone("11977777777");
 
         // Verifica se a validação de duplicatas impede a criação
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
@@ -152,12 +157,14 @@ public class UserTest {
         User firstUser = new User();
         firstUser.setName("John Doe");
         firstUser.setEmail("test@example.com");
+        firstUser.setFone("11966666666");
         userService.createUser(firstUser);
 
         // Tenta criar segundo usuário com mesmo email
         User secondUser = new User();
         secondUser.setName("Jane Smith");
         secondUser.setEmail("test@example.com");
+        secondUser.setFone("11955555555");
 
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
             userService.createUser(secondUser);
@@ -172,12 +179,14 @@ public class UserTest {
         User firstUser = new User();
         firstUser.setName("John Doe");
         firstUser.setEmail("john@example.com");
+        firstUser.setFone("11944444444");
         userService.createUser(firstUser);
 
         // Tenta criar segundo usuário com mesmo nome
         User secondUser = new User();
         secondUser.setName("John Doe");
         secondUser.setEmail("jane@example.com");
+        secondUser.setFone("11933333333");
 
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
             userService.createUser(secondUser);

@@ -35,6 +35,7 @@ public class EventTest {
         User creator = new User();
         creator.setName("Creator");
         creator.setEmail("creator@example.com");
+        creator.setFone("11922222222");
         creator = userService.createUser(creator);
         assertNotNull(creator.getId());
 

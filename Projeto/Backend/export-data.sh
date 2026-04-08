@@ -57,12 +57,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$RUN_POPULATE" == true ]]; then
-    if [[ ! -f db/seed-data.sql ]]; then
-        echo "Arquivo db/seed-data.sql não encontrado" >&2
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SEED_FILE="$SCRIPT_DIR/db/seed-data.sql"
+    if [[ ! -f "$SEED_FILE" ]]; then
+        echo "Arquivo $SEED_FILE não encontrado" >&2
         exit 1
     fi
     echo "🌱 Populando banco (seed-data.sql)..."
-    docker compose exec -T db psql -U admin -d meu_banco < db/seed-data.sql >/dev/null 2>&1 || {
+    docker compose -f "$SCRIPT_DIR/../docker-compose.yml" exec -T db psql -U admin -d meu_banco < "$SEED_FILE" >/dev/null 2>&1 || {
         echo "Falha ao executar seed" >&2
         exit 1
     }
@@ -70,6 +72,9 @@ if [[ "$RUN_POPULATE" == true ]]; then
 fi
 
 echo "📊 Exportando dados do banco para: $OUTPUT_FILE"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/../docker-compose.yml"
 
 {
         echo "╔════════════════════════════════════════════════════════════════╗"
@@ -82,7 +87,7 @@ echo "📊 Exportando dados do banco para: $OUTPUT_FILE"
         echo ""
     
         echo "👥 ═══════════════════ USUÁRIOS ═══════════════════"
-        docker compose exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
                 SELECT 
                         user_id as ID,
                         user_name as Nome,
@@ -97,7 +102,7 @@ echo "📊 Exportando dados do banco para: $OUTPUT_FILE"
     
         echo ""
         echo "🎫 ═══════════════════ EVENTOS ═══════════════════"
-        docker compose exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
                 SELECT 
                         event_id as ID,
                         event_name as Evento,
@@ -112,7 +117,7 @@ echo "📊 Exportando dados do banco para: $OUTPUT_FILE"
     
         echo ""
         echo "💰 ═══════════════════ CARTEIRAS ═══════════════════"
-        docker compose exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
                 SELECT 
                         w.user_id as \"ID Usuario\",
                         u.user_name as Usuario,
@@ -124,7 +129,7 @@ echo "📊 Exportando dados do banco para: $OUTPUT_FILE"
     
         echo ""
         echo "📝 ═══════════════════ INSCRIÇÕES ═══════════════════"
-        docker compose exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
                 SELECT 
                         u.user_name as Usuario,
                         e.event_name as Evento,
@@ -138,7 +143,7 @@ echo "📊 Exportando dados do banco para: $OUTPUT_FILE"
     
         echo ""
         echo "📊 ═══════════════════ ESTATÍSTICAS ═══════════════════"
-        docker compose exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
                 SELECT 
                         (SELECT COUNT(*) FROM users) as \"Total Usuários\",
                         (SELECT COUNT(*) FROM users WHERE admin = true) as Admins,
@@ -149,7 +154,7 @@ echo "📊 Exportando dados do banco para: $OUTPUT_FILE"
     
         echo ""
         echo "🏆 ═══════════════ EVENTO MAIS POPULAR ═══════════════"
-        docker compose exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
                 SELECT 
                         e.event_name as Evento,
                         COUNT(we.user_id) as Inscrições

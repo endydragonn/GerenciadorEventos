@@ -41,9 +41,6 @@ public class UserRepository {
             String nameVal = user.getName();
             String emailVal = user.getEmail();
             String foneVal = user.getFone();
-            if (foneVal == null || foneVal.isBlank()) {
-                foneVal = (user.getFone() != null && !user.getFone().isBlank()) ? user.getFone() : ("fone" + System.currentTimeMillis());
-            }
             String passwordVal = (user.getPassword() != null && !user.getPassword().isBlank()) ? user.getPassword() : "password";
             Date birthdateVal = toSqlDate(user.getBirthDate());
             if (birthdateVal == null) {
@@ -102,7 +99,7 @@ public class UserRepository {
      * Verificar se email já existe
      */
     public boolean emailExists(String email) {
-        String sql = "SELECT COUNT(*) FROM users WHERE email = ?";
+        String sql = "SELECT COUNT(*) FROM users WHERE LOWER(email) = LOWER(?)";
         try (Connection conn = databaseConnection.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             
@@ -174,7 +171,7 @@ public class UserRepository {
      * Buscar usuário por email
      */
     public User findByEmail(String email) {
-        String sql = "SELECT * FROM users WHERE email = ?";
+        String sql = "SELECT * FROM users WHERE LOWER(email) = LOWER(?)";
         try (Connection conn = databaseConnection.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             

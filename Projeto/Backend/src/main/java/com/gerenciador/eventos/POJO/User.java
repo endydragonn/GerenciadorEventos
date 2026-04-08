@@ -43,6 +43,7 @@ public class User {
     public Long getId() { return id; }
     public String getName() { return name; }
     public String getEmail() { return email; }
+    @JsonProperty("fone")
     public String getFone() { return fone; }
     public String getPassword() { return password; }
     @JsonProperty("birthdate")
@@ -57,6 +58,7 @@ public class User {
     public void setId(Long id) { this.id = id; }
     public void setName(String name) { this.name = name; }
     public void setEmail(String email) { this.email = email; }
+    @JsonProperty("fone")
     public void setFone(String fone) { this.fone = fone; }
     public void setPassword(String password) { this.password = password; }
     @JsonProperty("birthdate")

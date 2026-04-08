@@ -1,0 +1,47 @@
+{
+  "groups": [
+    {
+      "name": "jwt",
+      "type": "java.lang.Object"
+    },
+    {
+      "name": "verification.code",
+      "type": "java.lang.Object"
+    }
+  ],
+  "properties": [
+    {
+      "name": "jwt.secret",
+      "type": "java.lang.String",
+      "description": "JWT secret key for token signing",
+      "sourceType": "com.gerenciador.eventos.config.JwtConfig"
+    },
+    {
+      "name": "jwt.expirationSeconds",
+      "type": "java.lang.Integer",
+      "description": "JWT token expiration time in seconds",
+      "sourceType": "com.gerenciador.eventos.config.JwtConfig"
+    },
+    {
+      "name": "verification.code.length",
+      "type": "java.lang.Integer",
+      "description": "Length of email verification code",
+      "defaultValue": "6",
+      "sourceType": "com.gerenciador.eventos.config.VerificationConfig"
+    },
+    {
+      "name": "verification.code.expiration.minutes",
+      "type": "java.lang.Integer",
+      "description": "Email verification code expiration time in minutes",
+      "defaultValue": "5",
+      "sourceType": "com.gerenciador.eventos.config.VerificationConfig"
+    },
+    {
+      "name": "verification.code.max.attempts",
+      "type": "java.lang.Integer",
+      "description": "Maximum attempts to verify email code",
+      "defaultValue": "5",
+      "sourceType": "com.gerenciador.eventos.config.VerificationConfig"
+    }
+  ]
+}

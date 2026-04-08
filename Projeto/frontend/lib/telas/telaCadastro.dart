@@ -18,12 +18,46 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import '../helpers/date_input_formatter.dart';
 import 'package:flutter/services.dart';
-import 'telaPrincipal.dart'; // Assumindo import para MainScreen
 import 'telaLogin.dart'; // Para LoginScreen
-import 'auth.dart'; // ApiAuth
+import 'telaVerificacaoEmail.dart'; // Para TelaVerificacaoEmail
 import 'modals.dart'; // Modais
+
+// Classe para formatar telefone no padrão (XX)XXXXX-XXXX
+class PhoneInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final text = newValue.text;
+    
+    if (text.isEmpty) {
+      return newValue;
+    }
+    
+    // Remove tudo que não é número
+    final digitsOnly = text.replaceAll(RegExp(r'\D'), '');
+    
+    // Limita a 11 dígitos
+    if (digitsOnly.length > 11) {
+      return oldValue;
+    }
+    
+    // Formata de acordo com quantidade de dígitos
+    String formatted = '';
+    
+    if (digitsOnly.length <= 2) {
+      formatted = digitsOnly;
+    } else if (digitsOnly.length <= 7) {
+      formatted = '(${digitsOnly.substring(0, 2)})${digitsOnly.substring(2)}';
+    } else {
+      formatted = '(${digitsOnly.substring(0, 2)})${digitsOnly.substring(2, 7)}-${digitsOnly.substring(7)}';
+    }
+    
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+}
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -40,7 +74,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   bool _isLoading = false;
-  DateTime? _selectedBirthdate;
   
   // Mensagens de erro para cada campo
   String? _nameError;
@@ -69,21 +102,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
       hasError = true;
     }
 
-    if (_emailController.text.isEmpty || !_emailController.text.contains('@')) {
-      setState(() => _emailError = 'Insira um e-mail válido.');
+    if (_emailController.text.isEmpty) {
+      setState(() => _emailError = 'Por favor, insira seu e-mail.');
+      hasError = true;
+    } else if (!_emailController.text.contains('@') || !_emailController.text.contains('.')) {
+      setState(() => _emailError = 'Insira um e-mail válido (exemplo: user@domain.com).');
       hasError = true;
     }
 
     if (_phoneController.text.isEmpty) {
       setState(() => _phoneError = 'Por favor, insira seu telefone.');
       hasError = true;
-    } else if (_phoneController.text.length < 10) {
+    } else if (_phoneController.text.replaceAll(RegExp(r'\D'), '').length < 10) {
       setState(() => _phoneError = 'Telefone deve ter pelo menos 10 dígitos.');
+      hasError = true;
+    } else if (_phoneController.text.replaceAll(RegExp(r'\D'), '').length > 11) {
+      setState(() => _phoneError = 'Telefone não pode exceder 11 dígitos.');
       hasError = true;
     }
 
-    if (_selectedBirthdate == null) {
-      setState(() => _birthdateError = 'Por favor, selecione sua data de nascimento.');
+    if (_birthdateController.text.isEmpty || _birthdateController.text.length < 10) {
+      setState(() => _birthdateError = 'Por favor, selecione sua data de nascimento (DD/MM/YYYY).');
       hasError = true;
     }
 
@@ -104,18 +143,38 @@ class _RegisterScreenState extends State<RegisterScreen> {
     });
 
     try {
+      // Converte DD/MM/YYYY para YYYY-MM-DD
+      final dateStr = _birthdateController.text.trim(); // DD/MM/YYYY
+      
+      if (dateStr.length != 10 || !dateStr.contains('/')) {
+        throw Exception('Formato de data inválido: $dateStr');
+      }
+      
+      final dateParts = dateStr.split('/');
+      if (dateParts.length != 3) {
+        throw Exception('Data deveria ter 3 partes, mas tem ${dateParts.length}');
+      }
+      
+      final birthDateFormatted = '${dateParts[2]}-${dateParts[1]}-${dateParts[0]}'; // YYYY-MM-DD
+      
       final userData = {
         'name': _nameController.text,
         'email': _emailController.text,
-        'phone': _phoneController.text,
-        'birthdate': _selectedBirthdate!.toIso8601String().split('T')[0], // Formato YYYY-MM-DD
+        'fone': _phoneController.text.replaceAll(RegExp(r'\D'), ''), // Remove máscara
+        'birthdate': birthDateFormatted, // Formato YYYY-MM-DD (padrão banco)
         'password': _passwordController.text,
       };
 
+      // Chama endpoint de request-verification (Etapa 1)
       final response = await http.post(
-        Uri.parse('/api/bff/users'),
-        headers: ApiAuth.jsonHeaders(),
+        Uri.parse('http://localhost:8081/api/users/request-verification'),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode(userData),
+      ).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          throw Exception('Timeout na requisição');
+        },
       );
 
       setState(() {
@@ -123,29 +182,29 @@ class _RegisterScreenState extends State<RegisterScreen> {
       });
 
       if (response.statusCode == 201) {
-        // Cadastro bem-sucedido
+        // Requisição de verificação bem-sucedida
         if (!mounted) return;
-        AppModals.showRegisterSuccess(
+        
+        // Navega para tela de verificação de email
+        Navigator.push(
           context,
-          onOk: () {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (context) => const LoginScreen()),
-            );
-          },
+          MaterialPageRoute(
+            builder: (context) => TelaVerificacaoEmail(email: _emailController.text),
+          ),
         );
       } else if (response.statusCode == 400) {
-        // Erro de validação (ex: email já cadastrado)
+        // Erro de validação do backend
         if (!mounted) return;
-        String errorMsg = 'Verifique se o email já está cadastrado.';
+        String errorMsg = 'Verifique os dados inseridos.';
         try {
-          final errorData = jsonDecode(response.body);
-          errorMsg = errorData['message'] ?? errorMsg;
+          errorMsg = response.body;
         } catch (_) {}
         
-        setState(() {
-          _emailError = errorMsg;
-        });
+        // Mostra erro em modal ao invés de tentar adivinhar qual campo
+        AppModals.showRegisterError(
+          context,
+          'Erro na validação: $errorMsg',
+        );
       } else {
         // Erro genérico do servidor
         if (!mounted) return;
@@ -170,12 +229,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
       initialDate: DateTime(2000),
       firstDate: DateTime(1900),
       lastDate: DateTime.now(),
-      locale: const Locale('pt', 'BR'),
+      builder: (context, child) {
+        return Theme(
+          data: ThemeData.light().copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Colors.purple,
+              onPrimary: Colors.white,
+            ),
+          ),
+          child: child ?? const SizedBox(),
+        );
+      },
     );
     
-    if (picked != null) {
+    if (picked != null && mounted) {
       setState(() {
-        _selectedBirthdate = picked;
         _birthdateController.text = '${picked.day.toString().padLeft(2, '0')}/${picked.month.toString().padLeft(2, '0')}/${picked.year}';
         _birthdateError = null;
       });
@@ -227,12 +295,26 @@ class _RegisterScreenState extends State<RegisterScreen> {
               controller: _emailController,
               decoration: InputDecoration(
                 hintText: 'seuemail@example.com',
-                border: const OutlineInputBorder(),
+                border: OutlineInputBorder(
+                  borderSide: BorderSide(
+                    color: _emailError != null ? Colors.red : Colors.grey,
+                    width: _emailError != null ? 2 : 1,
+                  ),
+                ),
                 errorText: _emailError,
+                errorStyle: const TextStyle(color: Colors.red, fontSize: 12),
+                suffixIcon: _emailError != null
+                    ? const Icon(Icons.error, color: Colors.red)
+                    : (_emailController.text.isNotEmpty && _emailController.text.contains('@') && _emailController.text.contains('.')
+                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        : null),
               ),
+              keyboardType: TextInputType.emailAddress,
               onChanged: (value) {
-                if (_emailError != null && value.contains('@')) {
+                if (_emailError != null && value.contains('@') && value.contains('.')) {
                   setState(() => _emailError = null);
+                } else {
+                  setState(() {});
                 }
               },
             ),
@@ -247,8 +329,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 errorText: _phoneError,
               ),
               keyboardType: TextInputType.phone,
+              inputFormatters: [PhoneInputFormatter()],
               onChanged: (value) {
-                if (_phoneError != null && value.length >= 10) {
+                if (_phoneError != null && value.replaceAll(RegExp(r'\D'), '').length >= 10) {
                   setState(() => _phoneError = null);
                 }
               },
@@ -258,36 +341,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
             const Text('Data de Nascimento'),
             TextField(
               controller: _birthdateController,
+              readOnly: true,
               decoration: InputDecoration(
-                hintText: 'DD/MM/AAAA',
-                border: const OutlineInputBorder(),
-                errorText: _birthdateError,
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.calendar_today),
-                  onPressed: _selectBirthdate,
+                hintText: 'DD/MM/YYYY',
+                border: OutlineInputBorder(
+                  borderSide: BorderSide(
+                    color: _birthdateError != null ? Colors.red : Colors.grey,
+                    width: _birthdateError != null ? 2 : 1,
+                  ),
                 ),
+                errorText: _birthdateError,
+                errorStyle: const TextStyle(color: Colors.red, fontSize: 12),
+                suffixIcon: _birthdateError != null
+                    ? const Icon(Icons.error, color: Colors.red)
+                    : IconButton(
+                        icon: const Icon(Icons.calendar_today),
+                        onPressed: _selectBirthdate,
+                      ),
               ),
-              keyboardType: TextInputType.number,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(10),
-                DateInputFormatter(),
-              ],
-              onChanged: (value) {
-                if (_birthdateError != null && value.length >= 10) {
-                  setState(() => _birthdateError = null);
-                }
-                // Atualiza _selectedBirthdate se possível
-                try {
-                  if (value.length == 10) {
-                    final parts = value.split('/');
-                    final day = int.parse(parts[0]);
-                    final month = int.parse(parts[1]);
-                    final year = int.parse(parts[2]);
-                    _selectedBirthdate = DateTime(year, month, day);
-                  }
-                } catch (_) {}
-              },
+              onTap: _selectBirthdate,
             ),
             const SizedBox(height: 20.0),
 

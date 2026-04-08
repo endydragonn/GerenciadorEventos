@@ -61,7 +61,9 @@ TEST_EXIT_CODE=0
 # Executa testes no Docker (igual ao run-tests.sh), salvando relatórios em target/surefire-reports
 if [[ "$RUN_TESTS" == true ]]; then
   echo "🚀 Executando testes no Docker..."
-  docker run --rm --network gerenciador-net --env-file .env \
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+  docker run --rm --network gerenciador-net --env-file "$PROJECT_ROOT/.env" \\
     -v "$(pwd)":/workspace-src:ro \
     -v "$(pwd)/target":/workspace-output \
     maven:3.9.7-eclipse-temurin-21-jammy \

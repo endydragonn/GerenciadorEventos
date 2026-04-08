@@ -14,6 +14,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.gerenciador.eventos.POJO.User;
 import com.gerenciador.eventos.Service.UserService;
+import com.gerenciador.eventos.Service.EmailVerificationService;
+import com.gerenciador.eventos.security.JwtUtil;
+import java.util.HashMap;
+import java.util.Map;
+import java.sql.SQLException;
 
 /**
  * Controller - endpoints REST da API
@@ -26,6 +31,12 @@ public class UserController {
     @Autowired
     private UserService userService;
 
+    @Autowired
+    private EmailVerificationService emailVerificationService;
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
     /**
      * POST /api/users - Criar novo usuário
      * 
@@ -33,8 +44,10 @@ public class UserController {
      * {
      *   "name": "João Silva",
      *   "email": "joao@email.com",
+     *   "fone": "11999999999",
      *   "password": "senha123",
-     *   "cpf": "12345678900"
+     *   "cpf": "12345678900",
+     *   "birthDate": "1990-01-01"
      * }
      */
     @PostMapping
@@ -129,4 +142,136 @@ public class UserController {
      *   "email": "maria@email.com"
      * }
      */    
+
+    /**
+     * POST /api/users/request-verification - Solicitar verificação de email
+     * Etapa 1: Valida dados e envia código de verificação (sem criar usuário)
+     * 
+     * Body exemplo:
+     * {
+     *   "name": "João Silva",
+     *   "email": "joao@email.com",
+     *   "fone": "11999999999",
+     *   "password": "senha123",
+     *   "birthDate": "1990-01-01"
+     * }
+     */
+    @PostMapping("/request-verification")
+    public ResponseEntity<?> requestEmailVerification(@RequestBody User user) {
+        try {
+            if (user.getName() == null || user.getName().trim().isEmpty()) {
+                return ResponseEntity.badRequest().body("Nome é obrigatório");
+            }
+            if (user.getEmail() == null || user.getEmail().trim().isEmpty()) {
+                return ResponseEntity.badRequest().body("Email é obrigatório");
+            }
+            if (user.getFone() == null || user.getFone().trim().isEmpty()) {
+                return ResponseEntity.badRequest().body("Telefone é obrigatório");
+            }
+            if (user.getPassword() == null || user.getPassword().trim().isEmpty()) {
+                return ResponseEntity.badRequest().body("Senha é obrigatória");
+            }
+            if (user.getBirthDate() == null || user.getBirthDate().trim().isEmpty()) {
+                return ResponseEntity.badRequest().body("Data de nascimento é obrigatória");
+            }
+
+            // Remove mask do telefone
+            String phoneCleaned = user.getFone().replaceAll("\\D", "");
+            if (phoneCleaned.length() < 10 || phoneCleaned.length() > 11) {
+                return ResponseEntity.badRequest().body("Telefone deve conter 10 ou 11 dígitos");
+            }
+
+            emailVerificationService.requestEmailVerification(
+                user.getEmail(),
+                phoneCleaned,
+                user.getName(),
+                user.getPassword(),
+                user.getBirthDate()
+            );
+
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "Código de verificação enviado para " + user.getEmail());
+            response.put("email", user.getEmail());
+            return ResponseEntity.status(HttpStatus.CREATED).body(response);
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (SQLException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Erro ao solicitar verificação: " + e.getMessage());
+        }
+    }
+
+    /**
+     * POST /api/users/verify-email - Verificar email e criar usuário
+     * Etapa 2: Valida código e cria o usuário no banco
+     * 
+     * Body exemplo:
+     * {
+     *   "email": "joao@email.com",
+     *   "verificationCode": "123456"
+     * }
+     */
+    @PostMapping("/verify-email")
+    public ResponseEntity<?> verifyEmailAndCreateUser(@RequestBody Map<String, String> body) {
+        try {
+            String email = body.get("email");
+            String verificationCode = body.get("verificationCode");
+
+            if (email == null || email.trim().isEmpty()) {
+                return ResponseEntity.badRequest().body("Email é obrigatório");
+            }
+            if (verificationCode == null || verificationCode.trim().isEmpty()) {
+                return ResponseEntity.badRequest().body("Código de verificação é obrigatório");
+            }
+
+            User createdUser = emailVerificationService.verifyEmailAndCreateUser(email, verificationCode);
+
+            // Gera token JWT para login automático
+            String token = jwtUtil.generateToken(createdUser.getEmail());
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "Email verificado com sucesso. Usuário criado!");
+            response.put("token", token);
+            response.put("user", createdUser);
+            return ResponseEntity.status(HttpStatus.CREATED).body(response);
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (SQLException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Erro ao verificar email: " + e.getMessage());
+        }
+    }
+
+    /**
+     * POST /api/users/resend-verification-code - Reenviar código de verificação
+     * 
+     * Body exemplo:
+     * {
+     *   "email": "joao@email.com"
+     * }
+     */
+    @PostMapping("/resend-verification-code")
+    public ResponseEntity<?> resendVerificationCode(@RequestBody Map<String, String> body) {
+        try {
+            String email = body.get("email");
+
+            if (email == null || email.trim().isEmpty()) {
+                return ResponseEntity.badRequest().body("Email é obrigatório");
+            }
+
+            emailVerificationService.resendVerificationCode(email);
+
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "Código de verificação reenviado para " + email);
+            return ResponseEntity.ok(response);
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (SQLException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Erro ao reenviar código: " + e.getMessage());
+        }
+    }
 }
