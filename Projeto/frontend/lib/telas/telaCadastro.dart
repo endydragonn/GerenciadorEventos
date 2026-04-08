@@ -59,6 +59,148 @@ class PhoneInputFormatter extends TextInputFormatter {
   }
 }
 
+// Classe para formatar data no padrão DD/MM/YYYY
+class DateInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final text = newValue.text;
+    
+    if (text.isEmpty) {
+      return newValue;
+    }
+    
+    // Remove tudo que não é número
+    final digitsOnly = text.replaceAll(RegExp(r'\D'), '');
+    
+    // Limita a 8 dígitos (DDMMYYYY)
+    if (digitsOnly.length > 8) {
+      return oldValue;
+    }
+    
+    // Formata de acordo com quantidade de dígitos
+    String formatted = '';
+    
+    if (digitsOnly.length <= 2) {
+      formatted = digitsOnly;
+    } else if (digitsOnly.length <= 4) {
+      formatted = '${digitsOnly.substring(0, 2)}/${digitsOnly.substring(2)}';
+    } else {
+      formatted = '${digitsOnly.substring(0, 2)}/${digitsOnly.substring(2, 4)}/${digitsOnly.substring(4)}';
+    }
+    
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+}
+
+// Classe para limitar apenas números (para date picker)
+class NumericFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final digitsOnly = newValue.text.replaceAll(RegExp(r'\D'), '');
+    
+    // Limita a 8 dígitos
+    if (digitsOnly.length > 8) {
+      return oldValue;
+    }
+    
+    return TextEditingValue(
+      text: digitsOnly,
+      selection: TextSelection.collapsed(offset: digitsOnly.length),
+    );
+  }
+}
+
+// Widget para mostrar requisitos de senha
+class PasswordRequirements extends StatelessWidget {
+  final String password;
+  
+  const PasswordRequirements({super.key, required this.password});
+  
+  bool _hasMinLength() => password.length >= 6;
+  bool _hasUppercase() => password.contains(RegExp(r'[A-Z]'));
+  bool _hasNumber() => password.contains(RegExp(r'[0-9]'));
+  bool _hasSpecialChar() => password.contains(RegExp(r'[!@#$%^&*()_+=\[\]{};:,.<>?/\\|`~-]'));
+  
+  Widget _buildRequirement(String label, bool met) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        children: [
+          Icon(
+            met ? Icons.check_circle : Icons.cancel,
+            color: met ? Colors.green : Colors.red,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              color: met ? Colors.green : Colors.red,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildRequirement('Mínimo 6 caracteres', _hasMinLength()),
+        _buildRequirement('1 letra maiúscula (A-Z)', _hasUppercase()),
+        _buildRequirement('1 número (0-9)', _hasNumber()),
+        _buildRequirement('1 caractere especial (!@#$%...)', _hasSpecialChar()),
+      ],
+    );
+  }
+}
+
+// Widget para comparar senhas em tempo real
+class PasswordComparison extends StatelessWidget {
+  final String password;
+  final String confirmPassword;
+  
+  const PasswordComparison({super.key, required this.password, required this.confirmPassword});
+  
+  @override
+  Widget build(BuildContext context) {
+    final isMatch = password.isNotEmpty && confirmPassword.isNotEmpty && password == confirmPassword;
+    final showComparison = confirmPassword.isNotEmpty;
+    
+    if (!showComparison) {
+      return const SizedBox.shrink();
+    }
+    
+    return Padding(
+      padding: const EdgeInsets.only(top: 8.0, bottom: 12.0),
+      child: Row(
+        children: [
+          Icon(
+            isMatch ? Icons.check_circle : Icons.cancel,
+            color: isMatch ? Colors.green : Colors.red,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            isMatch ? 'Senhas conferem ✓' : 'Senhas não conferem',
+            style: TextStyle(
+              color: isMatch ? Colors.green : Colors.red,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
 
@@ -128,6 +270,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     if (_passwordController.text.isEmpty || _passwordController.text.length < 6) {
       setState(() => _passwordError = 'A senha deve ter pelo menos 6 caracteres.');
+      hasError = true;
+    } else if (!_passwordController.text.contains(RegExp(r'[A-Z]'))) {
+      setState(() => _passwordError = 'A senha deve conter pelo menos 1 letra maiúscula.');
+      hasError = true;
+    } else if (!_passwordController.text.contains(RegExp(r'[0-9]'))) {
+      setState(() => _passwordError = 'A senha deve conter pelo menos 1 número.');
+      hasError = true;
+    } else if (!_passwordController.text.contains(RegExp(r'[!@#$%^&*()_+=\[\]{};:,.<>?/\\|`~-]'))) {
+      setState(() => _passwordError = 'A senha deve conter pelo menos 1 caractere especial.');
       hasError = true;
     }
 
@@ -281,10 +432,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 hintText: 'Seu nome completo',
                 border: const OutlineInputBorder(),
                 errorText: _nameError,
+                suffixIcon: _nameError != null
+                    ? const Icon(Icons.error, color: Colors.red)
+                    : (_nameController.text.isNotEmpty
+                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        : null),
               ),
               onChanged: (value) {
                 if (_nameError != null && value.isNotEmpty) {
                   setState(() => _nameError = null);
+                } else {
+                  setState(() {});
                 }
               },
             ),
@@ -327,12 +485,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 hintText: '(00) 00000-0000',
                 border: const OutlineInputBorder(),
                 errorText: _phoneError,
+                suffixIcon: _phoneError != null
+                    ? const Icon(Icons.error, color: Colors.red)
+                    : (_phoneController.text.replaceAll(RegExp(r'\D'), '').length >= 10 && _phoneController.text.replaceAll(RegExp(r'\D'), '').length <= 11
+                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        : null),
               ),
               keyboardType: TextInputType.phone,
               inputFormatters: [PhoneInputFormatter()],
               onChanged: (value) {
                 if (_phoneError != null && value.replaceAll(RegExp(r'\D'), '').length >= 10) {
                   setState(() => _phoneError = null);
+                } else {
+                  setState(() {});
                 }
               },
             ),
@@ -341,7 +506,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
             const Text('Data de Nascimento'),
             TextField(
               controller: _birthdateController,
-              readOnly: true,
               decoration: InputDecoration(
                 hintText: 'DD/MM/YYYY',
                 border: OutlineInputBorder(
@@ -354,12 +518,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 errorStyle: const TextStyle(color: Colors.red, fontSize: 12),
                 suffixIcon: _birthdateError != null
                     ? const Icon(Icons.error, color: Colors.red)
-                    : IconButton(
-                        icon: const Icon(Icons.calendar_today),
-                        onPressed: _selectBirthdate,
-                      ),
+                    : (_birthdateController.text.length == 10
+                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        : IconButton(
+                            icon: const Icon(Icons.calendar_today),
+                            onPressed: _selectBirthdate,
+                          )),
               ),
+              keyboardType: TextInputType.number,
+              inputFormatters: [DateInputFormatter()],
               onTap: _selectBirthdate,
+              onChanged: (value) {
+                if (_birthdateError != null && value.length == 10) {
+                  setState(() => _birthdateError = null);
+                } else {
+                  setState(() {});
+                }
+              },
             ),
             const SizedBox(height: 20.0),
 
@@ -371,10 +546,29 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 hintText: 'Senha',
                 border: const OutlineInputBorder(),
                 errorText: _passwordError,
+                suffixIcon: _passwordError != null
+                    ? const Icon(Icons.error, color: Colors.red)
+                    : (_passwordController.text.length >= 6 &&
+                        _passwordController.text.contains(RegExp(r'[A-Z]')) &&
+                        _passwordController.text.contains(RegExp(r'[0-9]')) &&
+                        _passwordController.text.contains(RegExp(r'[!@#$%^&*()_+=\[\]{};:,.<>?/\\|`~-]'))
+                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        : null),
               ),
               onChanged: (value) {
-                if (_passwordError != null && value.length >= 6) {
-                  setState(() => _passwordError = null);
+                if (_passwordError != null) {
+                  setState(() {
+                    if (value.length >= 6 &&
+                        value.contains(RegExp(r'[A-Z]')) &&
+                        value.contains(RegExp(r'[0-9]')) &&
+                        value.contains(RegExp(r'[!@#$%^&*()_+=\[\]{};:,.<>?/\\|`~-]'))) {
+                      _passwordError = null;
+                    } else {
+                      setState(() {});
+                    }
+                  });
+                } else {
+                  setState(() {});
                 }
               },
             ),
@@ -388,13 +582,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 hintText: 'Confirme sua senha',
                 border: const OutlineInputBorder(),
                 errorText: _confirmPasswordError,
+                suffixIcon: _confirmPasswordError != null
+                    ? const Icon(Icons.error, color: Colors.red)
+                    : (_confirmPasswordController.text.isNotEmpty && _confirmPasswordController.text == _passwordController.text
+                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        : null),
               ),
               onChanged: (value) {
                 if (_confirmPasswordError != null && value == _passwordController.text) {
                   setState(() => _confirmPasswordError = null);
+                } else {
+                  setState(() {});
                 }
               },
             ),
+            const SizedBox(height: 8.0),
+            
+            // Comparação de senhas em tempo real
+            PasswordComparison(password: _passwordController.text, confirmPassword: _confirmPasswordController.text),
+            
+            // Requisitos de senha
+            PasswordRequirements(password: _passwordController.text),
             const SizedBox(height: 20.0),
 
             SizedBox(
