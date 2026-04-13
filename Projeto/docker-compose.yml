@@ -37,6 +37,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        API_BASE_URL: http://localhost:8088
     container_name: gerenciador-frontend
     ports:
       - "8088:80"

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'telaLogin.dart';
 import 'auth.dart';
+import '../config/app_config.dart';
 
 class TelaVerificacaoEmail extends StatefulWidget {
   final String email;
@@ -72,7 +73,7 @@ class _TelaVerificacaoEmailState extends State<TelaVerificacaoEmail> {
 
     try {
       final response = await http.post(
-        Uri.parse('http://localhost:8081/api/users/verify-email'),
+        Uri.parse('${AppConfig.apiBaseUrl}/api/users/verify-email'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'email': widget.email,
@@ -153,7 +154,7 @@ class _TelaVerificacaoEmailState extends State<TelaVerificacaoEmail> {
 
     try {
       final response = await http.post(
-        Uri.parse('http://localhost:8081/api/users/resend-verification-code'),
+        Uri.parse('${AppConfig.apiBaseUrl}/api/users/resend-verification-code'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'email': widget.email}),
       ).timeout(

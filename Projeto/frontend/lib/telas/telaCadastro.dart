@@ -22,6 +22,7 @@ import 'package:flutter/services.dart';
 import 'telaLogin.dart'; // Para LoginScreen
 import 'telaVerificacaoEmail.dart'; // Para TelaVerificacaoEmail
 import 'modals.dart'; // Modais
+import '../config/app_config.dart'; // Configuração da API
 
 // Classe para formatar telefone no padrão (XX)XXXXX-XXXX
 class PhoneInputFormatter extends TextInputFormatter {
@@ -113,16 +114,18 @@ class NumericFormatter extends TextInputFormatter {
   }
 }
 
-// Widget para mostrar requisitos de senha
+// Widget para mostrar requisitos de senha e comparação
 class PasswordRequirements extends StatelessWidget {
   final String password;
+  final String confirmPassword;
   
-  const PasswordRequirements({super.key, required this.password});
+  const PasswordRequirements({super.key, required this.password, this.confirmPassword = ''});
   
   bool _hasMinLength() => password.length >= 6;
   bool _hasUppercase() => password.contains(RegExp(r'[A-Z]'));
   bool _hasNumber() => password.contains(RegExp(r'[0-9]'));
   bool _hasSpecialChar() => password.contains(RegExp(r'[!@#$%^&*()_+=\[\]{};:,.<>?/\\|`~-]'));
+  bool _passwordsMatch() => password.isNotEmpty && confirmPassword.isNotEmpty && password == confirmPassword;
   
   Widget _buildRequirement(String label, bool met) {
     return Padding(
@@ -153,50 +156,11 @@ class PasswordRequirements extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildRequirement('Mínimo 6 caracteres', _hasMinLength()),
-        _buildRequirement('1 letra maiúscula (A-Z)', _hasUppercase()),
-        _buildRequirement('1 número (0-9)', _hasNumber()),
-        _buildRequirement('1 caractere especial (!@#$%...)', _hasSpecialChar()),
+        _buildRequirement('Ao menos 1 letra maiúscula', _hasUppercase()),
+        _buildRequirement('Ao menos 1 dígito', _hasNumber()),
+        _buildRequirement('Ao menos 1 caractere especial', _hasSpecialChar()),
+        _buildRequirement('Senhas são iguais', _passwordsMatch()),
       ],
-    );
-  }
-}
-
-// Widget para comparar senhas em tempo real
-class PasswordComparison extends StatelessWidget {
-  final String password;
-  final String confirmPassword;
-  
-  const PasswordComparison({super.key, required this.password, required this.confirmPassword});
-  
-  @override
-  Widget build(BuildContext context) {
-    final isMatch = password.isNotEmpty && confirmPassword.isNotEmpty && password == confirmPassword;
-    final showComparison = confirmPassword.isNotEmpty;
-    
-    if (!showComparison) {
-      return const SizedBox.shrink();
-    }
-    
-    return Padding(
-      padding: const EdgeInsets.only(top: 8.0, bottom: 12.0),
-      child: Row(
-        children: [
-          Icon(
-            isMatch ? Icons.check_circle : Icons.cancel,
-            color: isMatch ? Colors.green : Colors.red,
-            size: 18,
-          ),
-          const SizedBox(width: 8),
-          Text(
-            isMatch ? 'Senhas conferem ✓' : 'Senhas não conferem',
-            style: TextStyle(
-              color: isMatch ? Colors.green : Colors.red,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -216,6 +180,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   bool _isLoading = false;
+  bool _showPassword = false;
+  bool _showConfirmPassword = false;
   
   // Mensagens de erro para cada campo
   String? _nameError;
@@ -318,7 +284,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
       // Chama endpoint de request-verification (Etapa 1)
       final response = await http.post(
-        Uri.parse('http://localhost:8081/api/users/request-verification'),
+        Uri.parse('${AppConfig.apiBaseUrl}/api/users/request-verification'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(userData),
       ).timeout(
@@ -541,19 +507,34 @@ class _RegisterScreenState extends State<RegisterScreen> {
             const Text('Senha'),
             TextField(
               controller: _passwordController,
-              obscureText: true,
+              obscureText: !_showPassword,
               decoration: InputDecoration(
                 hintText: 'Senha',
                 border: const OutlineInputBorder(),
                 errorText: _passwordError,
                 suffixIcon: _passwordError != null
                     ? const Icon(Icons.error, color: Colors.red)
-                    : (_passwordController.text.length >= 6 &&
-                        _passwordController.text.contains(RegExp(r'[A-Z]')) &&
-                        _passwordController.text.contains(RegExp(r'[0-9]')) &&
-                        _passwordController.text.contains(RegExp(r'[!@#$%^&*()_+=\[\]{};:,.<>?/\\|`~-]'))
-                        ? const Icon(Icons.check_circle, color: Colors.green)
-                        : null),
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: Icon(
+                              _showPassword ? Icons.visibility : Icons.visibility_off,
+                              color: Colors.grey,
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _showPassword = !_showPassword;
+                              });
+                            },
+                          ),
+                          if (_passwordController.text.length >= 6 &&
+                              _passwordController.text.contains(RegExp(r'[A-Z]')) &&
+                              _passwordController.text.contains(RegExp(r'[0-9]')) &&
+                              _passwordController.text.contains(RegExp(r'[!@#$%^&*()_+=\[\]{};:,.<>?/\\|`~-]')))
+                            const Icon(Icons.check_circle, color: Colors.green)
+                        ],
+                      ),
               ),
               onChanged: (value) {
                 if (_passwordError != null) {
@@ -577,16 +558,31 @@ class _RegisterScreenState extends State<RegisterScreen> {
             const Text('Confirmar senha'),
             TextField(
               controller: _confirmPasswordController,
-              obscureText: true,
+              obscureText: !_showConfirmPassword,
               decoration: InputDecoration(
                 hintText: 'Confirme sua senha',
                 border: const OutlineInputBorder(),
                 errorText: _confirmPasswordError,
                 suffixIcon: _confirmPasswordError != null
                     ? const Icon(Icons.error, color: Colors.red)
-                    : (_confirmPasswordController.text.isNotEmpty && _confirmPasswordController.text == _passwordController.text
-                        ? const Icon(Icons.check_circle, color: Colors.green)
-                        : null),
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: Icon(
+                              _showConfirmPassword ? Icons.visibility : Icons.visibility_off,
+                              color: Colors.grey,
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _showConfirmPassword = !_showConfirmPassword;
+                              });
+                            },
+                          ),
+                          if (_confirmPasswordController.text.isNotEmpty && _confirmPasswordController.text == _passwordController.text)
+                            const Icon(Icons.check_circle, color: Colors.green)
+                        ],
+                      ),
               ),
               onChanged: (value) {
                 if (_confirmPasswordError != null && value == _passwordController.text) {
@@ -596,13 +592,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 }
               },
             ),
+            const SizedBox(height: 12.0),
+            const Text(
+              'Requisitos da senha:',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 8.0),
-            
-            // Comparação de senhas em tempo real
-            PasswordComparison(password: _passwordController.text, confirmPassword: _confirmPasswordController.text),
-            
-            // Requisitos de senha
-            PasswordRequirements(password: _passwordController.text),
+            // Requisitos de senha + Comparação
+            PasswordRequirements(
+              password: _passwordController.text,
+              confirmPassword: _confirmPasswordController.text,
+            ),
             const SizedBox(height: 20.0),
 
             SizedBox(
