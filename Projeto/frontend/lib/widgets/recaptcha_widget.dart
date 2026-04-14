@@ -123,6 +123,7 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
 
   Future<bool> _verifyTokenOnBackend(String token) async {
     try {
+      print('DEBUG: Enviando token para verificação: ${token.substring(0, 20)}...');
       final response = await http.post(
         Uri.parse('${AppConfig.apiBaseUrl}/api/users/verify-recaptcha'),
         headers: {'Content-Type': 'application/json'},
@@ -132,9 +133,15 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
         }),
       ).timeout(const Duration(seconds: 10));
 
+      print('DEBUG: Response status: ${response.statusCode}');
+      print('DEBUG: Response body: ${response.body}');
+      
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        print('DEBUG: Data decodificado: $data');
         return data['success'] == true && (data['score'] ?? 0.0) > 0.5;
+      } else {
+        print('❌ Erro: Status ${response.statusCode}');
       }
       
       return false;

@@ -38,13 +38,15 @@ public class SecurityConfig {
                 .requestMatchers(
                     "/bff/users/login",
                     "/bff/users",
-                    "/api/users/request-verification",
-                    "/api/users/verify-email",
-                    "/api/users/resend-verification-code",
-                    "/api/users/verify-recaptcha",
-                    "/bff/events/search",
+                    "/bff/**",
+                    "/api/users/**",
                     "/actuator/health",
                     "/api/seed" // endpoint de seed público
+                ).permitAll()
+                .requestMatchers(
+                    "/bff/users/*/request-password-reset-mfa",
+                    "/bff/users/*/verify-password-reset-mfa",
+                    "/bff/users/*/password-with-mfa"
                 ).permitAll()
                 .anyRequest().authenticated()
             )

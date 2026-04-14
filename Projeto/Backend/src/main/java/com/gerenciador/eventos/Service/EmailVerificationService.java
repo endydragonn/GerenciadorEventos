@@ -18,6 +18,7 @@ import com.gerenciador.eventos.POJO.PendingVerification;
 import com.gerenciador.eventos.POJO.User;
 import com.gerenciador.eventos.Repository.PendingVerificationRepository;
 import com.gerenciador.eventos.Repository.UserRepository;
+import com.gerenciador.eventos.config.EmailTemplates;
 
 @Service
 public class EmailVerificationService {
@@ -188,8 +189,8 @@ public class EmailVerificationService {
             SimpleMailMessage message = new SimpleMailMessage();
             message.setFrom(fromEmail);
             message.setTo(toEmail);
-            message.setSubject("Código de Verificação de Email - Gerenciador de Eventos");
-            message.setText(buildEmailContent(userName, verificationCode));
+            message.setSubject(EmailTemplates.getVerificationCodeSubject());
+            message.setText(EmailTemplates.getVerificationCodeTemplate(userName, verificationCode, expirationMinutes));
             
             mailSender.send(message);
         } catch (MailException e) {
@@ -199,16 +200,21 @@ public class EmailVerificationService {
     }
 
     /**
-     * Constrói conteúdo do email
+     * Envia código MFA para reset de senha
      */
-    private String buildEmailContent(String userName, String verificationCode) {
-        return "Olá " + userName + ",\n\n" +
-                "Bem-vindo ao Gerenciador de Eventos!\n\n" +
-                "Para completar seu cadastro, use o código de verificação abaixo:\n\n" +
-                "Código: " + verificationCode + "\n\n" +
-                "Este código é válido por " + expirationMinutes + " minutos.\n\n" +
-                "Se você não solicitou este cadastro, ignore este email.\n\n" +
-                "Atenciosamente,\n" +
-                "Equipe Gerenciador de Eventos";
+    public void sendPasswordResetMfaEmail(String toEmail, String userName, String mfaCode) {
+        try {
+            SimpleMailMessage message = new SimpleMailMessage();
+            message.setFrom(fromEmail);
+            message.setTo(toEmail);
+            message.setSubject(EmailTemplates.getPasswordResetMfaSubject());
+            message.setText(EmailTemplates.getPasswordResetMfaTemplate(userName, mfaCode));
+            
+            mailSender.send(message);
+            System.out.println("✅ Email de MFA enviado com sucesso para: " + toEmail);
+        } catch (MailException e) {
+            System.err.println("❌ Erro ao enviar email de MFA: " + e.getMessage());
+            throw new RuntimeException("Erro ao enviar email de MFA: " + e.getMessage());
+        }
     }
 }

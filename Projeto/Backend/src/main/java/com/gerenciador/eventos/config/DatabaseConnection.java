@@ -1,4 +1,4 @@
-package com.gerenciador.eventos;
+package com.gerenciador.eventos.config;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -23,4 +23,3 @@ public class DatabaseConnection {
         return DriverManager.getConnection(url, user, password);
     }
 }
-

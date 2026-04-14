@@ -28,6 +28,7 @@ import 'telaLogin.dart'; // LoginScreen
 import 'telaCadastro.dart'; // RegisterScreen
 import 'telaPesquisarEvento.dart'; // SearchEventScreen
 import 'telaCriacaoEvento.dart'; // CreateEventScreen
+import '../config/app_config.dart'; // AppConfig
 
 // 1. DATA_MODEL
 class HomePageData extends ChangeNotifier {
@@ -58,6 +59,13 @@ class HomePageData extends ChangeNotifier {
         userAvatarUrl = user['avatarUrl'];
       }
     }
+    notifyListeners();
+  }
+
+  void clearUser() {
+    user = {};
+    userName = 'Usuário 982';
+    events = [];
     notifyListeners();
   }
 
@@ -101,12 +109,38 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _loadUserData();
     _fetchEvents();
+  }
+
+  Future<void> _loadUserData() async {
+    try {
+      print('DEBUG: Iniciando _loadUserData');
+      print('DEBUG: Token: ${ApiAuth.token}');
+      final response = await http.get(
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/users/me'),
+        headers: ApiAuth.jsonHeaders(),
+      );
+      
+      print('DEBUG: Response status: ${response.statusCode}');
+      print('DEBUG: Response body: ${response.body}');
+      
+      if (response.statusCode == 200) {
+        final userData = jsonDecode(response.body) as Map<String, dynamic>;
+        print('DEBUG: User data loaded: $userData');
+        Provider.of<HomePageData>(context, listen: false).setUser(userData);
+      } else {
+        print('DEBUG: Failed to load user - Status: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('DEBUG: Error loading user data: $e');
+      // Usuário não autenticado
+    }
   }
 
   Future<void> _fetchEvents() async {
   final response = await http.get(
-    Uri.parse('/api/bff/events/search?term='),
+    Uri.parse('${AppConfig.apiBaseUrl}/bff/events/search?term='),
     headers: ApiAuth.jsonHeaders(),
   );
     if (response.statusCode == 200) {
@@ -230,8 +264,8 @@ class _UserProfileSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Só mostrar se usuário está logado
-    final bool isLoggedIn = homePageData.user != null && homePageData.user.isNotEmpty;
+    // Só mostrar se usuário está logado e tem dados
+    final bool isLoggedIn = homePageData.user.isNotEmpty && homePageData.user.containsKey('id');
     
     if (!isLoggedIn) {
       return const SizedBox.shrink(); // Não renderizar nada se não está logado
@@ -245,13 +279,15 @@ class _UserProfileSection extends StatelessWidget {
             backgroundImage: NetworkImage(homePageData.userAvatarUrl),
             radius: 32,
           ),
-            const SizedBox(width: 16),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(homePageData.user['name'] ?? homePageData.userName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const Text('Bem-vindo de volta!'),
-            ],
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(homePageData.user['name'] ?? homePageData.userName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const Text('Bem-vindo de volta!'),
+              ],
+            ),
           )
         ],
       ),

@@ -1,12 +1,17 @@
 package com.gerenciador.eventos.Repository;
 
-import com.gerenciador.eventos.DatabaseConnection;
-import com.gerenciador.eventos.POJO.PendingVerification;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.Optional;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
-import java.sql.*;
-import java.util.Optional;
+import com.gerenciador.eventos.POJO.PendingVerification;
+import com.gerenciador.eventos.config.DatabaseConnection;
 
 @Repository
 public class PendingVerificationRepository {

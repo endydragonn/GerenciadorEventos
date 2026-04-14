@@ -19,6 +19,7 @@ import org.springframework.context.annotation.Import;
 import com.gerenciador.eventos.POJO.User;
 import com.gerenciador.eventos.Service.UserService;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
+import com.gerenciador.eventos.config.DatabaseConnection;
 
 @SpringBootTest
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)

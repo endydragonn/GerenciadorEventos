@@ -192,6 +192,63 @@ public class UserService {
         return true;
     }
 
+    /**
+     * Gerar e guardar código MFA alfanumérico para reset de senha
+     */
+    public String generatePasswordResetMfa(Long userId) {
+        String mfaCode = generateAlphanumericCode(8);
+        userRepository.setPasswordResetMfaCode(userId, mfaCode);
+        return mfaCode;
+    }
+
+    /**
+     * Validar código MFA para reset de senha
+     */
+    public boolean verifyPasswordResetMfaCode(Long userId, String mfaCode) {
+        return userRepository.verifyPasswordResetMfaCode(userId, mfaCode);
+    }
+
+    /**
+     * Alterar senha com MFA (sem exigir senha antiga)
+     */
+    public void changePasswordWithMfa(Long userId, String newPassword, String mfaCode) {
+        // Validar MFA
+        if (!verifyPasswordResetMfaCode(userId, mfaCode)) {
+            throw new IllegalArgumentException("Código MFA inválido ou expirado");
+        }
+
+        User user = userRepository.findById(userId);
+        if (user == null) {
+            throw new IllegalArgumentException("Usuário não encontrado");
+        }
+
+        // Validar nova senha
+        if (newPassword == null || newPassword.trim().length() < 6) {
+            throw new IllegalArgumentException("A nova senha deve ter no mínimo 6 caracteres");
+        }
+
+        // Hash da nova senha e atualizar
+        String hashedPassword = passwordEncoder.encode(newPassword);
+        user.setPassword(hashedPassword);
+        userRepository.update(user);
+
+        // Limpar MFA após uso
+        userRepository.clearPasswordResetMfaCode(userId);
+    }
+
+    /**
+     * Gerar código MFA alfanumérico
+     */
+    private String generateAlphanumericCode(int length) {
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        StringBuilder code = new StringBuilder();
+        java.util.Random random = new java.util.Random();
+        for (int i = 0; i < length; i++) {
+            code.append(chars.charAt(random.nextInt(chars.length())));
+        }
+        return code.toString();
+    }
+
 
 }
 

@@ -20,7 +20,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'telaLogin.dart'; // Para LoginScreen
-import 'telaVerificacaoEmail.dart'; // Para TelaVerificacaoEmail
+import 'telaVerificacaoEmail.dart'; // Para VerificacaoEmailModal
 import 'modals.dart'; // Modais
 import '../config/app_config.dart'; // Configuração da API
 import '../widgets/recaptcha_widget.dart';
@@ -315,11 +315,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
         // Requisição de verificação bem-sucedida
         if (!mounted) return;
         
-        // Navega para tela de verificação de email
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => TelaVerificacaoEmail(email: _emailController.text),
+        // Mostra modal de verificação de email (centralizado na mesma tela)
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => VerificacaoEmailModal(
+            email: _emailController.text,
           ),
         );
       } else if (response.statusCode == 400) {

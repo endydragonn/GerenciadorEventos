@@ -23,6 +23,7 @@ import 'package:http/http.dart' as http;
 import 'auth.dart';
 import 'dart:convert';
 import 'modals.dart';
+import '../config/app_config.dart';
 
 class EditProfileScreen extends StatefulWidget {
   const EditProfileScreen({super.key});
@@ -36,11 +37,25 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
-  final _oldPasswordController = TextEditingController();
+  final _mfaCodeController = TextEditingController();
   final _newPasswordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   bool _hasChanges = false;
   bool _changePassword = false;
+  bool _mfaRequested = false;
+  bool _mfaValidated = false;
+  bool _showNewPassword = false;
+  bool _showConfirmPassword = false;
+  bool _requestingMfa = false;
+  bool _isRequestingMfa = false;
+
+  // Método para validar força da senha
+  bool _isPasswordStrong(String password) {
+    return password.length >= 6 &&
+           password.contains(RegExp(r'[A-Z]')) &&
+           password.contains(RegExp(r'[0-9]')) &&
+           password.contains(RegExp(r'[!@#$%^&*()_+=\[\]{};:,.<>?/\\|`~-]'));
+  }
 
   @override
   void initState() {
@@ -126,7 +141,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _nameController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
-    _oldPasswordController.dispose();
+    _mfaCodeController.dispose();
     _newPasswordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
@@ -136,43 +151,22 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (_formKey.currentState!.validate()) {
       final user = Provider.of<HomePageData>(context, listen: false).user;
       
-      // Validar senha se o usuário optou por alterá-la
+      // Se alterando senha, primeiro validar MFA antes de continuar
       if (_changePassword) {
-        if (_newPasswordController.text != _confirmPasswordController.text) {
+        if (!_mfaRequested) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('As senhas não coincidem'),
-              backgroundColor: Colors.red,
+              content: Text('Clique em "Solicitar Código MFA" para alterar sua senha'),
+              backgroundColor: Colors.orange,
             ),
           );
           return;
         }
-        
-        // Alterar senha primeiro
-        print('🔑 Alterando senha do usuário...');
-        
-        final passwordResponse = await http.put(
-          Uri.parse('/api/bff/users/${user['user_id']}/password'),
-          headers: ApiAuth.jsonHeaders(),
-          body: jsonEncode({
-            'oldPassword': _oldPasswordController.text,
-            'newPassword': _newPasswordController.text,
-          }),
-        );
 
-        print('📥 Resposta senha: ${passwordResponse.statusCode}');
-
-        if (!mounted) return;
-
-        if (passwordResponse.statusCode != 200) {
-          String errorMsg = 'Erro ao alterar senha';
-          try {
-            errorMsg = passwordResponse.body;
-          } catch (e) {}
-          
+        if (!_mfaValidated) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(errorMsg),
+            const SnackBar(
+              content: Text('Código MFA não validado. Verifique o código enviado no seu email.'),
               backgroundColor: Colors.red,
             ),
           );
@@ -187,43 +181,203 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         'fone': _phoneController.text,
       };
 
-      print('📤 Atualizando informações do usuário...');
+      try {
+        final response = await http.put(
+          Uri.parse('${AppConfig.apiBaseUrl}/bff/users/${user['user_id']}'),
+          headers: ApiAuth.jsonHeaders(),
+          body: jsonEncode(updatedUser),
+        );
 
-      final response = await http.put(
-        Uri.parse('/api/bff/users/${user['user_id']}'),
+        if (!mounted) return;
+
+        if (response.statusCode == 200) {
+          // Se alterando senha, fazer a alteração agora (após validação de MFA)
+          if (_changePassword) {
+            final passwordResponse = await http.put(
+              Uri.parse('${AppConfig.apiBaseUrl}/bff/users/${user['user_id']}/password-with-mfa'),
+              headers: ApiAuth.jsonHeaders(),
+              body: jsonEncode({
+                'mfaCode': _mfaCodeController.text,
+                'newPassword': _newPasswordController.text,
+              }),
+            );
+
+            if (!mounted) return;
+
+            if (passwordResponse.statusCode != 200) {
+              String errorMsg = 'Erro ao alterar senha';
+              try {
+                errorMsg = jsonDecode(passwordResponse.body);
+              } catch (e) {}
+              
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(errorMsg),
+                  backgroundColor: Colors.red,
+                ),
+              );
+              return;
+            }
+          }
+
+          // Atualizar dados no Provider
+          final updatedUserData = jsonDecode(response.body);
+          Provider.of<HomePageData>(context, listen: false).setUser(updatedUserData);
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_changePassword 
+                ? 'Perfil e senha atualizados com sucesso!' 
+                : 'Perfil atualizado com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const MainScreen()),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Falha ao atualizar perfil: ${response.statusCode}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } catch (e) {
+        if (!mounted) return;
+        AppModals.showConnectionError(context);
+      }
+    }
+  }
+
+  // Widget para mostrar requisito de senha
+  Widget _buildPasswordRequirement(String text, bool isMet, {bool withStrikethrough = true}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        children: [
+          Icon(
+            isMet ? Icons.check_circle : Icons.cancel,
+            size: 16,
+            color: isMet ? Colors.green : Colors.red,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 12,
+              color: isMet ? Colors.green : Colors.red,
+              decoration: isMet && withStrikethrough ? TextDecoration.lineThrough : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _requestPasswordResetMfa() async {
+    final user = Provider.of<HomePageData>(context, listen: false).user;
+    
+    setState(() {
+      _isRequestingMfa = true;
+    });
+
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/users/${user['user_id']}/request-password-reset-mfa'),
         headers: ApiAuth.jsonHeaders(),
-        body: jsonEncode(updatedUser),
       );
-
-      print('📥 Resposta: ${response.statusCode}');
 
       if (!mounted) return;
 
+      setState(() {
+        _isRequestingMfa = false;
+      });
+
       if (response.statusCode == 200) {
-        // Atualizar dados no Provider
-        final updatedUserData = jsonDecode(response.body);
-        Provider.of<HomePageData>(context, listen: false).setUser(updatedUserData);
-        
+        setState(() {
+          _mfaRequested = true;
+          _mfaValidated = false;
+        });
+
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_changePassword 
-              ? 'Perfil e senha atualizados com sucesso!' 
-              : 'Perfil atualizado com sucesso!'),
+          const SnackBar(
+            content: Text('📧 Código MFA enviado para seu email! Verifique sua caixa de entrada.'),
             backgroundColor: Colors.green,
           ),
         );
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const MainScreen()),
-        );
       } else {
+        String errorMsg = 'Erro ao solicitar código MFA';
+        try {
+          errorMsg = jsonDecode(response.body);
+        } catch (e) {}
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Falha ao atualizar perfil: ${response.statusCode}'),
+            content: Text(errorMsg),
             backgroundColor: Colors.red,
           ),
         );
       }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isRequestingMfa = false;
+      });
+      AppModals.showConnectionError(context);
+    }
+  }
+
+  Future<void> _verifyMfaCode() async {
+    if (_mfaCodeController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Digite o código MFA'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final user = Provider.of<HomePageData>(context, listen: false).user;
+    
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/users/${user['user_id']}/verify-password-reset-mfa'),
+        headers: ApiAuth.jsonHeaders(),
+        body: jsonEncode({'mfaCode': _mfaCodeController.text}),
+      );
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200) {
+        setState(() {
+          _mfaValidated = true;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Código MFA validado com sucesso!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        String errorMsg = 'Código MFA inválido ou expirado';
+        try {
+          errorMsg = jsonDecode(response.body);
+        } catch (e) {}
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      AppModals.showConnectionError(context);
     }
   }
 
@@ -431,16 +585,26 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   ),
                   subtitle: const Text('Marque esta opção se deseja alterar sua senha'),
                   value: _changePassword,
-                  onChanged: (bool? value) {
+                  onChanged: (bool? value) async {
                     setState(() {
                       _changePassword = value ?? false;
                       if (!_changePassword) {
                         // Limpar campos de senha ao desmarcar
-                        _oldPasswordController.clear();
+                        _mfaCodeController.clear();
                         _newPasswordController.clear();
                         _confirmPasswordController.clear();
+                        _mfaRequested = false;
+                        _mfaValidated = false;
                       }
                     });
+                    
+                    // Se marcou, enviar MFA automaticamente
+                    if (value == true && !_mfaRequested) {
+                      await Future.delayed(const Duration(milliseconds: 300));
+                      if (mounted) {
+                        await _requestPasswordResetMfa();
+                      }
+                    }
                   },
                   controlAffinity: ListTileControlAffinity.leading,
                 ),
@@ -448,98 +612,202 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 if (_changePassword) ...[
                   const SizedBox(height: 16.0),
                   
-                  // Senha Atual
-                  const Text('Senha Atual', style: TextStyle(fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 8.0),
-                  TextFormField(
-                    controller: _oldPasswordController,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      hintText: 'Digite sua senha atual',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.lock_outline),
-                    ),
-                    validator: (value) {
-                      if (_changePassword && (value == null || value.isEmpty)) {
-                        return 'Senha atual é obrigatória';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16.0),
-                  
-                  // Nova Senha
-                  const Text('Nova Senha', style: TextStyle(fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 8.0),
-                  TextFormField(
-                    controller: _newPasswordController,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      hintText: 'Digite a nova senha (mínimo 6 caracteres)',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.lock),
-                    ),
-                    validator: (value) {
-                      if (_changePassword && (value == null || value.isEmpty)) {
-                        return 'Nova senha é obrigatória';
-                      }
-                      if (_changePassword && value!.length < 6) {
-                        return 'A senha deve ter no mínimo 6 caracteres';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16.0),
-                  
-                  // Confirmar Nova Senha
-                  const Text('Confirmar Nova Senha', style: TextStyle(fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 8.0),
-                  TextFormField(
-                    controller: _confirmPasswordController,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      hintText: 'Digite a nova senha novamente',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.lock),
-                    ),
-                    validator: (value) {
-                      if (_changePassword && (value == null || value.isEmpty)) {
-                        return 'Confirmação de senha é obrigatória';
-                      }
-                      if (_changePassword && value != _newPasswordController.text) {
-                        return 'As senhas não coincidem';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16.0),
-                  
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.orange.shade200),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.info_outline, color: Colors.orange.shade700),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'A senha deve ter no mínimo 6 caracteres',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.orange.shade700,
+                  // Aviso de MFA (só mostra antes de solicitar o código)
+                  if (!_mfaRequested)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.security, color: Colors.blue.shade700),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Enviaremos um código MFA para seu email para validar a alteração de senha',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.blue.shade700,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-                
-                const SizedBox(height: 32.0),
+                  if (!_mfaRequested) const SizedBox(height: 16.0),
+                  
+                  if (_mfaRequested && !_mfaValidated) ...[
+                    // Campo de código MFA
+                    const Text('Código MFA', style: TextStyle(fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 8.0),
+                    TextFormField(
+                      autofocus: true,
+                      controller: _mfaCodeController,
+                      decoration: InputDecoration(
+                        hintText: 'Digite o código MFA (8 caracteres)',
+                        border: const OutlineInputBorder(),
+                        prefixIcon: const Icon(Icons.key),
+                        suffixIcon: _mfaValidated
+                            ? const Icon(Icons.check_circle, color: Colors.green)
+                            : null,
+                      ),
+                      maxLength: 8,
+                      textCapitalization: TextCapitalization.characters,
+                      onChanged: (value) async {
+                        setState(() {});
+                        if (value.length == 8 && !_mfaValidated) {
+                          await _verifyMfaCode();
+                        }
+                      },
+                      validator: (value) {
+                        if (_changePassword && _mfaRequested && (value == null || value.isEmpty)) {
+                          return 'Código MFA é obrigatório';
+                        }
+                        if (_changePassword && _mfaRequested && value!.length < 8) {
+                          return 'Código MFA deve ter 8 caracteres';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16.0),
+                  ],
+                  
+                  if (_mfaValidated) ...[
+                    // Nova Senha
+                    const Text('Nova Senha', style: TextStyle(fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 8.0),
+                    TextFormField(
+                      controller: _newPasswordController,
+                      obscureText: !_showNewPassword,
+                      onChanged: (value) => setState(() {}),
+                      decoration: InputDecoration(
+                        hintText: 'Digite a nova senha',
+                        border: const OutlineInputBorder(),
+                        prefixIcon: const Icon(Icons.lock),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _showNewPassword ? Icons.visibility : Icons.visibility_off,
+                            color: Colors.grey,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              _showNewPassword = !_showNewPassword;
+                            });
+                          },
+                        ),
+                      ),
+                      validator: (value) {
+                        if (_changePassword && (value == null || value.isEmpty)) {
+                          return 'Nova senha é obrigatória';
+                        }
+                        if (_changePassword && !_isPasswordStrong(value!)) {
+                          return 'Senha não atende aos requisitos';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16.0),
+                    
+                    // Confirmar Nova Senha
+                    const Text('Confirmar Nova Senha', style: TextStyle(fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 8.0),
+                    TextFormField(
+                      controller: _confirmPasswordController,
+                      obscureText: !_showConfirmPassword,
+                      onChanged: (value) => setState(() {}),
+                      decoration: InputDecoration(
+                        hintText: 'Digite a nova senha novamente',
+                        border: const OutlineInputBorder(),
+                        prefixIcon: const Icon(Icons.lock),
+                        suffixIcon: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (_confirmPasswordController.text.isNotEmpty && 
+                                _newPasswordController.text.isNotEmpty &&
+                                _confirmPasswordController.text == _newPasswordController.text)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 8.0),
+                                child: Icon(Icons.check_circle, color: Colors.green),
+                              ),
+                            IconButton(
+                              icon: Icon(
+                                _showConfirmPassword ? Icons.visibility : Icons.visibility_off,
+                                color: Colors.grey,
+                              ),
+                              onPressed: () {
+                                setState(() {
+                                  _showConfirmPassword = !_showConfirmPassword;
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                      validator: (value) {
+                        if (_changePassword && (value == null || value.isEmpty)) {
+                          return 'Confirmação de senha é obrigatória';
+                        }
+                        if (_changePassword && value != _newPasswordController.text) {
+                          return 'As senhas não coincidem';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16.0),
+                    
+                    // Requisitos de senha (mostra sempre)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue.shade200),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Requisitos da Senha:',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue.shade700,
+                              fontSize: 12,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            _buildPasswordRequirement(
+                              'Mínimo 6 caracteres',
+                              _newPasswordController.text.length >= 6,
+                            ),
+                            _buildPasswordRequirement(
+                              'Ao menos 1 letra maiúscula (A-Z)',
+                              _newPasswordController.text.contains(RegExp(r'[A-Z]')),
+                            ),
+                            _buildPasswordRequirement(
+                              'Ao menos 1 dígito (0-9)',
+                              _newPasswordController.text.contains(RegExp(r'[0-9]')),
+                            ),
+                            _buildPasswordRequirement(
+                              'Ao menos 1 caractere especial (!@#\$%^&*...)',
+                              _newPasswordController.text.contains(RegExp(r'[!@#$%^&*()_+=\[\]{};:,.<>?/\\|`~-]')),
+                            ),
+                            _buildPasswordRequirement(
+                              'Senhas são iguais',
+                              _newPasswordController.text.isNotEmpty &&
+                              _newPasswordController.text == _confirmPasswordController.text,
+                              withStrikethrough: false,
+                            ),
+
+                          ],
+                        ),
+                      ),
+                  ],
+                  ],
+                  
+                  const SizedBox(height: 32.0),
                 
                 // Botões
                 Row(

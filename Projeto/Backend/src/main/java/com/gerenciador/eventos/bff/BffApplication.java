@@ -26,6 +26,7 @@ import com.gerenciador.eventos.Service.EventService;
 import com.gerenciador.eventos.Service.EventWalletService;
 import com.gerenciador.eventos.Service.MyWalletService;
 import com.gerenciador.eventos.Service.UserService;
+import com.gerenciador.eventos.Service.EmailVerificationService;
 
 // Scan for packages as per structure
 @SpringBootApplication
@@ -42,10 +43,13 @@ public class BffApplication {
     public static class UserBffController {
         private final UserService userService;
         private final com.gerenciador.eventos.security.JwtUtil jwtUtil;
+        private final EmailVerificationService emailVerificationService;
 
-        public UserBffController(UserService userService, com.gerenciador.eventos.security.JwtUtil jwtUtil) {
+        public UserBffController(UserService userService, com.gerenciador.eventos.security.JwtUtil jwtUtil, 
+                                 EmailVerificationService emailVerificationService) {
             this.userService = userService;
             this.jwtUtil = jwtUtil;
+            this.emailVerificationService = emailVerificationService;
         }
 
         @PostMapping
@@ -116,6 +120,80 @@ public class BffApplication {
                 return ResponseEntity.badRequest().body(e.getMessage());
             } catch (Exception e) {
                 return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Erro ao alterar senha: " + e.getMessage());
+            }
+        }
+
+        @PostMapping("/{id}/request-password-reset-mfa")
+        public ResponseEntity<?> requestPasswordResetMfa(@PathVariable Long id) {
+            try {
+                User user = userService.findById(id);
+                
+                // Gerar código MFA
+                String mfaCode = userService.generatePasswordResetMfa(id);
+                
+                // Enviar email com MFA usando EmailVerificationService
+                emailVerificationService.sendPasswordResetMfaEmail(user.getEmail(), user.getName(), mfaCode);
+                
+                java.util.Map<String, String> response = new java.util.HashMap<>();
+                response.put("message", "Código MFA enviado para " + user.getEmail());
+                response.put("email", user.getEmail());
+                return ResponseEntity.ok(response);
+                
+            } catch (RuntimeException e) {
+                return ResponseEntity.notFound().build();
+            } catch (Exception e) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Erro ao requisitar MFA: " + e.getMessage());
+            }
+        }
+
+        @PostMapping("/{id}/verify-password-reset-mfa")
+        public ResponseEntity<?> verifyPasswordResetMfa(@PathVariable Long id, @RequestBody java.util.Map<String, String> body) {
+            try {
+                String mfaCode = body.get("mfaCode");
+                
+                if (mfaCode == null || mfaCode.trim().isEmpty()) {
+                    return ResponseEntity.badRequest().body("Código MFA é obrigatório");
+                }
+                
+                boolean isValid = userService.verifyPasswordResetMfaCode(id, mfaCode);
+                if (isValid) {
+                    java.util.Map<String, String> response = new java.util.HashMap<>();
+                    response.put("message", "Código MFA validado com sucesso");
+                    return ResponseEntity.ok(response);
+                } else {
+                    return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Código MFA inválido ou expirado");
+                }
+            } catch (Exception e) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Erro ao validar MFA: " + e.getMessage());
+            }
+        }
+
+        @PutMapping("/{id}/password-with-mfa")
+        public ResponseEntity<?> changePasswordWithMfa(@PathVariable Long id, @RequestBody java.util.Map<String, String> body) {
+            try {
+                String mfaCode = body.get("mfaCode");
+                String newPassword = body.get("newPassword");
+                
+                if (mfaCode == null || mfaCode.trim().isEmpty()) {
+                    return ResponseEntity.badRequest().body("Código MFA é obrigatório");
+                }
+                if (newPassword == null || newPassword.isEmpty()) {
+                    return ResponseEntity.badRequest().body("Nova senha é obrigatória");
+                }
+                
+                userService.changePasswordWithMfa(id, newPassword, mfaCode);
+                
+                java.util.Map<String, String> response = new java.util.HashMap<>();
+                response.put("message", "Senha alterada com sucesso");
+                return ResponseEntity.ok(response);
+                
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(e.getMessage());
+            } catch (Exception e) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Erro ao alterar senha: " + e.getMessage());
             }
         }
 

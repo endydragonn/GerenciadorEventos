@@ -4,7 +4,7 @@
 // Função: Hub central após login - visualização e navegação para funcionalidades
 // 
 // Funcionalidades:
-// - Exibição de eventos disponíveis (busca via API /api/bff/events/search)
+// - Exibição de eventos disponíveis (busca via API /bff/events/search)
 // - Barra de navegação superior com nome do site
 // - Menu do usuário (Avatar com opções):
 //   • Gerenciar Eventos (criar e editar eventos do usuário)
@@ -27,7 +27,7 @@ import 'telaInscricaoEvento.dart'; // EventRegistrationScreen
 import 'telaHomePage.dart'; // HomeScreen & HomePageData
 import 'telaEdicaoPerfil.dart';
 import 'telaCriacaoEvento.dart';
-import 'telaInscricaoEvento.dart'; // Importar tela de inscrição
+import '../config/app_config.dart'; // AppConfig
 import 'telaHomePage.dart'; // Para deslogar
 
 class MainScreen extends StatefulWidget {
@@ -43,12 +43,29 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    _loadUserData();
     _fetchEvents();
+  }
+
+  Future<void> _loadUserData() async {
+    try {
+      final response = await http.get(
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/users/me'),
+        headers: ApiAuth.jsonHeaders(),
+      );
+      
+      if (response.statusCode == 200) {
+        final userData = jsonDecode(response.body) as Map<String, dynamic>;
+        Provider.of<HomePageData>(context, listen: false).setUser(userData);
+      }
+    } catch (e) {
+      // Erro ao carregar dados do usuário
+    }
   }
 
   Future<void> _fetchEvents() async {
   final response = await http.get(
-    Uri.parse('/api/bff/events/search?term='),
+    Uri.parse('${AppConfig.apiBaseUrl}/bff/events/search?term='),
     headers: ApiAuth.jsonHeaders(),
   );
     if (response.statusCode == 200) {
@@ -100,6 +117,21 @@ class _MainScreenState extends State<MainScreen> {
           ],
         ),
         actions: <Widget>[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Center(
+              child: Text(
+                homePageData.user.isNotEmpty 
+                  ? homePageData.user['name'] ?? homePageData.userName
+                  : homePageData.userName,
+                style: const TextStyle(
+                  color: Colors.black87,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ),
           PopupMenuButton<String>(
             onSelected: (String value) {
               if (value == 'Editar Perfil') {
@@ -113,12 +145,21 @@ class _MainScreenState extends State<MainScreen> {
                   MaterialPageRoute(builder: (context) => const CreateEventScreen()),
                 );
               } else if (value == 'Deslogar') {
-                // Limpar token ao deslogar
+                // Limpar token e dados ao deslogar
                 ApiAuth.clearToken();
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (context) => const HomeScreen()),
-                );
+                
+                // Limpar Provider
+                if (mounted) {
+                  Provider.of<HomePageData>(context, listen: false).clearUser();
+                }
+                
+                // Forçar navegação para login sem deixar volta
+                if (mounted) {
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (context) => const HomeScreen()),
+                    (route) => false,
+                  );
+                }
               }
             },
             itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[

@@ -14,7 +14,7 @@ import java.time.format.DateTimeParseException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
-import com.gerenciador.eventos.DatabaseConnection;
+import com.gerenciador.eventos.config.DatabaseConnection;
 import com.gerenciador.eventos.POJO.User;
 
 /**
@@ -273,6 +273,57 @@ public class UserRepository {
         }
         
         return user;
+    }
+
+    /**
+     * Guardar código MFA para reset de senha
+     */
+    public void setPasswordResetMfaCode(Long userId, String mfaCode) {
+        String sql = "UPDATE users SET password_reset_mfa_code = ?, password_reset_mfa_expiration = NOW() + INTERVAL '15 minutes' WHERE user_id = ?";
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            
+            stmt.setString(1, mfaCode);
+            stmt.setLong(2, userId);
+            stmt.executeUpdate();
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Erro ao guardar código MFA: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Validar código MFA para reset de senha
+     */
+    public boolean verifyPasswordResetMfaCode(Long userId, String mfaCode) {
+        String sql = "SELECT COUNT(*) FROM users WHERE user_id = ? AND password_reset_mfa_code = ? AND password_reset_mfa_expiration > NOW()";
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            
+            stmt.setLong(1, userId);
+            stmt.setString(2, mfaCode);
+            ResultSet rs = stmt.executeQuery();
+            return rs.next() && rs.getInt(1) > 0;
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Erro ao validar MFA: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Limpar código MFA após uso
+     */
+    public void clearPasswordResetMfaCode(Long userId) {
+        String sql = "UPDATE users SET password_reset_mfa_code = NULL, password_reset_mfa_expiration = NULL WHERE user_id = ?";
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            
+            stmt.setLong(1, userId);
+            stmt.executeUpdate();
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Erro ao limpar código MFA: " + e.getMessage(), e);
+        }
     }
 
     private boolean toPrimitive(Boolean b) {

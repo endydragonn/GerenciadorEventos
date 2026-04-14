@@ -7,7 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.TestConfiguration;
 
-import com.gerenciador.eventos.DatabaseConnection;
+import com.gerenciador.eventos.config.DatabaseConnection;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;

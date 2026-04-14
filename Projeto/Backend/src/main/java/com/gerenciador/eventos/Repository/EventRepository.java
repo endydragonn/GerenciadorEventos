@@ -14,8 +14,8 @@ import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
-import com.gerenciador.eventos.DatabaseConnection;
 import com.gerenciador.eventos.POJO.Event;
+import com.gerenciador.eventos.config.DatabaseConnection;
 
 /**
  * Repository para entidade Event usando JDBC cru via DatabaseConnection.
