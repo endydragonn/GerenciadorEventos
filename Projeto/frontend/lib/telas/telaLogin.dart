@@ -24,6 +24,8 @@ import 'telaPrincipal.dart'; // MainScreen
 import 'telaCadastro.dart'; // RegisterScreen
 import 'auth.dart';
 import 'modals.dart';
+import '../config/app_config.dart';
+import '../widgets/recaptcha_widget.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -38,11 +40,39 @@ class _LoginScreenState extends State<LoginScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
+  bool _recaptchaValidated = false;
   
   // Mensagem de erro inline
   String? _loginError;
 
+  @override
+  void initState() {
+    super.initState();
+    // Carregar credenciais cacheadas se existirem
+    _loadCachedCredentials();
+  }
+
+  Future<void> _loadCachedCredentials() async {
+    final cached = await ApiAuth.getCachedCredentials();
+    if (cached != null && mounted) {
+      setState(() {
+        _usernameController.text = cached['email'] ?? '';
+        _passwordController.text = cached['password'] ?? '';
+        _rememberMe = true;
+      });
+      print('✅ Credenciais cacheadas carregadas automaticamente');
+    }
+  }
+
   Future<void> _login() async {
+    // Validar reCAPTCHA primeiro
+    if (!_recaptchaValidated) {
+      setState(() {
+        _loginError = 'Por favor, complete a verificação de segurança';
+      });
+      return;
+    }
+
     // Limpar erro anterior
     setState(() {
       _loginError = null;
@@ -51,7 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('/api/bff/users/login'),
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/users/login'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'email': _usernameController.text,
@@ -71,8 +101,15 @@ class _LoginScreenState extends State<LoginScreen> {
 
         print('🔐 Login bem-sucedido - Lembrar de mim: $_rememberMe');
 
-        // Salvar token JWT - persistente apenas se "Lembrar de mim" estiver marcado
-        await ApiAuth.setToken(token, persist: _rememberMe);
+        // SEMPRE salvar token JWT (independente do checkbox)
+        await ApiAuth.setToken(token);
+
+        // Salvar credenciais APENAS se "Lembrar de mim" estiver marcado
+        await ApiAuth.setCachedCredentials(
+          _usernameController.text,
+          _passwordController.text,
+          persist: _rememberMe
+        );
 
         // Salvar dados do usuário no Provider
         if (!mounted) return;
@@ -259,6 +296,16 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
             const SizedBox(height: 20.0),
+            RecaptchaWidget(
+              action: 'login',
+              onRecaptchaChanged: (isValid) {
+                setState(() {
+                  _recaptchaValidated = isValid;
+                });
+              },
+            ),
+            const SizedBox(height: 20.0),
+
             SizedBox(
               width: 150.0,
               child: ElevatedButton(

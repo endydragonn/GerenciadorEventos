@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:convert';
 import 'telaLogin.dart';
+import 'telaPrincipal.dart';
 import 'auth.dart';
 import '../config/app_config.dart';
 
@@ -96,11 +97,11 @@ class _TelaVerificacaoEmailState extends State<TelaVerificacaoEmail> {
           token = responseData['token'];
           
           if (token != null && token.isNotEmpty) {
-            // Salva token com persistência (vai estar disponível ao reiniciar)
-            await ApiAuth.setToken(token, persist: true);
+            // Salva token (agora sempre persistente)
+            await ApiAuth.setToken(token);
           }
         } catch (e) {
-          // Ignora erro de parse
+          print('Erro ao extrair token: $e');
         }
 
         if (mounted) {
@@ -111,15 +112,17 @@ class _TelaVerificacaoEmailState extends State<TelaVerificacaoEmail> {
             ),
           );
           
-          // Aguarda 1 segundo e navega (será redirecionado para home automaticamente se houver token)
-          Future.delayed(const Duration(seconds: 1), () {
-            if (mounted) {
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (context) => const LoginScreen()),
-                (route) => false,
-              );
-            }
-          });
+          // Aguarda 2 segundos para garantir que o token está salvo
+          // e depois navega direto para MainScreen (evita LoginScreen)
+          await Future.delayed(const Duration(seconds: 2));
+          
+          if (mounted) {
+            print('Redirecionando para MainScreen...');
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(builder: (context) => const MainScreen()),
+              (route) => false,
+            );
+          }
         }
       } else {
         String errorMsg = 'Erro ao verificar código';

@@ -41,6 +41,7 @@ public class SecurityConfig {
                     "/api/users/request-verification",
                     "/api/users/verify-email",
                     "/api/users/resend-verification-code",
+                    "/api/users/verify-recaptcha",
                     "/bff/events/search",
                     "/actuator/health",
                     "/api/seed" // endpoint de seed público

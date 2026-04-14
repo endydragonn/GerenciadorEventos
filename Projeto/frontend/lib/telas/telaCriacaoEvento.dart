@@ -114,7 +114,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         return;
       }
 
-      print('👤 Usuário criando evento: ${user['user_id']} - ${user['email']}');
+      print('👤 Usuário criando novo evento...');
 
       // Converter data do formato DD/MM/AAAA para ISO 8601
       String formattedDate;
@@ -169,8 +169,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         'presenters': [], // Lista vazia de apresentadores (obrigatório no backend)
       };
 
-      print('📤 Enviando dados do evento: ${jsonEncode(eventData)}');
-      print('🔑 Creator ID sendo enviado: ${user['user_id']} (tipo: ${user['user_id'].runtimeType})');
+      print('📤 Enviando dados do evento...');
 
       try {
         final response = await http.post(

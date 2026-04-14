@@ -149,7 +149,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         }
         
         // Alterar senha primeiro
-        print('🔑 Alterando senha do usuário ${user['user_id']}');
+        print('🔑 Alterando senha do usuário...');
         
         final passwordResponse = await http.put(
           Uri.parse('/api/bff/users/${user['user_id']}/password'),
@@ -187,7 +187,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         'fone': _phoneController.text,
       };
 
-      print('📤 Atualizando usuário ${user['user_id']}: $updatedUser');
+      print('📤 Atualizando informações do usuário...');
 
       final response = await http.put(
         Uri.parse('/api/bff/users/${user['user_id']}'),

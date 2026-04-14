@@ -285,12 +285,15 @@ public class BffApplication {
 
                 // Validar tipo do arquivo
                 String contentType = file.getContentType();
-                if (contentType == null || !contentType.startsWith("image/")) {
+                if (contentType == null) {
+                    return ResponseEntity.badRequest().body("Tipo de arquivo não identificado");
+                }
+                if (!contentType.startsWith("image/")) {
                     return ResponseEntity.badRequest().body("Arquivo deve ser uma imagem");
                 }
 
                 // Ler e converter para JPG
-                byte[] imageBytes = convertToJpg(file.getBytes(), file.getContentType());
+                byte[] imageBytes = convertToJpg(file.getBytes());
 
                 // Buscar evento e atualizar imagem
                 Event event = eventService.findById(id);
@@ -325,7 +328,7 @@ public class BffApplication {
             }
         }
 
-        private byte[] convertToJpg(byte[] inputBytes, String contentType) throws Exception {
+        private byte[] convertToJpg(byte[] inputBytes) throws Exception {
             java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(inputBytes);
             java.awt.image.BufferedImage image = javax.imageio.ImageIO.read(bais);
             

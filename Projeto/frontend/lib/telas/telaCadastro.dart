@@ -23,6 +23,7 @@ import 'telaLogin.dart'; // Para LoginScreen
 import 'telaVerificacaoEmail.dart'; // Para TelaVerificacaoEmail
 import 'modals.dart'; // Modais
 import '../config/app_config.dart'; // Configuração da API
+import '../widgets/recaptcha_widget.dart';
 
 // Classe para formatar telefone no padrão (XX)XXXXX-XXXX
 class PhoneInputFormatter extends TextInputFormatter {
@@ -182,6 +183,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _isLoading = false;
   bool _showPassword = false;
   bool _showConfirmPassword = false;
+  bool _recaptchaValidated = false;
   
   // Mensagens de erro para cada campo
   String? _nameError;
@@ -192,6 +194,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String? _confirmPasswordError;
 
   Future<void> _register() async {
+    // Validar reCAPTCHA primeiro
+    if (!_recaptchaValidated) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Por favor, complete a verificação de segurança'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     // Limpar erros anteriores
     setState(() {
       _nameError = null;
@@ -602,6 +615,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
             PasswordRequirements(
               password: _passwordController.text,
               confirmPassword: _confirmPasswordController.text,
+            ),
+            const SizedBox(height: 20.0),
+            RecaptchaWidget(
+              action: 'register',
+              onRecaptchaChanged: (isValid) {
+                setState(() {
+                  _recaptchaValidated = isValid;
+                });
+              },
             ),
             const SizedBox(height: 20.0),
 

@@ -21,46 +21,61 @@ import 'package:shared_preferences/shared_preferences.dart';
 class ApiAuth {
   static String? _token;
   static const String _tokenKey = 'jwt_token';
+  static const String _emailKey = 'cached_email';
+  static const String _passwordKey = 'cached_password';
 
   // Inicializar: carregar token salvo
   static Future<void> initialize() async {
-    print('🚀 ApiAuth.initialize() - Iniciando...');
     final prefs = await SharedPreferences.getInstance();
-    print('📦 SharedPreferences obtido');
-    
-    // Listar todas as chaves armazenadas
-    final keys = prefs.getKeys();
-    print('🔑 Chaves armazenadas: $keys');
     
     _token = prefs.getString(_tokenKey);
-    print('🔑 ApiAuth.initialize() - Token carregado: ${_token != null ? "SIM (${_token!.length} caracteres, início: ${_token!.substring(0, _token!.length > 20 ? 20 : _token!.length)}...)" : "NÃO"}');
   }
 
-  // Salvar token permanente (quando "Lembrar de mim" está marcado)
-  static Future<void> setToken(String? token, {bool persist = true}) async {
+  // Salvar token SEMPRE (independente do checkbox)
+  static Future<void> setToken(String? token) async {
     _token = token;
     final prefs = await SharedPreferences.getInstance();
     
-    print('💾 ApiAuth.setToken() - persist=$persist, token=${token != null ? "presente" : "null"}');
+    if (token != null && token.isNotEmpty) {
+      await prefs.setString(_tokenKey, token);
+    } else {
+      await prefs.remove(_tokenKey);
+    }
+  }
+
+  // Salvar credenciais para "Lembrar de mim"
+  static Future<void> setCachedCredentials(String email, String password, {bool persist = true}) async {
+    final prefs = await SharedPreferences.getInstance();
     
     if (persist) {
-      // Salvar no localStorage para persistir após refresh
-      if (token != null && token.isNotEmpty) {
-        await prefs.setString(_tokenKey, token);
-        print('✅ Token salvo no localStorage com chave "$_tokenKey"');
-        
-        // Verificar se foi salvo
-        final saved = prefs.getString(_tokenKey);
-        print('🔍 Verificação: Token recuperado = ${saved != null ? "SIM" : "NÃO"}');
-      } else {
-        await prefs.remove(_tokenKey);
-        print('🗑️ Token removido do localStorage');
-      }
+      await prefs.setString(_emailKey, email);
+      await prefs.setString(_passwordKey, password);
+      // NÃO printamos credenciais por segurança
     } else {
-      // Não salvar no localStorage - apenas na memória (sessão atual)
-      await prefs.remove(_tokenKey);
-      print('⚠️ Token NÃO persistente - removido do localStorage');
+      await prefs.remove(_emailKey);
+      await prefs.remove(_passwordKey);
     }
+  }
+
+  // Obter credenciais cacheadas
+  static Future<Map<String, String>?> getCachedCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    final email = prefs.getString(_emailKey);
+    final password = prefs.getString(_passwordKey);
+    
+    if (email != null && password != null) {
+      // NÃO printamos email ou senha por segurança
+      return {'email': email, 'password': password};
+    }
+    
+    return null;
+  }
+
+  // Limpar credenciais cacheadas
+  static Future<void> clearCachedCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_emailKey);
+    await prefs.remove(_passwordKey);
   }
 
   // Limpar token (logout)
@@ -68,7 +83,6 @@ class ApiAuth {
     _token = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_tokenKey);
-    print('🚪 ApiAuth.clearToken() - Token removido (logout)');
   }
 
   static String? get token => _token;

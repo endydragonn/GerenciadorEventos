@@ -18,8 +18,4 @@ class AppConfig {
   static const String registerEndpoint = '$apiBaseUrl/api/users';
   static const String loginEndpoint = '$apiBaseUrl/api/users/login';
   static const String meEndpoint = '$apiBaseUrl/api/bff/users/me';
-  
-  static void printConfig() {
-    print('🔧 AppConfig - API Base URL: $apiBaseUrl');
-  }
 }

@@ -24,7 +24,8 @@ import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'auth.dart';
 import 'dart:convert';
-import 'telaLogin.dart'; // corrigido caminho relativo
+import 'telaLogin.dart'; // LoginScreen
+import 'telaCadastro.dart'; // RegisterScreen
 import 'telaPesquisarEvento.dart'; // SearchEventScreen
 import 'telaCriacaoEvento.dart'; // CreateEventScreen
 
@@ -154,7 +155,7 @@ class _TopNavigationBar extends StatelessWidget {
               homePageData.siteName,
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18.0),
             ),
-            // Mostrar ícone de usuário se logado, senão mostrar botão de menu
+            // Mostrar dados do usuário se logado, senão mostrar botões de Login/Sign up
             if (isLoggedIn)
               Row(
                 children: [
@@ -175,14 +176,42 @@ class _TopNavigationBar extends StatelessWidget {
                 ],
               )
             else
-              IconButton(
-                icon: const Icon(Icons.more_vert, size: 28),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const LoginScreen()),
-                  );
-                },
+              Row(
+                children: [
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const LoginScreen()),
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    ),
+                    child: const Text(
+                      'Login',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const RegisterScreen()),
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.blue, width: 1.5),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    ),
+                    child: const Text(
+                      'Sign up',
+                      style: TextStyle(color: Colors.blue, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
               ),
           ],
         ),
@@ -201,6 +230,13 @@ class _UserProfileSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Só mostrar se usuário está logado
+    final bool isLoggedIn = homePageData.user != null && homePageData.user.isNotEmpty;
+    
+    if (!isLoggedIn) {
+      return const SizedBox.shrink(); // Não renderizar nada se não está logado
+    }
+    
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Row(
@@ -213,7 +249,7 @@ class _UserProfileSection extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(homePageData.userName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(homePageData.user['name'] ?? homePageData.userName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const Text('Bem-vindo de volta!'),
             ],
           )
