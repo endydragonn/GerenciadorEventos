@@ -76,19 +76,15 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
     }
     
     final userId = user['user_id'];
-    print('📋 Buscando eventos para userId: $userId');
 
     // Enrolled
-    print('📡 Buscando eventos inscritos...');
     final enrolledResponse = await http.get(
       Uri.parse('/api/bff/event-wallets/user/$userId'),
       headers: ApiAuth.jsonHeaders(),
     );
-    print('📥 Resposta eventos inscritos: ${enrolledResponse.statusCode}');
     
     if (enrolledResponse.statusCode == 200) {
       final wallets = jsonDecode(enrolledResponse.body) as List;
-      print('✅ Encontrados ${wallets.length} eventos inscritos');
       List<Map<String, dynamic>> events = [];
       for (var wallet in wallets) {
         final eventResponse = await http.get(
@@ -105,16 +101,13 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
     }
 
     // Created
-    print('📡 Buscando eventos criados...');
     final createdResponse = await http.get(
       Uri.parse('/api/bff/events?creator_id=$userId'),
       headers: ApiAuth.jsonHeaders(),
     );
-    print('📥 Resposta eventos criados: ${createdResponse.statusCode}');
     
     if (createdResponse.statusCode == 200) {
       final createdList = jsonDecode(createdResponse.body) as List;
-      print('✅ Encontrados ${createdList.length} eventos criados');
       setState(() {
         createdEvents = createdList.cast<Map<String, dynamic>>();
       });

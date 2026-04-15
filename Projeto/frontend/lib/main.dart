@@ -69,7 +69,6 @@ class MyApp extends StatelessWidget {
 
             // Se carregou usuário, restaurar no Provider e ir para MainScreen
             if (snapshot.hasData && snapshot.data != null) {
-              print('🎯 Navegando para MainScreen com sessão restaurada');
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 Provider.of<HomePageData>(context, listen: false)
                     .setUser(snapshot.data!);
@@ -79,7 +78,6 @@ class MyApp extends StatelessWidget {
             }
 
             // Sem sessão válida, mostrar HomeScreen (que tem botão de login)
-            print('🏠 Navegando para HomeScreen (sem sessão)');
             return const HomeScreen();
           },
         ),

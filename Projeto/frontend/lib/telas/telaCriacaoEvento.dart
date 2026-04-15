@@ -114,7 +114,6 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         return;
       }
 
-      print('👤 Usuário criando novo evento...');
 
       // Converter data do formato DD/MM/AAAA para ISO 8601
       String formattedDate;
@@ -169,7 +168,6 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         'presenters': [], // Lista vazia de apresentadores (obrigatório no backend)
       };
 
-      print('📤 Enviando dados do evento...');
 
       try {
         final response = await http.post(
@@ -178,7 +176,6 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
           body: jsonEncode(eventData),
         );
 
-        print('📥 Resposta do servidor: ${response.statusCode}');
         if (response.statusCode >= 400) {
           print('❌ Erro: ${response.body}');
         }

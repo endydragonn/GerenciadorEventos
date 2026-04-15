@@ -60,7 +60,7 @@ class _LoginScreenState extends State<LoginScreen> {
         _passwordController.text = cached['password'] ?? '';
         _rememberMe = true;
       });
-      print('✅ Credenciais cacheadas carregadas automaticamente');
+
     }
   }
 
@@ -98,8 +98,6 @@ class _LoginScreenState extends State<LoginScreen> {
         final data = jsonDecode(response.body);
         final user = data['user'];
         final token = data['token'];
-
-        print('🔐 Login bem-sucedido - Lembrar de mim: $_rememberMe');
 
         // SEMPRE salvar token JWT (independente do checkbox)
         await ApiAuth.setToken(token);

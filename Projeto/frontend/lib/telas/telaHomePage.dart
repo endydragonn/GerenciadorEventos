@@ -115,23 +115,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadUserData() async {
     try {
-      print('DEBUG: Iniciando _loadUserData');
-      print('DEBUG: Token: ${ApiAuth.token}');
       final response = await http.get(
         Uri.parse('${AppConfig.apiBaseUrl}/bff/users/me'),
         headers: ApiAuth.jsonHeaders(),
       );
       
-      print('DEBUG: Response status: ${response.statusCode}');
-      print('DEBUG: Response body: ${response.body}');
       
       if (response.statusCode == 200) {
         final userData = jsonDecode(response.body) as Map<String, dynamic>;
-        print('DEBUG: User data loaded: $userData');
+
         Provider.of<HomePageData>(context, listen: false).setUser(userData);
-      } else {
-        print('DEBUG: Failed to load user - Status: ${response.statusCode}');
-      }
+      } 
     } catch (e) {
       print('DEBUG: Error loading user data: $e');
       // Usuário não autenticado

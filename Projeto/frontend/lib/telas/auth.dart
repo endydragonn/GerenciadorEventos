@@ -50,7 +50,7 @@ class ApiAuth {
     if (persist) {
       await prefs.setString(_emailKey, email);
       await prefs.setString(_passwordKey, password);
-      // NÃO printamos credenciais por segurança
+
     } else {
       await prefs.remove(_emailKey);
       await prefs.remove(_passwordKey);
@@ -64,7 +64,7 @@ class ApiAuth {
     final password = prefs.getString(_passwordKey);
     
     if (email != null && password != null) {
-      // NÃO printamos email ou senha por segurança
+  
       return {'email': email, 'password': password};
     }
     

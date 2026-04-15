@@ -60,7 +60,6 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
     } catch (e) {
       setState(() => _isVerifying = false);
       
-      debugPrint('Erro reCAPTCHA: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Erro na verificação do reCAPTCHA'),
@@ -84,7 +83,6 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
         throw Exception('grecaptcha não carregou no window');
       }
       
-      debugPrint('🔐 Executando grecaptcha.execute() com action: ${widget.action}');
       
       // Criar objeto de parâmetros de forma correta para JavaScript
       final Map<String, String> params = {'action': widget.action};
@@ -99,13 +97,13 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
       // Conectar callbacks ao promise
       promise.callMethod('then', [
         js.allowInterop((token) {
-          debugPrint('✓ Token gerado com sucesso!');
+  
           if (!completer.isCompleted) {
             completer.complete(token as String);
           }
         }),
         js.allowInterop((error) {
-          debugPrint('✗ Erro ao gerar token: $error');
+ 
           if (!completer.isCompleted) {
             completer.completeError(error);
           }
@@ -116,14 +114,13 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
       return await completer.future.timeout(const Duration(seconds: 20));
       
     } catch (e) {
-      debugPrint('✗ Erro em _getRecaptchaToken: $e');
+      // debugPrint('✗ Erro em _getRecaptchaToken: $e');
       rethrow;
     }
   }
 
   Future<bool> _verifyTokenOnBackend(String token) async {
     try {
-      print('DEBUG: Enviando token para verificação: ${token.substring(0, 20)}...');
       final response = await http.post(
         Uri.parse('${AppConfig.apiBaseUrl}/api/users/verify-recaptcha'),
         headers: {'Content-Type': 'application/json'},
@@ -132,21 +129,16 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
           'action': widget.action,
         }),
       ).timeout(const Duration(seconds: 10));
-
-      print('DEBUG: Response status: ${response.statusCode}');
-      print('DEBUG: Response body: ${response.body}');
       
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        print('DEBUG: Data decodificado: $data');
+        
         return data['success'] == true && (data['score'] ?? 0.0) > 0.7;
-      } else {
-        print('❌ Erro: Status ${response.statusCode}');
       }
       
       return false;
     } catch (e) {
-      print('❌ Erro ao verificar token no backend: $e');
+      // print('❌ Erro ao verificar token no backend: $e');
       return false;
     }
   }

@@ -205,7 +205,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
         'presenters': widget.event['presenters'] ?? [],
       };
 
-      print('📤 Atualizando evento ${widget.event['event_id']}: ${jsonEncode(eventData)}');
+
 
       try {
         final response = await http.put(
