@@ -140,6 +140,18 @@ class _MainScreenState extends State<MainScreen> {
                   MaterialPageRoute(builder: (context) => const EditProfileScreen()),
                 );
               } else if (value == 'Criar Evento') {
+                // Verificar se o usuário é host antes de navegar
+                final isHost = homePageData.user['host'] ?? homePageData.user['isHost'] ?? false;
+                if (!isHost) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Apenas usuários com status de host podem criar eventos'),
+                      backgroundColor: Colors.redAccent,
+                      duration: Duration(seconds: 3),
+                    ),
+                  );
+                  return;
+                }
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (context) => const CreateEventScreen()),

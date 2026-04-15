@@ -60,6 +60,7 @@ public class RecaptchaController {
 
             logger.info("Enviando requisição para Google reCAPTCHA API...");
             
+            @SuppressWarnings("unchecked")
             Map<String, Object> response = restTemplate.postForObject(
                 RECAPTCHA_VERIFY_URL,
                 entity,

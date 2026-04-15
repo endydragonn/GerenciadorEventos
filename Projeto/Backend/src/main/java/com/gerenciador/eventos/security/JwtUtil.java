@@ -37,6 +37,18 @@ public class JwtUtil {
                 .compact();
     }
 
+    public String generateToken(String subject, Boolean isHost) {
+        Date now = new Date();
+        Date exp = new Date(now.getTime() + expirationSeconds * 1000);
+        return Jwts.builder()
+                .setSubject(subject)
+                .claim("isHost", isHost != null ? isHost : false)
+                .setIssuedAt(now)
+                .setExpiration(exp)
+                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .compact();
+    }
+
     public boolean isTokenValid(String token) {
         try {
             Claims claims = extractAllClaims(token);
@@ -48,6 +60,25 @@ public class JwtUtil {
 
     public String extractSubject(String token) {
         return extractAllClaims(token).getSubject();
+    }
+
+    public Boolean extractIsHost(String token) {
+        Claims claims = extractAllClaims(token);
+        Object isHostClaim = claims.get("isHost");
+        if (isHostClaim instanceof Boolean b) {
+            return b;
+        }
+        if (isHostClaim instanceof Number n) {
+            return n.longValue() != 0;
+        }
+        if (isHostClaim instanceof String s) {
+            // Use equalsIgnoreCase to avoid temporary string conversion
+            return "true".equalsIgnoreCase(s);
+        }
+        if (isHostClaim != null) {
+            return "true".equalsIgnoreCase(isHostClaim.toString());
+        }
+        return false;
     }
 
     private Claims extractAllClaims(String token) {

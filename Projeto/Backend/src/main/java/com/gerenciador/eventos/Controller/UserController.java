@@ -227,8 +227,8 @@ public class UserController {
 
             User createdUser = emailVerificationService.verifyEmailAndCreateUser(email, verificationCode);
 
-            // Gera token JWT para login automático
-            String token = jwtUtil.generateToken(createdUser.getEmail());
+            // Gera token JWT para login automático (inclui status de host)
+            String token = jwtUtil.generateToken(createdUser.getEmail(), createdUser.getIsHost());
 
             Map<String, Object> response = new HashMap<>();
             response.put("message", "Email verificado com sucesso. Usuário criado!");

@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.gerenciador.eventos.POJO.Event;
 import com.gerenciador.eventos.Service.EventService;
+import com.gerenciador.eventos.security.AuthorizationUtil;
 
 /**
  * Controller REST para operações com Event (POJO simples)
@@ -28,11 +29,22 @@ public class EventController {
     @Autowired
     private EventService eventService;
 
+    @Autowired
+    private AuthorizationUtil authorizationUtil;
+
     /**
      * POST /api/events - Criar novo evento (sem persistir)
+     * Apenas usuários com status de host podem criar eventos
      */
     @PostMapping
     public ResponseEntity<?> createEvent(@RequestBody Event event) {
+        // Verificar se o usuário é host
+        try {
+            authorizationUtil.ensureUserIsHost();
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ex.getMessage());
+        }
+
         // validações básicas do payload (campos óbvios)
         List<String> basicErrors = validate(event);
         if (!basicErrors.isEmpty()) {
@@ -52,9 +64,17 @@ public class EventController {
 
     /**
      * POST /api/events/validate - Validar evento sem criar
+     * Apenas usuários com status de host podem validar eventos
      */
     @PostMapping("/validate")
     public ResponseEntity<?> validateEvent(@RequestBody Event event) {
+        // Verificar se o usuário é host
+        try {
+            authorizationUtil.ensureUserIsHost();
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ex.getMessage());
+        }
+
         // validações básicas
         List<String> errors = validate(event);
         // validações do service (regras + duplicidade + existência do criador)

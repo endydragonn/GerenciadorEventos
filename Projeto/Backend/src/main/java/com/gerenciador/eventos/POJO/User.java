@@ -17,6 +17,7 @@ public class User {
     private String password;
     private String birthDate;
     private Boolean isAdmin;
+    private Boolean isHost;
     private Boolean isActive;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -24,6 +25,7 @@ public class User {
     // Construtor vazio
     public User() {
         this.isAdmin = false;
+        this.isHost = false;
         this.isActive = true;
     }
 
@@ -35,6 +37,7 @@ public class User {
         this.password = password;
         this.birthDate = birthDate;
         this.isAdmin = false;
+        this.isHost = false;
         this.isActive = true;
     }
 
@@ -49,6 +52,7 @@ public class User {
     @JsonProperty("birthdate")
     public String getBirthDate() { return birthDate; }
     public Boolean getIsAdmin() { return isAdmin; }
+    public Boolean getIsHost() { return isHost; }
     public Boolean getIsActive() { return isActive; }
     @JsonProperty("created_at")
     public LocalDateTime getCreatedAt() { return createdAt; }
@@ -64,6 +68,7 @@ public class User {
     @JsonProperty("birthdate")
     public void setBirthDate(String birthDate) { this.birthDate = birthDate; }
     public void setIsAdmin(Boolean isAdmin) { this.isAdmin = isAdmin; }
+    public void setIsHost(Boolean isHost) { this.isHost = isHost; }
     public void setIsActive(Boolean isActive) { this.isActive = isActive; }
     @JsonProperty("created_at")
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
@@ -76,6 +81,7 @@ public class User {
                 ", name='" + name + '\'' +
                 ", email='" + email + '\'' +
                 ", fone='" + fone + '\'' +
+                ", isHost=" + isHost +
                 ", isActive=" + isActive +
                 ", createdAt=" + createdAt +
                 '}';

@@ -73,6 +73,23 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
           );
         },
       );
+      return;
+    }
+
+    // Verificar se o usuário é um host
+    final isHost = user['host'] ?? user['isHost'] ?? false;
+    if (!isHost) {
+      AppModals.showError(
+        context,
+        'Acesso Negado',
+        'Apenas usuários com status de host podem criar eventos.',
+        onOk: () {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const MainScreen()),
+          );
+        },
+      );
     }
   }
 
@@ -110,6 +127,17 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
           context,
           'Erro de Autenticação',
           'ID do usuário não encontrado. Faça login novamente.',
+        );
+        return;
+      }
+
+      // Verificar se o usuário é um host
+      final isHost = user['host'] ?? user['isHost'] ?? false;
+      if (!isHost) {
+        AppModals.showError(
+          context,
+          'Acesso Negado',
+          'Apenas usuários com status de host podem criar eventos.',
         );
         return;
       }

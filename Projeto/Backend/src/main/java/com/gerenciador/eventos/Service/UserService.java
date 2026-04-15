@@ -240,7 +240,7 @@ public class UserService {
      * Gerar código MFA alfanumérico
      */
     private String generateAlphanumericCode(int length) {
-        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz";
         StringBuilder code = new StringBuilder();
         java.util.Random random = new java.util.Random();
         for (int i = 0; i < length; i++) {
