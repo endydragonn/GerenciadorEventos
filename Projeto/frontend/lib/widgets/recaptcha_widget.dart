@@ -139,7 +139,7 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         print('DEBUG: Data decodificado: $data');
-        return data['success'] == true && (data['score'] ?? 0.0) > 0.5;
+        return data['success'] == true && (data['score'] ?? 0.0) > 0.7;
       } else {
         print('❌ Erro: Status ${response.statusCode}');
       }

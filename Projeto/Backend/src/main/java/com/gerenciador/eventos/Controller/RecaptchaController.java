@@ -36,7 +36,7 @@ public class RecaptchaController {
     private String recaptchaSecretKey;
 
     private static final String RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify";
-    private static final double SCORE_THRESHOLD = 0.5;
+    private static final double SCORE_THRESHOLD = 0.7;
 
     @PostMapping("/verify-recaptcha")
     public ResponseEntity<?> verifyRecaptcha(@RequestBody RecaptchaRequest request) {
