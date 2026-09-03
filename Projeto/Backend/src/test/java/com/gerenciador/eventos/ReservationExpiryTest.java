@@ -211,7 +211,9 @@ public class ReservationExpiryTest {
                + "WHERE user_id = ? AND event_id = ?")) {
             ps.setLong(1, userId);
             ps.setLong(2, eventId);
-            ps.executeUpdate();
+            int linhas = ps.executeUpdate();
+            assertEquals(1, linhas,
+                    "forçar expires_at deve afetar exatamente a reserva do teste");
         }
     }
 
