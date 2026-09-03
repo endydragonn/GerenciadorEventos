@@ -28,15 +28,12 @@ jobs:
           MSG+="📋 #${PR_NUMBER}: ${PR_TITLE}"$'\n'
           MSG+="🔗 ${PR_URL}"$'\n\n'
 
-          MSG+="👀 Revisores:"$'\n'
-
           if [ -n "$REVIEWER_NAMES" ]; then
-            MSG+="${REVIEWER_NAMES}"$'\n'
-          else
-            MSG+="• Nenhum revisor solicitado"$'\n'
+            MSG+="👀 Revisores:"$'\n'
+            MSG+="${REVIEWER_NAMES}"$'\n\n'
           fi
 
-          MSG+=$'\n'"🤖 Pré-review: Claude"$'\n'
+          MSG+=$'\n'"🤖 Pré-review: \n • Claude \n • GitHub Copilot"$'\n'
           MSG+=$'\n'"👀 Dá uma olhada quando puder."
 
           IFS=',' read -ra IDS <<< "$CHAT_IDS"
