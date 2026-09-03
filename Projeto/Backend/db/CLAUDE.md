@@ -32,7 +32,16 @@ não há migração via ORM. Leia também o CLAUDE.md da raiz e o de `Backend/`.
 Nessa migração, a semântica de `quant` **inverte**: no modelo antigo `event.quant` = ingressos
 vendidos, no novo `eventcap.quant` = vagas disponíveis, então a etapa 2 converte
 `quant = GREATEST(capacity - vendidos, 0)` (e `capacity IS NULL` do modelo antigo vira o
-sentinela `-1/-1` de evento ilimitado). Coberto por `EventCapMigrationTest`.
+sentinela `-1/-1` de evento ilimitado). Coberto por `EventCapMigrationTest` (só a conversão)
+e, ponta a ponta, pelo harness `migrations/verify-20260901-migration.sh`.
+
+`migrations/verify-20260901-migration.sh` (harness da issue #6, cross-platform como
+`run-tests.sh`): cria um banco **descartável** `eventcap_mig_check` no container, aplica os
+init-scripts `01`–`08`, roda `99-tests.sql`, depois roda o harness SQL
+`verify-20260901-migration.sql` — que reconstrói o schema ANTIGO **com dados**, aplica a
+migração **2×** (idempotência) e checa colunas removidas/criadas, constraints, índice parcial,
+conversão de `quant` (limitado / esgotado-piso-0 / ilimitado) e **preservação dos dados**
+(contagem + identidade das linhas). Não toca em `meu_banco`. Exit `!= 0` se algo falhar.
 
 **Os scripts de init só rodam na PRIMEIRA criação do volume `db-data`.** Depois disso são
 ignorados. Para reaplicar do zero:
