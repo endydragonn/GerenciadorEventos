@@ -35,7 +35,7 @@ jobs:
 
           MSG+="🤖 Pré-review:"$'\n'
           MSG+="• Claude"$'\n'
-          MSG+="• GitHub Copilot"$'\n\n'
+          MSG+="• GitHub Copilot"$'\n'
           
           MSG+=$'\n'"👀 Dá uma olhada quando puder."
 
