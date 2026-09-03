@@ -148,6 +148,16 @@ o passo final do fluxo, nunca antes:
 gh pr create --base main --head Issue-N --title "Issue N: <título>" --body-file <arquivo> [--draft]
 ```
 
+- **Logo depois de criar o PR, marque a review do Copilot** (obrigatório, versão lite — só
+  solicitar, não esperar nem tratar como gate):
+  ```
+  gh pr edit <N> -R endydragonn/GerenciadorEventos --add-reviewer "@copilot"
+  ```
+  Se falhar, fallback via API:
+  `gh api --method POST repos/endydragonn/GerenciadorEventos/pulls/<N>/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'`.
+  Se nem assim entrar (Copilot review não habilitado no repo), diga isso no relatório e siga —
+  não trava o fluxo. O pipeline **não** aguarda nem age sobre os comentários do Copilot; quem
+  lê e decide é o usuário.
 - Corpo do PR (via `--body-file`): 1 linha dizendo que é a implementação da issue #N via
   `/implement-issue`; a tabela **critério de aceite → PASS/FAIL/não verificável + evidência**
   (do validador); o resumo do gerador; os findings não-bloqueantes do revisor como
@@ -162,7 +172,8 @@ Abrir o PR (draft ou normal) neste passo é automático.
 
 Relatório final ao usuário:
 
-- **Link do PR** `Issue-N` (draft ou ready) + hash do commit.
+- **Link do PR** `Issue-N` (draft ou ready) + hash do commit + confirmação de que a review do
+  Copilot foi marcada (ou por que não deu).
 - Resumo do que mudou (do relatório do gerador).
 - **Tabela critério de aceite → PASS/FAIL/não verificável + evidência** (do validador).
 - Findings não-bloqueantes do revisor (como follow-ups).
