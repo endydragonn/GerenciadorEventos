@@ -1,79 +1,322 @@
-name: Notificar PR via Telegram
+name: Resumo diário via Telegram
 
 on:
-  pull_request:
-    types: [opened, reopened, ready_for_review]
+  repository_dispatch:
+    types: [daily_summary]
 
 jobs:
-  notify:
+  summary:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+
     steps:
-      - name: Enviar notificação Telegram
+      - name: Gerar resumo
         env:
+          GH_TOKEN: ${{ github.token }}
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+
           REPO: ${{ github.repository }}
-          USER: ${{ github.event.pull_request.user.login }}
-          REVIEWERS: ${{ toJson(github.event.pull_request.requested_reviewers) }}
-          PR_DRAFT: ${{ github.event.pull_request.draft }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
 
+        shell: bash
         run: |
-          # Verifica se o Claude Code gerou o PR
-          if echo "$PR_BODY" | grep -Fq "https://claude.com/claude-code"; then
-            CLAUDE_REVIEW="• Claude"
-          else
-            CLAUDE_REVIEW=""
+          set -euo pipefail
+
+          # ============================================================
+          # Data / horário
+          # ============================================================
+
+          TODAY=$(TZ="America/Sao_Paulo" date '+%Y-%m-%d')
+          DISPLAY_DATE=$(TZ="America/Sao_Paulo" date '+%d/%m/%Y')
+
+          echo "========================================"
+          echo "Gerando resumo de $DISPLAY_DATE"
+          echo "Repository: $REPO"
+          echo "Chat ID: $CHAT_ID"
+          echo "========================================"
+
+          if [ -z "$CHAT_ID" ]; then
+            echo "ERRO: chat_id não informado."
+            exit 1
           fi
 
-          # Lista de revisores
-          REVIEWER_NAMES=$(echo "$REVIEWERS" | jq -r '.[].login' | sed 's/^/• /')
+          # ============================================================
+          # Função para escapar texto do Telegram
+          # ============================================================
 
-          # Status do PR
-          if [ "$PR_DRAFT" = "true" ]; then
-            PR_STATUS="📝 Draft"
-          else
-            PR_STATUS="🟢 Ready for review"
-          fi
+          telegram_escape() {
+            printf '%s' "$1" |
+              sed \
+                -e 's/&/\&amp;/g' \
+                -e 's/</\&lt;/g' \
+                -e 's/>/\&gt;/g'
+          }
 
-          # Monta mensagem
-          MSG="🎉 O ${USER} abriu um PR pra você revisar!"$'\n\n'
-          MSG+="📦 ${REPO}"$'\n'
-          MSG+="📋 #${PR_NUMBER}: ${PR_TITLE}"$'\n'
-          MSG+="📌 Status: ${PR_STATUS}"$'\n'
-          MSG+="🔗 ${PR_URL}"$'\n\n'
+          # ============================================================
+          # PRs abertas hoje
+          #
+          # A API é consultada em páginas para não ficar limitada
+          # aos primeiros 100 resultados.
+          # ============================================================
 
-          # Revisores
-          if [ -n "$REVIEWER_NAMES" ]; then
-            MSG+="👀 Revisores:"$'\n'
-            MSG+="${REVIEWER_NAMES}"$'\n\n'
-          fi
+          OPENED_PRS=""
 
-          # Pré-review
-          MSG+="🤖 Pré-review:"$'\n'
+          PAGE=1
 
-          if [ -n "$CLAUDE_REVIEW" ]; then
-            MSG+="${CLAUDE_REVIEW}"$'\n'
-          fi
+          while true; do
+            RESPONSE=$(gh api \
+              "repos/${REPO}/pulls?state=all&sort=created&direction=desc&per_page=100&page=${PAGE}")
 
-          MSG+="• GitHub Copilot"$'\n'
+            COUNT=$(echo "$RESPONSE" | jq 'length')
 
-          MSG+=$'\n'"👀 Dá uma olhada quando puder."
+            if [ "$COUNT" -eq 0 ]; then
+              break
+            fi
 
-          # Envia para todos os chats
-          IFS=',' read -ra IDS <<< "$CHAT_IDS"
+            PAGE_RESULTS=$(echo "$RESPONSE" |
+              jq -r --arg date "$TODAY" '
+                .[]
+                | select(.created_at | startswith($date))
+                | "• #\(.number) — \(.title)\n  👤 \(.user.login)"
+              ')
 
-          for ID in "${IDS[@]}"; do
-            ID=$(echo "$ID" | tr -d ' ')
+            if [ -n "$PAGE_RESULTS" ]; then
+              if [ -n "$OPENED_PRS" ]; then
+                OPENED_PRS="${OPENED_PRS}
+          ${PAGE_RESULTS}"
+              else
+                OPENED_PRS="$PAGE_RESULTS"
+              fi
+            fi
 
-            curl -s -X POST \
-              "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-              -d "chat_id=${ID}" \
-              --data-urlencode "text=${MSG}"
+            # Como está ordenado por created desc,
+            # podemos parar quando o resultado mais antigo
+            # da página já for anterior a hoje.
+            OLDEST_DATE=$(echo "$RESPONSE" |
+              jq -r '.[-1].created_at // ""' |
+              cut -d'T' -f1)
 
-            echo "Enviado para chat $ID"
+            if [ -n "$OLDEST_DATE" ] && [[ "$OLDEST_DATE" < "$TODAY" ]]; then
+              break
+            fi
+
+            PAGE=$((PAGE + 1))
+
+            # Proteção contra loop inesperado
+            if [ "$PAGE" -gt 100 ]; then
+              echo "Aviso: limite de paginação atingido para PRs abertas."
+              break
+            fi
           done
+
+          # ============================================================
+          # PRs fechadas / mergeadas hoje
+          # ============================================================
+
+          CLOSED_PRS=""
+
+          PAGE=1
+
+          while true; do
+            RESPONSE=$(gh api \
+              "repos/${REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=${PAGE}")
+
+            COUNT=$(echo "$RESPONSE" | jq 'length')
+
+            if [ "$COUNT" -eq 0 ]; then
+              break
+            fi
+
+            PAGE_RESULTS=$(echo "$RESPONSE" |
+              jq -r --arg date "$TODAY" '
+                .[]
+                | select(.closed_at != null)
+                | select(.closed_at | startswith($date))
+                | if .merged_at != null then
+                    "• #\(.number) — \(.title)\n  👤 \(.user.login)\n  🔀 Mergeado"
+                  else
+                    "• #\(.number) — \(.title)\n  👤 \(.user.login)\n  ❌ Fechado"
+                  end
+              ')
+
+            if [ -n "$PAGE_RESULTS" ]; then
+              if [ -n "$CLOSED_PRS" ]; then
+                CLOSED_PRS="${CLOSED_PRS}
+          ${PAGE_RESULTS}"
+              else
+                CLOSED_PRS="$PAGE_RESULTS"
+              fi
+            fi
+
+            # Como está ordenado por updated desc,
+            # podemos parar quando a última atualização
+            # da página já for anterior a hoje.
+            OLDEST_DATE=$(echo "$RESPONSE" |
+              jq -r '.[-1].updated_at // ""' |
+              cut -d'T' -f1)
+
+            if [ -n "$OLDEST_DATE" ] && [[ "$OLDEST_DATE" < "$TODAY" ]]; then
+              break
+            fi
+
+            PAGE=$((PAGE + 1))
+
+            if [ "$PAGE" -gt 100 ]; then
+              echo "Aviso: limite de paginação atingido para PRs fechadas."
+              break
+            fi
+          done
+
+          # ============================================================
+          # Issues fechadas hoje
+          # ============================================================
+
+          CLOSED_ISSUES=""
+
+          PAGE=1
+
+          while true; do
+            RESPONSE=$(gh api \
+              "repos/${REPO}/issues?state=closed&sort=updated&direction=desc&per_page=100&page=${PAGE}")
+
+            COUNT=$(echo "$RESPONSE" | jq 'length')
+
+            if [ "$COUNT" -eq 0 ]; then
+              break
+            fi
+
+            PAGE_RESULTS=$(echo "$RESPONSE" |
+              jq -r --arg date "$TODAY" '
+                .[]
+                | select(.pull_request == null)
+                | select(.closed_at != null)
+                | select(.closed_at | startswith($date))
+                | "• #\(.number) — \(.title)\n  👤 \(.user.login)"
+              ')
+
+            if [ -n "$PAGE_RESULTS" ]; then
+              if [ -n "$CLOSED_ISSUES" ]; then
+                CLOSED_ISSUES="${CLOSED_ISSUES}
+          ${PAGE_RESULTS}"
+              else
+                CLOSED_ISSUES="$PAGE_RESULTS"
+              fi
+            fi
+
+            OLDEST_DATE=$(echo "$RESPONSE" |
+              jq -r '.[-1].updated_at // ""' |
+              cut -d'T' -f1)
+
+            if [ -n "$OLDEST_DATE" ] && [[ "$OLDEST_DATE" < "$TODAY" ]]; then
+              break
+            fi
+
+            PAGE=$((PAGE + 1))
+
+            if [ "$PAGE" -gt 100 ]; then
+              echo "Aviso: limite de paginação atingido para Issues."
+              break
+            fi
+          done
+
+          # ============================================================
+          # Totais
+          # ============================================================
+
+          OPENED_COUNT=0
+          CLOSED_COUNT=0
+          ISSUES_COUNT=0
+
+          if [ -n "$OPENED_PRS" ]; then
+            OPENED_COUNT=$(printf '%s\n' "$OPENED_PRS" | grep -c '^• #' || true)
+          fi
+
+          if [ -n "$CLOSED_PRS" ]; then
+            CLOSED_COUNT=$(printf '%s\n' "$CLOSED_PRS" | grep -c '^• #' || true)
+          fi
+
+          if [ -n "$CLOSED_ISSUES" ]; then
+            ISSUES_COUNT=$(printf '%s\n' "$CLOSED_ISSUES" | grep -c '^• #' || true)
+          fi
+
+          # ============================================================
+          # Montar mensagem
+          # ============================================================
+
+          MSG="📊 Resumo do dia — ${DISPLAY_DATE}
+
+          📦 ${REPO}
+
+          🔀 PRs abertas"
+
+          if [ -n "$OPENED_PRS" ]; then
+            MSG="${MSG}
+          ${OPENED_PRS}"
+          else
+            MSG="${MSG}
+          Nenhuma PR aberta hoje."
+          fi
+
+          MSG="${MSG}
+
+          ✅ PRs fechadas/mergeadas"
+
+          if [ -n "$CLOSED_PRS" ]; then
+            MSG="${MSG}
+          ${CLOSED_PRS}"
+          else
+            MSG="${MSG}
+          Nenhuma PR fechada hoje."
+          fi
+
+          MSG="${MSG}
+
+          📋 Issues fechadas"
+
+          if [ -n "$CLOSED_ISSUES" ]; then
+            MSG="${MSG}
+          ${CLOSED_ISSUES}"
+          else
+            MSG="${MSG}
+          Nenhuma Issue fechada hoje."
+          fi
+
+          MSG="${MSG}
+
+          📈 Total
+          • ${OPENED_COUNT} PR(s) aberta(s)
+          • ${CLOSED_COUNT} PR(s) fechada(s)
+          • ${ISSUES_COUNT} Issue(s) fechada(s)"
+
+          # ============================================================
+          # Mostrar no log
+          # ============================================================
+
+          echo "========================================"
+          echo "RESUMO GERADO"
+          echo "========================================"
+          printf '%s\n' "$MSG"
+          echo "========================================"
+
+          # ============================================================
+          # Enviar para Telegram
+          # ============================================================
+
+          TELEGRAM_RESPONSE=$(curl -sS -X POST \
+            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}")
+
+          TELEGRAM_OK=$(echo "$TELEGRAM_RESPONSE" | jq -r '.ok // false')
+
+          if [ "$TELEGRAM_OK" != "true" ]; then
+            echo "ERRO ao enviar mensagem para o Telegram:"
+            echo "$TELEGRAM_RESPONSE"
+            exit 1
+          fi
+
+          echo "Resumo enviado com sucesso para $CHAT_ID"
