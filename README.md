@@ -1,5 +1,5 @@
 # Documentação Gerenciamento de Eventos
-
+.
 ### [Link Video Final de 2025](https://www.youtube.com/watch?v=49sNSOQzUIc)
 
 Esta documentação unificada descreve o software web completo para gerenciamento de eventos, como palestras, shows ou workshops. O sistema é composto por duas partes principais: o **back-end** (o "cérebro" que lida com lógica, dados e segurança, construído em Java com Spring Boot) e o **front-end** (a "fachada" visível no navegador ou app, feita com Flutter, que permite interações como login, criação de eventos e inscrições).
