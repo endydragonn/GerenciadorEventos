@@ -19,17 +19,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
-          REPO: ${{ github.repository }}
+          REPO: ${{ github.event.client_payload.repository }}
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
 
+        shell: bash
         run: |
-          # Data de hoje em São Paulo
+          set -euo pipefail
+
           TODAY=$(TZ="America/Sao_Paulo" date '+%Y-%m-%d')
           DISPLAY_DATE=$(TZ="America/Sao_Paulo" date '+%d/%m/%Y')
 
-          echo "Gerando resumo de $TODAY"
+          echo "========================================"
+          echo "Gerando resumo de $DISPLAY_DATE"
+          echo "Repository: $REPO"
           echo "Chat ID: $CHAT_ID"
-
+          echo "========================================"
           # ============================================================
           # PRs abertas hoje
           # ============================================================
