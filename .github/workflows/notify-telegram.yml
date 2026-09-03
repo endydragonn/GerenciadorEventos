@@ -21,7 +21,7 @@ jobs:
           REVIEWERS: ${{ toJson(github.event.pull_request.requested_reviewers) }}
 
         run: |
-          REVIEWER_NAMES=$(echo '${REVIEWERS}' | jq -r '.[].login' | sed 's/^/• /')
+          REVIEWER_NAMES=$(echo "$REVIEWERS" | jq -r '.[].login' | sed 's/^/• /')
 
           MSG="🎉 O ${USER} abriu um PR pra você revisar!"$'\n\n'
           MSG+="📦 ${REPO}"$'\n'
@@ -50,4 +50,6 @@ jobs:
               --data-urlencode "text=${MSG}"
 
             echo "Enviado para chat $ID"
+            echo "REVIEWERS:"
+            echo "$REVIEWERS"
           done
