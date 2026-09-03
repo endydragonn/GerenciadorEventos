@@ -7,6 +7,7 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
+
     steps:
       - name: Enviar notificação Telegram
         env:
@@ -16,14 +17,37 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           REPO: ${{ github.repository }}
-          USER: ${{github.event.pull_request.user.login}}
+          USER: ${{ github.event.pull_request.user.login }}
+          REVIEWERS: ${{ toJson(github.event.pull_request.requested_reviewers) }}
+
         run: |
-          MSG="🎉 O ${USER} abriu um PR pra você revisar!"$'\n\n'"📦 ${REPO}"$'\n'"📋 #${PR_NUMBER}: ${PR_TITLE}"$'\n'"🔗 ${PR_URL}"$'\n\n'"👀 Dá uma olhada quando puder."
+          REVIEWER_NAMES=$(echo '${REVIEWERS}' | jq -r '.[].login' | sed 's/^/• /')
+
+          MSG="🎉 O ${USER} abriu um PR pra você revisar!"$'\n\n'
+          MSG+="📦 ${REPO}"$'\n'
+          MSG+="📋 #${PR_NUMBER}: ${PR_TITLE}"$'\n'
+          MSG+="🔗 ${PR_URL}"$'\n\n'
+
+          MSG+="👀 Revisores:"$'\n'
+
+          if [ -n "$REVIEWER_NAMES" ]; then
+            MSG+="${REVIEWER_NAMES}"$'\n'
+          else
+            MSG+="• Nenhum revisor solicitado"$'\n'
+          fi
+
+          MSG+=$'\n'"🤖 Pré-review: Claude"$'\n'
+          MSG+=$'\n'"👀 Dá uma olhada quando puder."
+
           IFS=',' read -ra IDS <<< "$CHAT_IDS"
+
           for ID in "${IDS[@]}"; do
             ID=$(echo "$ID" | tr -d ' ')
-            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+
+            curl -s -X POST \
+              "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
               -d "chat_id=${ID}" \
               --data-urlencode "text=${MSG}"
+
             echo "Enviado para chat $ID"
           done
