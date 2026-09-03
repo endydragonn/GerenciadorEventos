@@ -55,11 +55,18 @@ Anuncie ao usuário: **"Skills ativas para a issue #N: ..."**.
   ou se o trabalho existe no repo. Se **não**, avise o usuário e pergunte se segue mesmo
   assim ou faz a dependência antes. Não prossiga silenciosamente.
 
-### 3. Branch
+### 3. Branch — uma por issue, `Issue-N`, publicada na hora
 
 - `git status` primeiro. Se houver trabalho não commitado que não é seu, pare e alinhe.
-- Branch a partir de `main`: `feat/issue-<N>-<slug-curto>` (o `CLAUDE.md` proíbe commit
-  direto em `main`). **Não commite ainda.**
+- Branch a partir de `main` com o nome **exato `Issue-N`** (ex.: `Issue-5`). Uma branch por
+  issue, sempre.
+- **Publique imediatamente**, antes de qualquer código:
+  ```
+  git checkout -b Issue-N
+  git push -u origin Issue-N
+  ```
+  (a branch nasce apontando pra `main`; fica visível no GitHub na hora).
+- Durante o loop, **não commite** — trabalhe no working tree.
 
 ### 4. Loop de implementação (máx. 3 voltas; se estourar, pare e relate o impasse)
 
@@ -89,20 +96,31 @@ Despache um subagent por vez; leia o relatório antes do próximo. Não rode os 
 - Relate o **resultado real** — nunca afirme "passa" sem ter visto passar
   (`superpowers:verification-before-completion`).
 
-### 6. Relatório final ao usuário
+### 6. Commit + push na branch `Issue-N` — automático
 
-- Branch criada.
+Quando o loop passa (revisor APROVADO + validador CONFORME) e a verificação do passo 5 está
+feita:
+
+- **Commite na `Issue-N`** — mensagem Conventional Commits em PT-BR (`feat:`/`fix:`/…),
+  referenciando a issue (`Closes #N` ou `Refs #N`), fechando com os trailers do `CLAUDE.md`.
+  Uma mudança lógica coesa por commit.
+- **`git push` na hora** — a branch fica sempre publicada e atualizada. Não precisa pedir
+  confirmação para push **na branch `Issue-N`** (é o fluxo).
+- Se a issue não ficou 100% (itens não verificáveis sem Docker, ou impasse no loop), commite
+  e pushe mesmo assim como WIP, e diga isso no relatório.
+
+**O que ainda exige pedido explícito do usuário:** abrir/mergear PR de `Issue-N` → `main`, e
+qualquer push direto em `main`. Isso o `CLAUDE.md` continua proibindo sem ordem.
+
+### 7. Relatório final ao usuário
+
+- Branch `Issue-N` — publicada, com link do GitHub e o hash do commit.
 - Resumo do que mudou (do relatório do gerador).
 - **Tabela critério de aceite → PASS/FAIL/não verificável + evidência** (do validador).
 - Findings não-bloqueantes do revisor (como follow-ups).
 - Resultado dos testes (real).
 - Suposições feitas.
-
-### 7. Commit / push — só se o usuário pedir
-
-O `CLAUDE.md` manda: só commita/pusha quando o usuário pedir, e confirma antes do push.
-Se pedir: mensagem Conventional Commits em PT-BR (`feat:`/`fix:`/…), fechando com os trailers
-do `CLAUDE.md`. Uma mudança lógica por commit.
+- Ofereça abrir o PR `Issue-N` → `main` (não abra sem o usuário pedir).
 
 ## Quando NÃO usar este skill
 
