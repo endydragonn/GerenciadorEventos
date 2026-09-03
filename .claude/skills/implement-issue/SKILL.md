@@ -45,7 +45,7 @@ Quatro papéis:
   5. **Anuncie e confirme ANTES de qualquer coisa:** mostre `#N`, título, labels e o
      **Depende de** (do corpo). Se for issue de Fase 0 puramente de ambiente, sem diff (ver
      *Quando NÃO usar*), diga isso. **Espere o "ok" do usuário** antes de ir ao passo 3
-     (branch/PR). Se ele apontar outra issue, use a que ele deu.
+     (criar a branch). Se ele apontar outra issue, use a que ele deu.
 - Com o N definido: `gh issue view <N> -R endydragonn/GerenciadorEventos` → capture título,
   corpo (contexto + **Aceite** + **Depende de**), labels. Se `gh` falhar, leia o item
   correspondente no `BACKLOG.md`.
@@ -77,22 +77,19 @@ Anuncie ao usuário: **"Skills ativas para a issue #N: ..."**.
   ou se o trabalho existe no repo. Se **não**, avise o usuário e pergunte se segue mesmo
   assim ou faz a dependência antes. Não prossiga silenciosamente.
 
-### 3. Branch `Issue-N` + PR draft — abertos na hora
+### 3. Branch `Issue-N` — criada e pushada na hora (o PR só no passo 7)
 
 - Se a issue foi auto-selecionada no passo 1, só chegue aqui **depois** do "ok" do usuário.
 - `git status` primeiro. Se houver trabalho não commitado que não é seu, pare e alinhe.
 - Branch a partir de `main` com o nome **exato `Issue-N`** (ex.: `Issue-5`). Uma por issue.
-- **Abra o PR draft imediatamente**, antes de qualquer código de feature:
+- Crie e pushe a branch com um commit vazio (marca o início, dá backup remoto e faz a
+  auto-seleção do passo 1 pular esta issue). **NÃO abra o PR agora** — ele é o **último**
+  passo do fluxo (passo 7), depois de o loop passar e a verificação estar feita:
   ```
   git checkout -b Issue-N
   git commit --allow-empty -m "chore: inicia Issue-N (Refs #N)"
   git push -u origin Issue-N
-  gh pr create --draft --base main --head Issue-N --title "Issue N: <título>" --body-file <arquivo>
   ```
-  O corpo do PR (via `--body-file`, num arquivo temporário): 1 linha dizendo que é a
-  implementação da issue #N via `/implement-issue`, depois a seção **Aceite** copiada da
-  issue, e "WIP — atualizado ao final do pipeline". Use `Refs #N` no corpo (não `Closes #N`
-  ainda — só ao marcar ready, se a issue for 100% coberta).
 - **Vault ≠ git — não cite o vault no PR nem no commit.** O vault Obsidian
   (`D:\Claude\Brain\...`) e o repositório são controles de versão **independentes**. Em corpo
   de PR e mensagem de commit: nunca liste caminhos do vault, nem trate uma mudança no vault
@@ -102,7 +99,6 @@ Anuncie ao usuário: **"Skills ativas para a issue #N: ..."**.
   arquivos versionados. Se a issue pedir registrar a origem, é uma linha em prosa num README
   versionado — sem path absoluto, sem tratar como diff.
 - Durante o loop, **não commite código** — trabalhe no working tree.
-- Guarde o número/URL do PR para o passo 7.
 
 ### 4. Loop de implementação (máx. 3 voltas; se estourar, pare e relate o impasse)
 
@@ -132,7 +128,7 @@ Despache um subagent por vez; leia o relatório antes do próximo. Não rode os 
 - Relate o **resultado real** — nunca afirme "passa" sem ter visto passar
   (`superpowers:verification-before-completion`).
 
-### 6. Commit + push + atualizar o PR — automático
+### 6. Commit + push — automático (ainda sem PR)
 
 Quando o loop passa (revisor APROVADO + validador CONFORME) e a verificação do passo 5 está
 feita:
@@ -141,17 +137,30 @@ feita:
   fechando com os trailers do `CLAUDE.md`. Uma mudança lógica coesa por commit. Referencie a
   issue: `Closes #N` se cobre 100%, senão `Refs #N`. **Não mencione o vault** na mensagem
   (ver passo 3, "Vault ≠ git").
-- **`git push` na hora** — o PR draft atualiza sozinho.
-- **Atualize o corpo do PR** (`gh pr edit`) com a tabela critério→PASS/FAIL/evidência do
-  validador e o resumo do gerador. **Sem citar o vault** como alteração (ver passo 3).
-- Se cobriu 100% (validador CONFORME, sem pendências) → **`gh pr ready <N>`** (tira do
-  draft). Senão, deixa draft e diz no relatório o que falta.
+- **`git push` na hora** — só atualiza a branch remota; o PR ainda não existe.
+
+### 7. Abrir o PR + relatório final — último passo
+
+Só agora, com o loop fechado, a verificação feita e os commits pushados, **abra o PR** — é
+o passo final do fluxo, nunca antes:
+
+```
+gh pr create --base main --head Issue-N --title "Issue N: <título>" --body-file <arquivo> [--draft]
+```
+
+- Corpo do PR (via `--body-file`): 1 linha dizendo que é a implementação da issue #N via
+  `/implement-issue`; a tabela **critério de aceite → PASS/FAIL/não verificável + evidência**
+  (do validador); o resumo do gerador; os findings não-bloqueantes do revisor como
+  follow-ups. **Sem citar o vault** como alteração (ver passo 3).
+- Cobriu 100% (validador CONFORME, sem pendências) → PR aberto **normal** e use `Closes #N`
+  no corpo. Senão → `--draft`, `Refs #N`, e diga no corpo/relatório o que falta pra sair do
+  draft.
 
 **O que ainda exige pedido explícito do usuário:** **mergear** o PR `Issue-N` → `main`, e
 qualquer commit/push direto em `main`. Isso o `CLAUDE.md` continua proibindo sem ordem.
-Abrir e atualizar o PR (draft ou ready) é automático.
+Abrir o PR (draft ou normal) neste passo é automático.
 
-### 7. Relatório final ao usuário
+Relatório final ao usuário:
 
 - **Link do PR** `Issue-N` (draft ou ready) + hash do commit.
 - Resumo do que mudou (do relatório do gerador).
