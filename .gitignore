@@ -1,0 +1,8 @@
+.env
+
+# repowise codebase index (local, machine-specific)
+.repowise/**
+
+# Claude Code — estado local; agents/ e skills/ são versionados
+.claude/settings.local.json
+.claude/*.local.*
