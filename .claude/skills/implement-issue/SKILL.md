@@ -162,6 +162,17 @@ Abrir e atualizar o PR (draft ou ready) é automático.
 - Se está ready: ofereça **mergear** (não mergeie sem o usuário pedir). Se draft: diga o que
   falta pra sair do draft.
 
+### 8. Depois do merge — sincronizar o `main` local
+
+Assim que o PR `Issue-N` for **aprovado/mergeado** (pelo usuário), sincronize na hora:
+
+- `git checkout main && git pull` — traz o merge do `origin`.
+- Se sobrou algum commit local em `main` (ex.: follow-up de skill/config fora do fluxo de
+  issue), **`git push` na hora** dele também.
+- Apague a branch da issue (`git branch -d Issue-N`; `git push origin --delete Issue-N`).
+
+Não deixar o `main` local divergindo do `origin` entre uma issue e a próxima.
+
 ## Quando NÃO usar este skill
 
 - Tarefa de exploração/pergunta (use as ferramentas direto).
