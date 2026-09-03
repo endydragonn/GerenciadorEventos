@@ -33,6 +33,7 @@ jobs:
           MSG="🎉 O ${USER} abriu um PR pra você revisar!"$'\n\n'
           MSG+="📦 ${REPO}"$'\n'
           MSG+="📋 #${PR_NUMBER}: ${PR_TITLE}"$'\n'
+          📌 Status: ${PR_STATUS}
           MSG+="🔗 ${PR_URL}"$'\n\n'
 
           if [ -n "$REVIEWER_NAMES" ]; then
