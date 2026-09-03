@@ -33,7 +33,10 @@ jobs:
             MSG+="${REVIEWER_NAMES}"$'\n\n'
           fi
 
-          MSG+=$'\n'"🤖 Pré-review: \n • Claude \n • GitHub Copilot"$'\n'
+          MSG+="🤖 Pré-review:"$'\n'
+          MSG+="• Claude"$'\n'
+          MSG+="• GitHub Copilot"$'\n\n'
+          
           MSG+=$'\n'"👀 Dá uma olhada quando puder."
 
           IFS=',' read -ra IDS <<< "$CHAT_IDS"
