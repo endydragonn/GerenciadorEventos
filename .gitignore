@@ -1,5 +1,12 @@
 .env
 
+# Artefatos de build (CLAUDE.md: nunca versionar)
+**/target/
+**/build/
+
+# Editor local
+.vscode/
+
 # repowise codebase index (local, machine-specific)
 .repowise/**
 

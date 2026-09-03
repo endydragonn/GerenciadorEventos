@@ -1,17 +1,30 @@
 package com.gerenciador.eventos.Service;
 
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import com.gerenciador.eventos.POJO.Event;
+import com.gerenciador.eventos.POJO.EventCap;
 import com.gerenciador.eventos.POJO.EventWallet;
 import com.gerenciador.eventos.POJO.MyWallet;
+import com.gerenciador.eventos.Repository.EventCapRepository;
 import com.gerenciador.eventos.Repository.EventRepository;
 import com.gerenciador.eventos.Repository.EventWalletRepository;
 import com.gerenciador.eventos.Repository.MyWalletRepository;
+import com.gerenciador.eventos.config.DatabaseConnection;
 
+/**
+ * Regras de inscrição/reserva em eventos.
+ *
+ * <p>A reserva é feita em duas etapas: {@link #addLink} debita a vaga em {@code eventcap}
+ * (via UPDATE condicional atômico) e cria a linha {@code pending} com {@code expires_at};
+ * {@link #confirm} efetiva ({@code pending -> confirmed}). O job
+ * {@link ReservationExpiryService} devolve vagas de reservas {@code pending} vencidas.</p>
+ */
 @Service
 public class EventWalletService {
 
@@ -21,25 +34,116 @@ public class EventWalletService {
     private MyWalletRepository myWalletRepository;
     @Autowired
     private EventRepository eventRepository;
+    @Autowired
+    private EventCapRepository eventCapRepository;
+    @Autowired
+    private DatabaseConnection databaseConnection;
 
+    /**
+     * Cria uma reserva {@code pending}: debita a vaga em {@code eventcap} e grava a linha em
+     * {@code walletevent}, tudo numa transação. Se o evento estiver lotado, nada é gravado.
+     */
     public EventWallet addLink(EventWallet ew) {
         validateBasic(ew);
-        // existência
+
         MyWallet wallet = myWalletRepository.findByUserId(ew.getUserId());
         if (wallet == null) throw new IllegalArgumentException("Carteira do usuário não encontrada");
-        Event event = eventRepository.findById(ew.getEventId());
-        if (event == null) throw new IllegalArgumentException("Evento não encontrado");
-        // duplicidade
-        if (eventWalletRepository.exists(ew.getUserId(), ew.getEventId()))
+        if (eventRepository.findById(ew.getEventId()) == null)
+            throw new IllegalArgumentException("Evento não encontrado");
+
+        EventCap cap = eventCapRepository.findByEventId(ew.getEventId());
+        if (cap == null) throw new IllegalArgumentException("Capacidade do evento não configurada");
+        if (cap.getBuyTimeLimit() != null && LocalDateTime.now().isAfter(cap.getBuyTimeLimit()))
+            throw new IllegalArgumentException("Janela de compra encerrada para este evento");
+
+        if (eventWalletRepository.existsActive(ew.getUserId(), ew.getEventId()))
             throw new IllegalArgumentException("Vínculo já existente");
 
-        return eventWalletRepository.save(ew);
+        int maxTimeInLine = cap.getMaxTimeInLine() != null ? cap.getMaxTimeInLine() : 120;
+        LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(maxTimeInLine);
+
+        try (Connection conn = databaseConnection.getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                // evento ilimitado (capacity = -1): reserva sempre permitida, sem CAS
+                boolean reserved = cap.isUnlimited()
+                        || eventCapRepository.tryReserve(conn, ew.getEventId());
+                if (!reserved) {
+                    conn.rollback();
+                    throw new IllegalArgumentException("Evento lotado");
+                }
+                boolean created = eventWalletRepository.reservePending(
+                        conn, ew.getUserId(), ew.getEventId(), expiresAt);
+                if (!created) {
+                    // corrida: já havia reserva ativa — desfaz o decremento
+                    conn.rollback();
+                    throw new IllegalArgumentException("Vínculo já existente");
+                }
+                conn.commit();
+            } catch (SQLException | RuntimeException ex) {
+                conn.rollback();
+                throw ex instanceof RuntimeException ? (RuntimeException) ex
+                        : new RuntimeException("Erro ao reservar: " + ex.getMessage(), ex);
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao reservar: " + ex.getMessage(), ex);
+        }
+
+        ew.setStatus("pending");
+        ew.setExpiresAt(expiresAt);
+        return ew;
     }
 
+    /** {@code pending -> confirmed}. */
+    public EventWallet confirm(Long userId, Long eventId) {
+        if (userId == null || userId <= 0) throw new IllegalArgumentException("userId inválido");
+        if (eventId == null || eventId <= 0) throw new IllegalArgumentException("eventId inválido");
+        int rows = eventWalletRepository.confirm(userId, eventId);
+        if (rows == 0) {
+            String status = eventWalletRepository.currentStatus(userId, eventId);
+            if ("confirmed".equals(status)) throw new IllegalArgumentException("Reserva já confirmada");
+            if ("expired".equals(status)) throw new IllegalArgumentException("Reserva expirada — refaça a inscrição");
+            throw new IllegalArgumentException("Nenhuma reserva pendente para confirmar");
+        }
+        EventWallet ew = new EventWallet(userId, eventId);
+        ew.setStatus("confirmed");
+        return ew;
+    }
+
+    /**
+     * Cancela a inscrição e devolve a vaga ao evento, tudo numa transação.
+     *
+     * <p>O cancelamento é um UPDATE condicional único ({@code cancelIfActive}): a vaga só é
+     * devolvida se ESTA chamada foi a que tirou a reserva do estado ativo
+     * ({@code pending}/{@code confirmed}). Duas remoções concorrentes — ou uma corrida com o
+     * job de expiração — não conseguem devolver a mesma vaga duas vezes (sem overselling).</p>
+     *
+     * <p>Se a reserva já estava {@code cancelled}/{@code expired} ou não existe, a operação é
+     * um no-op silencioso (semântica idempotente de DELETE): não é erro cancelar de novo.</p>
+     */
     public void removeLink(Long userId, Long eventId) {
         if (userId == null || userId <= 0) throw new IllegalArgumentException("userId inválido");
         if (eventId == null || eventId <= 0) throw new IllegalArgumentException("eventId inválido");
-        eventWalletRepository.delete(userId, eventId);
+
+        try (Connection conn = databaseConnection.getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                int cancelada = eventWalletRepository.cancelIfActive(conn, userId, eventId);
+                if (cancelada == 1) {
+                    eventCapRepository.release(conn, eventId);
+                }
+                conn.commit();
+            } catch (SQLException ex) {
+                conn.rollback();
+                throw ex;
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao cancelar inscrição: " + ex.getMessage(), ex);
+        }
     }
 
     public List<EventWallet> listByUser(Long userId) {
@@ -59,7 +163,7 @@ public class EventWalletService {
         }
         if (ew.getUserId() != null && ew.getEventId() != null
             && ew.getUserId() > 0 && ew.getEventId() > 0
-            && eventWalletRepository.exists(ew.getUserId(), ew.getEventId())) {
+            && eventWalletRepository.existsActive(ew.getUserId(), ew.getEventId())) {
             sb.append("Vínculo já existente. ");
         }
         return sb.toString().trim();

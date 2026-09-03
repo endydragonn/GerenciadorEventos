@@ -454,11 +454,8 @@ public class BffApplication {
                     && e.getBuy_time_limit().isAfter(e.getEvent_date())) {
                 errors.add("Data limite de compra não pode ser após a data do evento");
             }
-            if (e.getLot_quantity() != null && e.getLot_quantity() < 0) {
-                errors.add("Quantidade de lotes não pode ser negativa");
-            }
-            if (e.getQuantity() < 0) {
-                errors.add("Quantidade de ingressos não pode ser negativa");
+            if (e.getLot_quantity() == null || (e.getLot_quantity() < 1 && e.getLot_quantity() != -1)) {
+                errors.add("Capacidade (lot_quantity) é obrigatória: >= 1, ou -1 para ilimitado");
             }
             if (e.getPresenters() == null) {
                 errors.add("Lista de apresentadores não pode ser nula (pode ser vazia)");
@@ -486,6 +483,22 @@ public class BffApplication {
             try {
                 EventWallet saved = eventWalletService.addLink(ew);
                 return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+            } catch (IllegalArgumentException ex) {
+                return ResponseEntity.badRequest().body(ex.getMessage());
+            } catch (RuntimeException ex) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
+            }
+        }
+
+        @PostMapping("/confirm")
+        public ResponseEntity<?> confirmLink(@RequestBody EventWallet ew) {
+            List<String> errors = validateEventWalletBasic(ew);
+            if (!errors.isEmpty()) {
+                return ResponseEntity.badRequest().body(String.join("; ", errors));
+            }
+            try {
+                EventWallet confirmed = eventWalletService.confirm(ew.getUserId(), ew.getEventId());
+                return ResponseEntity.ok(confirmed);
             } catch (IllegalArgumentException ex) {
                 return ResponseEntity.badRequest().body(ex.getMessage());
             } catch (RuntimeException ex) {

@@ -29,6 +29,10 @@ não há migração via ORM. Leia também o CLAUDE.md da raiz e o de `Backend/`.
 
 `db/migrations/` guarda scripts de migração idempotentes para bancos já existentes
 (ex.: `20260901-eventcap-isolation.sql`), aplicáveis a quente via `psql` sem recriar o volume.
+Nessa migração, a semântica de `quant` **inverte**: no modelo antigo `event.quant` = ingressos
+vendidos, no novo `eventcap.quant` = vagas disponíveis, então a etapa 2 converte
+`quant = GREATEST(capacity - vendidos, 0)` (e `capacity IS NULL` do modelo antigo vira o
+sentinela `-1/-1` de evento ilimitado). Coberto por `EventCapMigrationTest`.
 
 **Os scripts de init só rodam na PRIMEIRA criação do volume `db-data`.** Depois disso são
 ignorados. Para reaplicar do zero:

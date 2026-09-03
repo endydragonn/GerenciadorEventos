@@ -120,7 +120,8 @@ class _EditEventScreenState extends State<EditEventScreen> {
       }
     }
     
-    if (widget.event['lot_quantity'] != null) {
+    // -1 = sem limite -> campo fica vazio
+    if (widget.event['lot_quantity'] != null && widget.event['lot_quantity'] != -1) {
       _capacityController.text = widget.event['lot_quantity'].toString();
     }
     
@@ -157,7 +158,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
 
       // Converter data do formato DD/MM/AAAA para ISO 8601
       String formattedDate;
-      String buyTimeLimit;
+      String? buyTimeLimit;
       try {
         final dateParts = _dateController.text.split('/');
         if (dateParts.length != 3) {
@@ -178,8 +179,8 @@ class _EditEventScreenState extends State<EditEventScreen> {
           final buyYear = buyParts[2];
           buyTimeLimit = '$buyYear-$buyMonth-${buyDay}T23:59:59';
         } else {
-          final dayBefore = int.parse(day) - 1;
-          buyTimeLimit = '$year-$month-${dayBefore.toString().padLeft(2, '0')}T23:59:59';
+          // não informado -> null; backend usa a data do evento
+          buyTimeLimit = null;
         }
       } catch (e) {
         AppModals.showError(
@@ -200,7 +201,11 @@ class _EditEventScreenState extends State<EditEventScreen> {
         'is_EAD': _isEAD,
         'creator_id': user['user_id'],
         'quantity': widget.event['quantity'] ?? 0,
-        'lot_quantity': _isEAD ? null : (_capacityController.text.isNotEmpty ? int.tryParse(_capacityController.text) : null),
+        // no backend vira eventcap.capacity (quant acompanha a variação).
+        // Campo vazio = -1 (sem limite de vendas).
+        'lot_quantity': _capacityController.text.isNotEmpty
+            ? (int.tryParse(_capacityController.text) ?? -1)
+            : -1,
         'price': _paymentType == 'Gratuito' ? 0.0 : (double.tryParse(_priceController.text) ?? 0.0),
         'presenters': widget.event['presenters'] ?? [],
       };

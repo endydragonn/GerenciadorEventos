@@ -27,6 +27,8 @@ public class SchemaValidationTest {
     void shouldHaveRequiredTables() throws Exception {
         assertTrue(tableExists("public", "users"), "Tabela 'users' não existe");
         assertTrue(tableExists("public", "event"), "Tabela 'event' não existe");
+        assertTrue(tableExists("public", "eventcap"), "Tabela 'eventcap' não existe");
+        assertTrue(tableExists("public", "eventpresenter"), "Tabela 'eventpresenter' não existe");
         assertTrue(tableExists("public", "mywallet"), "Tabela 'mywallet' não existe");
         assertTrue(tableExists("public", "walletevent"), "Tabela 'walletevent' não existe");
     }
@@ -43,9 +45,20 @@ public class SchemaValidationTest {
     void eventTableShouldHaveKeyColumns() throws Exception {
         assertColumns("event",
             "event_id", "creator_id", "event_name", "ead", "address",
-            "event_date", "buy_time_limit", "capacity", "quant", "description",
-            "created_at", "updated_at"
+            "event_date", "description", "created_at", "updated_at"
         );
+    }
+
+    @Test
+    void eventCapTableShouldHaveKeyColumns() throws Exception {
+        assertColumns("eventcap",
+            "event_id", "capacity", "quant", "buy_time_limit", "max_time_in_line"
+        );
+    }
+
+    @Test
+    void eventPresenterTableShouldHaveKeyColumns() throws Exception {
+        assertColumns("eventpresenter", "event_id", "presenter_name");
     }
 
     @Test
@@ -58,7 +71,7 @@ public class SchemaValidationTest {
     @Test
     void walletEventTableShouldHaveKeyColumns() throws Exception {
         assertColumns("walletevent",
-            "user_id", "event_id", "created_at", "updated_at"
+            "user_id", "event_id", "status", "expires_at", "created_at", "updated_at"
         );
     }
 

@@ -92,7 +92,9 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
           headers: ApiAuth.jsonHeaders(),
         );
         if (eventResponse.statusCode == 200) {
-          events.add(jsonDecode(eventResponse.body));
+          final ev = jsonDecode(eventResponse.body) as Map<String, dynamic>;
+          ev['_reservaStatus'] = wallet['status']; // confirmed | pending | expired | cancelled
+          events.add(ev);
         }
       }
       setState(() {
@@ -111,6 +113,21 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
       setState(() {
         createdEvents = createdList.cast<Map<String, dynamic>>();
       });
+    }
+  }
+
+  String _statusLabel(dynamic status) {
+    switch (status) {
+      case 'confirmed':
+        return 'confirmada';
+      case 'pending':
+        return 'pendente (aguardando confirmação)';
+      case 'expired':
+        return 'expirada';
+      case 'cancelled':
+        return 'cancelada';
+      default:
+        return status?.toString() ?? '-';
     }
   }
 
@@ -325,6 +342,18 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
                       Text('Data: ${event['event_date']}'),
                       Text('Local: ${event['address']}'),
                       Text('Tipo: ${event['type']}'),
+                      if (event['_reservaStatus'] != null)
+                        Text(
+                          'Reserva: ${_statusLabel(event['_reservaStatus'])}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: event['_reservaStatus'] == 'confirmed'
+                                ? Colors.green
+                                : (event['_reservaStatus'] == 'pending'
+                                    ? Colors.orange
+                                    : Colors.red),
+                          ),
+                        ),
                     ],
                   ),
                   trailing: PopupMenuButton<String>(

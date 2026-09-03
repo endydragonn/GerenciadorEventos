@@ -46,6 +46,25 @@ public class EventWalletController {
     }
 
     /**
+     * POST /api/event-wallets/confirm - Confirmar reserva pendente (pending -> confirmed)
+     */
+    @PostMapping("/confirm")
+    public ResponseEntity<?> confirm(@RequestBody EventWallet ew) {
+        List<String> errors = validate(ew);
+        if (!errors.isEmpty()) {
+            return ResponseEntity.badRequest().body(String.join("; ", errors));
+        }
+        try {
+            EventWallet confirmed = eventWalletService.confirm(ew.getUserId(), ew.getEventId());
+            return ResponseEntity.ok(confirmed);
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(ex.getMessage());
+        } catch (RuntimeException ex) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
+        }
+    }
+
+    /**
      * POST /api/event-wallets/validate - Validar vínculo carteira-evento
      */
     @PostMapping("/validate")

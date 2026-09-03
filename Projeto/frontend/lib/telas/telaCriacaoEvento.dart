@@ -145,7 +145,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
 
       // Converter data do formato DD/MM/AAAA para ISO 8601
       String formattedDate;
-      String buyTimeLimit;
+      String? buyTimeLimit;
       try {
         final dateParts = _dateController.text.split('/');
         if (dateParts.length != 3) {
@@ -157,7 +157,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         // Formato: YYYY-MM-DDTHH:MM:SS
         formattedDate = '$year-$month-${day}T09:00:00';
         
-        // Converter buy_time_limit se fornecido, senão usar 1 dia antes do evento
+        // buy_time_limit: se não informado, fica null e o backend usa a data do evento
         if (_buyLimitController.text.isNotEmpty) {
           final buyParts = _buyLimitController.text.split('/');
           if (buyParts.length != 3) {
@@ -168,9 +168,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
           final buyYear = buyParts[2];
           buyTimeLimit = '$buyYear-$buyMonth-${buyDay}T23:59:59';
         } else {
-          // Padrão: 1 dia antes do evento às 23:59:59
-          final dayBefore = int.parse(day) - 1;
-          buyTimeLimit = '$year-$month-${dayBefore.toString().padLeft(2, '0')}T23:59:59';
+          buyTimeLimit = null;
         }
       } catch (e) {
         AppModals.showError(
@@ -190,7 +188,11 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         'is_EAD': _isEAD,
         'creator_id': user['user_id'],
         'quantity': 0,
-        'lot_quantity': _isEAD ? null : (_capacityController.text.isNotEmpty ? int.tryParse(_capacityController.text) : null),
+        // capacidade vira o agregado eventcap no backend.
+        // Campo vazio = -1 (sem limite de vendas); número = capacidade fixa.
+        'lot_quantity': _capacityController.text.isNotEmpty
+            ? (int.tryParse(_capacityController.text) ?? -1)
+            : -1,
         // Preço: 0.0 para eventos gratuitos, valor digitado para eventos pagos
         'price': _paymentType == 'Gratuito' ? 0.0 : (double.tryParse(_priceController.text) ?? 0.0),
         'presenters': [], // Lista vazia de apresentadores (obrigatório no backend)

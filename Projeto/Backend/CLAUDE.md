@@ -97,8 +97,10 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
    `IllegalArgumentException("Evento lotado")`; se `true`, grava `walletevent` como `pending`
    com `expires_at = now + eventcap.max_time_in_line` (UPSERT, revive linhas `expired`/`cancelled`).
 2. `confirm` (`POST .../event-wallets/confirm`): `pending → confirmed` (`expires_at` = NULL).
-3. `removeLink` (`DELETE .../event-wallets`): marca `cancelled` e devolve a vaga (`release`),
-   numa transação.
+3. `removeLink` (`DELETE .../event-wallets`): numa transação, um `UPDATE` condicional único
+   (`cancelIfActive`: `pending`/`confirmed` → `cancelled`) e `release` **só se** esse UPDATE
+   afetou 1 linha — evita devolução dupla de vaga em cancelamento concorrente / corrida com o
+   job. Reserva já `cancelled`/`expired`/inexistente ⇒ no-op silencioso (idempotente).
 4. `Service/ReservationExpiryService` — `@Scheduled` (a cada `reservation.expiry.scan.ms`,
    default 30s; `@EnableScheduling` em `config/SchedulingConfig`): varre `pending` vencidas e,
    por transação, `expireIfStale` (condicional, não pisa em confirmação concorrente) + `release`.
