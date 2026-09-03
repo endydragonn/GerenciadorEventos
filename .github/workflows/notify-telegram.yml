@@ -20,48 +20,51 @@ jobs:
           USER: ${{ github.event.pull_request.user.login }}
           REVIEWERS: ${{ toJson(github.event.pull_request.requested_reviewers) }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
-          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
 
         run: |
-          # Busca o corpo atual do PR
-          PR_BODY=$(gh api \
-            "repos/${REPO}/pulls/${PR_NUMBER}" \
-            --jq '.body // ""')
-
           # Verifica se o Claude Code gerou o PR
           if echo "$PR_BODY" | grep -Fq "https://claude.com/claude-code"; then
             CLAUDE_REVIEW="• Claude"
           else
             CLAUDE_REVIEW=""
           fi
-          
+
+          # Lista de revisores
           REVIEWER_NAMES=$(echo "$REVIEWERS" | jq -r '.[].login' | sed 's/^/• /')
 
+          # Status do PR
           if [ "$PR_DRAFT" = "true" ]; then
             PR_STATUS="📝 Draft"
           else
             PR_STATUS="🟢 Ready for review"
           fi
 
+          # Monta mensagem
           MSG="🎉 O ${USER} abriu um PR pra você revisar!"$'\n\n'
           MSG+="📦 ${REPO}"$'\n'
           MSG+="📋 #${PR_NUMBER}: ${PR_TITLE}"$'\n'
-          MSG+="📌 Status: ${PR_STATUS}"
+          MSG+="📌 Status: ${PR_STATUS}"$'\n'
           MSG+="🔗 ${PR_URL}"$'\n\n'
 
+          # Revisores
           if [ -n "$REVIEWER_NAMES" ]; then
             MSG+="👀 Revisores:"$'\n'
             MSG+="${REVIEWER_NAMES}"$'\n\n'
           fi
 
+          # Pré-review
           MSG+="🤖 Pré-review:"$'\n'
+
           if [ -n "$CLAUDE_REVIEW" ]; then
             MSG+="${CLAUDE_REVIEW}"$'\n'
           fi
+
           MSG+="• GitHub Copilot"$'\n'
-          
+
           MSG+=$'\n'"👀 Dá uma olhada quando puder."
 
+          # Envia para todos os chats
           IFS=',' read -ra IDS <<< "$CHAT_IDS"
 
           for ID in "${IDS[@]}"; do
