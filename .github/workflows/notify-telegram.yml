@@ -20,6 +20,7 @@ jobs:
           USER: ${{ github.event.pull_request.user.login }}
           REVIEWERS: ${{ toJson(github.event.pull_request.requested_reviewers) }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
+          GH_TOKEN: ${{ github.token }}
 
         run: |
           # Busca o corpo atual do PR
@@ -45,7 +46,7 @@ jobs:
           MSG="🎉 O ${USER} abriu um PR pra você revisar!"$'\n\n'
           MSG+="📦 ${REPO}"$'\n'
           MSG+="📋 #${PR_NUMBER}: ${PR_TITLE}"$'\n'
-          📌 Status: ${PR_STATUS}
+          MSG+="📌 Status: ${PR_STATUS}"
           MSG+="🔗 ${PR_URL}"$'\n\n'
 
           if [ -n "$REVIEWER_NAMES" ]; then
