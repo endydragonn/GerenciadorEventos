@@ -1,0 +1,22 @@
+name: Notificar PR via Telegram
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enviar notificação Telegram
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          MSG="🎉 O Claude abriu um PR pra você revisar!"$'\n\n'"📋 #${PR_NUMBER}: ${PR_TITLE}"$'\n'"🔗 ${PR_URL}"$'\n\n'"👀 Dá uma olhada quando puder."
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}"
