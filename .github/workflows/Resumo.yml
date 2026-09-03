@@ -14,6 +14,11 @@ jobs:
       issues: read
 
     steps:
+
+      # =====================================================
+      # GERAR RESUMO
+      # =====================================================
+
       - name: Gerar resumo
         env:
           GH_TOKEN: ${{ github.token }}
@@ -21,22 +26,31 @@ jobs:
 
           REPO: ${{ github.repository }}
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
+          SUMMARY_TYPE: ${{ github.event.client_payload.summary_type }}
 
         run: |
+
           set -e
+
+          # =================================================
+          # DATA
+          # =================================================
 
           TODAY=$(TZ="America/Sao_Paulo" date '+%Y-%m-%d')
           DISPLAY_DATE=$(TZ="America/Sao_Paulo" date '+%d/%m/%Y')
 
           echo "======================================"
-          echo "Gerando resumo de $TODAY"
+          echo "Resumo diário"
           echo "Repositório: $REPO"
           echo "Chat ID: $CHAT_ID"
+          echo "Tipo: $SUMMARY_TYPE"
+          echo "Data: $TODAY"
           echo "======================================"
 
-          # ==========================================
+
+          # =================================================
           # PRs ABERTAS HOJE
-          # ==========================================
+          # =================================================
 
           echo "Buscando PRs abertas hoje..."
 
@@ -66,19 +80,21 @@ jobs:
             ')
 
             if [ -n "$PAGE_DATA" ]; then
+
               if [ -n "$OPENED_PRS" ]; then
                 OPENED_PRS="${OPENED_PRS}
           ${PAGE_DATA}"
               else
                 OPENED_PRS="$PAGE_DATA"
               fi
+
             fi
 
-            # Como está ordenado por created_at desc,
-            # quando a PR mais antiga da página já é anterior
-            # a hoje, não precisamos continuar.
             OLDEST_DATE=$(echo "$DATA" | jq -r '
-              if length > 0 then .[-1].created_at else "" end
+              if length > 0
+              then .[-1].created_at
+              else ""
+              end
             ')
 
             if [[ "$OLDEST_DATE" < "$TODAY" ]]; then
@@ -88,11 +104,11 @@ jobs:
           done
 
 
-          # ==========================================
+          # =================================================
           # PRs FECHADAS / MERGEADAS HOJE
-          # ==========================================
+          # =================================================
 
-          echo "Buscando PRs fechadas/mergeadas hoje..."
+          echo "Buscando PRs fechadas hoje..."
 
           CLOSED_PRS=""
 
@@ -125,35 +141,26 @@ jobs:
             ')
 
             if [ -n "$PAGE_DATA" ]; then
+
               if [ -n "$CLOSED_PRS" ]; then
                 CLOSED_PRS="${CLOSED_PRS}
           ${PAGE_DATA}"
               else
                 CLOSED_PRS="$PAGE_DATA"
               fi
+
             fi
 
-            # Verifica a data de fechamento mais antiga
-            # encontrada nesta página.
-            OLDEST_CLOSED_DATE=$(echo "$DATA" | jq -r '
-              [
-                .[]
-                | select(.closed_at != null)
-                | .closed_at
-              ]
-              | if length > 0 then .[-1] else "" end
-            ')
-
-            if [ -n "$OLDEST_CLOSED_DATE" ] && [[ "$OLDEST_CLOSED_DATE" < "$TODAY" ]]; then
+            if [ "$COUNT" -lt 100 ]; then
               break
             fi
 
           done
 
 
-          # ==========================================
+          # =================================================
           # ISSUES FECHADAS HOJE
-          # ==========================================
+          # =================================================
 
           echo "Buscando Issues fechadas hoje..."
 
@@ -185,86 +192,98 @@ jobs:
             ')
 
             if [ -n "$PAGE_DATA" ]; then
+
               if [ -n "$CLOSED_ISSUES" ]; then
                 CLOSED_ISSUES="${CLOSED_ISSUES}
           ${PAGE_DATA}"
               else
                 CLOSED_ISSUES="$PAGE_DATA"
               fi
+
             fi
 
-            OLDEST_CLOSED_DATE=$(echo "$DATA" | jq -r '
-              [
-                .[]
-                | select(.pull_request == null)
-                | select(.closed_at != null)
-                | .closed_at
-              ]
-              | if length > 0 then .[-1] else "" end
-            ')
-
-            if [ -n "$OLDEST_CLOSED_DATE" ] && [[ "$OLDEST_CLOSED_DATE" < "$TODAY" ]]; then
+            if [ "$COUNT" -lt 100 ]; then
               break
             fi
 
           done
 
 
-          # ==========================================
-          # MONTA A MENSAGEM
-          # ==========================================
+          # =================================================
+          # CONTADORES
+          # =================================================
 
-          MSG="📊 Resumo do dia — ${DISPLAY_DATE}
+          OPENED_COUNT=$(echo "$OPENED_PRS" | grep -c '^• #' || true)
+
+          CLOSED_COUNT=$(echo "$CLOSED_PRS" | grep -c '^• #' || true)
+
+          ISSUES_COUNT=$(echo "$CLOSED_ISSUES" | grep -c '^• #' || true)
+
+          MERGED_COUNT=$(echo "$CLOSED_PRS" | grep -c '🔀 Mergeado' || true)
+
+          CLOSED_ONLY_COUNT=$(echo "$CLOSED_PRS" | grep -c '❌ Fechado' || true)
+
+
+          # =================================================
+          # RESUMO COMPLETO
+          # =================================================
+
+          if [ "$SUMMARY_TYPE" = "completo" ]; then
+
+            MSG="📊 Resumo do dia — ${DISPLAY_DATE}
 
           📦 ${REPO}
 
           🔀 PRs abertas hoje"
 
-          if [ -n "$OPENED_PRS" ]; then
-            MSG+="
+            if [ -n "$OPENED_PRS" ]; then
+
+              MSG+="
           ${OPENED_PRS}"
-          else
-            MSG+="
+
+            else
+
+              MSG+="
           Nenhuma PR aberta hoje."
-          fi
+
+            fi
 
 
-          MSG+="
+            MSG+="
 
           ✅ PRs fechadas/mergeadas hoje"
 
-          if [ -n "$CLOSED_PRS" ]; then
-            MSG+="
+            if [ -n "$CLOSED_PRS" ]; then
+
+              MSG+="
           ${CLOSED_PRS}"
-          else
-            MSG+="
+
+            else
+
+              MSG+="
           Nenhuma PR fechada hoje."
-          fi
+
+            fi
 
 
-          MSG+="
+            MSG+="
 
           📋 Issues fechadas hoje"
 
-          if [ -n "$CLOSED_ISSUES" ]; then
-            MSG+="
+            if [ -n "$CLOSED_ISSUES" ]; then
+
+              MSG+="
           ${CLOSED_ISSUES}"
-          else
-            MSG+="
+
+            else
+
+              MSG+="
           Nenhuma Issue fechada hoje."
-          fi
+
+            fi
 
 
-          # ==========================================
-          # CONTADORES
-          # ==========================================
-
-          OPENED_COUNT=$(echo "$OPENED_PRS" | grep -c '^• #' || true)
-          CLOSED_COUNT=$(echo "$CLOSED_PRS" | grep -c '^• #' || true)
-          ISSUES_COUNT=$(echo "$CLOSED_ISSUES" | grep -c '^• #' || true)
-
-
-          MSG+="
+            MSG+="
 
           📈 Total
           • ${OPENED_COUNT} PR(s) aberta(s)
@@ -272,24 +291,57 @@ jobs:
           • ${ISSUES_COUNT} Issue(s) fechada(s)"
 
 
-          # ==========================================
-          # ENVIA PARA O TELEGRAM
-          # ==========================================
+          # =================================================
+          # RESUMO RESUMIDO
+          # =================================================
 
-          echo "Enviando resumo para o Telegram..."
+          else
+
+            MSG="📊 Resumo do dia — ${DISPLAY_DATE}
+
+          📦 ${REPO}
+
+          🔀 PRs
+          • ${OPENED_COUNT} aberta(s)
+          • ${CLOSED_COUNT} fechada(s)
+          • ${MERGED_COUNT} mergeada(s)
+          • ${CLOSED_ONLY_COUNT} fechada(s) sem merge
+
+          📋 Issues
+          • ${ISSUES_COUNT} fechada(s)
+
+          📈 Total
+          • $((OPENED_COUNT + CLOSED_COUNT + ISSUES_COUNT)) evento(s)"
+
+
+          fi
+
+
+          # =================================================
+          # TELEGRAM
+          # =================================================
+
+          echo "Enviando resumo..."
 
           RESPONSE=$(curl -s -X POST \
             "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             -d "chat_id=${CHAT_ID}" \
             --data-urlencode "text=${MSG}")
 
+
           SUCCESS=$(echo "$RESPONSE" | jq -r '.ok')
 
           if [ "$SUCCESS" != "true" ]; then
-            echo "Erro ao enviar mensagem para o Telegram:"
+
+            echo "======================================"
+            echo "ERRO AO ENVIAR TELEGRAM"
             echo "$RESPONSE"
+            echo "======================================"
+
             exit 1
+
           fi
+
 
           echo "======================================"
           echo "Resumo enviado com sucesso."
