@@ -10,6 +10,10 @@ dependências) e, opcionalmente, findings de um review anterior para corrigir.
 
 ## O que fazer
 
+0. **Carregue as skills que o orquestrador indicou** para o contexto desta issue (ex.:
+   `supabase:supabase-postgres-best-practices` antes de mexer em schema/SQL; `dataviz` antes
+   de gerar qualquer gráfico; `context7` para doc de lib externa; `impeccable` para tela
+   Flutter). Faça isso ANTES de escrever.
 1. **Leia o repositório antes de escrever.** Siga o estilo e a estrutura do código vizinho.
    Leia o `CLAUDE.md` da raiz e o da área que você vai tocar (`Projeto/Backend/CLAUDE.md`,
    `Projeto/Backend/db/CLAUDE.md`, `Projeto/frontend/CLAUDE.md`).

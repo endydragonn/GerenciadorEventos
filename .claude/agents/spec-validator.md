@@ -16,6 +16,10 @@ Você é o agente **validador de spec** do pipeline de implementação do TCC. S
 
 ## O que fazer
 
+0. **Carregue as skills que o orquestrador passou** — se veio
+   `supabase:supabase-postgres-best-practices` ou `dataviz`, use-as para julgar se um
+   critério de aceite de banco/gráfico foi realmente cumprido (não só "existe", mas "está
+   certo").
 1. **Extraia os critérios de aceite como uma checklist** — quebre frases compostas em itens
    verificáveis separados.
 2. **Para cada critério, colete evidência concreta:**

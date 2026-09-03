@@ -30,6 +30,25 @@ Quatro papéis:
 - Se a issue referencia uma ADR, tenha o caminho no vault à mão:
   `D:\Claude\Brain\01-Projects\Event-Management-System\`.
 
+### 1.5. Ativar as skills do contexto da issue
+
+Olhe as **labels** e o **corpo** da issue e monte a lista de skills a usar. Invoque as
+"sempre" agora; passe a lista inteira em cada despacho de subagent (passo 4) para que o
+gerador/revisor/validador também as carreguem.
+
+| Sinal na issue | Skills a ativar |
+|---|---|
+| **sempre** | `superpowers:test-driven-development` (teste antes do código), `superpowers:verification-before-completion` (evidência antes de "pronto") |
+| label `area/banco`, ou o diff toca `*.sql` / schema / migração / índice / trigger / função / `pg_cron` / RLS / tipos de coluna | **`supabase:supabase-postgres-best-practices` — carregar ANTES de escrever qualquer coisa que vive no Postgres.** Também `supabase:supabase` se envolver Supabase, pooler (Supavisor), CLI, ou leitura de logs |
+| label `area/frontend` (telas Flutter) | `impeccable` — UX, hierarquia visual, estados de erro/vazio/carregando, i18n, contagem regressiva |
+| label `area/carga` ou `artigo` **com gráfico / relatório / dashboard** (#12–#14, #21, #28–#30, #33, #38, #44) | `dataviz` — ler ANTES de gerar qualquer chart/tabela de stat/comparação. `artifact-design` se o entregável for uma página HTML |
+| label `area/eventos` ou `area/infra`, ou o diff mexe com lib/framework externo (Spring Boot, PgJDBC, Kafka/Redpanda client, Supavisor, Flutter, Docker Compose) | `context7` (MCP) — buscar doc atual da lib antes de escrever config/integração; nunca de memória |
+| label `seguranca`, ou o diff mexe em auth / JWT / segredo / `.env` / CORS / reCAPTCHA (#16, #21, #35) | rodar `/security-review` no diff no passo 5; se for mudança grande de auth, considerar `find-security-vulnerabilities-in-code` |
+| a issue **é uma ADR / decisão** a registrar, não código (#25 escolher backbone; partes de #17) | `superpowers:brainstorming` primeiro, e escrever/atualizar a ADR no vault + `BACKLOG.md` antes de tocar código |
+| durante o loop: bug ou teste falhando | `superpowers:systematic-debugging` antes de propor conserto |
+
+Anuncie ao usuário: **"Skills ativas para a issue #N: ..."**.
+
 ### 2. Checar dependências
 
 - Para cada `#X` em "Depende de": confira se está fechada (`gh issue view X --json state`)
@@ -44,12 +63,16 @@ Quatro papéis:
 
 ### 4. Loop de implementação (máx. 3 voltas; se estourar, pare e relate o impasse)
 
-1. **Gerador** — despache `code-generator` com: corpo da issue + critérios de aceite +
+1. **Gerador** — despache `code-generator` com: corpo da issue + critérios de aceite + **a
+   lista de skills do passo 1.5** (instrua: "carregue estas skills antes de escrever") +
    (nas voltas 2+) os findings bloqueantes da volta anterior.
-2. **Revisor** — despache `code-reviewer` com o `git diff` da branch. 
+2. **Revisor** — despache `code-reviewer` com o `git diff` da branch + a lista de skills do
+   passo 1.5 (o revisor usa `supabase:supabase-postgres-best-practices` / `dataviz` / etc.
+   como checklist do que cobrar).
 3. Se o veredito do revisor for **MUDANÇAS NECESSÁRIAS** → volte ao passo 1 com os
    bloqueantes. Não chame o validador ainda.
-4. **Validador de spec** — despache `spec-validator` com o corpo da issue + working tree.
+4. **Validador de spec** — despache `spec-validator` com o corpo da issue + working tree
+   (+ a lista de skills, para saber quais critérios de arquitetura/qualidade checar).
 5. Se **NÃO CONFORME** → volte ao passo 1 com a lista de faltas.
 6. Revisor **APROVADO** + validador **CONFORME** (ou CONFORME com itens não verificáveis sem
    Docker) → sai do loop.
@@ -91,8 +114,11 @@ do `CLAUDE.md`. Uma mudança lógica por commit.
 
 ## Skills complementares
 
-- `superpowers:test-driven-development`, `superpowers:verification-before-completion`,
-  `superpowers:requesting-code-review` — disciplina que os subagents e o passo 5 seguem.
+- O mapeamento label→skill do **passo 1.5** é a forma canônica de ativar skills; mantenha-o
+  atualizado quando surgirem novas labels ou skills.
+- `superpowers:requesting-code-review` — disciplina que o `code-reviewer` encarna.
+- `superpowers:using-git-worktrees` / `superpowers:finishing-a-development-branch` — se o
+  usuário quiser isolar a branch num worktree, ou ao fechar o PR.
 - `spec-driven-implementation` (Warp) — **só** para quando quiser um `PRODUCT.md`/`TECH.md`
   de uma FASE inteira (ex.: toda a conversão CQRS/ES da Fase 6), não por issue. Por issue, o
   corpo da issue + a ADR do vault já são a spec.

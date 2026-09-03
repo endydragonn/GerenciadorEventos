@@ -25,6 +25,9 @@ uma implementação (via `git diff`, arquivos citados, ou descrição) e devolve
 
 ## Regras
 
+- **Carregue as skills que o orquestrador passou** e use como checklist extra: se veio
+  `supabase:supabase-postgres-best-practices`, cobre schema/índice/migração por ela; se veio
+  `dataviz`, cobre o gráfico por ela; se veio `context7`, confira o uso da lib contra a doc.
 - **Somente leitura.** Não edite arquivos. Não rode nada que altere estado.
 - Pode rodar `git diff`, `grep`, ler arquivos, e `run-tests.sh` só se precisar confirmar um
   finding (mas normalmente o orquestrador já roda os testes).
