@@ -27,7 +27,7 @@ Table User {
   user_id uuid [pk]
   user_name varchar [not null]
   email varchar [not null, unique]
-  fone varchar [unique]
+  fone varchar [not null, unique]
   password varchar [not null]
   birthdate date [not null]
   is_admin boolean [not null, default: false]
@@ -117,7 +117,7 @@ Ref: Event.event_id > EventPresenter.event_id
 - **`Event.creator_id` deixou de ser `unique`** e a ref virou `>` (1:N) — a versão anterior limitava cada usuário a criar um único evento na vida, o que contradiz o README (usuário cria vários eventos).
 - **`EventPresenter` criada como tabela filha** — o README fala em `presenters` como lista (pode ser vazia); um `varchar` único (`participant`) não representa isso.
 - **`Event` ganhou `image_data` e `updated_at`**, presentes no README e ausentes no schema original.
-- **`User` ganhou `is_admin`, `is_active`, `updated_at`**; `email` virou `unique`; `fone` virou opcional + `unique` (README: "opcional, mas único se informado").
+- **`User` ganhou `is_admin`, `is_active`, `updated_at`**; `email` virou `unique`; `fone` é **obrigatório** (`not null`) e `unique` (README: "obrigatório e único"). (Decisão do usuário em 2026-09-03, issue #7: `fone` não é opcional — o schema real, o `UserService.validateRequired` e o frontend já tratavam como obrigatório; a redação anterior desta ADR e do README, que diziam "opcional", é que estava errada.)
 - **`birthdate` mudou de `datetime` pra `date`** — data de nascimento não tem hora.
 - **`EventCap` documentada com a invariante `0 <= quant <= capacity`** e o padrão de `UPDATE` condicional (CAS) do [Backend-Architecture](Backend-Architecture.md), já que DBML não tem `CHECK` nativo.
 - **`WalletEvent` ganhou `status` e `created_at`** — sem isso não dava pra distinguir inscrição confirmada de uma reserva cancelada, nem auditar quando aconteceu.

@@ -69,7 +69,7 @@ Labels sugeridas: `fase/0`…`fase/11`, `area/backend`, `area/banco`, `area/infr
 
 ### 6. Revisar constraints do Postgres + validar `walletevent.status`
 `fase/1` `area/banco` `area/backend`
-- **Aceite:** `email` unique, `fone` unique-se-informado, `event_name` unique confirmados. Fluxo `walletevent.status` validado — UPSERT que revive `expired`/`cancelled`, índice parcial `idx_walletevent_pending_expires`.
+- **Aceite:** `email` unique, `fone` obrigatório + unique, `event_name` unique confirmados. Fluxo `walletevent.status` validado — UPSERT que revive `expired`/`cancelled`, índice parcial `idx_walletevent_pending_expires`.
 - **Depende de:** #5
 
 ### 7. Validar o job `ReservationExpiryService`

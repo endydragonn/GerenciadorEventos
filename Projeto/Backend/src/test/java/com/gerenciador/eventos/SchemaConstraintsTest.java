@@ -65,11 +65,11 @@ public class SchemaConstraintsTest {
     }
 
     @Test
-    void usersFoneTemConstraintUniquePelaColunaFone() throws Exception {
-        // NOTA: só a unicidade é afirmada aqui. A nullability de fone (schema real: NOT NULL)
-        // diverge da ADR (docs/adr/Database-Schema.md — "opcional, mas único se informado") e
-        // é lacuna conhecida, registrada no relatório da issue #7 para follow-up. Não asserir.
+    void usersFoneEhUniqueENotNull() throws Exception {
+        // fone é OBRIGATÓRIO e único (decisão do usuário em 2026-09-03, issue #7 critério 2):
+        // o schema real, o UserService.validateRequired e o frontend já tratam assim.
         assertUniqueConstraintColumns("Users_fone_key", "public.users", "fone");
+        assertColunaNotNull("public.users", "fone");
     }
 
     @Test
@@ -216,6 +216,24 @@ public class SchemaConstraintsTest {
         assertEquals(esperado, atual,
                 "constraint '" + conname + "' restringe colunas " + atual
                         + ", esperado exatamente " + esperado);
+    }
+
+    /** Afirma que a coluna {@code coluna} de {@code regclass} é {@code NOT NULL} no schema real. */
+    private void assertColunaNotNull(String regclass, String coluna) throws Exception {
+        String sql =
+            "SELECT a.attnotnull "
+          + "FROM pg_attribute a "
+          + "WHERE a.attrelid = ?::regclass AND a.attname = ? AND a.attnum > 0 AND NOT a.attisdropped";
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, regclass);
+            ps.setString(2, coluna);
+            try (ResultSet rs = ps.executeQuery()) {
+                assertTrue(rs.next(), "coluna " + regclass + "." + coluna + " não encontrada");
+                assertTrue(rs.getBoolean("attnotnull"),
+                        "coluna " + regclass + "." + coluna + " deveria ser NOT NULL no schema real");
+            }
+        }
     }
 
     private User novoUsuarioPojo(String email, String fone) {
