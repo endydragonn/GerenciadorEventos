@@ -15,8 +15,9 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
         run: |
-          MSG="🎉 O Claude abriu um PR pra você revisar!"$'\n\n'"📋 #${PR_NUMBER}: ${PR_TITLE}"$'\n'"🔗 ${PR_URL}"$'\n\n'"👀 Dá uma olhada quando puder."
+          MSG="🎉 O Claude abriu um PR pra você revisar!"$'\n\n'"📦 ${REPO}"$'\n'"📋 #${PR_NUMBER}: ${PR_TITLE}"$'\n'"🔗 ${PR_URL}"$'\n\n'"👀 Dá uma olhada quando puder."
           IFS=',' read -ra IDS <<< "$CHAT_IDS"
           for ID in "${IDS[@]}"; do
             ID=$(echo "$ID" | tr -d ' ')
