@@ -13,6 +13,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.TestPropertySource;
 
 import com.gerenciador.eventos.POJO.Event;
 import com.gerenciador.eventos.POJO.EventWallet;
@@ -30,6 +31,11 @@ import com.gerenciador.eventos.config.DatabaseConnection;
 @SpringBootTest
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Import(GlobalDbTruncator.class)
+// Estica o intervalo do @Scheduled de ReservationExpiryService para 1h (initialDelay e
+// fixedDelay), bem além da duração da suíte, para que o job nunca dispare sozinho em
+// background durante os testes; as chamadas explícitas a expireStaleReservations() seguem
+// iguais.
+@TestPropertySource(properties = "reservation.expiry.scan.ms=3600000")
 public class ReservationExpiryTest {
 
     @Autowired private UserService userService;
