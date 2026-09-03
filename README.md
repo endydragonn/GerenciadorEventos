@@ -96,7 +96,7 @@ Representa uma pessoa no sistema. É como um cartão de identificação com deta
   - `id`: Um número único para identificar o usuário (gerado automaticamente).
   - `name`: Nome da pessoa.
   - `email`: Endereço de email (obrigatório e único).
-  - `fone`: Telefone (opcional, mas deve ser único se informado).
+  - `fone`: Telefone (obrigatório e único).
   - `password`: Senha (guardada de forma segura, "codificada" para ninguém ler).
   - `birthDate`: Data de nascimento (no formato "ano-mês-dia").
   - `isAdmin`: Indica se o usuário é administrador (true/false, padrão false).
