@@ -1,33 +1,82 @@
 #!/bin/bash
 
-# Script para rodar testes totalmente isolado no Docker
+# Roda a suíte de testes totalmente isolada no Docker (container Maven efêmero +
+# Postgres real na rede gerenciador-net).
+#
+# Funciona em Linux/macOS e no Git Bash do Windows (Docker Desktop):
+#  - em Linux/macOS os caminhos do host vão como estão e o container roda com o
+#    uid do host, pra não deixar target/ como root;
+#  - no Git Bash o binário do Docker é nativo do Windows e não entende "/e/...",
+#    então usamos "pwd -W" (-> "E:/...") e desligamos a conversão de path do MSYS.
+#
+# Pré-requisito: a stack no ar pra existir a rede e o banco
+#   docker compose -f Projeto/docker-compose.yml up -d db
+# O cache do Maven fica no volume nomeado "gerenciador-eventos-m2" (persiste entre
+# execuções; não é removido por "docker compose down -v").
+
 echo ""
 echo "=================================================="
 echo "   🧪 EXECUTANDO TESTES NO DOCKER"
 echo "=================================================="
 echo ""
 
-# Rodar tudo dentro do Docker, copiando fonte para /tmp dentro do container
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-docker run --rm --network gerenciador-net --env-file "$PROJECT_ROOT/.env" \
-  -v "$SCRIPT_DIR":/workspace-src:ro \
-  -v "$SCRIPT_DIR/target":/workspace-output \
+
+if [ ! -f "$PROJECT_ROOT/.env" ]; then
+    echo "❌ Não encontrei $PROJECT_ROOT/.env (credenciais do banco). Abortando."
+    echo ""
+    exit 1
+fi
+
+# Argumentos que dependem do SO. HOME dentro do container aponta pro cache do m2.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        HOST_SRC="$(cd "$SCRIPT_DIR" && pwd -W)"
+        HOST_ENV_FILE="$(cd "$PROJECT_ROOT" && pwd -W)/.env"
+        export MSYS_NO_PATHCONV=1
+        export MSYS2_ARG_CONV_EXCL='*'
+        CONTAINER_HOME=/root
+        PLATFORM_ARGS=(-v gerenciador-eventos-m2:/root/.m2)
+        ;;
+    *)
+        HOST_SRC="$SCRIPT_DIR"
+        HOST_ENV_FILE="$PROJECT_ROOT/.env"
+        CONTAINER_HOME=/tmp/mvnhome
+        PLATFORM_ARGS=(
+            --user "$(id -u):$(id -g)"
+            -e HOME=/tmp/mvnhome
+            -v gerenciador-eventos-m2:/tmp/mvnhome/.m2
+        )
+        ;;
+esac
+
+REPORTS_DIR="$SCRIPT_DIR/target/surefire-reports"
+
+# Cria o diretório de saída ANTES do bind-mount (senão o Docker o cria como root).
+mkdir -p "$SCRIPT_DIR/target"
+
+# Rodar tudo dentro do Docker, copiando fonte para /tmp dentro do container
+docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
+  "${PLATFORM_ARGS[@]}" \
+  -e "MVN_REPO=$CONTAINER_HOME/.m2/repository" \
+  -v "$HOST_SRC":/workspace-src:ro \
+  -v "$HOST_SRC/target":/workspace-output \
   maven:3.9.7-eclipse-temurin-21-jammy \
   bash -c '
     # Copiar código fonte para /tmp dentro do container
-    mkdir -p /tmp/build
+    mkdir -p /tmp/build "$MVN_REPO"
     cp -r /workspace-src/* /tmp/build/ 2>/dev/null || true
     cd /tmp/build
-    
-    # Executar testes (todo download fica dentro do container)
-    mvn -q clean test
+
+    # Executar testes (todo download fica no volume de cache do m2)
+    mvn -q -Dmaven.repo.local="$MVN_REPO" clean test
     TEST_CODE=$?
-    
+
     # Copiar apenas relatórios para o volume de saída
     mkdir -p /workspace-output/surefire-reports
     cp -r target/surefire-reports/* /workspace-output/surefire-reports/ 2>/dev/null || true
-    
+
     exit $TEST_CODE
   '
 
@@ -39,17 +88,17 @@ echo "   📊 RESUMO DOS TESTES"
 echo "=================================================="
 
 # Extrair informações dos relatórios Surefire
-if [ -d "target/surefire-reports" ]; then
+if [ -d "$REPORTS_DIR" ]; then
     echo ""
-    
+
     TOTAL_TESTS=0
     TOTAL_FAILURES=0
     TOTAL_ERRORS=0
     TOTAL_SKIPPED=0
     TOTAL_TIME=0
-    
+
     # Coletar estatísticas de cada classe de teste
-    for file in target/surefire-reports/TEST-*.xml; do
+    for file in "$REPORTS_DIR"/TEST-*.xml; do
         if [ -f "$file" ]; then
             TEST_CLASS=$(basename "$file" .xml | sed 's/TEST-//' | sed 's/com.gerenciador.eventos.//')
             TESTS=$(grep -oP 'tests="\K[0-9]+' "$file" | head -1)
@@ -57,15 +106,15 @@ if [ -d "target/surefire-reports" ]; then
             ERRORS=$(grep -oP 'errors="\K[0-9]+' "$file" | head -1)
             SKIPPED=$(grep -oP 'skipped="\K[0-9]+' "$file" | head -1)
             TIME=$(grep -oP 'time="\K[0-9.]+' "$file" | head -1)
-            
+
             TOTAL_TESTS=$((TOTAL_TESTS + TESTS))
             TOTAL_FAILURES=$((TOTAL_FAILURES + FAILURES))
             TOTAL_ERRORS=$((TOTAL_ERRORS + ERRORS))
             TOTAL_SKIPPED=$((TOTAL_SKIPPED + SKIPPED))
-            # Acumular tempo usando bc para suportar decimais
+            # Acumular tempo com awk (POSIX; bc pode não existir num Linux enxuto)
             TIME_CLEAN=$(echo "$TIME" | tr ',' '.')
-            TOTAL_TIME=$(echo "$TOTAL_TIME + $TIME_CLEAN" | bc -l)
-            
+            TOTAL_TIME=$(awk "BEGIN{printf \"%.3f\", ${TOTAL_TIME:-0} + ${TIME_CLEAN:-0}}")
+
             if [ "$FAILURES" == "0" ] && [ "$ERRORS" == "0" ]; then
                 echo "  ✅ $TEST_CLASS: $TESTS testes (${TIME}s)"
             else
@@ -73,7 +122,7 @@ if [ -d "target/surefire-reports" ]; then
             fi
         fi
     done
-    
+
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "📊 TOTAL:"
