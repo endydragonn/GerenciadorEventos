@@ -1,9 +1,17 @@
 ---
 name: implement-issue
-description: Implementa uma issue do BACKLOG.md / GitHub (endydragonn/GerenciadorEventos) pelo pipeline de 4 papéis do TCC — orquestrador (esta sessão) + subagents code-generator, code-reviewer, spec-validator. Use SEMPRE que a tarefa for "implementar a issue #N", "fazer o item N do backlog", "resolver a issue X" ou equivalente. Invocação: /implement-issue <N> (número da issue do GitHub ou do item do BACKLOG.md).
+description: Implementa uma issue do BACKLOG.md / GitHub (endydragonn/GerenciadorEventos) pelo pipeline de 4 papéis do TCC — orquestrador (esta sessão) + subagents code-generator, code-reviewer, spec-validator. Use SEMPRE que a tarefa for "implementar a issue #N", "fazer o item N do backlog", "resolver a issue X", "implementar a próxima issue", "pega a próxima do backlog" ou equivalente. Invocação: /implement-issue [N] — com número (issue do GitHub / item do BACKLOG.md) ou SEM número para o pipeline escolher sozinho a issue aberta de menor nº ainda sem branch nem PR (anuncia e pede "ok" antes de começar).
 ---
 
 # implement-issue — pipeline de implementação guiado por spec
+
+> **Comece com contexto limpo.** Este pipeline gera muito contexto (subagents, `git diff`,
+> logs de teste). Se a conversa atual já tem história que não interessa, **rode `/clear`
+> primeiro e depois `/implement-issue`** — sem número, a auto-seleção (passo 1) pega a
+> próxima issue sozinha, então não há nada a carregar pela limpeza. O skill não consegue
+> disparar `/clear` sozinho: é comando do cliente e apagaria as próprias instruções + o
+> argumento no meio da execução. Se você invocou sem limpar e a conversa está pesada, o
+> orquestrador deve **avisar isso agora** e sugerir `/clear` + reinvocar antes de criar a branch.
 
 Estrutura obrigatória para implementar qualquer item do `BACKLOG.md` / issue do repo.
 Quatro papéis:
@@ -22,11 +30,25 @@ Quatro papéis:
 
 ### 1. Resolver a issue
 
-- Argumento é o número. **Issue do GitHub** (`#2`–`#47`) ou **item do `BACKLOG.md`**
-  (lembre: item N do backlog = issue #N+1).
-- `gh issue view <N> -R endydragonn/GerenciadorEventos` → capture título, corpo (contexto +
-  **Aceite** + **Depende de**), labels. Se `gh` falhar, leia o item correspondente no
-  `BACKLOG.md`.
+- **Veio um número** (`/implement-issue N`): é ele. **Issue do GitHub** (`#2`–`#47`) ou
+  **item do `BACKLOG.md`** (lembre: item N do backlog = issue #N+1). Pula para o `gh issue
+  view` abaixo.
+- **NÃO veio número** (`/implement-issue` puro): selecione sozinho a issue aberta de menor
+  nº ainda não iniciada.
+  1. `gh issue list --repo endydragonn/GerenciadorEventos --state open --json number,title,labels --limit 100 --jq 'sort_by(.number)'`
+  2. Branches: `gh api repos/endydragonn/GerenciadorEventos/branches --paginate --jq '.[].name'`.
+     PRs abertos: `gh pr list --repo endydragonn/GerenciadorEventos --state open --json number,headRefName,title,body`.
+  3. Percorra as issues do menor nº para o maior. **Pule** `#n` se existe branch com nome
+     exato `Issue-n`, **ou** se um PR aberto tem `headRefName == "Issue-n"` ou cita `#n` /
+     `Issue n` no título/corpo. A 1ª que sobrar é a candidata.
+  4. Nenhuma sobrou → relate "todas as issues abertas já têm branch ou PR" e pare.
+  5. **Anuncie e confirme ANTES de qualquer coisa:** mostre `#N`, título, labels e o
+     **Depende de** (do corpo). Se for issue de Fase 0 puramente de ambiente, sem diff (ver
+     *Quando NÃO usar*), diga isso. **Espere o "ok" do usuário** antes de ir ao passo 3
+     (branch/PR). Se ele apontar outra issue, use a que ele deu.
+- Com o N definido: `gh issue view <N> -R endydragonn/GerenciadorEventos` → capture título,
+  corpo (contexto + **Aceite** + **Depende de**), labels. Se `gh` falhar, leia o item
+  correspondente no `BACKLOG.md`.
 - Se a issue referencia uma ADR, tenha o caminho no vault à mão:
   `D:\Claude\Brain\01-Projects\Event-Management-System\`.
 
@@ -57,6 +79,7 @@ Anuncie ao usuário: **"Skills ativas para a issue #N: ..."**.
 
 ### 3. Branch `Issue-N` + PR draft — abertos na hora
 
+- Se a issue foi auto-selecionada no passo 1, só chegue aqui **depois** do "ok" do usuário.
 - `git status` primeiro. Se houver trabalho não commitado que não é seu, pare e alinhe.
 - Branch a partir de `main` com o nome **exato `Issue-N`** (ex.: `Issue-5`). Uma por issue.
 - **Abra o PR draft imediatamente**, antes de qualquer código de feature:
@@ -70,6 +93,14 @@ Anuncie ao usuário: **"Skills ativas para a issue #N: ..."**.
   implementação da issue #N via `/implement-issue`, depois a seção **Aceite** copiada da
   issue, e "WIP — atualizado ao final do pipeline". Use `Refs #N` no corpo (não `Closes #N`
   ainda — só ao marcar ready, se a issue for 100% coberta).
+- **Vault ≠ git — não cite o vault no PR nem no commit.** O vault Obsidian
+  (`D:\Claude\Brain\...`) e o repositório são controles de versão **independentes**. Em corpo
+  de PR e mensagem de commit: nunca liste caminhos do vault, nem trate uma mudança no vault
+  como parte do changeset/diff — descreva só o que mudou **no repo**. Vale inclusive quando a
+  issue vendoriza conteúdo do vault (ex.: #3): o conteúdo vendorizado entra como arquivo do
+  repo e pronto; **não** insira "blocos de proveniência" apontando pro vault dentro dos
+  arquivos versionados. Se a issue pedir registrar a origem, é uma linha em prosa num README
+  versionado — sem path absoluto, sem tratar como diff.
 - Durante o loop, **não commite código** — trabalhe no working tree.
 - Guarde o número/URL do PR para o passo 7.
 
@@ -108,10 +139,11 @@ feita:
 
 - **Commite na `Issue-N`** — mensagem Conventional Commits em PT-BR (`feat:`/`fix:`/…),
   fechando com os trailers do `CLAUDE.md`. Uma mudança lógica coesa por commit. Referencie a
-  issue: `Closes #N` se cobre 100%, senão `Refs #N`.
+  issue: `Closes #N` se cobre 100%, senão `Refs #N`. **Não mencione o vault** na mensagem
+  (ver passo 3, "Vault ≠ git").
 - **`git push` na hora** — o PR draft atualiza sozinho.
 - **Atualize o corpo do PR** (`gh pr edit`) com a tabela critério→PASS/FAIL/evidência do
-  validador e o resumo do gerador.
+  validador e o resumo do gerador. **Sem citar o vault** como alteração (ver passo 3).
 - Se cobriu 100% (validador CONFORME, sem pendências) → **`gh pr ready <N>`** (tira do
   draft). Senão, deixa draft e diz no relatório o que falta.
 

@@ -34,6 +34,11 @@ dependências) e, opcionalmente, findings de um review anterior para corrigir.
 6. **Consulte o vault quando a issue referencia uma ADR:**
    `D:\Claude\Brain\01-Projects\Event-Management-System\` (via ferramentas de arquivo ou
    Bash; o MCP `vault` também serve). As ADRs são a spec de arquitetura.
+7. **Vault ≠ git.** O vault e o repo são controles de versão independentes. Ao vendorizar
+   conteúdo do vault, o arquivo entra no repo como qualquer outro — **não** adicione bloco de
+   proveniência apontando pro caminho do vault dentro do arquivo versionado, e não descreva a
+   mudança no relatório como "cópia do vault X". Registro de origem, se a issue pedir, é uma
+   linha neutra num README versionado.
 
 ## O que NÃO fazer
 
