@@ -83,8 +83,9 @@ Anuncie ao usuário: **"Skills ativas para a issue #N: ..."**.
 - `git status` primeiro. Se houver trabalho não commitado que não é seu, pare e alinhe.
 - Branch a partir de `main` com o nome **exato `Issue-N`** (ex.: `Issue-5`). Uma por issue.
 - Crie e pushe a branch com um commit vazio (marca o início, dá backup remoto e faz a
-  auto-seleção do passo 1 pular esta issue). **NÃO abra o PR agora** — ele é o **último**
-  passo do fluxo (passo 7), depois de o loop passar e a verificação estar feita:
+  auto-seleção do passo 1 pular esta issue). **NÃO abra o PR agora** — ele entra só no passo 7
+  (draft), depois de o loop passar e a verificação estar feita; o passo 7.5 (avaliar a review
+  do Copilot) fecha o fluxo:
   ```
   git checkout -b Issue-N
   git commit --allow-empty -m "chore: inicia Issue-N (Refs #N)"
@@ -139,36 +140,70 @@ feita:
   (ver passo 3, "Vault ≠ git").
 - **`git push` na hora** — só atualiza a branch remota; o PR ainda não existe.
 
-### 7. Abrir o PR + relatório final — último passo
+### 7. Abrir o PR (draft) + marcar a review do Copilot
 
-Só agora, com o loop fechado, a verificação feita e os commits pushados, **abra o PR** — é
-o passo final do fluxo, nunca antes:
+Só agora, com o loop fechado, a verificação feita e os commits pushados, **abra o PR** — nunca
+antes. **O PR nasce sempre `--draft`**, com `Refs #N` no corpo; ele só sai do draft no passo
+7.5, depois de a review do Copilot ser avaliada e tratada.
 
 ```
-gh pr create --base main --head Issue-N --title "Issue N: <título>" --body-file <arquivo> [--draft]
+gh pr create --base main --head Issue-N --title "Issue N: <título>" --body-file <arquivo> --draft
 ```
 
-- **Logo depois de criar o PR, marque a review do Copilot** (obrigatório, versão lite — só
-  solicitar, não esperar nem tratar como gate):
+- Corpo do PR (via `--body-file`): 1 linha dizendo que é a implementação da issue #N via
+  `/implement-issue`; a tabela **critério de aceite → PASS/FAIL/não verificável + evidência**
+  (do validador); o resumo do gerador; os findings não-bloqueantes do revisor como
+  follow-ups. **Sem citar o vault** como alteração (ver passo 3).
+- **Logo depois de criar o PR, marque a review do Copilot** (obrigatório, versão lite):
   ```
   gh pr edit <N> -R endydragonn/GerenciadorEventos --add-reviewer "@copilot"
   ```
   Se falhar, fallback via API:
   `gh api --method POST repos/endydragonn/GerenciadorEventos/pulls/<N>/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'`.
-  Se nem assim entrar (Copilot review não habilitado no repo), diga isso no relatório e siga —
-  não trava o fluxo. O pipeline **não** aguarda nem age sobre os comentários do Copilot; quem
-  lê e decide é o usuário.
-- Corpo do PR (via `--body-file`): 1 linha dizendo que é a implementação da issue #N via
-  `/implement-issue`; a tabela **critério de aceite → PASS/FAIL/não verificável + evidência**
-  (do validador); o resumo do gerador; os findings não-bloqueantes do revisor como
-  follow-ups. **Sem citar o vault** como alteração (ver passo 3).
-- Cobriu 100% (validador CONFORME, sem pendências) → PR aberto **normal** e use `Closes #N`
-  no corpo. Senão → `--draft`, `Refs #N`, e diga no corpo/relatório o que falta pra sair do
-  draft.
+  Se nem assim entrar (Copilot review não habilitado no repo), diga isso no relatório e vá
+  direto ao passo 7.5 tratando como "sem review do Copilot".
 
-**O que ainda exige pedido explícito do usuário:** **mergear** o PR `Issue-N` → `main`, e
-qualquer commit/push direto em `main`. Isso o `CLAUDE.md` continua proibindo sem ordem.
-Abrir o PR (draft ou normal) neste passo é automático.
+### 7.5. Avaliar a review do Copilot — gate antes de sair do draft
+
+- **Aguarde a review** (espera limitada: cheque a cada ~30–60 s por até ~10 min; a versão
+  lite costuma responder em 2–5 min). Se não vier no teto, registre no relatório e siga como
+  "sem review do Copilot".
+- Colete os findings:
+  `gh api repos/endydragonn/GerenciadorEventos/pulls/<N>/reviews` e
+  `gh api repos/endydragonn/GerenciadorEventos/pulls/<N>/comments`.
+- **Avalie cada finding** com a mesma lente do `code-reviewer`: procede? é correção real,
+  violação de convenção do projeto (`CLAUDE.md`), ou melhoria de qualidade de teste? Bate com
+  as escolhas deliberadas do projeto (JDBC puro, schema em SQL, BFF, etc.) ou pede uma
+  "migração" que o `CLAUDE.md` proíbe? Se o finding tocar as skills do passo 1.5, use-as pra
+  julgar.
+- Classifique cada um:
+  - **Não procede / irrelevante / contra uma escolha deliberada** → registre no relatório com
+    o motivo e descarte.
+  - **Procede e é relevante ao projeto** → **PARE e pergunte ao usuário o que fazer.**
+    Apresente: o finding, sua avaliação, e a ação recomendada. Não aplique sozinho.
+- Aplique o que o usuário decidir: nova rodada do gerador (disciplina do passo 4 — gerador,
+  depois revisor scoped no diff do fix) ou, se for trivial (1–3 linhas óbvias), edição
+  direta; rode `run-tests.sh`; **commite + pushe na `Issue-N`** com `Refs #N`.
+- Se aplicou mudança, **re-solicite a review do Copilot** e repita o 7.5 (teto: 2 rodadas de
+  fix; se estourar, relate o que ficou em aberto e siga).
+- **Sair do draft — automático, sem pedir confirmação:** assim que o Copilot devolver
+  **aprovação** (🟢 / "Approval recommended" / nenhum finding novo) **ou** todos os findings
+  pendentes tiverem sido tratados (aplicados ou descartados com motivo), **e** o validador
+  tiver dado CONFORME sem pendências → `gh pr ready <N>` na hora e troque `Refs #N` →
+  `Closes #N` no corpo. Não pergunte ao usuário pra marcar ready — só o **merge** segue
+  sendo pedido dele.
+  - Se o Copilot ainda tem finding pendente que procede e é relevante, o PR **continua
+    draft** até o usuário decidir (o gate do parágrafo acima).
+  - Se o validador deixou pendências (cobertura < 100%), o PR **continua draft** — diga no
+    relatório o que falta.
+  - Se a review do Copilot não veio no teto de espera, trate como "sem review": aplica o
+    mesmo gate (validador CONFORME → ready).
+
+**O que ainda exige pedido explícito do usuário:** decidir o que fazer com um finding do
+Copilot que procede e é relevante (o pipeline pergunta, não aplica sozinho); **mergear** o PR
+`Issue-N` → `main`; e qualquer commit/push direto em `main`. Isso o `CLAUDE.md` continua
+proibindo sem ordem. Abrir o PR draft, marcar o Copilot, descartar finding que não procede, e
+sair do draft quando o gate fecha são automáticos.
 
 Relatório final ao usuário:
 
@@ -177,6 +212,8 @@ Relatório final ao usuário:
 - Resumo do que mudou (do relatório do gerador).
 - **Tabela critério de aceite → PASS/FAIL/não verificável + evidência** (do validador).
 - Findings não-bloqueantes do revisor (como follow-ups).
+- **Review do Copilot:** cada finding → procede/não procede + relevante/irrelevante + o que
+  foi feito (descartado com motivo / aplicado no commit X / decisão do usuário).
 - Resultado dos testes (real).
 - Suposições feitas.
 - Se está ready: ofereça **mergear** (não mergeie sem o usuário pedir). Se draft: diga o que
