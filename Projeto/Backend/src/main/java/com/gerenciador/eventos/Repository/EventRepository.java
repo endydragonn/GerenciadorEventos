@@ -15,11 +15,18 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
 import com.gerenciador.eventos.POJO.Event;
+import com.gerenciador.eventos.POJO.EventCap;
 import com.gerenciador.eventos.config.DatabaseConnection;
 
 /**
  * Repository para entidade Event usando JDBC cru via DatabaseConnection.
- * Mapeia o POJO Event para a tabela public.event.
+ *
+ * <p>A tabela {@code public.event} guarda só metadados. Capacidade/vagas/janela de venda
+ * ficam no agregado isolado {@code public.eventcap} ({@link EventCapRepository}); a lista de
+ * apresentadores fica em {@code public.eventpresenter} ({@link EventPresenterRepository}).
+ * O POJO {@link Event} continua carregando {@code lot_quantity}/{@code quantity}/
+ * {@code buy_time_limit}/{@code presenters} como campos de transporte da API — este
+ * repository os grava/lê no agregado certo.</p>
  */
 @Repository
 public class EventRepository {
@@ -27,10 +34,16 @@ public class EventRepository {
     @Autowired
     private DatabaseConnection databaseConnection;
 
+    @Autowired
+    private EventCapRepository eventCapRepository;
+
+    @Autowired
+    private EventPresenterRepository eventPresenterRepository;
+
     /**
-     * Inserir novo evento.
-     * Campos do banco: creator_id, event_name, ead, address, event_date,
-     * buy_time_limit, capacity, quant, description.
+     * Insere evento + agregado de capacidade + apresentadores numa única transação.
+     * {@code lot_quantity} do POJO vira {@code eventcap.capacity}, e {@code quant} nasce
+     * igual à capacidade (todas as vagas disponíveis).
      */
     public Event save(Event e) {
         if (e.getCreator_id() == null) {
@@ -42,52 +55,63 @@ public class EventRepository {
         if (e.getEvent_date() == null) {
             throw new IllegalArgumentException("event_date é obrigatório");
         }
+        if (e.getLot_quantity() == null
+                || (e.getLot_quantity() < 1 && e.getLot_quantity() != EventCap.UNLIMITED)) {
+            throw new IllegalArgumentException("capacity (lot_quantity) é obrigatória: >= 1, ou -1 para ilimitado");
+        }
 
-            // buy_time_limit: definimos via aplicação
-            String sql = "INSERT INTO event (creator_id, event_name, ead, address, event_date, buy_time_limit, capacity, quant, description, image_data) "
-                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO event (creator_id, event_name, ead, address, event_date, description, image_data) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?)";
 
-            try (Connection conn = databaseConnection.getConnection();
-                 PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+        try (Connection conn = databaseConnection.getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                try (PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+                    int idx = 1;
+                    stmt.setLong(idx++, e.getCreator_id());
+                    stmt.setString(idx++, e.getEvent_name());
+                    stmt.setBoolean(idx++, toPrimitive(e.getIs_EAD()));
+                    stmt.setString(idx++, nullIfBlank(e.getAddress()));
+                    stmt.setTimestamp(idx++, toTimestamp(e.getEvent_date()));
+                    stmt.setString(idx++, e.getDescription() != null ? e.getDescription() : "");
+                    if (e.getImage_data() != null) {
+                        stmt.setBytes(idx++, e.getImage_data());
+                    } else {
+                        stmt.setNull(idx++, java.sql.Types.BINARY);
+                    }
+                    stmt.executeUpdate();
+                    try (ResultSet rs = stmt.getGeneratedKeys()) {
+                        if (rs.next()) {
+                            e.setEvent_id(rs.getLong(1));
+                        }
+                    }
+                }
 
-                int idx = 1;
-                stmt.setLong(idx++, e.getCreator_id());
-                stmt.setString(idx++, e.getEvent_name());
-                stmt.setBoolean(idx++, toPrimitive(e.getIs_EAD()));
-                stmt.setString(idx++, nullIfBlank(e.getAddress()));
-                stmt.setTimestamp(idx++, toTimestamp(e.getEvent_date()));
-                // se buy_time_limit for nulo, usar event_date como default
                 LocalDateTime buyLimit = (e.getBuy_time_limit() != null) ? e.getBuy_time_limit() : e.getEvent_date();
-                stmt.setTimestamp(idx++, toTimestamp(buyLimit));
-                if (e.getLot_quantity() == null) {
-                    stmt.setNull(idx++, java.sql.Types.INTEGER);
-                } else {
-                    stmt.setInt(idx++, e.getLot_quantity());
-                }
-                stmt.setInt(idx++, e.getQuantity());
-                stmt.setString(idx++, e.getDescription() != null ? e.getDescription() : "");
-                // Imagem
-                if (e.getImage_data() != null) {
-                    stmt.setBytes(idx++, e.getImage_data());
-                } else {
-                    stmt.setNull(idx++, java.sql.Types.BINARY);
-                }
+                EventCap cap = new EventCap(e.getEvent_id(), e.getLot_quantity(), e.getLot_quantity(), buyLimit);
+                eventCapRepository.create(conn, cap);
 
-                stmt.executeUpdate();
+                eventPresenterRepository.replaceAll(conn, e.getEvent_id(), e.getPresenters());
 
-                ResultSet rs = stmt.getGeneratedKeys();
-                if (rs.next()) {
-                    e.setEvent_id(rs.getLong(1));
-                }
-
-                fetchTimestamps(e);
-                return e;
+                conn.commit();
             } catch (SQLException ex) {
-                throw new RuntimeException("Erro ao salvar evento: " + ex.getMessage(), ex);
+                conn.rollback();
+                throw ex;
+            } finally {
+                conn.setAutoCommit(true);
             }
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao salvar evento: " + ex.getMessage(), ex);
+        }
+
+        // Reflete o estado gravado no POJO retornado
+        e.setBuy_time_limit((e.getBuy_time_limit() != null) ? e.getBuy_time_limit() : e.getEvent_date());
+        e.setQuantity(e.getLot_quantity());
+        fetchTimestamps(e);
+        return e;
     }
 
-    /** Buscar evento por ID */
+    /** Buscar evento por ID (metadados apenas; capacidade/apresentadores são carregados pelo Service). */
     public Event findById(Long id) {
         String sql = "SELECT * FROM event WHERE event_id = ?";
         try (Connection conn = databaseConnection.getConnection();
@@ -148,20 +172,14 @@ public class EventRepository {
         }
     }
 
-    /** Atualizar evento existente */
+    /** Atualizar apenas os metadados do evento (capacidade/janela de venda vão pelo EventCapRepository). */
     public Event update(Event e) {
         if (e.getEvent_id() == null) {
             throw new IllegalArgumentException("event_id é obrigatório para atualizar");
         }
-        // UPDATE: se buy_time_limit vier null, não atualizamos essa coluna (mantém valor atual)
-        boolean updateBuyLimit = e.getBuy_time_limit() != null;
-        StringBuilder sb = new StringBuilder();
-        sb.append("UPDATE event SET creator_id = ?, event_name = ?, ead = ?, address = ?, event_date = ?, ");
-        if (updateBuyLimit) {
-            sb.append("buy_time_limit = ?, ");
-        }
-        sb.append("capacity = ?, quant = ?, description = ?, image_data = ? WHERE event_id = ?");
-        String upSql = sb.toString();
+        String upSql = "UPDATE event SET creator_id = ?, event_name = ?, ead = ?, address = ?, "
+                + "event_date = ?, description = ?, image_data = ?, updated_at = CURRENT_TIMESTAMP "
+                + "WHERE event_id = ?";
 
         try (Connection conn = databaseConnection.getConnection();
              PreparedStatement stmt = conn.prepareStatement(upSql)) {
@@ -172,17 +190,7 @@ public class EventRepository {
             stmt.setBoolean(idx++, toPrimitive(e.getIs_EAD()));
             stmt.setString(idx++, nullIfBlank(e.getAddress()));
             stmt.setTimestamp(idx++, toTimestamp(e.getEvent_date()));
-            if (updateBuyLimit) {
-                stmt.setTimestamp(idx++, toTimestamp(e.getBuy_time_limit()));
-            }
-            if (e.getLot_quantity() == null) {
-                stmt.setNull(idx++, java.sql.Types.INTEGER);
-            } else {
-                stmt.setInt(idx++, e.getLot_quantity());
-            }
-            stmt.setInt(idx++, e.getQuantity());
             stmt.setString(idx++, e.getDescription() != null ? e.getDescription() : "");
-            // image_data: aceita null
             if (e.getImage_data() != null) {
                 stmt.setBytes(idx++, e.getImage_data());
             } else {
@@ -199,7 +207,7 @@ public class EventRepository {
         }
     }
 
-    /** Remover evento definitivamente */
+    /** Remover evento definitivamente (eventcap e eventpresenter caem por ON DELETE CASCADE). */
     public void delete(Long id) {
         String sql = "DELETE FROM event WHERE event_id = ?";
         try (Connection conn = databaseConnection.getConnection();
@@ -239,43 +247,16 @@ public class EventRepository {
         e.setAddress(rs.getString("address"));
         Timestamp ed = rs.getTimestamp("event_date");
         if (ed != null) e.setEvent_date(ed.toLocalDateTime());
-        Timestamp btl = rs.getTimestamp("buy_time_limit");
-        if (btl != null) e.setBuy_time_limit(btl.toLocalDateTime());
-        int capacity = rs.getInt("capacity");
-        if (!rs.wasNull()) e.setLot_quantity(capacity);
-        e.setQuantity(rs.getInt("quant"));
         e.setDescription(rs.getString("description"));
-        // Imagem (coluna pode não existir em bancos antigos)
-        if (hasColumn(rs, "image_data")) {
-            byte[] imageData = rs.getBytes("image_data");
-            if (imageData != null) e.setImage_data(imageData);
-        }
+        byte[] imageData = rs.getBytes("image_data");
+        if (imageData != null) e.setImage_data(imageData);
         Timestamp createdAt = rs.getTimestamp("created_at");
         if (createdAt != null) e.setCreatedAt(createdAt.toLocalDateTime());
         Timestamp updatedAt = rs.getTimestamp("updated_at");
         if (updatedAt != null) e.setUpdatedAt(updatedAt.toLocalDateTime());
-        // presenters não está no schema -> manter lista vazia ou a recebida externamente
+        // capacity/quant/buy_time_limit/presenters: preenchidos pelo Service a partir dos
+        // agregados eventcap / eventpresenter.
         return e;
-    }
-
-    /**
-     * Verifica se o ResultSet contém uma coluna com o nome dado.
-     * Usado para compatibilidade com esquemas antigos que ainda não tenham a coluna image_data.
-     */
-    private boolean hasColumn(ResultSet rs, String columnName) {
-        try {
-            java.sql.ResultSetMetaData meta = rs.getMetaData();
-            int cols = meta.getColumnCount();
-            for (int i = 1; i <= cols; i++) {
-                String label = meta.getColumnLabel(i);
-                if (columnName.equalsIgnoreCase(label)) return true;
-                String name = meta.getColumnName(i);
-                if (columnName.equalsIgnoreCase(name)) return true;
-            }
-        } catch (SQLException ex) {
-            // se falhar, assume que a coluna não existe
-        }
-        return false;
     }
 
     private boolean toPrimitive(Boolean b) {

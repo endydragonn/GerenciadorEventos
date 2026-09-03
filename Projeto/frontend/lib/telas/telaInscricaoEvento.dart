@@ -135,9 +135,10 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
     };
 
     try {
-      // Usar ApiAuth para enviar o header Authorization corretamente
       final headers = ApiAuth.jsonHeaders();
-      final response = await http.post(
+
+      // Passo 1: reservar a vaga (UPDATE condicional atômico no backend -> status 'pending')
+      final reserveResp = await http.post(
         Uri.parse('/api/bff/event-wallets'),
         headers: headers,
         body: jsonEncode(enrollment),
@@ -145,7 +146,31 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
 
       if (!mounted) return;
 
-      if (response.statusCode == 201) {
+      if (reserveResp.statusCode != 201 && reserveResp.statusCode != 200) {
+        String errorMsg = 'Você já está inscrito neste evento ou o evento está lotado.';
+        try {
+          errorMsg = utf8.decode(reserveResp.bodyBytes);
+        } catch (_) {}
+        AppModals.showError(
+          context,
+          reserveResp.statusCode == 400 ? 'Inscrição Inválida' : 'Erro na Inscrição',
+          errorMsg,
+        );
+        return;
+      }
+
+      // Passo 2: confirmar a reserva (pending -> confirmed).
+      // Obs.: se o usuário fechar o app antes deste passo, o job de expiração do backend
+      // devolve a vaga automaticamente após eventcap.max_time_in_line.
+      final confirmResp = await http.post(
+        Uri.parse('/api/bff/event-wallets/confirm'),
+        headers: headers,
+        body: jsonEncode(enrollment),
+      );
+
+      if (!mounted) return;
+
+      if (confirmResp.statusCode == 200) {
         AppModals.showSuccess(
           context,
           'Inscrição Confirmada',
@@ -157,24 +182,12 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
             );
           },
         );
-      } else if (response.statusCode == 400) {
-        String errorMsg = 'Você já está inscrito neste evento ou o evento está lotado.';
-        try {
-          errorMsg = utf8.decode(response.bodyBytes);
-        } catch (e) {
-          // Usar mensagem padrão
-        }
-        AppModals.showError(
-          context,
-          'Inscrição Inválida',
-          errorMsg,
-        );
       } else {
-        AppModals.showError(
-          context,
-          'Erro na Inscrição',
-          'Ocorreu um erro (${response.statusCode}). Tente novamente.',
-        );
+        String errorMsg = 'Não foi possível confirmar a reserva. Tente novamente.';
+        try {
+          errorMsg = utf8.decode(confirmResp.bodyBytes);
+        } catch (_) {}
+        AppModals.showError(context, 'Confirmação Pendente', errorMsg);
       }
     } catch (e) {
       if (!mounted) return;
@@ -234,11 +247,13 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
 
     final event = _eventData!;
     final eventId = event['event_id'];
-    final isEAD = event['ead'] == true;
-    final capacity = event['capacity'];
-    final quant = event['quant'] ?? 0;
-    final vagasDisponiveis = capacity != null ? capacity - quant : null;
-    final temVagas = vagasDisponiveis == null || vagasDisponiveis > 0;
+    final isEAD = event['is_EAD'] == true || event['ead'] == true;
+    // O backend serializa o POJO Event: lot_quantity = capacidade, quantity = vagas disponíveis.
+    // -1 (ou null) = evento sem limite de vagas.
+    final vagasRaw = event['quantity'];
+    final ilimitado = vagasRaw == null || vagasRaw == -1;
+    final vagasDisponiveis = ilimitado ? null : vagasRaw;
+    final temVagas = ilimitado || vagasDisponiveis > 0;
     
     return Scaffold(
       appBar: AppBar(

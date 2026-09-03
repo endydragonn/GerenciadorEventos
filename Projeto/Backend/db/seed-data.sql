@@ -15,17 +15,14 @@ INSERT INTO users (user_name, email, fone, password, birthdate, admin) VALUES
     ('Carlos Souza', 'carlos.souza@email.com', '11987654325', 'senha654', '1995-07-18', true)
 ON CONFLICT (email) DO NOTHING;
 
--- Inserir eventos de exemplo
-INSERT INTO event (creator_id, event_name, ead, address, event_date, buy_time_limit, capacity, quant, description) VALUES
+-- Inserir eventos de exemplo (metadados apenas; capacidade vai em eventcap)
+INSERT INTO event (creator_id, event_name, ead, address, event_date, description) VALUES
     (
         (SELECT user_id FROM users WHERE email = 'joao.silva@email.com'),
         'Workshop de Java',
         false,
         'Av. Paulista, 1000 - São Paulo, SP',
-        '2025-12-15 09:00:00',
-        '2025-12-14 23:59:59',
-        100,
-        2,
+        '2026-12-15 09:00:00',
         'Aprenda Java do zero ao avançado com experts da área'
     ),
     (
@@ -33,21 +30,15 @@ INSERT INTO event (creator_id, event_name, ead, address, event_date, buy_time_li
         'Conferência de DevOps',
         false,
         'Centro de Convenções - Rio de Janeiro, RJ',
-        '2025-12-20 14:00:00',
-        '2025-12-19 23:59:59',
-        200,
-        3,
+        '2026-12-20 14:00:00',
         'As melhores práticas de DevOps e Cloud Computing'
     ),
     (
         (SELECT user_id FROM users WHERE email = 'pedro.oliveira@email.com'),
-        'Hackathon 2025',
+        'Hackathon 2026',
         false,
         'Campus UFMG - Belo Horizonte, MG',
-        '2026-01-10 08:00:00',
-        '2026-01-09 23:59:59',
-        50,
-        1,
+        '2027-01-10 08:00:00',
         'Competição de programação com prêmios incríveis'
     ),
     (
@@ -55,10 +46,7 @@ INSERT INTO event (creator_id, event_name, ead, address, event_date, buy_time_li
         'Meetup de Spring Boot',
         true,
         NULL,
-        '2025-12-01 19:00:00',
-        '2025-12-01 18:00:00',
-        NULL,
-        0,
+        '2026-12-01 19:00:00',
         'Compartilhe experiências e aprenda sobre Spring Boot'
     ),
     (
@@ -66,42 +54,69 @@ INSERT INTO event (creator_id, event_name, ead, address, event_date, buy_time_li
         'Curso de Docker',
         false,
         'Rua XV de Novembro, 500 - Curitiba, PR',
-        '2026-02-05 10:00:00',
-        '2026-02-04 23:59:59',
-        30,
-        0,
+        '2027-02-05 10:00:00',
         'Containerização e orquestração com Docker e Kubernetes'
     )
 ON CONFLICT (event_name) DO NOTHING;
 
+-- Capacidade/vagas isoladas em eventcap (quant = vagas ainda disponíveis)
+INSERT INTO eventcap (event_id, capacity, quant, buy_time_limit)
+SELECT e.event_id, v.capacity, v.quant, v.buy_time_limit
+FROM (VALUES
+    ('Workshop de Java',      100, 98,  TIMESTAMP '2026-12-14 23:59:59'),
+    ('Conferência de DevOps', 200, 197, TIMESTAMP '2026-12-19 23:59:59'),
+    ('Hackathon 2026',        50,  49,  TIMESTAMP '2027-01-09 23:59:59'),
+    ('Meetup de Spring Boot', 80,  79,  TIMESTAMP '2026-12-01 18:00:00'),
+    ('Curso de Docker',       30,  29,  TIMESTAMP '2027-02-04 23:59:59')
+) AS v(event_name, capacity, quant, buy_time_limit)
+JOIN event e ON e.event_name = v.event_name
+ON CONFLICT (event_id) DO NOTHING;
+
+-- Apresentadores de exemplo
+INSERT INTO eventpresenter (event_id, presenter_name)
+SELECT e.event_id, v.presenter_name
+FROM (VALUES
+    ('Workshop de Java',      'Fulano de Tal'),
+    ('Workshop de Java',      'Ciclana Souza'),
+    ('Conferência de DevOps', 'Beltrano Lima')
+) AS v(event_name, presenter_name)
+JOIN event e ON e.event_name = v.event_name
+ON CONFLICT (event_id, presenter_name) DO NOTHING;
+
 -- Nota: MyWallet é criada automaticamente pelo trigger create_wallet_for_user
 -- quando um usuário é inserido, então não precisamos inserir aqui
 
--- Inserir inscrições em eventos (walletevent relaciona user_id com event_id)
-INSERT INTO walletevent (user_id, event_id) VALUES
+-- Inserir inscrições confirmadas (walletevent relaciona user_id com event_id)
+INSERT INTO walletevent (user_id, event_id, status) VALUES
     (
         (SELECT user_id FROM users WHERE email = 'maria.santos@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Workshop de Java')
+        (SELECT event_id FROM event WHERE event_name = 'Workshop de Java'),
+        'confirmed'
     ),
     (
         (SELECT user_id FROM users WHERE email = 'pedro.oliveira@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Conferência de DevOps')
+        (SELECT event_id FROM event WHERE event_name = 'Conferência de DevOps'),
+        'confirmed'
     ),
     (
         (SELECT user_id FROM users WHERE email = 'ana.costa@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Meetup de Spring Boot')
+        (SELECT event_id FROM event WHERE event_name = 'Meetup de Spring Boot'),
+        'confirmed'
     ),
     (
         (SELECT user_id FROM users WHERE email = 'carlos.souza@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Hackathon 2025')
+        (SELECT event_id FROM event WHERE event_name = 'Hackathon 2026'),
+        'confirmed'
     ),
     (
         (SELECT user_id FROM users WHERE email = 'maria.santos@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Curso de Docker')
+        (SELECT event_id FROM event WHERE event_name = 'Curso de Docker'),
+        'confirmed'
     ),
     (
         (SELECT user_id FROM users WHERE email = 'joao.silva@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Conferência de DevOps')
+        (SELECT event_id FROM event WHERE event_name = 'Conferência de DevOps'),
+        'confirmed'
     )
 ON CONFLICT (user_id, event_id) DO NOTHING;
 
@@ -117,45 +132,46 @@ BEGIN
     SELECT COUNT(*) INTO v_events_count FROM event;
     SELECT COUNT(*) INTO v_wallets_count FROM mywallet;
     SELECT COUNT(*) INTO v_transactions_count FROM walletevent;
-    
+
     RAISE NOTICE '==========================================';
-    RAISE NOTICE '✅ DADOS POPULADOS COM SUCESSO!';
+    RAISE NOTICE 'DADOS POPULADOS COM SUCESSO!';
     RAISE NOTICE '==========================================';
-    RAISE NOTICE '📊 Resumo:';
-    RAISE NOTICE '  • Usuários: %', v_users_count;
-    RAISE NOTICE '  • Eventos: %', v_events_count;
-    RAISE NOTICE '  • Carteiras: %', v_wallets_count;
-    RAISE NOTICE '  • Transações: %', v_transactions_count;
+    RAISE NOTICE 'Resumo:';
+    RAISE NOTICE '  - Usuarios: %', v_users_count;
+    RAISE NOTICE '  - Eventos: %', v_events_count;
+    RAISE NOTICE '  - Carteiras: %', v_wallets_count;
+    RAISE NOTICE '  - Inscricoes: %', v_transactions_count;
     RAISE NOTICE '==========================================';
 END $$;
 
 -- Mostrar dados das tabelas
 \echo ''
-\echo '👥 ========== USUÁRIOS =========='
+\echo '========== USUARIOS =========='
 SELECT user_id, user_name, email, fone, TO_CHAR(birthdate, 'DD/MM/YYYY') as nascimento, admin
-FROM users 
+FROM users
 ORDER BY user_id;
 
 \echo ''
-\echo '🎫 ========== EVENTOS =========='
-SELECT event_id, event_name, 
-       CASE WHEN ead THEN 'EAD' ELSE 'Presencial' END as tipo,
-       TO_CHAR(event_date, 'DD/MM/YYYY HH24:MI') as data_evento,
-       capacity as capacidade, 
-       quant as quantidade
-FROM event 
-ORDER BY event_date;
+\echo '========== EVENTOS =========='
+SELECT e.event_id, e.event_name,
+       CASE WHEN e.ead THEN 'EAD' ELSE 'Presencial' END as tipo,
+       TO_CHAR(e.event_date, 'DD/MM/YYYY HH24:MI') as data_evento,
+       c.capacity as capacidade,
+       c.quant as vagas_disponiveis
+FROM event e
+LEFT JOIN eventcap c ON c.event_id = e.event_id
+ORDER BY e.event_date;
 
 \echo ''
-\echo '💰 ========== CARTEIRAS =========='
+\echo '========== CARTEIRAS =========='
 SELECT w.user_id, u.user_name as usuario
 FROM mywallet w
 JOIN users u ON w.user_id = u.user_id
 ORDER BY w.user_id;
 
 \echo ''
-\echo '📝 ========== INSCRIÇÕES =========='
-SELECT u.user_name as usuario, e.event_name as evento
+\echo '========== INSCRICOES =========='
+SELECT u.user_name as usuario, e.event_name as evento, we.status
 FROM walletevent we
 JOIN users u ON we.user_id = u.user_id
 JOIN event e ON we.event_id = e.event_id

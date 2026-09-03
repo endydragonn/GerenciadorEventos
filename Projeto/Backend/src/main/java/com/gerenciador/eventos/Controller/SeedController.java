@@ -116,7 +116,9 @@ public class SeedController {
         if (seedData.getEnrollments() != null) {
             for (EventWallet enrollment : seedData.getEnrollments()) {
                 try {
+                    // seed cria inscrições já confirmadas (reserva + confirmação)
                     eventWalletService.addLink(enrollment);
+                    eventWalletService.confirm(enrollment.getUserId(), enrollment.getEventId());
                     enrollmentsCreated++;
                 } catch (IllegalArgumentException e) {
                     warnings.add("Inscrição (user:" + enrollment.getUserId() + 

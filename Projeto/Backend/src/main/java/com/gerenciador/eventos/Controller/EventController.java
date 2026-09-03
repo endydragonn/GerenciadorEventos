@@ -166,11 +166,8 @@ public class EventController {
                 && e.getBuy_time_limit().isAfter(e.getEvent_date())) {
             errors.add("Data limite de compra não pode ser após a data do evento");
         }
-        if (e.getLot_quantity() != null && e.getLot_quantity() < 0) {
-            errors.add("Quantidade de lotes não pode ser negativa");
-        }
-        if (e.getQuantity() != null && e.getQuantity() < 0) {
-            errors.add("Quantidade de ingressos não pode ser negativa");
+        if (e.getLot_quantity() == null || (e.getLot_quantity() < 1 && e.getLot_quantity() != -1)) {
+            errors.add("Capacidade (lot_quantity) é obrigatória: >= 1, ou -1 para ilimitado");
         }
         if (e.getPresenters() == null) {
             errors.add("Lista de apresentadores não pode ser nula (pode ser vazia)");

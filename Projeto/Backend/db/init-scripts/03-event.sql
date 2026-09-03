@@ -1,6 +1,11 @@
 -- Table: public.event
 -- Tabela de eventos (depende de users.user_id via FK)
 -- Encoding: UTF-8
+--
+-- NOTA DE ARQUITETURA: capacidade/vagas (capacity, quant) e a janela de venda
+-- (buy_time_limit) NÃO ficam aqui. Foram isoladas no agregado public.eventcap
+-- (ver 04-eventcap.sql), que tem sua própria fronteira de consistência forte e é
+-- protegido por UPDATE condicional atômico. Aqui ficam só os metadados do evento.
 
 SET client_encoding = 'UTF8';
 
@@ -14,9 +19,6 @@ CREATE TABLE IF NOT EXISTS public.event
     ead boolean NOT NULL DEFAULT false,
     address text COLLATE pg_catalog."default",
     event_date timestamp without time zone NOT NULL,
-    buy_time_limit timestamp without time zone NOT NULL,
-    capacity integer,
-    quant integer NOT NULL,
     description text COLLATE pg_catalog."default" NOT NULL,
     image_data bytea,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
@@ -33,4 +35,3 @@ TABLESPACE pg_default;
 
 ALTER TABLE IF EXISTS public.event
     OWNER to admin;
-
