@@ -38,10 +38,10 @@ padrão do arquivo que você está editando.
 
 ## Git
 
-- Trabalhe em branch a partir de `main`; **nunca** commit ou push direto em `main`.
-- Implementação de issue: branch `Issue-N` (uma por issue), publicada na hora
-  (`git push -u origin Issue-N`); commits e pushes **nessa branch** são automáticos no fluxo
-  do `/implement-issue`. Abrir/mergear PR de `Issue-N` → `main` **só quando o usuário pedir**.
+- **Nunca** commit ou push direto em `main`. Tudo entra por PR.
+- Implementação de issue (`/implement-issue`): branch `Issue-N` (uma por issue) + **PR draft
+  aberto na hora**; commits, pushes e atualização do PR **nessa branch** são automáticos no
+  fluxo. **Mergear** o PR `Issue-N` → `main` **só quando o usuário pedir**.
 - Fora desse fluxo (docs, config, etc.): **só faça commit ou push quando o usuário pedir**;
   antes de push, confirme.
 - Mensagens no estilo do histórico (Conventional Commits): `feat:`, `refactor:`, `fix:`,

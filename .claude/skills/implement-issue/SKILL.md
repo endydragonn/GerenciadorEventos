@@ -55,18 +55,23 @@ Anuncie ao usuário: **"Skills ativas para a issue #N: ..."**.
   ou se o trabalho existe no repo. Se **não**, avise o usuário e pergunte se segue mesmo
   assim ou faz a dependência antes. Não prossiga silenciosamente.
 
-### 3. Branch — uma por issue, `Issue-N`, publicada na hora
+### 3. Branch `Issue-N` + PR draft — abertos na hora
 
 - `git status` primeiro. Se houver trabalho não commitado que não é seu, pare e alinhe.
-- Branch a partir de `main` com o nome **exato `Issue-N`** (ex.: `Issue-5`). Uma branch por
-  issue, sempre.
-- **Publique imediatamente**, antes de qualquer código:
+- Branch a partir de `main` com o nome **exato `Issue-N`** (ex.: `Issue-5`). Uma por issue.
+- **Abra o PR draft imediatamente**, antes de qualquer código de feature:
   ```
   git checkout -b Issue-N
+  git commit --allow-empty -m "chore: inicia Issue-N (Refs #N)"
   git push -u origin Issue-N
+  gh pr create --draft --base main --head Issue-N --title "Issue N: <título>" --body-file <arquivo>
   ```
-  (a branch nasce apontando pra `main`; fica visível no GitHub na hora).
-- Durante o loop, **não commite** — trabalhe no working tree.
+  O corpo do PR (via `--body-file`, num arquivo temporário): 1 linha dizendo que é a
+  implementação da issue #N via `/implement-issue`, depois a seção **Aceite** copiada da
+  issue, e "WIP — atualizado ao final do pipeline". Use `Refs #N` no corpo (não `Closes #N`
+  ainda — só ao marcar ready, se a issue for 100% coberta).
+- Durante o loop, **não commite código** — trabalhe no working tree.
+- Guarde o número/URL do PR para o passo 7.
 
 ### 4. Loop de implementação (máx. 3 voltas; se estourar, pare e relate o impasse)
 
@@ -96,31 +101,34 @@ Despache um subagent por vez; leia o relatório antes do próximo. Não rode os 
 - Relate o **resultado real** — nunca afirme "passa" sem ter visto passar
   (`superpowers:verification-before-completion`).
 
-### 6. Commit + push na branch `Issue-N` — automático
+### 6. Commit + push + atualizar o PR — automático
 
 Quando o loop passa (revisor APROVADO + validador CONFORME) e a verificação do passo 5 está
 feita:
 
 - **Commite na `Issue-N`** — mensagem Conventional Commits em PT-BR (`feat:`/`fix:`/…),
-  referenciando a issue (`Closes #N` ou `Refs #N`), fechando com os trailers do `CLAUDE.md`.
-  Uma mudança lógica coesa por commit.
-- **`git push` na hora** — a branch fica sempre publicada e atualizada. Não precisa pedir
-  confirmação para push **na branch `Issue-N`** (é o fluxo).
-- Se a issue não ficou 100% (itens não verificáveis sem Docker, ou impasse no loop), commite
-  e pushe mesmo assim como WIP, e diga isso no relatório.
+  fechando com os trailers do `CLAUDE.md`. Uma mudança lógica coesa por commit. Referencie a
+  issue: `Closes #N` se cobre 100%, senão `Refs #N`.
+- **`git push` na hora** — o PR draft atualiza sozinho.
+- **Atualize o corpo do PR** (`gh pr edit`) com a tabela critério→PASS/FAIL/evidência do
+  validador e o resumo do gerador.
+- Se cobriu 100% (validador CONFORME, sem pendências) → **`gh pr ready <N>`** (tira do
+  draft). Senão, deixa draft e diz no relatório o que falta.
 
-**O que ainda exige pedido explícito do usuário:** abrir/mergear PR de `Issue-N` → `main`, e
-qualquer push direto em `main`. Isso o `CLAUDE.md` continua proibindo sem ordem.
+**O que ainda exige pedido explícito do usuário:** **mergear** o PR `Issue-N` → `main`, e
+qualquer commit/push direto em `main`. Isso o `CLAUDE.md` continua proibindo sem ordem.
+Abrir e atualizar o PR (draft ou ready) é automático.
 
 ### 7. Relatório final ao usuário
 
-- Branch `Issue-N` — publicada, com link do GitHub e o hash do commit.
+- **Link do PR** `Issue-N` (draft ou ready) + hash do commit.
 - Resumo do que mudou (do relatório do gerador).
 - **Tabela critério de aceite → PASS/FAIL/não verificável + evidência** (do validador).
 - Findings não-bloqueantes do revisor (como follow-ups).
 - Resultado dos testes (real).
 - Suposições feitas.
-- Ofereça abrir o PR `Issue-N` → `main` (não abra sem o usuário pedir).
+- Se está ready: ofereça **mergear** (não mergeie sem o usuário pedir). Se draft: diga o que
+  falta pra sair do draft.
 
 ## Quando NÃO usar este skill
 
