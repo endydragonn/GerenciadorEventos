@@ -19,9 +19,16 @@ jobs:
           REPO: ${{ github.repository }}
           USER: ${{ github.event.pull_request.user.login }}
           REVIEWERS: ${{ toJson(github.event.pull_request.requested_reviewers) }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
 
         run: |
           REVIEWER_NAMES=$(echo "$REVIEWERS" | jq -r '.[].login' | sed 's/^/• /')
+
+          if [ "$PR_DRAFT" = "true" ]; then
+            PR_STATUS="📝 Draft"
+          else
+            PR_STATUS="🟢 Ready for review"
+          fi
 
           MSG="🎉 O ${USER} abriu um PR pra você revisar!"$'\n\n'
           MSG+="📦 ${REPO}"$'\n'
