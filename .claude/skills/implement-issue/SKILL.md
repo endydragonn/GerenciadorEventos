@@ -84,8 +84,8 @@ Anuncie ao usuário: **"Skills ativas para a issue #N: ..."**.
 - Branch a partir de `main` com o nome **exato `Issue-N`** (ex.: `Issue-5`). Uma por issue.
 - Crie e pushe a branch com um commit vazio (marca o início, dá backup remoto e faz a
   auto-seleção do passo 1 pular esta issue). **NÃO abra o PR agora** — ele entra só no passo 7
-  (draft), depois de o loop passar e a verificação estar feita; o passo 7.5 (avaliar a review
-  do Copilot) fecha o fluxo:
+  (draft), depois de o loop passar e a verificação estar feita; o passo 7.5 (avaliar as
+  reviews do Copilot e do Gemini) fecha o fluxo:
   ```
   git checkout -b Issue-N
   git commit --allow-empty -m "chore: inicia Issue-N (Refs #N)"
@@ -144,7 +144,7 @@ feita:
 
 Só agora, com o loop fechado, a verificação feita e os commits pushados, **abra o PR** — nunca
 antes. **O PR nasce sempre `--draft`**, com `Refs #N` no corpo; ele só sai do draft no passo
-7.5, depois de a review do Copilot ser avaliada e tratada.
+7.5, depois de as reviews do Copilot **e do Gemini** serem avaliadas e tratadas.
 
 ```
 gh pr create --base main --head Issue-N --title "Issue N: <título>" --body-file <arquivo> --draft
@@ -162,16 +162,23 @@ gh pr create --base main --head Issue-N --title "Issue N: <título>" --body-file
   `gh api --method POST repos/endydragonn/GerenciadorEventos/pulls/<N>/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'`.
   Se nem assim entrar (Copilot review não habilitado no repo), diga isso no relatório e vá
   direto ao passo 7.5 tratando como "sem review do Copilot".
+- **A review do Gemini dispara sozinha** — nada a marcar. O workflow
+  `.github/workflows/gemini-pr-reviewer.yml` (evento `pull_request` `[opened, synchronize]`)
+  roda a cada abertura de PR **e a cada push novo** e posta **um comentário de issue** (autor
+  `github-actions[bot]`) começando com `### 🤖 Gemini Code Review`. Se o workflow não existir,
+  falhar, ou faltar `GEMINI_API_KEY`, trate como "sem review do Gemini" no passo 7.5.
 
-### 7.5. Avaliar a review do Copilot — gate antes de sair do draft
+### 7.5. Avaliar as reviews automáticas (Copilot + Gemini) — gate antes de sair do draft
 
-- **Aguarde a review** (espera limitada: cheque a cada ~30–60 s por até ~10 min; a versão
-  lite costuma responder em 2–5 min). Se não vier no teto, registre no relatório e siga como
-  "sem review do Copilot".
-- Colete os findings:
-  `gh api repos/endydragonn/GerenciadorEventos/pulls/<N>/reviews` e
-  `gh api repos/endydragonn/GerenciadorEventos/pulls/<N>/comments`.
-- **Avalie cada finding** com a mesma lente do `code-reviewer`: procede? é correção real,
+- **Aguarde as duas reviews** (espera limitada: cheque a cada ~30–60 s por até ~10 min; as
+  duas costumam responder em 2–5 min). Para cada uma que não vier no teto, registre no
+  relatório e siga como "sem review de \<bot\>".
+- Colete os findings das duas:
+  - **Copilot:** `gh api repos/endydragonn/GerenciadorEventos/pulls/<N>/reviews` e
+    `gh api repos/endydragonn/GerenciadorEventos/pulls/<N>/comments`.
+  - **Gemini:** `gh api repos/endydragonn/GerenciadorEventos/issues/<N>/comments --jq '[.[] | select(.user.login=="github-actions[bot]" and (.body | startswith("### 🤖 Gemini Code Review")))] | last | .body'`
+    (`last` = o comentário mais recente; o workflow posta um novo a cada push do fix).
+- **Avalie cada finding das duas reviews** com a mesma lente do `code-reviewer`: procede? é correção real,
   violação de convenção do projeto (`CLAUDE.md`), ou melhoria de qualidade de teste? Bate com
   as escolhas deliberadas do projeto (JDBC puro, schema em SQL, BFF, etc.) ou pede uma
   "migração" que o `CLAUDE.md` proíbe? Se o finding tocar as skills do passo 1.5, use-as pra
@@ -184,36 +191,38 @@ gh pr create --base main --head Issue-N --title "Issue N: <título>" --body-file
 - Aplique o que o usuário decidir: nova rodada do gerador (disciplina do passo 4 — gerador,
   depois revisor scoped no diff do fix) ou, se for trivial (1–3 linhas óbvias), edição
   direta; rode `run-tests.sh`; **commite + pushe na `Issue-N`** com `Refs #N`.
-- Se aplicou mudança, **re-solicite a review do Copilot** e repita o 7.5 (teto: 2 rodadas de
-  fix; se estourar, relate o que ficou em aberto e siga).
-- **Sair do draft — automático, sem pedir confirmação:** assim que o Copilot devolver
-  **aprovação** (🟢 / "Approval recommended" / nenhum finding novo) **ou** todos os findings
-  pendentes tiverem sido tratados (aplicados ou descartados com motivo), **e** o validador
-  tiver dado CONFORME sem pendências → `gh pr ready <N>` na hora e troque `Refs #N` →
-  `Closes #N` no corpo. Não pergunte ao usuário pra marcar ready — só o **merge** segue
-  sendo pedido dele.
-  - Se o Copilot ainda tem finding pendente que procede e é relevante, o PR **continua
-    draft** até o usuário decidir (o gate do parágrafo acima).
+- Se aplicou mudança, **re-solicite a review do Copilot** (`gh pr edit ... --add-reviewer`); a
+  do Gemini **re-roda sozinha** no push do fix (evento `synchronize`) — pegue o comentário
+  mais recente. Repita o 7.5 com os findings novos das duas (teto: 2 rodadas de fix; se
+  estourar, relate o que ficou em aberto e siga).
+- **Sair do draft — automático, sem pedir confirmação:** assim que **todos os findings
+  pendentes de Copilot e Gemini** tiverem sido tratados (aplicados ou descartados com motivo)
+  — ou as reviews não vierem no teto de espera — **e** o validador tiver dado CONFORME sem
+  pendências → `gh pr ready <N>` na hora e troque `Refs #N` → `Closes #N` no corpo. Não
+  pergunte ao usuário pra marcar ready — só o **merge** segue sendo pedido dele.
+  - Se Copilot **ou** Gemini ainda tem finding pendente que procede e é relevante, o PR
+    **continua draft** até o usuário decidir (o gate do parágrafo acima).
   - Se o validador deixou pendências (cobertura < 100%), o PR **continua draft** — diga no
     relatório o que falta.
-  - Se a review do Copilot não veio no teto de espera, trate como "sem review": aplica o
-    mesmo gate (validador CONFORME → ready).
+  - Se uma das reviews não veio no teto de espera, trate como "sem review de \<bot\>": aplica
+    o mesmo gate (validador CONFORME + findings da outra tratados → ready).
 
 **O que ainda exige pedido explícito do usuário:** decidir o que fazer com um finding do
-Copilot que procede e é relevante (o pipeline pergunta, não aplica sozinho); **mergear** o PR
+Copilot **ou do Gemini** que procede e é relevante (o pipeline pergunta, não aplica sozinho); **mergear** o PR
 `Issue-N` → `main`; e qualquer commit/push direto em `main`. Isso o `CLAUDE.md` continua
-proibindo sem ordem. Abrir o PR draft, marcar o Copilot, descartar finding que não procede, e
-sair do draft quando o gate fecha são automáticos.
+proibindo sem ordem. Abrir o PR draft, marcar o Copilot, aguardar o Gemini, descartar finding
+que não procede, e sair do draft quando o gate fecha são automáticos.
 
 Relatório final ao usuário:
 
 - **Link do PR** `Issue-N` (draft ou ready) + hash do commit + confirmação de que a review do
-  Copilot foi marcada (ou por que não deu).
+  Copilot foi marcada e de que a do Gemini rodou (ou, para cada uma, por que não deu).
 - Resumo do que mudou (do relatório do gerador).
 - **Tabela critério de aceite → PASS/FAIL/não verificável + evidência** (do validador).
 - Findings não-bloqueantes do revisor (como follow-ups).
-- **Review do Copilot:** cada finding → procede/não procede + relevante/irrelevante + o que
-  foi feito (descartado com motivo / aplicado no commit X / decisão do usuário).
+- **Reviews automáticas (Copilot + Gemini):** por review, cada finding → procede/não procede
+  + relevante/irrelevante + o que foi feito (descartado com motivo / aplicado no commit X /
+  decisão do usuário).
 - Resultado dos testes (real).
 - Suposições feitas.
 - Se está ready: ofereça **mergear** (não mergeie sem o usuário pedir). Se draft: diga o que
