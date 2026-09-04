@@ -98,6 +98,20 @@ THROUGHPUT_RAW=$(extrair_stat_k6 "$SUMMARY" "iterations" "rate")
     echo "ERRO: não consegui extrair p(50)/p(95)/p(99)/throughput de $SUMMARY (rodou com --summary-trend-stats incluindo p(50),p(95),p(99)?)" >&2
     exit 1
 }
+# Confere que os 4 valores são numéricos antes de seguir -- o parser acima é
+# um awk artesanal amarrado ao formato atual do k6-summary.json; se uma
+# versão futura do k6 mudar esse formato, é melhor falhar alto aqui do que
+# deixar o printf abaixo coagir lixo não-numérico em "0.0" silenciosamente
+# (achado do Gemini na review da issue #11/PR #82).
+for par in "p(50)=$P50_RAW" "p(95)=$P95_RAW" "p(99)=$P99_RAW" "throughput=$THROUGHPUT_RAW"; do
+    valor="${par#*=}"
+    case "$valor" in
+        ''|*[!0-9.eE+-]*)
+            echo "ERRO: valor extraído do k6-summary.json não é numérico ($par) -- formato do JSON mudou?" >&2
+            exit 1
+            ;;
+    esac
+done
 # normaliza casas decimais (o k6 exporta floats com precisão variável) -- CSV
 # final estável e legível, independente da precisão bruta do JSON.
 P50=$(awk -v v="$P50_RAW" 'BEGIN{printf "%.1f", v}')

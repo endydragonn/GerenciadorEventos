@@ -30,6 +30,18 @@
 set -uo pipefail
 
 EVENT_ID="${EVENT_ID:?EVENT_ID é obrigatória}"
+# EVENT_ID entra direto numa query SQL abaixo (amostrar()) -- exigir formato
+# estritamente numérico antes de interpolar evita injeção de SQL caso o
+# script seja chamado standalone com um valor não confiável (achado do
+# Gemini na review da issue #11/PR #82; dentro do fluxo normal via run.sh o
+# valor já vem de um grep -oP '[0-9]+', mas collector.sh não deve confiar
+# nisso sozinho).
+case "$EVENT_ID" in
+    ''|*[!0-9]*)
+        echo "ERRO: EVENT_ID deve ser um inteiro positivo (recebido: '$EVENT_ID')." >&2
+        exit 1
+        ;;
+esac
 CONTAINER_DB="${CONTAINER_DB:-gerenciador-db}"
 INTERVAL_S="${INTERVAL_S:-1}"
 OUT_FILE="${OUT_FILE:-$(mktemp)}"

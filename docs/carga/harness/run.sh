@@ -62,7 +62,12 @@ BASE_URL_PROBE="${BASE_URL_PROBE:-http://localhost:8081}"
 BASE_URL_K6="${BASE_URL_K6:-http://backend:8081}"
 NETWORK="${NETWORK:-gerenciador-net}"
 CONTAINER_DB="${CONTAINER_DB:-gerenciador-db}"
-K6_IMAGE="${K6_IMAGE:-grafana/k6}"
+# Versão fixada (não "latest"): report.sh faz parsing manual (awk) do
+# k6-summary.json com um formato específico; uma troca silenciosa de versão
+# do k6 poderia mudar esse formato e quebrar a extração sem aviso (achado do
+# Gemini na review da issue #11/PR #82). Atualize aqui deliberadamente, não
+# via "latest".
+K6_IMAGE="${K6_IMAGE:-grafana/k6:2.2.0}"
 N="${N:-10}"
 CAPACITY="${CAPACITY:-4}"
 READPATH="${READPATH:-cas}"
