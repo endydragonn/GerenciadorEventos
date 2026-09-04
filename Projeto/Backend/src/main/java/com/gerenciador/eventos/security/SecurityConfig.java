@@ -35,18 +35,13 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
+                // Superfície HTTP única: toda a API de negócio mora sob /bff/** (issue #78).
+                // Já era pública por inteiro antes desta issue (login, cadastro, CRUD de
+                // evento/carteira) — nenhuma mudança de gate aqui, só a consolidação do
+                // path (/api/users/** e /api/seed viraram /bff/users/** e /bff/seed).
                 .requestMatchers(
-                    "/bff/users/login",
-                    "/bff/users",
                     "/bff/**",
-                    "/api/users/**",
-                    "/actuator/health",
-                    "/api/seed" // endpoint de seed público
-                ).permitAll()
-                .requestMatchers(
-                    "/bff/users/*/request-password-reset-mfa",
-                    "/bff/users/*/verify-password-reset-mfa",
-                    "/bff/users/*/password-with-mfa"
+                    "/actuator/health"
                 ).permitAll()
                 .anyRequest().authenticated()
             )

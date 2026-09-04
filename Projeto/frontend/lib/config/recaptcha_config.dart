@@ -6,6 +6,6 @@ const String RECAPTCHA_SITE_KEY = String.fromEnvironment(
   defaultValue: '', // Será carregado do .env
 );
 
-// URL base da API backend para validar reCAPTCHA
-const String RECAPTCHA_VERIFY_ENDPOINT = '/api/users/verify-recaptcha';
+// Path (relativo ao AppConfig.apiBaseUrl) para validar reCAPTCHA no backend
+const String RECAPTCHA_VERIFY_ENDPOINT = '/bff/users/verify-recaptcha';
 

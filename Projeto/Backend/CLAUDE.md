@@ -20,17 +20,22 @@ e roda `mvn clean test`. **Exige o container `db` no ar**: os testes batem num P
 - `src/test/.../SchemaValidationTest` valida o schema real contra o esperado.
 - `TestSupport/GlobalDbTruncator` dá `TRUNCATE` nas tabelas entre testes — não há mock de banco.
 - `EventTest`, `UserTest`, `EventWalletTest`, `MyWalletTest` exercitam services + repositories.
-- Não há testes unitários isolados; tudo é de integração com banco.
+- `HttpContractTest` (`webEnvironment = RANDOM_PORT` + `TestRestTemplate`) fixa path + método
+  + forma de request/response de cada endpoint `/bff/**` que o Flutter consome — bate no
+  HTTP real (inclusive `SecurityConfig`), não MockMvc. `JavaMailSender` é mockado
+  (`@MockitoBean`) e `RECAPTCHA_SECRET_KEY` é forçada vazia via `@TestPropertySource` para
+  não depender de SMTP/Google reais.
+- Não há testes unitários isolados; tudo é de integração com banco (exceto os mocks pontuais
+  do `HttpContractTest` para dependências externas).
 
 ## Camadas (pacote `com.gerenciador.eventos`)
 
 ```
-Main.java              entrypoint @SpringBootApplication
+Main.java              entrypoint @SpringBootApplication (único)
 POJO/                  objetos simples (getters/setters), SEM anotação JPA
 Repository/            acesso a dados — JDBC puro
 Service/               regras de negócio e validação
-Controller/            endpoints /api/**  e  /api/bff/**
-bff/BffApplication     endpoints /bff/**  (classes @RestController internas)
+bff/                   superfície HTTP única: /bff/** (arquivos @RestController próprios)
 security/              JWT + Spring Security + BCrypt + papel "host"
 config/                DatabaseConnection, CorsConfig, EmailTemplates
 ```
@@ -70,18 +75,27 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 
 ## Rotas e segurança
 
-- **Nginx do frontend remove o prefixo `/api/`** antes de encaminhar para `backend:8081`
-  (`/api/bff/users/login` → `/bff/users/login`). Em acesso direto ao backend, use o path real.
-- Dois conjuntos de controllers coexistem (migração inacabada):
-  `Controller/*` sob `/api/**` e `/api/bff/**`; `bff/BffApplication` sob `/bff/**`.
-  O frontend mira principalmente a camada BFF.
-- `security/SecurityConfig`: stateless, CSRF off. **Público**: `/bff/**`, `/api/users/**`,
-  `/api/seed`, `/actuator/health`, e os fluxos de reset de senha com MFA. Todo o resto exige
+- **Superfície HTTP única sob `/bff/**`** (issue #78): `bff/BffUserController` (users — CRUD,
+  login, `/me`, cadastro em duas fases, reset de senha com MFA, reCAPTCHA),
+  `bff/BffEventController` (events — CRUD, validate, search, imagem),
+  `bff/BffEventWalletController` (event-wallets — addLink/confirm/validate/removeLink/
+  listByUser), `bff/BffMyWalletController` (my-wallets — validate/getByUser/ensure),
+  `bff/BffSeedController` (seed, dev). Não existe mais `/api/**` de negócio nem um 2º
+  `@SpringBootApplication`; `Main.java` é o único entrypoint e as classes `bff/*` são
+  `@RestController` de nível top-level, descobertas pelo component scan do próprio `Main`.
+- **Nginx do frontend faz proxy de `/bff/` → `backend:8081/bff/` sem rewrite/strip**
+  (`nginx.conf`): o path chega igual no backend. Em acesso direto ao backend (dev sem
+  Nginx), use o mesmo path `/bff/...`.
+- `security/SecurityConfig`: stateless, CSRF off. **Público**: `/bff/**` (por inteiro,
+  incluindo login/cadastro/CRUD de evento/carteira — ver "Fora de escopo" no roadmap,
+  issue #57 vai restringir `event-wallets`) e `/actuator/health`. Todo o resto exige
   `Authorization: Bearer <jwt>`.
 - `JwtAuthenticationFilter` valida o token e põe o e-mail como `subject`/username. Não há
   roles dinâmicas no token (authority fixa `USER`).
-- Autorização por papel: `security/AuthorizationUtil.isCurrentUserHost()` lê `users.Host`
-  (coluna com maiúscula) — gate para criação/edição de evento.
+- `security/AuthorizationUtil.isCurrentUserHost()` lê `users.Host` (coluna com maiúscula) e
+  existe para checagem de papel "host", mas hoje **nenhum controller chama** `ensureUserIsHost()`
+  — `bff/BffEventController.createEvent` não faz esse gate (já era assim antes da issue #78,
+  só o controller `/api/events` morto fazia). Não é escopo desta issue mudar isso.
 - Senhas: `BCryptPasswordEncoder` (bean em `SecurityConfig`). Nunca gravar senha em claro
   (o seed SQL grava em claro só para dados de teste — não replicar em código de produção).
 - CORS está definido **duas vezes** (`config.CorsConfig` e o bean em `SecurityConfig`, este
@@ -105,7 +119,8 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
    default 30s; `@EnableScheduling` em `config/SchedulingConfig`): varre `pending` vencidas e,
    por transação, `expireIfStale` (condicional, não pisa em confirmação concorrente) + `release`.
 
-O `SeedController` cria inscrições já confirmadas (`addLink` seguido de `confirm`).
+O `bff/BffSeedController` (`POST /bff/seed`) cria inscrições já confirmadas (`addLink`
+seguido de `confirm`).
 
 ### Feature flag `reservation.readpath` — caminho CAS (default) vs. ingênuo (experimento)
 
@@ -130,13 +145,13 @@ chamável direto (os testes o invocam sem esperar o timer).
 
 ## Cadastro em duas fases + e-mail
 
-1. `POST /api/users/request-verification` grava em `pending_verifications` (hash da senha +
+1. `POST /bff/users/request-verification` grava em `pending_verifications` (hash da senha +
    código de 6 dígitos, expira em 5 min — ver `application.properties`).
-2. `POST /api/users/verify-email` confere o código e só então insere em `users`.
+2. `POST /bff/users/verify-email` confere o código e só então insere em `users`.
 3. `Service/EmailVerificationService` envia o código via SMTP Gmail (`spring-boot-starter-mail`),
    templates em `config/EmailTemplates`.
-4. reCAPTCHA v3: `Controller/RecaptchaController` valida o token com a Google usando
-   `RECAPTCHA_SECRET_KEY`.
+4. reCAPTCHA v3: `POST /bff/users/verify-recaptcha` (em `bff/BffUserController`) valida o
+   token com a Google usando `RECAPTCHA_SECRET_KEY`.
 
 ## Config
 
@@ -150,7 +165,11 @@ chamável direto (os testes o invocam sem esperar o timer).
 
 ## Ao mexer aqui
 
-- Novo endpoint → decida a camada (BFF vs `/api`) coerente com o vizinho; ajuste
-  `SecurityConfig` se for público.
+- Novo endpoint → entra em `bff/*` (superfície HTTP única, ver "Rotas e segurança"), no
+  controller do agregado correspondente; ajuste `SecurityConfig` se precisar sair do
+  `/bff/**` público (raro).
+- Mudou path, método ou forma de request/response de um endpoint consumido pelo Flutter →
+  atualize `src/test/.../HttpContractTest` (trava a superfície pro harness de carga da
+  issue #11) e o `frontend/CLAUDE.md`.
 - Nova query → JDBC parametrizado (`?`), nunca concatenar string em SQL.
 - Rode `./run-tests.sh` (com `db` no ar) antes de dar por pronto.

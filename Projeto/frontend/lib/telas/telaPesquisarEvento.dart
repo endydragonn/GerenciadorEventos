@@ -5,7 +5,7 @@
 // 
 // Funcionalidades:
 // - Campo de busca com pesquisa em tempo real
-// - Busca via API (/api/bff/events/search?term={query})
+// - Busca via API (/bff/events/search?term={query})
 // - Exibição de resultados em cards
 // - Informações exibidas: nome, data, local, tipo (EAD/Presencial)
 // - Navegação para detalhes do evento ao clicar
@@ -21,6 +21,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth.dart';
 import 'package:intl/intl.dart';
 import 'telaInscricaoEvento.dart';
+import '../config/app_config.dart';
 
 class SearchEventScreen extends StatefulWidget {
   const SearchEventScreen({super.key});
@@ -71,7 +72,7 @@ class _SearchEventScreenState extends State<SearchEventScreen> {
       final headers = ApiAuth.jsonHeaders();
       // Busca todos os eventos (termo vazio retorna todos)
       final response = await http.get(
-        Uri.parse('/api/bff/events/search?term='),
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/events/search?term='),
         headers: headers,
       );
 
@@ -335,7 +336,7 @@ class _SearchEventScreenState extends State<SearchEventScreen> {
                                             borderRadius: BorderRadius.circular(8.0),
                                             child: eventId != null
                                                 ? Image.network(
-                                                    '/api/bff/events/$eventId/image',
+                                                    '${AppConfig.apiBaseUrl}/bff/events/$eventId/image',
                                                     width: 80,
                                                     height: 80,
                                                     fit: BoxFit.cover,

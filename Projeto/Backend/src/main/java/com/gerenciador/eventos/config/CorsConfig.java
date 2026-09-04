@@ -8,12 +8,9 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 /**
  * Configuração CORS centralizada para TODOS os endpoints
  * Lê origins do .env via CORS_ALLOWED_ORIGINS
- * 
- * Aplica-se automaticamente a:
- * - /api/users/** (usuários, login, registro, etc)
- * - /api/events/** (eventos)
- * - /api/wallet/** (carteira)
- * - Qualquer outro endpoint /api/**
+ *
+ * Aplica-se automaticamente a /bff/** (users, events, event-wallets, my-wallets, seed —
+ * superfície HTTP única desde a issue #78).
  */
 @Configuration
 public class CorsConfig implements WebMvcConfigurer {
@@ -24,9 +21,9 @@ public class CorsConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         String[] origins = corsAllowedOrigins.split(",");
-        
-        // Aplicar CORS a TODOS os endpoints /api/**
-        registry.addMapping("/api/**")
+
+        // Aplicar CORS a TODOS os endpoints /bff/**
+        registry.addMapping("/bff/**")
                 .allowedOrigins(origins)
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
                 .allowedHeaders("*")

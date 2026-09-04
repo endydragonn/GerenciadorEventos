@@ -6,7 +6,7 @@
 // Funcionalidades:
 // - Formulário pré-preenchido com dados atuais do usuário
 // - Campos editáveis: nome, email, telefone, foto de perfil
-// - Atualização via API (/api/bff/users/{userId}) com método PUT
+// - Atualização via API (/bff/users/{userId}) com método PUT
 // - Validações de campos (email válido, telefone, etc.)
 // - Confirmação antes de salvar alterações
 // - Opção de cancelar edição
@@ -100,7 +100,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     try {
       final response = await http.get(
-        Uri.parse('/api/bff/users/${user['user_id']}'),
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/users/${user['user_id']}'),
         headers: ApiAuth.jsonHeaders(),
       );
 

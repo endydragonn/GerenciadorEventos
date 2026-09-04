@@ -6,7 +6,7 @@
 // Funcionalidades:
 // - Formulário pré-preenchido com dados do evento
 // - Campos editáveis: título, data, local, descrição, capacidade, etc.
-// - Atualização via API (/api/bff/events/{eventId}) com método PUT
+// - Atualização via API (/bff/events/{eventId}) com método PUT
 // - Validações de campos
 // - Confirmação antes de salvar alterações
 // - Opção de cancelar edição
@@ -23,6 +23,7 @@ import 'telaGerenciarEventos.dart';
 import 'modals.dart';
 import '../helpers/date_input_formatter.dart';
 import 'package:flutter/services.dart';
+import '../config/app_config.dart';
 
 class EditEventScreen extends StatefulWidget {
   final Map<String, dynamic> event;
@@ -214,7 +215,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
 
       try {
         final response = await http.put(
-          Uri.parse('/api/bff/events/${widget.event['event_id']}'),
+          Uri.parse('${AppConfig.apiBaseUrl}/bff/events/${widget.event['event_id']}'),
           headers: ApiAuth.jsonHeaders(),
           body: jsonEncode(eventData),
         );
