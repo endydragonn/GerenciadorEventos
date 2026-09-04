@@ -1,3 +1,4 @@
+# Gera resumos de PRs mergeadas e Issues fechadas e devolve os dados para o servidor.
 name: Resumo diário via Telegram
 
 on:
@@ -14,10 +15,12 @@ jobs:
       issues: read
 
     steps:
-      - name: Gerar resumo
+      - name: Gerar resumo e enviar ao servidor
         env:
           GH_TOKEN: ${{ github.token }}
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # URL fixa da sua aplicação no Render
+          SERVER_URL: "https://telegram-bot-rcu4.onrender.com/webhook/resumo"
+          SERVER_TOKEN: ${{ secrets.SERVER_API_TOKEN }}
 
           REPO: ${{ github.repository }}
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
@@ -55,6 +58,7 @@ jobs:
           echo "Chat ID: $CHAT_ID"
           echo "Tipo: $SUMMARY_TYPE"
           echo "Data início: $START_DATE"
+          echo "Servidor Destino: $SERVER_URL"
           echo "======================================"
 
 
@@ -93,7 +97,7 @@ jobs:
             if [ -n "$PAGE_DATA" ]; then
               if [ -n "$MERGED_PRS" ]; then
                 MERGED_PRS="${MERGED_PRS}
-          ${PAGE_DATA}"
+${PAGE_DATA}"
               else
                 MERGED_PRS="$PAGE_DATA"
               fi
@@ -142,7 +146,7 @@ jobs:
             if [ -n "$PAGE_DATA" ]; then
               if [ -n "$CLOSED_ISSUES" ]; then
                 CLOSED_ISSUES="${CLOSED_ISSUES}
-          ${PAGE_DATA}"
+${PAGE_DATA}"
               else
                 CLOSED_ISSUES="$PAGE_DATA"
               fi
@@ -156,7 +160,7 @@ jobs:
 
 
           # ============================================================
-          # CONTADORES E TÍTULO
+          # CONTADORES
           # ============================================================
 
           MERGED_COUNT=$(echo "$MERGED_PRS" | grep -c '^• #' || true)
@@ -173,35 +177,35 @@ jobs:
 
             MSG="${HEADER}
 
-          📦 ${REPO}
+📦 ${REPO}
 
-          🔀 PRs mergeadas"
+🔀 PRs mergeadas"
 
             if [ -n "$MERGED_PRS" ]; then
               MSG+="
-          ${MERGED_PRS}"
+${MERGED_PRS}"
             else
               MSG+="
-          Nenhuma."
+Nenhuma."
             fi
 
             MSG+="
 
-          📋 Issues fechadas"
+📋 Issues fechadas"
 
             if [ -n "$CLOSED_ISSUES" ]; then
               MSG+="
-          ${CLOSED_ISSUES}"
+${CLOSED_ISSUES}"
             else
               MSG+="
-          Nenhuma."
+Nenhuma."
             fi
 
             MSG+="
 
-          📈 Totais
-          • ${MERGED_COUNT} PRs mergeadas
-          • ${ISSUES_COUNT} Issues fechadas"
+📈 Totais
+• ${MERGED_COUNT} PRs mergeadas
+• ${ISSUES_COUNT} Issues fechadas"
 
           else
 
@@ -211,41 +215,60 @@ jobs:
 
             MSG="${HEADER}
 
-          📦 ${REPO}
+📦 ${REPO}
 
-          🔀 PRs
-          • ${MERGED_COUNT} mergeadas
+🔀 PRs
+• ${MERGED_COUNT} mergeadas
 
-          📋 Issues
-          • ${ISSUES_COUNT} fechadas
+📋 Issues
+• ${ISSUES_COUNT} fechadas
 
-          📈 Total
-          • ${TOTAL_COUNT} evento(s)"
+📈 Total
+• ${TOTAL_COUNT} evento(s)"
 
           fi
 
 
           # ============================================================
-          # ENVIA PARA O TELEGRAM
+          # DEVOLVE OS DADOS PARA O SERVIDOR BACKEND (RENDER)
           # ============================================================
 
           MESSAGE_LENGTH=${#MSG}
-
           echo "Tamanho da mensagem: ${MESSAGE_LENGTH} caracteres"
 
-          RESPONSE=$(curl -s -X POST \
-            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            --data-urlencode "text=${MSG}")
+          PAYLOAD=$(jq -n \
+            --arg repo "$REPO" \
+            --arg summary_type "$SUMMARY_TYPE" \
+            --arg start_date "$START_DATE" \
+            --arg chat_id "$CHAT_ID" \
+            --arg message "$MSG" \
+            --argjson total "$TOTAL_COUNT" \
+            --argjson merged "$MERGED_COUNT" \
+            --argjson issues "$ISSUES_COUNT" \
+            '{
+              repository: $repo,
+              summary_type: $summary_type,
+              start_date: $start_date,
+              chat_id: $chat_id,
+              message: $message,
+              totals: {
+                merged_prs: $merged,
+                closed_issues: $issues,
+                total: $total
+              }
+            }')
 
-          SUCCESS=$(echo "$RESPONSE" | jq -r '.ok')
+          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" -X POST "$SERVER_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${SERVER_TOKEN:-}" \
+            -d "$PAYLOAD")
 
-          if [ "$SUCCESS" != "true" ]; then
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "Resumo devolvido com sucesso ao servidor ($HTTP_STATUS)."
+          else
             echo "======================================"
-            echo "ERRO AO ENVIAR TELEGRAM"
-            echo "$RESPONSE"
+            echo "ERRO AO DEVOLVER PARA O SERVIDOR ($HTTP_STATUS)"
+            cat response.txt
             echo "======================================"
             exit 1
           fi
-
-          echo "Resumo enviado com sucesso."
