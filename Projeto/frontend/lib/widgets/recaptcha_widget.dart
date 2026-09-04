@@ -5,6 +5,7 @@ import 'dart:html' as html;
 import 'dart:js' as js;
 import 'dart:async';
 import '../config/app_config.dart';
+import '../config/recaptcha_config.dart';
 
 class RecaptchaWidget extends StatefulWidget {
   final Function(bool) onRecaptchaChanged;
@@ -122,7 +123,7 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
   Future<bool> _verifyTokenOnBackend(String token) async {
     try {
       final response = await http.post(
-        Uri.parse('${AppConfig.apiBaseUrl}/api/users/verify-recaptcha'),
+        Uri.parse('${AppConfig.apiBaseUrl}$RECAPTCHA_VERIFY_ENDPOINT'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'token': token,

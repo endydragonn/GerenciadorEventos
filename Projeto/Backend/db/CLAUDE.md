@@ -58,8 +58,10 @@ docker compose -f Projeto/docker-compose.yml up -d --build
 ## Modelo atual
 
 - **`users`** — PK `user_id` (identity). `email`, `fone`, `user_name` são `UNIQUE` e
-  `NOT NULL`. Flags de papel: `admin` e **`Host`** (coluna com maiúscula → sempre entre aspas
-  em SQL: `"Host"`). Campos de MFA de reset de senha: `password_reset_mfa_code`,
+  `NOT NULL`. Flags de papel: `admin` e **`Host`** — DDL declara `Host boolean` **sem aspas**
+  (`db/init-scripts/02-users.sql`), então o Postgres dobra o identificador para minúsculas:
+  a coluna real é `host`, acessada sem aspas em SQL (igual `isactive`). Campos de MFA de
+  reset de senha: `password_reset_mfa_code`,
   `password_reset_mfa_expiration`. `created_at` / `updated_at` com default.
   - Trigger `trigger_create_wallet` (`AFTER INSERT`): cria automaticamente a linha em
     `mywallet`. A aplicação **nunca** insere carteira à mão.

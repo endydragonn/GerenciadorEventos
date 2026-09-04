@@ -6,10 +6,10 @@
 // Funcionalidades:
 // - Duas abas (Tabs):
 //   1. "Inscritos": Eventos nos quais o usuário está inscrito
-//      • Lista via API /api/bff/event-wallets/user/{userId}
+//      • Lista via API /bff/event-wallets/user/{userId}
 //      • Opção de cancelar inscrição
 //   2. "Criados": Eventos criados pelo usuário
-//      • Lista via API /api/bff/events?creator_id={userId}
+//      • Lista via API /bff/events?creator_id={userId}
 //      • Visualização de participantes inscritos
 // - Carregamento assíncrono de dados
 // - Tratamento de estados (loading, erro, vazio)
@@ -26,6 +26,7 @@ import 'dart:convert';
 import 'telaEdicaoEvento.dart';
 import 'telaPrincipal.dart';
 import 'modals.dart';
+import '../config/app_config.dart';
 
 class ManageEventsScreen extends StatefulWidget {
   const ManageEventsScreen({super.key});
@@ -79,7 +80,7 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
 
     // Enrolled
     final enrolledResponse = await http.get(
-      Uri.parse('/api/bff/event-wallets/user/$userId'),
+      Uri.parse('${AppConfig.apiBaseUrl}/bff/event-wallets/user/$userId'),
       headers: ApiAuth.jsonHeaders(),
     );
     
@@ -88,7 +89,7 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
       List<Map<String, dynamic>> events = [];
       for (var wallet in wallets) {
         final eventResponse = await http.get(
-          Uri.parse('/api/bff/events/${wallet['eventId']}'),
+          Uri.parse('${AppConfig.apiBaseUrl}/bff/events/${wallet['eventId']}'),
           headers: ApiAuth.jsonHeaders(),
         );
         if (eventResponse.statusCode == 200) {
@@ -104,7 +105,7 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
 
     // Created
     final createdResponse = await http.get(
-      Uri.parse('/api/bff/events?creator_id=$userId'),
+      Uri.parse('${AppConfig.apiBaseUrl}/bff/events?creator_id=$userId'),
       headers: ApiAuth.jsonHeaders(),
     );
     
@@ -287,7 +288,7 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
                 final userId = user['user_id'];
                 final eventId = event['event_id'];
                 final response = await http.delete(
-                  Uri.parse('/api/bff/event-wallets?userId=$userId&eventId=$eventId'),
+                  Uri.parse('${AppConfig.apiBaseUrl}/bff/event-wallets?userId=$userId&eventId=$eventId'),
                   headers: ApiAuth.jsonHeaders(),
                 );
                 if (response.statusCode == 200) {

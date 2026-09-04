@@ -5,7 +5,7 @@
 // 
 // Funcionalidades:
 // - Formulário de login com email e senha
-// - Validação de credenciais via API (/api/bff/users/login)
+// - Validação de credenciais via API (/bff/users/login)
 // - Checkbox "Lembrar de mim" para persistência de sessão
 // - Geração e armazenamento de token JWT (persistente se "Lembrar" marcado)
 // - Recuperação de senha (TODO - não implementado)

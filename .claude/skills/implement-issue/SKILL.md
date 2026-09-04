@@ -153,7 +153,8 @@ gh pr create --base main --head Issue-N --title "Issue N: <título>" --body-file
 - Corpo do PR (via `--body-file`): 1 linha dizendo que é a implementação da issue #N via
   `/implement-issue`; a tabela **critério de aceite → PASS/FAIL/não verificável + evidência**
   (do validador); o resumo do gerador; os findings não-bloqueantes do revisor como
-  follow-ups. **Sem citar o vault** como alteração (ver passo 3).
+  follow-ups (ou, se o usuário preferir tratar já, issue nova via `create-issue` — ver passo
+  7.5). **Sem citar o vault** como alteração (ver passo 3).
 - **Logo depois de criar o PR, marque a review do Copilot** (obrigatório, versão lite):
   ```
   gh pr edit <N> -R endydragonn/GerenciadorEventos --add-reviewer "@copilot"
@@ -187,17 +188,26 @@ gh pr create --base main --head Issue-N --title "Issue N: <título>" --body-file
   - **Não procede / irrelevante / contra uma escolha deliberada** → registre no relatório com
     o motivo e descarte.
   - **Procede e é relevante ao projeto** → **PARE e pergunte ao usuário o que fazer.**
-    Apresente: o finding, sua avaliação, e a ação recomendada. Não aplique sozinho.
+    Apresente: o finding, sua avaliação, e a ação recomendada — incluindo a opção de **adiar
+    como issue nova** (ver abaixo) quando o fix não é desta PR. Não aplique sozinho.
 - Aplique o que o usuário decidir: nova rodada do gerador (disciplina do passo 4 — gerador,
   depois revisor scoped no diff do fix) ou, se for trivial (1–3 linhas óbvias), edição
   direta; rode `run-tests.sh`; **commite + pushe na `Issue-N`** com `Refs #N`.
+- **Se o usuário decidir adiar em vez de mexer nesta branch:** invoque a skill `create-issue`
+  (Caminho B, oportunista) — não crie a issue "na mão" fora dela. Preencha a origem com o que
+  já está em mãos: `Refs #N` (issue atual), `PR #M` (esta), o finding (Copilot/Gemini/revisor
+  do passo 4) e a data. Depois de criada, anote o número da issue nova no relatório final em
+  vez de deixar o item como TODO solto. Precedente: #57 e #58 nasceram assim, de findings do
+  `code-reviewer` na review da #5 (PR #55) — antes de existir `create-issue`, foram criadas na
+  mão; agora é sempre via a skill.
 - Se aplicou mudança, **re-solicite a review do Copilot** (`gh pr edit ... --add-reviewer`); a
   do Gemini **re-roda sozinha** no push do fix (evento `synchronize`) — pegue o comentário
   mais recente. Repita o 7.5 com os findings novos das duas (teto: 2 rodadas de fix; se
   estourar, relate o que ficou em aberto e siga).
 - **Sair do draft — automático, sem pedir confirmação:** assim que **todos os findings
-  pendentes de Copilot e Gemini** tiverem sido tratados (aplicados ou descartados com motivo)
-  — ou as reviews não vierem no teto de espera — **e** o validador tiver dado CONFORME sem
+  pendentes de Copilot e Gemini** tiverem sido tratados (aplicados, descartados com motivo, ou
+  adiados como issue nova via `create-issue`) — ou as reviews não vierem no teto de espera —
+  **e** o validador tiver dado CONFORME sem
   pendências → `gh pr ready <N>` na hora e troque `Refs #N` → `Closes #N` no corpo. Não
   pergunte ao usuário pra marcar ready — só o **merge** segue sendo pedido dele.
   - Se Copilot **ou** Gemini ainda tem finding pendente que procede e é relevante, o PR
@@ -222,7 +232,7 @@ Relatório final ao usuário:
 - Findings não-bloqueantes do revisor (como follow-ups).
 - **Reviews automáticas (Copilot + Gemini):** por review, cada finding → procede/não procede
   + relevante/irrelevante + o que foi feito (descartado com motivo / aplicado no commit X /
-  decisão do usuário).
+  adiado como issue nova #Y via `create-issue` / decisão do usuário).
 - Resultado dos testes (real).
 - Suposições feitas.
 - Se está ready: ofereça **mergear** (não mergeie sem o usuário pedir). Se draft: diga o que
@@ -251,6 +261,9 @@ Não deixar o `main` local divergindo do `origin` entre uma issue e a próxima.
 
 - O mapeamento label→skill do **passo 1.5** é a forma canônica de ativar skills; mantenha-o
   atualizado quando surgirem novas labels ou skills.
+- `create-issue` — sempre que um finding (revisor do passo 4, Copilot/Gemini do passo 7.5) for
+  adiado em vez de entrar nesta PR, é essa skill que cria a issue de follow-up, não `gh issue
+  create` direto.
 - `superpowers:requesting-code-review` — disciplina que o `code-reviewer` encarna.
 - `superpowers:using-git-worktrees` / `superpowers:finishing-a-development-branch` — se o
   usuário quiser isolar a branch num worktree, ou ao fechar o PR.

@@ -7,7 +7,7 @@
 // - Formulário de cadastro com nome, email, senha e confirmação
 // - Validações de campos (nome não vazio, email válido, senha mínima 6 caracteres)
 // - Verificação de senha igual à confirmação
-// - Criação de usuário via API (/api/bff/users)
+// - Criação de usuário via API (/bff/users/request-verification)
 // - Hash de senha com BCrypt no backend
 // - SnackBars para feedback de sucesso/erro
 // - Tratamento de erros (email duplicado, dados inválidos, erro de conexão)
@@ -297,7 +297,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
       // Chama endpoint de request-verification (Etapa 1)
       final response = await http.post(
-        Uri.parse('${AppConfig.apiBaseUrl}/api/users/request-verification'),
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/users/request-verification'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(userData),
       ).timeout(

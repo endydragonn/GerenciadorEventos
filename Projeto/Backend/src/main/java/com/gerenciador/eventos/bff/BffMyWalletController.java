@@ -1,9 +1,8 @@
-package com.gerenciador.eventos.Controller;
+package com.gerenciador.eventos.bff;
 
 import java.util.ArrayList;
 import java.util.List;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -16,44 +15,45 @@ import com.gerenciador.eventos.POJO.MyWallet;
 import com.gerenciador.eventos.Service.MyWalletService;
 
 /**
- * Controller REST para MyWallet (carteira do usuário)
- * A carteira é criada automaticamente via trigger ao criar o usuário.
- * Portanto, não expomos criação manual; oferecemos consulta por userId.
+ * Camada BFF única para a carteira do usuário (my-wallet): validate, getByUser, ensure.
+ * Antes desta issue (#78) vivia em {@code bff.BffApplication.MyWalletBffController}.
+ * Comportamento inalterado. Sem chamador no frontend hoje (carteira é criada
+ * automaticamente por trigger no cadastro), mas faz parte da superfície BFF.
  */
 @RestController
-@RequestMapping("/api/wallets")
-public class MyWalletController {
+@RequestMapping("/bff/my-wallets")
+public class BffMyWalletController {
 
-    @Autowired
-    private MyWalletService myWalletService;
+    private final MyWalletService myWalletService;
 
+    public BffMyWalletController(MyWalletService myWalletService) {
+        this.myWalletService = myWalletService;
+    }
 
-
-    /**
-     * POST /api/wallets/validate - Validar carteira
-     */
     @PostMapping("/validate")
     public ResponseEntity<?> validateWallet(@RequestBody MyWallet wallet) {
-        List<String> errors = validate(wallet);
+        List<String> errors = validateMyWalletBasic(wallet);
         if (errors.isEmpty()) {
             return ResponseEntity.ok("Carteira válida");
         }
         return ResponseEntity.badRequest().body(String.join("; ", errors));
     }
 
-    /**
-     * GET /api/wallets/{userId} - Buscar carteira pelo ID do usuário
-     */
     @GetMapping("/{userId}")
     public ResponseEntity<?> getByUser(@PathVariable Long userId) {
         if (userId == null || userId <= 0) {
             return ResponseEntity.badRequest().body("userId inválido");
         }
-    MyWallet wallet = myWalletService.getByUserId(userId);
+        MyWallet wallet = myWalletService.getByUserId(userId);
         return ResponseEntity.ok(wallet);
     }
 
-    private List<String> validate(MyWallet w) {
+    @PostMapping("/ensure/{userId}")
+    public ResponseEntity<MyWallet> ensureExists(@PathVariable Long userId) {
+        return ResponseEntity.ok(myWalletService.ensureExists(userId));
+    }
+
+    private List<String> validateMyWalletBasic(MyWallet w) {
         List<String> errors = new ArrayList<>();
         if (w.getUserId() == null || w.getUserId() <= 0) {
             errors.add("user_id é obrigatório e deve ser positivo");
