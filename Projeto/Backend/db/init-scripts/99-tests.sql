@@ -6,6 +6,7 @@
 -- - CHECK da invariante 0 <= quant <= capacity
 -- - eventpresenter (lista de apresentadores, PK composta)
 -- - Máquina de estados de walletevent (status)
+-- - Read model desnormalizado event_availability (refresh inline + cascata no DELETE)
 -- - TRUNCATE e revalidação pós-TRUNCATE
 
 \echo Iniciando testes minimos do banco...
@@ -17,6 +18,7 @@ DECLARE
   v_event1 integer;
   v_event2 integer;
   v_event_ilim integer;
+  v_event_rm integer;
   v_count integer;
   v_rows  integer;
   v_err   text;
@@ -24,7 +26,7 @@ BEGIN
   v_err := NULL;
   BEGIN
     -- Baseline limpa
-    TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event,
+    TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event_availability, public.event,
                    public.walletevent, public.mywallet, public.users
       RESTART IDENTITY CASCADE;
 
@@ -122,6 +124,41 @@ BEGIN
     SELECT quant INTO v_count FROM public.eventcap WHERE event_id = v_event2;
     IF v_count <> 1 THEN RAISE EXCEPTION 'Falha: cancelamento nao devolveu a vaga (quant=%)', v_count; END IF;
 
+    -- 6b) Read model event_availability: UPSERT do refresh inline + cascata no DELETE do evento
+    INSERT INTO public.event (creator_id, event_name, event_date, description)
+    VALUES (v_user1, 'Evento Read Model', now() + interval '40 days', 'rm')
+    RETURNING event_id INTO v_event_rm;
+    INSERT INTO public.eventcap (event_id, capacity, quant) VALUES (v_event_rm, 4, 4);
+    -- 1 reserva ativa (pending) -> available deve ser capacity - ativos = 3
+    INSERT INTO public.walletevent (user_id, event_id, status, expires_at)
+    VALUES (v_user2, v_event_rm, 'pending', now() + interval '120 seconds');
+
+    INSERT INTO public.event_availability (event_id, available, refreshed_at)
+    SELECT ec.event_id,
+           CASE WHEN ec.capacity = -1 THEN -1
+                ELSE GREATEST(ec.capacity - COALESCE(a.ativos, 0), 0) END,
+           now()
+    FROM public.eventcap ec
+    LEFT JOIN (
+        SELECT event_id, count(*) AS ativos
+        FROM public.walletevent
+        WHERE status IN ('pending', 'confirmed')
+        GROUP BY event_id
+    ) a ON a.event_id = ec.event_id
+    ON CONFLICT (event_id) DO UPDATE
+      SET available = EXCLUDED.available, refreshed_at = EXCLUDED.refreshed_at;
+
+    SELECT available INTO v_count FROM public.event_availability WHERE event_id = v_event_rm;
+    IF v_count <> 3 THEN
+      RAISE EXCEPTION 'Falha: available do read model deveria ser 3 (capacity 4 - 1 ativa), e %', v_count;
+    END IF;
+
+    -- cascata: DELETE do evento remove a linha de event_availability (FK ON DELETE CASCADE)
+    DELETE FROM public.walletevent WHERE event_id = v_event_rm;
+    DELETE FROM public.event WHERE event_id = v_event_rm;
+    SELECT count(*) INTO v_count FROM public.event_availability WHERE event_id = v_event_rm;
+    IF v_count <> 0 THEN RAISE EXCEPTION 'Falha: event_availability nao foi removido em cascata'; END IF;
+
     -- 7) status invalido rejeitado pelo CHECK
     BEGIN
       INSERT INTO public.walletevent (user_id, event_id, status)
@@ -148,7 +185,7 @@ BEGIN
     IF v_count <> 0 THEN RAISE EXCEPTION 'Falha: eventpresenter nao foi removido em cascata'; END IF;
 
     -- 10) TRUNCATE e revalidacao do trigger
-    TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event,
+    TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event_availability, public.event,
                    public.walletevent, public.mywallet, public.users
       RESTART IDENTITY CASCADE;
 
@@ -161,7 +198,7 @@ BEGIN
     SELECT count(*) INTO v_count FROM public.mywallet WHERE user_id = v_user1;
     IF v_count <> 1 THEN RAISE EXCEPTION 'trigger nao criou mywallet apos TRUNCATE'; END IF;
 
-    TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event,
+    TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event_availability, public.event,
                    public.walletevent, public.mywallet, public.users
       RESTART IDENTITY CASCADE;
   EXCEPTION WHEN OTHERS THEN
@@ -169,7 +206,7 @@ BEGIN
   END;
 
   -- Cleanup incondicional
-  TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event,
+  TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event_availability, public.event,
                  public.walletevent, public.mywallet, public.users
     RESTART IDENTITY CASCADE;
 

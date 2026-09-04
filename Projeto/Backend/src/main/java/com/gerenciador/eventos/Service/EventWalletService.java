@@ -6,11 +6,13 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.gerenciador.eventos.POJO.EventCap;
 import com.gerenciador.eventos.POJO.EventWallet;
 import com.gerenciador.eventos.POJO.MyWallet;
+import com.gerenciador.eventos.Repository.EventAvailabilityRepository;
 import com.gerenciador.eventos.Repository.EventCapRepository;
 import com.gerenciador.eventos.Repository.EventRepository;
 import com.gerenciador.eventos.Repository.EventWalletRepository;
@@ -24,6 +26,17 @@ import com.gerenciador.eventos.config.DatabaseConnection;
  * (via UPDATE condicional atômico) e cria a linha {@code pending} com {@code expires_at};
  * {@link #confirm} efetiva ({@code pending -> confirmed}). O job
  * {@link ReservationExpiryService} devolve vagas de reservas {@code pending} vencidas.</p>
+ *
+ * <p>A checagem de capacidade em {@link #addLink} tem dois caminhos, selecionados pela
+ * feature flag {@code reservation.readpath}:</p>
+ * <ul>
+ *   <li><b>{@code cas}</b> (default) — UPDATE condicional atômico em {@code eventcap};
+ *       nunca oversella. Comportamento inalterado.</li>
+ *   <li><b>{@code naive}</b> — lê o read model defasado {@code event_availability}
+ *       (atualizado só pelo job {@link ReadModelRefreshService}) e insere em
+ *       {@code walletevent} SEM tocar {@code eventcap}; OVERSELLA proporcional ao lag do
+ *       read model. Braço de controle do experimento de concorrência da Fase 2.</li>
+ * </ul>
  */
 @Service
 public class EventWalletService {
@@ -37,7 +50,13 @@ public class EventWalletService {
     @Autowired
     private EventCapRepository eventCapRepository;
     @Autowired
+    private EventAvailabilityRepository eventAvailabilityRepository;
+    @Autowired
     private DatabaseConnection databaseConnection;
+
+    /** Caminho de leitura da reserva: {@code cas} (default) ou {@code naive}. */
+    @Value("${reservation.readpath:cas}")
+    private String readPath;
 
     /**
      * Cria uma reserva {@code pending}: debita a vaga em {@code eventcap} e grava a linha em
@@ -61,6 +80,22 @@ public class EventWalletService {
 
         int maxTimeInLine = cap.getMaxTimeInLine() != null ? cap.getMaxTimeInLine() : 120;
         LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(maxTimeInLine);
+
+        // Caminho de leitura ingênuo (feature flag reservation.readpath=naive): lê o read
+        // model defasado event_availability e insere SEM CAS. Oversella proporcional ao lag
+        // do read model — é o braço de controle do experimento da Fase 2, não um bug.
+        if ("naive".equalsIgnoreCase(readPath)) {
+            Integer disp = eventAvailabilityRepository.findAvailable(ew.getEventId());
+            if (disp == null)
+                throw new IllegalArgumentException("Disponibilidade do evento ainda não calculada");
+            if (disp == 0)
+                throw new IllegalArgumentException("Evento lotado");
+            // disp > 0, ou disp == -1 (ilimitado): segue — NUNCA chama eventCapRepository
+            gravarReservaPendingSemCas(ew, expiresAt);
+            ew.setStatus("pending");
+            ew.setExpiresAt(expiresAt);
+            return ew;
+        }
 
         try (Connection conn = databaseConnection.getConnection()) {
             conn.setAutoCommit(false);
@@ -94,6 +129,38 @@ public class EventWalletService {
         ew.setStatus("pending");
         ew.setExpiresAt(expiresAt);
         return ew;
+    }
+
+    /**
+     * Grava a reserva {@code pending} numa transação curta, SEM tocar o agregado
+     * {@code eventcap} (sem CAS). Usado só pelo caminho de leitura ingênuo
+     * ({@code reservation.readpath=naive}).
+     */
+    private void gravarReservaPendingSemCas(EventWallet ew, LocalDateTime expiresAt) {
+        try (Connection conn = databaseConnection.getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                boolean created = eventWalletRepository.reservePending(
+                        conn, ew.getUserId(), ew.getEventId(), expiresAt);
+                if (!created) {
+                    // Guarda defensiva intencional (espelha o caminho CAS): o existsActive
+                    // acima já barra a duplicidade no fluxo normal; este ramo só é atingido
+                    // numa corrida com outra inserção concorrente do mesmo par. Sem teste
+                    // dedicado — não há como forçá-lo de forma determinística.
+                    conn.rollback();
+                    throw new IllegalArgumentException("Vínculo já existente");
+                }
+                conn.commit();
+            } catch (SQLException | RuntimeException ex) {
+                conn.rollback();
+                throw ex instanceof RuntimeException ? (RuntimeException) ex
+                        : new RuntimeException("Erro ao reservar: " + ex.getMessage(), ex);
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao reservar: " + ex.getMessage(), ex);
+        }
     }
 
     /** {@code pending -> confirmed}. */
