@@ -24,7 +24,7 @@ jobs:
       - name: Instalar Dependências do Script
         run: |
           cd .github/workflows/scripts
-          npm ci
+          npm install
 
       - name: Executar Revisão de Código com Gemini
         env:
