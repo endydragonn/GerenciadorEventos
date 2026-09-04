@@ -16,15 +16,17 @@ jobs:
       - name: Checkout do Código
         uses: actions/checkout@v4
 
-      - name: Configurar Node.js
+      - name: Configurar Node.js com Cache
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'
+          cache-dependency-path: '.github/workflows/scripts/package.json'
 
-      - name: Instalar Dependências do Script
+      - name: Instalar Dependências
         run: |
           cd .github/workflows/scripts
-          npm install
+          npm install --prefer-offline --no-audit
 
       - name: Executar Revisão de Código com Gemini
         env:
