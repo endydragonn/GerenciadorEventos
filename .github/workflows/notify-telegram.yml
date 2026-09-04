@@ -1,4 +1,4 @@
-# Gera resumos de PRs mergeadas e Issues fechadas (hoje, 1-7 dias ou todo o histórico).
+# DESCRIPTION: Gera resumos de PRs mergeadas e Issues fechadas (hoje, 1-10 dias ou todo o histórico).
 name: Resumo diário via Telegram
 
 on:
@@ -19,7 +19,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SERVER_URL: "https://telegram-bot-rcu4.onrender.com"
-
           REPO: ${{ github.repository }}
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
           SUMMARY_TYPE: ${{ github.event.client_payload.summary_type }}
@@ -35,7 +34,8 @@ jobs:
             START_DATE="1970-01-01"
             HEADER="📊 Resumo (Todo o histórico) — ${DISPLAY_DATE}"
           else
-            if ! [[ "$DAYS" =~ ^[1-7]$ ]]; then
+            # Aceita valores de 1 a 10
+            if ! [[ "$DAYS" =~ ^([1-9]|10)$ ]]; then
               DAYS=1
             fi
 
@@ -58,17 +58,14 @@ jobs:
           echo "Data início: $START_DATE"
           echo "======================================"
 
-
           # ============================================================
           # PRs MERGEADAS NO PERÍODO
           # ============================================================
 
           echo "Buscando PRs mergeadas..."
-
           MERGED_PRS=""
 
           for PAGE in {1..10}; do
-
             DATA=$(gh api \
               "repos/${REPO}/pulls" \
               --method GET \
@@ -103,20 +100,16 @@ ${PAGE_DATA}"
             if [ "$COUNT" -lt 100 ]; then
               break
             fi
-
           done
-
 
           # ============================================================
           # ISSUES FECHADAS NO PERÍODO
           # ============================================================
 
           echo "Buscando Issues fechadas..."
-
           CLOSED_ISSUES=""
 
           for PAGE in {1..10}; do
-
             DATA=$(gh api \
               "repos/${REPO}/issues" \
               --method GET \
@@ -152,26 +145,17 @@ ${PAGE_DATA}"
             if [ "$COUNT" -lt 100 ]; then
               break
             fi
-
           done
 
-
           # ============================================================
-          # CONTADORES
+          # CONTADORES E MONTAGEM DA MENSAGEM
           # ============================================================
 
           MERGED_COUNT=$(echo "$MERGED_PRS" | grep -c '^• #' || true)
           ISSUES_COUNT=$(echo "$CLOSED_ISSUES" | grep -c '^• #' || true)
-
           TOTAL_COUNT=$((MERGED_COUNT + ISSUES_COUNT))
 
-
-          # ============================================================
-          # RESUMO COMPLETO
-          # ============================================================
-
           if [ "$SUMMARY_TYPE" = "completo" ]; then
-
             MSG="${HEADER}
 
 📦 ${REPO}
@@ -205,11 +189,6 @@ Nenhuma."
 • ${ISSUES_COUNT} Issues fechadas"
 
           else
-
-            # ==========================================================
-            # RESUMO RESUMIDO
-            # ==========================================================
-
             MSG="${HEADER}
 
 📦 ${REPO}
@@ -222,50 +201,26 @@ Nenhuma."
 
 📈 Total
 • ${TOTAL_COUNT} evento(s)"
-
           fi
 
-
           # ============================================================
-          # DEVOLVE O RESUMO PARA O SERVIDOR BACKEND
+          # ENVIO DIRETO PARA O BOT NO TELEGRAM
           # ============================================================
 
-          MESSAGE_LENGTH=${#MSG}
-
-          echo "Tamanho da mensagem: ${MESSAGE_LENGTH} caracteres"
-
+          # Envia a mensagem gerada diretamente para o endpoint do servidor
           PAYLOAD=$(jq -n \
-            --arg repo "$REPO" \
-            --arg summary_type "$SUMMARY_TYPE" \
-            --arg start_date "$START_DATE" \
             --arg chat_id "$CHAT_ID" \
-            --arg message "$MSG" \
-            --argjson total "$TOTAL_COUNT" \
-            --argjson merged "$MERGED_COUNT" \
-            --argjson issues "$ISSUES_COUNT" \
-            '{
-              repository: $repo,
-              summary_type: $summary_type,
-              start_date: $start_date,
-              chat_id: $chat_id,
-              message: $message,
-              totals: {
-                merged_prs: $merged,
-                closed_issues: $issues,
-                total: $total
-              }
-            }')
+            --arg text "$MSG" \
+            '{chat_id: $chat_id, text: $text}')
 
-          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" -X POST "$SERVER_URL" \
+          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" -X POST "${SERVER_URL}/webhook/github-summary" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
 
           if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-            echo "Resumo enviado com sucesso ao servidor ($HTTP_STATUS)."
+            echo "Resumo enviado com sucesso ($HTTP_STATUS)."
           else
-            echo "======================================"
             echo "ERRO AO ENVIAR PARA O SERVIDOR ($HTTP_STATUS)"
             cat response.txt
-            echo "======================================"
             exit 1
           fi
