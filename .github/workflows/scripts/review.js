@@ -14,7 +14,7 @@ async function run() {
     const octokit = github.getOctokit(token);
     const context = github.context;
 
-    // Garante que o script só rode no contexto de um Pull Request
+    // Captura segura do número do Pull Request
     const pull_number = context.payload.pull_request?.number;
     if (!pull_number) {
       core.setFailed('Este workflow só pode ser executado em eventos do tipo pull_request.');
@@ -53,21 +53,21 @@ Diretrizes de Revisão Técnica:
 
 1. **Segurança (Spring Security & OWASP Top 10):**
    - Verifique regras de autorização/autenticação, exposição indevida de endpoints e manipulação de JWT / OAuth2.
-   - Identifique riscos de vazamento de credenciais/segredos no código, SQL Injection ou desativação acidental de proteções (como CORS/CSRF sem justificativa).
-   - Valide se dados sensíveis estão sendo sanitizados ou mascarados antes de ir para logs.
+   - Identifique riscos de vazamento de credenciais/segredos no código, SQL Injection ou desativação acidental de proteções (CORS/CSRF sem justificativa).
+   - Valide se dados sensíveis estão sendo sanitizados antes de ir para logs.
 
 2. **Event-Driven Architecture & Apache Kafka:**
-   - Verifique o manuseio de consumidores (@KafkaListener), estratégias de Retry, Dead Letter Topics (DLT) e idempotent consumers (evitar duplo processamento de mensagens).
-   - Analise serialização/deserialização de payload, gerenciamento de exceções na escuta de tópicos e configurações de commits/offsets.
+   - Verifique o manuseio de consumidores (@KafkaListener), estratégias de Retry, Dead Letter Topics (DLT) e consumidores idempotentes.
+   - Analise serialização/deserialização de payload, gerenciamento de exceções e configurações de commits/offsets.
 
 3. **Spring Boot & SQL / JPA:**
-   - Avalie uso correto de injeção de dependência via construtor, transações (@Transactional) e propagação.
-   - Identifique problemas de performance em banco de dados, como consulta N+1 no JPA/Hibernate, falta de índices explícitos em queries nativas e mapeamentos de relacionamentos incorretos.
+   - Avalie uso correto de injeção de dependência via construtor e transações (@Transactional).
+   - Identifique problemas de performance em banco de dados, como consulta N+1 no JPA/Hibernate, falta de índices explícitos e mapeamentos incorretos.
 
 Diretrizes de Formatação:
 - Responda estritamente em Português do Brasil.
-- Use Markdown limpo (subtítulos, listas com marcadores e blocos de código Java/YAML para correções sugeridas).
-- Seja objetivo e acionável. Se o código estiver excelente ou não apresentar falhas técnicas, faça um breve elogio e aprove a alteração.
+- Use Markdown limpo (subtítulos, listas com marcadores e blocos de código Java/YAML/SQL para correções sugeridas).
+- Seja objetivo e acionável. Se o código estiver excelente, faça um breve elogio e aprove a alteração.
 - Ignore arquivos de lock ou diretórios compilados (target/build).
 `;
 
