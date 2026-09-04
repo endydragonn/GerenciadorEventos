@@ -15,10 +15,10 @@ jobs:
       issues: read
 
     steps:
-      - name: Gerar resumo
+      - name: Gerar e enviar resumo para o Bot
         env:
+          BOT_URL: "https://telegram-bot-rcu4.onrender.com"
           GH_TOKEN: ${{ github.token }}
-          SERVER_URL: "https://telegram-bot-rcu4.onrender.com"
           REPO: ${{ github.repository }}
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
           SUMMARY_TYPE: ${{ github.event.client_payload.summary_type }}
@@ -203,21 +203,14 @@ Nenhuma."
           fi
 
           # ============================================================
-          # ENVIO DIRETO PARA O BOT NO TELEGRAM
+          # MONTAGEM DO PAYLOAD JSON VIA JQ E ENVIO AO BOT
           # ============================================================
+
           PAYLOAD=$(jq -n \
             --arg chat_id "$CHAT_ID" \
             --arg text "$MSG" \
             '{chat_id: $chat_id, text: $text}')
 
-          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" -X POST "${SERVER_URL}/webhook/github-summary" \
+          curl -s -X POST "${BOT_URL}/webhook/github-summary" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
-
-          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-            echo "Resumo enviado com sucesso ($HTTP_STATUS)."
-          else
-            echo "ERRO AO ENVIAR PARA O SERVIDOR ($HTTP_STATUS)"
-            cat response.txt
-            exit 1
-          fi
+            -d "$PAYLOAD"
