@@ -13,19 +13,25 @@ jobs:
       issues: write
 
     steps:
-      - name: Checkout do Código
+      # 1. Faz o Checkout do código apontando explicitamente para a branch MAIN
+      - name: Checkout do Código (Branch Main)
         uses: actions/checkout@v4
+        with:
+          ref: main
 
+      # 2. Configura o Node.js usando a versão 22 (LTS)
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 'lts/*'
+          node-version: 22
 
+      # 3. Instala as dependências a partir do package.json presente na MAIN
       - name: Instalar Dependências do Script
         run: |
           cd .github/workflows/scripts
           npm install
 
+      # 4. Executa a revisão consumindo o script da MAIN, mas analisando o PR atual
       - name: Executar Revisão de Código com Gemini
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
