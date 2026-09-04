@@ -1,3 +1,4 @@
+# DESCRIPTION: Notifica abertura de PRs para o servidor central do bot sem precisar de secrets de Chat ID.
 name: Notificar PR via Telegram
 
 on:
@@ -9,10 +10,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Enviar notificação Telegram
+      - name: Enviar notificação para o Bot
         env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
+          BOT_URL: "https://telegram-bot-rcu4.onrender.com" # Substitua pela sua URL no Render
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -23,15 +23,14 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
 
         run: |
-          # Verifica se o Claude Code gerou o PR
-          if echo "$PR_BODY" | grep -Fq "https://claude.com/claude-code"; then
-            CLAUDE_REVIEW="• Claude"
-          else
-            CLAUDE_REVIEW=""
-          fi
+          set -e
 
-          # Lista de revisores
-          REVIEWER_NAMES=$(echo "$REVIEWERS" | jq -r '.[].login' | sed 's/^/• /')
+          # Detecção de Claude Code
+          if echo "$PR_BODY" | grep -Fq "https://claude.com/claude-code"; then
+            CLAUDE_REVIEW="true"
+          else
+            CLAUDE_REVIEW="false"
+          fi
 
           # Status do PR
           if [ "$PR_DRAFT" = "true" ]; then
@@ -40,40 +39,22 @@ jobs:
             PR_STATUS="🟢 Ready for review"
           fi
 
-          # Monta mensagem
-          MSG="🎉 O ${USER} abriu um PR pra você revisar!"$'\n\n'
-          MSG+="📦 ${REPO}"$'\n'
-          MSG+="📋 #${PR_NUMBER}: ${PR_TITLE}"$'\n'
-          MSG+="📌 Status: ${PR_STATUS}"$'\n'
-          MSG+="🔗 ${PR_URL}"$'\n\n'
+          # Formata a lista de revisores em array JSON
+          REVIEWER_LIST=$(echo "$REVIEWERS" | jq -c '[.[].login]')
 
-          # Revisores
-          if [ -n "$REVIEWER_NAMES" ]; then
-            MSG+="👀 Revisores:"$'\n'
-            MSG+="${REVIEWER_NAMES}"$'\n\n'
-          fi
+          # Monta o JSON de payload
+          PAYLOAD=$(jq -n \
+            --arg repo "$REPO" \
+            --argjson pr_number "$PR_NUMBER" \
+            --arg pr_title "$PR_TITLE" \
+            --arg pr_url "$PR_URL" \
+            --arg author "$USER" \
+            --arg status "$PR_STATUS" \
+            --argjson reviewers "$REVIEWER_LIST" \
+            --argjson claude_review "$CLAUDE_REVIEW" \
+            '{repo: $repo, pr_number: $pr_number, pr_title: $pr_title, pr_url: $pr_url, author: $author, status: $status, reviewers: $reviewers, claude_review: $claude_review}')
 
-          # Pré-review
-          MSG+="🤖 Pré-review:"$'\n'
-
-          if [ -n "$CLAUDE_REVIEW" ]; then
-            MSG+="${CLAUDE_REVIEW}"$'\n'
-          fi
-
-          MSG+="• GitHub Copilot"$'\n'
-
-          MSG+=$'\n'"👀 Dá uma olhada quando puder."
-
-          # Envia para todos os chats
-          IFS=',' read -ra IDS <<< "$CHAT_IDS"
-
-          for ID in "${IDS[@]}"; do
-            ID=$(echo "$ID" | tr -d ' ')
-
-            curl -s -X POST \
-              "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-              -d "chat_id=${ID}" \
-              --data-urlencode "text=${MSG}"
-
-            echo "Enviado para chat $ID"
-          done
+          # Envia a notificação ao bot central
+          curl -s -X POST "${BOT_URL}/webhook/github-pr" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"
