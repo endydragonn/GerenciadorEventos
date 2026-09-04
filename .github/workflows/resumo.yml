@@ -34,7 +34,6 @@ jobs:
             START_DATE="1970-01-01"
             HEADER="📊 Resumo (Todo o histórico) — ${DISPLAY_DATE}"
           else
-            # Aceita valores de 1 a 10
             if ! [[ "$DAYS" =~ ^([1-9]|10)$ ]]; then
               DAYS=1
             fi
@@ -206,8 +205,6 @@ Nenhuma."
           # ============================================================
           # ENVIO DIRETO PARA O BOT NO TELEGRAM
           # ============================================================
-
-          # Envia a mensagem gerada diretamente para o endpoint do servidor
           PAYLOAD=$(jq -n \
             --arg chat_id "$CHAT_ID" \
             --arg text "$MSG" \
