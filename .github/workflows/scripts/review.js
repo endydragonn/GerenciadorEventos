@@ -13,7 +13,15 @@ async function run() {
 
     const octokit = github.getOctokit(token);
     const context = github.context;
-    const { owner, repo, number: pull_number } = context.issue;
+
+    // Garante que o script só rode no contexto de um Pull Request
+    const pull_number = context.payload.pull_request?.number;
+    if (!pull_number) {
+      core.setFailed('Este workflow só pode ser executado em eventos do tipo pull_request.');
+      return;
+    }
+
+    const { owner, repo } = context.repo;
 
     // 1. Obter as alterações (diff) do PR
     const { data: diffData } = await octokit.rest.pulls.get({
@@ -30,7 +38,7 @@ async function run() {
       return;
     }
 
-    // Limita o tamanho do diff em caracteres para otimizar o tempo e cota
+    // Limita o tamanho do diff em caracteres para otimizar tempo e cota
     const truncatedDiff = fullDiff.slice(0, 30000);
 
     // 2. Inicializar o cliente do Gemini
@@ -73,7 +81,7 @@ Diretrizes de Formatação:
       contents: prompt,
       config: {
         systemInstruction,
-        temperature: 0.2, // Baixa temperatura para manter o feedback técnico e consistente
+        temperature: 0.2,
       }
     });
 
