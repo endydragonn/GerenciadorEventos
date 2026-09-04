@@ -37,95 +37,17 @@ jobs:
           echo "Data: $TODAY"
           echo "======================================"
 
+
           # ============================================================
-          # PRs ABERTAS
+          # PRs MERGEADAS HOJE
           # ============================================================
 
-          echo "Buscando PRs abertas hoje..."
+          echo "Buscando PRs mergeadas hoje..."
 
-          OPENED_PRS=""
+          MERGED_PRS=""
 
           for PAGE in {1..10}; do
-            DATA=$(gh api \
-              "repos/${REPO}/pulls" \
-              --method GET \
-              -f state=all \
-              -f sort=created \
-              -f direction=desc \
-              -f per_page=100 \
-              -f page="$PAGE")
 
-            COUNT=$(echo "$DATA" | jq 'length')
-
-            if [ "$COUNT" -eq 0 ]; then
-              break
-            fi
-
-            while IFS= read -r PR; do
-
-              NUMBER=$(echo "$PR" | jq -r '.number')
-              TITLE=$(echo "$PR" | jq -r '.title')
-              BODY=$(echo "$PR" | jq -r '.body // ""')
-
-              # Procura uma Issue explicitamente referenciada
-              # no título ou corpo da PR.
-              ISSUE_NUMBER=$(printf '%s\n%s' "$TITLE" "$BODY" \
-                | grep -Eio '(closes|closed|close|fixes|fixed|fix|resolves|resolved|resolve)[[:space:]]+#[0-9]+' \
-                | grep -Eo '#[0-9]+' \
-                | head -n 1 \
-                | tr -d '#' || true)
-
-              # Caso não encontre "Fixes #123", etc.,
-              # procura uma referência simples a #123.
-              if [ -z "$ISSUE_NUMBER" ]; then
-                ISSUE_NUMBER=$(printf '%s\n%s' "$TITLE" "$BODY" \
-                  | grep -Eo '(^|[^[:alnum:]_])#[0-9]+' \
-                  | head -n 1 \
-                  | tr -d '#' || true)
-              fi
-
-              if [ -n "$ISSUE_NUMBER" ]; then
-                LINE="• #${NUMBER} — ${TITLE} — Issue #${ISSUE_NUMBER}"
-              else
-                LINE="• #${NUMBER} — ${TITLE}"
-              fi
-
-              if [ -n "$OPENED_PRS" ]; then
-                OPENED_PRS="${OPENED_PRS}
-          ${LINE}"
-              else
-                OPENED_PRS="$LINE"
-              fi
-
-            done < <(
-              echo "$DATA" | jq -c --arg date "$TODAY" '
-                .[]
-                | select(.created_at | startswith($date))
-              '
-            )
-
-            OLDEST_DATE=$(echo "$DATA" | jq -r '
-              if length > 0
-              then .[-1].created_at
-              else ""
-              end
-            ')
-
-            if [[ "$OLDEST_DATE" < "$TODAY" ]]; then
-              break
-            fi
-          done
-
-
-          # ============================================================
-          # PRs FECHADAS
-          # ============================================================
-
-          echo "Buscando PRs fechadas hoje..."
-
-          CLOSED_PRS=""
-
-          for PAGE in {1..10}; do
             DATA=$(gh api \
               "repos/${REPO}/pulls" \
               --method GET \
@@ -143,32 +65,29 @@ jobs:
 
             PAGE_DATA=$(echo "$DATA" | jq -r --arg date "$TODAY" '
               .[]
-              | select(.closed_at != null)
-              | select(.closed_at | startswith($date))
-              | if .merged_at != null then
-                  "• #\(.number) — \(.title) — 🔀 Merge"
-                else
-                  "• #\(.number) — \(.title) — ❌ Fechada"
-                end
+              | select(.merged_at != null)
+              | select(.merged_at | startswith($date))
+              | "• #\(.number) — \(.title)"
             ')
 
             if [ -n "$PAGE_DATA" ]; then
-              if [ -n "$CLOSED_PRS" ]; then
-                CLOSED_PRS="${CLOSED_PRS}
+              if [ -n "$MERGED_PRS" ]; then
+                MERGED_PRS="${MERGED_PRS}
           ${PAGE_DATA}"
               else
-                CLOSED_PRS="$PAGE_DATA"
+                MERGED_PRS="$PAGE_DATA"
               fi
             fi
 
             if [ "$COUNT" -lt 100 ]; then
               break
             fi
+
           done
 
 
           # ============================================================
-          # ISSUES FECHADAS
+          # ISSUES FECHADAS HOJE
           # ============================================================
 
           echo "Buscando Issues fechadas hoje..."
@@ -176,6 +95,7 @@ jobs:
           CLOSED_ISSUES=""
 
           for PAGE in {1..10}; do
+
             DATA=$(gh api \
               "repos/${REPO}/issues" \
               --method GET \
@@ -211,6 +131,7 @@ jobs:
             if [ "$COUNT" -lt 100 ]; then
               break
             fi
+
           done
 
 
@@ -218,12 +139,10 @@ jobs:
           # CONTADORES
           # ============================================================
 
-          OPENED_COUNT=$(echo "$OPENED_PRS" | grep -c '^• #' || true)
-          CLOSED_COUNT=$(echo "$CLOSED_PRS" | grep -c '^• #' || true)
+          MERGED_COUNT=$(echo "$MERGED_PRS" | grep -c '^• #' || true)
           ISSUES_COUNT=$(echo "$CLOSED_ISSUES" | grep -c '^• #' || true)
 
-          MERGED_COUNT=$(echo "$CLOSED_PRS" | grep -c '🔀 Merge' || true)
-          CLOSED_ONLY_COUNT=$(echo "$CLOSED_PRS" | grep -c '❌ Fechada' || true)
+          TOTAL_COUNT=$((MERGED_COUNT + ISSUES_COUNT))
 
 
           # ============================================================
@@ -236,23 +155,11 @@ jobs:
 
           📦 ${REPO}
 
-          🔀 PR abertas"
+          🔀 PRs mergeadas"
 
-            if [ -n "$OPENED_PRS" ]; then
+            if [ -n "$MERGED_PRS" ]; then
               MSG+="
-          ${OPENED_PRS}"
-            else
-              MSG+="
-          Nenhuma."
-            fi
-
-            MSG+="
-
-          ✅ PR fechadas"
-
-            if [ -n "$CLOSED_PRS" ]; then
-              MSG+="
-          ${CLOSED_PRS}"
+          ${MERGED_PRS}"
             else
               MSG+="
           Nenhuma."
@@ -273,8 +180,7 @@ jobs:
             MSG+="
 
           📈 Totais
-          • ${OPENED_COUNT} PR abertas
-          • ${CLOSED_COUNT} PR fechadas
+          • ${MERGED_COUNT} PRs mergeadas
           • ${ISSUES_COUNT} Issues fechadas"
 
           else
@@ -288,16 +194,13 @@ jobs:
           📦 ${REPO}
 
           🔀 PRs
-          • ${OPENED_COUNT} abertas
-          • ${CLOSED_COUNT} fechadas
           • ${MERGED_COUNT} mergeadas
-          • ${CLOSED_ONLY_COUNT} fechadas sem merge
 
           📋 Issues
           • ${ISSUES_COUNT} fechadas
 
           📈 Total
-          • $((OPENED_COUNT + CLOSED_COUNT + ISSUES_COUNT)) evento(s)"
+          • ${TOTAL_COUNT} evento(s)"
 
           fi
 
@@ -312,7 +215,7 @@ jobs:
 
           if [ "$MESSAGE_LENGTH" -gt 4000 ]; then
             echo "AVISO: resumo possui mais de 4000 caracteres."
-            echo "Telegram pode rejeitar mensagens acima de 4096 caracteres."
+            echo "Telegram possui limite de 4096 caracteres."
           fi
 
 
