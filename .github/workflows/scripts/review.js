@@ -73,11 +73,11 @@ Diretrizes de Formatação:
 
     const prompt = `Analise o seguinte diff de Pull Request (Java / Spring Boot / Security / Kafka / SQL) e forneça seu code review:\n\n\`\`\`diff\n${truncatedDiff}\n\`\`\``;
 
-    core.info('Enviando diff para análise do Gemini 2.5 Flash...');
+    core.info('Enviando diff para análise do Gemini...');
 
-    // 3. Chamada ao modelo Gemini 2.5 Flash
+    // Chamada atualizada com o modelo ativo
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.6-flash',
       contents: prompt,
       config: {
         systemInstruction,
