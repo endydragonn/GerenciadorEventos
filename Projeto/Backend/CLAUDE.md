@@ -86,16 +86,40 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 - **Nginx do frontend faz proxy de `/bff/` → `backend:8081/bff/` sem rewrite/strip**
   (`nginx.conf`): o path chega igual no backend. Em acesso direto ao backend (dev sem
   Nginx), use o mesmo path `/bff/...`.
-- `security/SecurityConfig`: stateless, CSRF off. **Público**: `/bff/**` (por inteiro,
-  incluindo login/cadastro/CRUD de evento/carteira — ver "Fora de escopo" no roadmap,
-  issue #57 vai restringir `event-wallets`) e `/actuator/health`. Todo o resto exige
-  `Authorization: Bearer <jwt>`.
+- `security/SecurityConfig`: stateless, CSRF off. Desde a issue #79, deny-by-default também
+  dentro de `/bff/**` — só a lista abaixo é pública, todo o resto exige
+  `Authorization: Bearer <jwt>` (401 fixo via `HttpStatusEntryPoint`, sem token/token
+  inválido numa rota protegida).
+  - **Público**: `POST /bff/users/login`, `POST /bff/users/request-verification`,
+    `POST /bff/users/verify-email`, `POST /bff/users/resend-verification-code`,
+    `POST /bff/users/verify-recaptcha`, `GET /bff/events/**` (inclui `/bff/events/search` e
+    `/bff/events/{id}/image` — este último servido via `<img>`/`Image.network` no Flutter,
+    que nunca manda header customizado), `POST /bff/seed` (ferramenta de dev) e
+    `GET /actuator/health`.
+  - **Autenticado**: todo o resto de `/bff/**` — `/bff/event-wallets/**` e
+    `/bff/my-wallets/**` por inteiro, mutações de evento (`POST/PUT/DELETE /bff/events/**`,
+    inclusive upload de imagem) e o resto de `/bff/users/**` (`/me`, `GET/PUT /{id}`,
+    `/{id}/password`, `/{id}/password-with-mfa`, `/{id}/request-password-reset-mfa`,
+    `/{id}/verify-password-reset-mfa`, `GET /email/{email}`, `/validate`,
+    `POST /` criação direta).
+  - **Preflight CORS**: `OPTIONS /**` é liberado por verbo (`HttpMethod.OPTIONS`, não por
+    path) ANTES das regras acima, como defesa em profundidade — o `CorsFilter` que
+    `.cors(...)` registra no filter chain já intercepta e responde o preflight antes do
+    `AuthorizationFilter`, então na prática o preflight já não caía em `.authenticated()`
+    mesmo sem essa regra (verificado empiricamente, ver
+    `HttpContractTest#corsPreflight_onProtectedRoute_isNotBlockedByAuth`); a regra explícita
+    protege contra reordenar filtros ou remover `.cors(...)` no futuro.
 - `JwtAuthenticationFilter` valida o token e põe o e-mail como `subject`/username. Não há
   roles dinâmicas no token (authority fixa `USER`).
-- `security/AuthorizationUtil.isCurrentUserHost()` lê `users.Host` (coluna com maiúscula) e
-  existe para checagem de papel "host", mas hoje **nenhum controller chama** `ensureUserIsHost()`
-  — `bff/BffEventController.createEvent` não faz esse gate (já era assim antes da issue #78,
-  só o controller `/api/events` morto fazia). Não é escopo desta issue mudar isso.
+- `security/AuthorizationUtil.isCurrentUserHost()` lê `users.host` (coluna criada sem aspas
+  no DDL como `Host`, então o Postgres dobra pra minúsculas — `UserRepository` lê/grava com
+  `host` minúsculo, igual `isactive`). Desde a issue #79, `bff/BffEventController.createEvent`
+  /`updateEvent`/`deleteEvent` chamam `ensureUserIsHost()` (IllegalArgumentException → HTTP
+  400, padrão do projeto); leitura (get/search/list/validate) e a imagem não ganham esse
+  gate. **Nenhuma rota promove um usuário a host** (de propósito — `UserRepository.save`/
+  `update` não persistem `host`, só o leem, pra não abrir auto-promoção via
+  `PUT /bff/users/{id}`); hoje só existe host via SQL direto/seed manual. Promover host por
+  um fluxo de produto (ex.: endpoint de admin) é gap conhecido, não resolvido nesta issue.
 - Senhas: `BCryptPasswordEncoder` (bean em `SecurityConfig`). Nunca gravar senha em claro
   (o seed SQL grava em claro só para dados de teste — não replicar em código de produção).
 - CORS está definido **duas vezes** (`config.CorsConfig` e o bean em `SecurityConfig`, este
@@ -166,8 +190,9 @@ chamável direto (os testes o invocam sem esperar o timer).
 ## Ao mexer aqui
 
 - Novo endpoint → entra em `bff/*` (superfície HTTP única, ver "Rotas e segurança"), no
-  controller do agregado correspondente; ajuste `SecurityConfig` se precisar sair do
-  `/bff/**` público (raro).
+  controller do agregado correspondente. Desde a issue #79 o default dentro de `/bff/**` é
+  **autenticado**: endpoint novo já nasce protegido; só adicione em `SecurityConfig` se ele
+  precisar ser público (raro — normalmente já resolvido pelo padrão `GET /bff/events/**`).
 - Mudou path, método ou forma de request/response de um endpoint consumido pelo Flutter →
   atualize `src/test/.../HttpContractTest` (trava a superfície pro harness de carga da
   issue #11) e o `frontend/CLAUDE.md`.

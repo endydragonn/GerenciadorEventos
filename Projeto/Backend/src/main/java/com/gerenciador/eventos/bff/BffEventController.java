@@ -17,25 +17,37 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.gerenciador.eventos.POJO.Event;
 import com.gerenciador.eventos.Service.EventService;
+import com.gerenciador.eventos.security.AuthorizationUtil;
 
 /**
  * Camada BFF única para eventos: CRUD, validate, search e upload/serve de imagem.
  * Antes desta issue (#78) esta lógica vivia em {@code bff.BffApplication.EventBffController}
  * (a que o Flutter efetivamente chamava) e era duplicada em {@code Controller.EventController}
  * sob {@code /api/events} (sem chamador no frontend). Comportamento inalterado.
+ *
+ * <p>Issue #79: criar/editar/excluir evento agora exige que o usuário autenticado seja host
+ * ({@link AuthorizationUtil#ensureUserIsHost()}) — antes qualquer usuário logado podia.
+ * Leitura (get/search/list/validate) e a imagem (upload/get) não ganham esse gate.</p>
  */
 @RestController
 @RequestMapping("/bff/events")
 public class BffEventController {
 
     private final EventService eventService;
+    private final AuthorizationUtil authorizationUtil;
 
-    public BffEventController(EventService eventService) {
+    public BffEventController(EventService eventService, AuthorizationUtil authorizationUtil) {
         this.eventService = eventService;
+        this.authorizationUtil = authorizationUtil;
     }
 
     @PostMapping
     public ResponseEntity<?> createEvent(@RequestBody Event event) {
+        try {
+            authorizationUtil.ensureUserIsHost();
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(ex.getMessage());
+        }
         List<String> basicErrors = validateEventBasic(event);
         if (!basicErrors.isEmpty()) {
             return ResponseEntity.badRequest().body(String.join("; ", basicErrors));
@@ -75,6 +87,11 @@ public class BffEventController {
 
     @PutMapping("/{id}")
     public ResponseEntity<?> updateEvent(@PathVariable Long id, @RequestBody Event event) {
+        try {
+            authorizationUtil.ensureUserIsHost();
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(ex.getMessage());
+        }
         if (event.getEvent_id() == null) {
             event.setEvent_id(id);
         } else if (!id.equals(event.getEvent_id())) {
@@ -96,6 +113,11 @@ public class BffEventController {
 
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteEvent(@PathVariable Long id) {
+        try {
+            authorizationUtil.ensureUserIsHost();
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(ex.getMessage());
+        }
         try {
             eventService.delete(id);
             return ResponseEntity.noContent().build();

@@ -22,8 +22,9 @@ import com.gerenciador.eventos.Service.EventWalletService;
  * removeLink, listByUser. Antes desta issue (#78) vivia em
  * {@code bff.BffApplication.EventWalletBffController} (a que o Flutter efetivamente chamava)
  * e era duplicada em {@code Controller.EventWalletController} sob {@code /api/event-wallets}
- * (sem chamador no frontend). Comportamento inalterado — inclusive o endpoint continua público
- * e tirando {@code userId} do corpo/query (issue #57 trata isso).
+ * (sem chamador no frontend). Desde a issue #79, {@code /bff/event-wallets/**} exige
+ * autenticação (deny-by-default); segue tirando {@code userId} do corpo/query sem validar
+ * contra o usuário autenticado (IDOR — issue #57 trata isso, ainda não resolvido).
  */
 @RestController
 @RequestMapping("/bff/event-wallets")

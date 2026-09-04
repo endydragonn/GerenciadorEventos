@@ -1,5 +1,8 @@
 package com.gerenciador.eventos;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -37,6 +40,7 @@ import com.gerenciador.eventos.POJO.User;
 import com.gerenciador.eventos.Repository.PendingVerificationRepository;
 import com.gerenciador.eventos.Service.UserService;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
+import com.gerenciador.eventos.config.DatabaseConnection;
 
 /**
  * Teste de contrato da superfície HTTP única {@code /bff/**} (issue #78).
@@ -52,6 +56,14 @@ import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
  * issue #11 vai efetivamente exercitar. {@code JavaMailSender} é mockado para não depender
  * de SMTP real nem dos timeouts de rede configurados; {@code RECAPTCHA_SECRET_KEY} é forçada
  * vazia para exercitar o caminho determinístico (sem chamar a API do Google).</p>
+ *
+ * <p>Issue #79: {@code SecurityConfig} deixou de liberar {@code /bff/**} por inteiro — só a
+ * lista explícita de rotas públicas continua sem token, o resto exige
+ * {@code Authorization: Bearer <jwt>}. O fixture {@link #createUser(String)} passou a criar o
+ * usuário via {@link UserService} direto (não HTTP) porque {@code POST /bff/users} agora
+ * exige auth e a maioria dos testes usa esse fixture só para ter um usuário/token disponível
+ * antes de exercitar a rota que o teste realmente cobre; o contrato HTTP de
+ * {@code POST /bff/users} continua coberto por {@link #createUser_returns201WithUserId()}.</p>
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -71,6 +83,9 @@ public class HttpContractTest {
     @Autowired
     private UserService userService;
 
+    @Autowired
+    private DatabaseConnection databaseConnection;
+
     @MockitoBean
     private JavaMailSender mailSender;
 
@@ -80,6 +95,13 @@ public class HttpContractTest {
 
     // ======================= fixtures =======================
 
+    /**
+     * Cria usuário direto via {@link UserService} (não HTTP): desde a issue #79
+     * {@code POST /bff/users} exige auth, e este fixture é usado por quase todo teste só
+     * para ter um usuário disponível antes de logar e exercitar a rota que o teste cobre de
+     * fato. O contrato HTTP de criação continua coberto por
+     * {@link #createUser_returns201WithUserId()}.
+     */
     private User createUser(String tag) {
         User u = new User();
         u.setName("Contract User " + tag);
@@ -87,12 +109,44 @@ public class HttpContractTest {
         u.setFone("119" + String.format("%08d", Math.abs(tag.hashCode()) % 100000000));
         u.setPassword("senha123");
         u.setBirthDate("1990-01-01");
-        ResponseEntity<User> resp = restTemplate.postForEntity(url("/bff/users"), u, User.class);
-        assertEquals(HttpStatus.CREATED, resp.getStatusCode());
-        return resp.getBody();
+        User created = userService.createUser(u);
+        assertNotNull(created.getId());
+        return created;
     }
 
-    private Event createEvent(Long creatorId, String name, int capacity) {
+    /** Igual {@link #createUser(String)}, mas promove o usuário a host via SQL direto —
+     * não existe (de propósito) rota HTTP que promova host, para não abrir
+     * auto-promoção via {@code PUT /bff/users/{id}}. */
+    private User createHostUser(String tag) {
+        User created = createUser(tag);
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement("UPDATE users SET host = true WHERE user_id = ?")) {
+            stmt.setLong(1, created.getId());
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new RuntimeException("Falha ao promover usuário de teste a host: " + e.getMessage(), e);
+        }
+        created.setIsHost(true);
+        return created;
+    }
+
+    private String loginAndGetToken(String email, String password) {
+        Map<String, String> creds = new HashMap<>();
+        creds.put("email", email);
+        creds.put("password", password);
+        ResponseEntity<Map> resp = restTemplate.postForEntity(url("/bff/users/login"), creds, Map.class);
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        return (String) resp.getBody().get("token");
+    }
+
+    private HttpHeaders authHeaders(String token) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("Authorization", "Bearer " + token);
+        return headers;
+    }
+
+    private Event createEvent(Long creatorId, String name, int capacity, String hostToken) {
         Event e = new Event();
         e.setCreator_id(creatorId);
         e.setEvent_name(name);
@@ -105,7 +159,8 @@ public class HttpContractTest {
         e.setLot_quantity(capacity);
         e.setDescription("desc");
         e.setPresenters(new ArrayList<>());
-        ResponseEntity<Event> resp = restTemplate.postForEntity(url("/bff/events"), e, Event.class);
+        HttpEntity<Event> entity = new HttpEntity<>(e, authHeaders(hostToken));
+        ResponseEntity<Event> resp = restTemplate.exchange(url("/bff/events"), HttpMethod.POST, entity, Event.class);
         assertEquals(HttpStatus.CREATED, resp.getStatusCode());
         return resp.getBody();
     }
@@ -114,34 +169,55 @@ public class HttpContractTest {
 
     @Test
     public void createUser_returns201WithUserId() {
-        User created = createUser("create-user");
-        assertNotNull(created.getId());
-        assertEquals("create-user@example.com", created.getEmail());
+        // POST /bff/users exige auth desde a issue #79: loga com um usuário já existente
+        // (criado via service) só para ter um token, e exercita o contrato HTTP real de
+        // criação com esse token.
+        User existing = createUser("create-user-auth");
+        String token = loginAndGetToken(existing.getEmail(), "senha123");
+
+        User u = new User();
+        u.setName("Contract User create-user");
+        u.setEmail("create-user@example.com");
+        u.setFone("11955512340");
+        u.setPassword("senha123");
+        u.setBirthDate("1990-01-01");
+
+        HttpEntity<User> entity = new HttpEntity<>(u, authHeaders(token));
+        ResponseEntity<User> resp = restTemplate.exchange(url("/bff/users"), HttpMethod.POST, entity, User.class);
+
+        assertEquals(HttpStatus.CREATED, resp.getStatusCode());
+        assertNotNull(resp.getBody().getId());
+        assertEquals("create-user@example.com", resp.getBody().getEmail());
     }
 
     @Test
     public void getUserById_and_byEmail() {
         User created = createUser("get-user");
+        String token = loginAndGetToken(created.getEmail(), "senha123");
+        HttpEntity<Void> authed = new HttpEntity<>(authHeaders(token));
 
-        ResponseEntity<User> byId = restTemplate.getForEntity(url("/bff/users/" + created.getId()), User.class);
+        ResponseEntity<User> byId = restTemplate.exchange(
+                url("/bff/users/" + created.getId()), HttpMethod.GET, authed, User.class);
         assertEquals(HttpStatus.OK, byId.getStatusCode());
         assertEquals(created.getEmail(), byId.getBody().getEmail());
 
-        ResponseEntity<User> byEmail = restTemplate.getForEntity(
-                url("/bff/users/email/" + created.getEmail()), User.class);
+        ResponseEntity<User> byEmail = restTemplate.exchange(
+                url("/bff/users/email/" + created.getEmail()), HttpMethod.GET, authed, User.class);
         assertEquals(HttpStatus.OK, byEmail.getStatusCode());
         assertEquals(created.getId(), byEmail.getBody().getId());
 
-        ResponseEntity<String> notFound = restTemplate.getForEntity(url("/bff/users/999999999"), String.class);
+        ResponseEntity<String> notFound = restTemplate.exchange(
+                url("/bff/users/999999999"), HttpMethod.GET, authed, String.class);
         assertEquals(HttpStatus.NOT_FOUND, notFound.getStatusCode());
     }
 
     @Test
     public void updateUser_returns200WithUpdatedFields() {
         User created = createUser("update-user");
+        String token = loginAndGetToken(created.getEmail(), "senha123");
         created.setName("Nome Atualizado");
 
-        HttpEntity<User> entity = new HttpEntity<>(created);
+        HttpEntity<User> entity = new HttpEntity<>(created, authHeaders(token));
         ResponseEntity<User> resp = restTemplate.exchange(
                 url("/bff/users/" + created.getId()), HttpMethod.PUT, entity, User.class);
 
@@ -152,11 +228,12 @@ public class HttpContractTest {
     @Test
     public void changePassword_returns200PlainTextOnSuccess() {
         User created = createUser("change-password");
+        String token = loginAndGetToken(created.getEmail(), "senha123");
 
         Map<String, String> body = new HashMap<>();
         body.put("oldPassword", "senha123");
         body.put("newPassword", "novaSenha456");
-        HttpEntity<Map<String, String>> entity = new HttpEntity<>(body);
+        HttpEntity<Map<String, String>> entity = new HttpEntity<>(body, authHeaders(token));
 
         ResponseEntity<String> resp = restTemplate.exchange(
                 url("/bff/users/" + created.getId() + "/password"), HttpMethod.PUT, entity, String.class);
@@ -168,22 +245,31 @@ public class HttpContractTest {
     @Test
     public void deleteUser_returns204() {
         User created = createUser("delete-user");
+        String token = loginAndGetToken(created.getEmail(), "senha123");
+        HttpEntity<Void> entity = new HttpEntity<>(authHeaders(token));
         ResponseEntity<Void> resp = restTemplate.exchange(
-                url("/bff/users/" + created.getId()), HttpMethod.DELETE, HttpEntity.EMPTY, Void.class);
+                url("/bff/users/" + created.getId()), HttpMethod.DELETE, entity, Void.class);
         assertEquals(HttpStatus.NO_CONTENT, resp.getStatusCode());
     }
 
     @Test
     public void validateUser_returns200ForValidAnd400ForInvalid() {
+        User caller = createUser("validate-user-auth");
+        String token = loginAndGetToken(caller.getEmail(), "senha123");
+
         User valid = new User();
         valid.setName("Validate User");
         valid.setEmail("validate-user@example.com");
         valid.setFone("11955500001");
-        ResponseEntity<String> ok = restTemplate.postForEntity(url("/bff/users/validate"), valid, String.class);
+        HttpEntity<User> validEntity = new HttpEntity<>(valid, authHeaders(token));
+        ResponseEntity<String> ok = restTemplate.exchange(
+                url("/bff/users/validate"), HttpMethod.POST, validEntity, String.class);
         assertEquals(HttpStatus.OK, ok.getStatusCode());
 
         User invalid = new User();
-        ResponseEntity<String> bad = restTemplate.postForEntity(url("/bff/users/validate"), invalid, String.class);
+        HttpEntity<User> invalidEntity = new HttpEntity<>(invalid, authHeaders(token));
+        ResponseEntity<String> bad = restTemplate.exchange(
+                url("/bff/users/validate"), HttpMethod.POST, invalidEntity, String.class);
         assertEquals(HttpStatus.BAD_REQUEST, bad.getStatusCode());
     }
 
@@ -228,9 +314,12 @@ public class HttpContractTest {
         assertEquals(HttpStatus.OK, authed.getStatusCode());
         assertEquals("me-user@example.com", authed.getBody().getEmail());
 
+        // Desde a issue #79 /bff/users/me exige auth no próprio SecurityConfig: sem token,
+        // a requisição é barrada ANTES do controller (401 fixo via HttpStatusEntryPoint), e
+        // o corpo "Não autenticado" (que o controller monta pro caso "autenticado, mas com
+        // authentication anônima") não é mais alcançado nesse caminho.
         ResponseEntity<String> anon = restTemplate.getForEntity(url("/bff/users/me"), String.class);
         assertEquals(HttpStatus.UNAUTHORIZED, anon.getStatusCode());
-        assertEquals("Não autenticado", anon.getBody());
     }
 
     @Test
@@ -280,9 +369,12 @@ public class HttpContractTest {
     @Test
     public void passwordResetMfa_requestVerifyAndChange() {
         User user = createUser("mfa-user");
+        String token = loginAndGetToken(user.getEmail(), "senha123");
+        HttpEntity<Void> noBodyAuthed = new HttpEntity<>(authHeaders(token));
 
-        ResponseEntity<Map> requestResp = restTemplate.postForEntity(
-                url("/bff/users/" + user.getId() + "/request-password-reset-mfa"), null, Map.class);
+        ResponseEntity<Map> requestResp = restTemplate.exchange(
+                url("/bff/users/" + user.getId() + "/request-password-reset-mfa"),
+                HttpMethod.POST, noBodyAuthed, Map.class);
         assertEquals(HttpStatus.OK, requestResp.getStatusCode());
         assertTrue(requestResp.getBody().containsKey("message"));
 
@@ -291,22 +383,24 @@ public class HttpContractTest {
         // passo seguinte — não estamos testando a geração do código aqui.
         String mfaCode = userService.generatePasswordResetMfa(user.getId());
 
-        ResponseEntity<Map> verifyResp = restTemplate.postForEntity(
+        HttpEntity<Map<String, String>> verifyEntity = new HttpEntity<>(Map.of("mfaCode", mfaCode), authHeaders(token));
+        ResponseEntity<Map> verifyResp = restTemplate.exchange(
                 url("/bff/users/" + user.getId() + "/verify-password-reset-mfa"),
-                Map.of("mfaCode", mfaCode), Map.class);
+                HttpMethod.POST, verifyEntity, Map.class);
         assertEquals(HttpStatus.OK, verifyResp.getStatusCode());
         assertTrue(verifyResp.getBody().containsKey("message"));
 
-        ResponseEntity<String> invalidMfa = restTemplate.postForEntity(
+        HttpEntity<Map<String, String>> invalidEntity = new HttpEntity<>(Map.of("mfaCode", "invalido"), authHeaders(token));
+        ResponseEntity<String> invalidMfa = restTemplate.exchange(
                 url("/bff/users/" + user.getId() + "/verify-password-reset-mfa"),
-                Map.of("mfaCode", "invalido"), String.class);
+                HttpMethod.POST, invalidEntity, String.class);
         assertEquals(HttpStatus.UNAUTHORIZED, invalidMfa.getStatusCode());
 
         String mfaCode2 = userService.generatePasswordResetMfa(user.getId());
         Map<String, String> changeBody = new HashMap<>();
         changeBody.put("mfaCode", mfaCode2);
         changeBody.put("newPassword", "senhaComMfa789");
-        HttpEntity<Map<String, String>> entity = new HttpEntity<>(changeBody);
+        HttpEntity<Map<String, String>> entity = new HttpEntity<>(changeBody, authHeaders(token));
         ResponseEntity<Map> changeResp = restTemplate.exchange(
                 url("/bff/users/" + user.getId() + "/password-with-mfa"), HttpMethod.PUT, entity, Map.class);
         assertEquals(HttpStatus.OK, changeResp.getStatusCode());
@@ -331,18 +425,21 @@ public class HttpContractTest {
 
     @Test
     public void eventCrud_createGetUpdateSearchListByCreator() {
-        User creator = createUser("event-creator");
-        Event created = createEvent(creator.getId(), "Evento Contrato " + System.nanoTime(), 10);
+        User creator = createHostUser("event-creator");
+        String token = loginAndGetToken(creator.getEmail(), "senha123");
+        Event created = createEvent(creator.getId(), "Evento Contrato " + System.nanoTime(), 10, token);
         assertNotNull(created.getEvent_id());
         assertEquals(10, created.getLot_quantity());
 
+        // GET é público (não exige token) — permanece assim (rota consumida sem login pelo
+        // Flutter na tela de detalhes do evento).
         ResponseEntity<Event> byId = restTemplate.getForEntity(
                 url("/bff/events/" + created.getEvent_id()), Event.class);
         assertEquals(HttpStatus.OK, byId.getStatusCode());
         assertEquals(created.getEvent_name(), byId.getBody().getEvent_name());
 
         created.setDescription("descrição atualizada");
-        HttpEntity<Event> updateEntity = new HttpEntity<>(created);
+        HttpEntity<Event> updateEntity = new HttpEntity<>(created, authHeaders(token));
         ResponseEntity<Event> updated = restTemplate.exchange(
                 url("/bff/events/" + created.getEvent_id()), HttpMethod.PUT, updateEntity, Event.class);
         assertEquals(HttpStatus.OK, updated.getStatusCode());
@@ -361,7 +458,12 @@ public class HttpContractTest {
 
     @Test
     public void validateEvent_returns200ForValidAnd400ForInvalid() {
+        // /bff/events/validate não é GET, então não está na lista pública de eventos —
+        // exige um usuário autenticado (não precisa ser host: só createEvent/updateEvent/
+        // deleteEvent ganharam o gate de host da issue #79).
         User creator = createUser("event-validate-creator");
+        String token = loginAndGetToken(creator.getEmail(), "senha123");
+
         Event valid = new Event();
         valid.setCreator_id(creator.getId());
         valid.setEvent_name("Evento Válido " + System.nanoTime());
@@ -370,23 +472,32 @@ public class HttpContractTest {
         valid.setLot_quantity(5);
         valid.setPresenters(new ArrayList<>());
 
-        ResponseEntity<String> ok = restTemplate.postForEntity(url("/bff/events/validate"), valid, String.class);
+        HttpEntity<Event> validEntity = new HttpEntity<>(valid, authHeaders(token));
+        ResponseEntity<String> ok = restTemplate.exchange(
+                url("/bff/events/validate"), HttpMethod.POST, validEntity, String.class);
         assertEquals(HttpStatus.OK, ok.getStatusCode());
 
         Event invalid = new Event();
-        ResponseEntity<String> bad = restTemplate.postForEntity(url("/bff/events/validate"), invalid, String.class);
+        HttpEntity<Event> invalidEntity = new HttpEntity<>(invalid, authHeaders(token));
+        ResponseEntity<String> bad = restTemplate.exchange(
+                url("/bff/events/validate"), HttpMethod.POST, invalidEntity, String.class);
         assertEquals(HttpStatus.BAD_REQUEST, bad.getStatusCode());
     }
 
     @Test
     public void eventImage_getReturns404WhenAbsent_uploadRejectsNonImage() {
-        User creator = createUser("event-image-creator");
-        Event event = createEvent(creator.getId(), "Evento Imagem " + System.nanoTime(), 5);
+        User creator = createHostUser("event-image-creator");
+        String token = loginAndGetToken(creator.getEmail(), "senha123");
+        Event event = createEvent(creator.getId(), "Evento Imagem " + System.nanoTime(), 5, token);
 
+        // GET da imagem continua público (servido via <img>/Image.network no Flutter, que
+        // nunca manda header customizado).
         ResponseEntity<byte[]> getImage = restTemplate.getForEntity(
                 url("/bff/events/" + event.getEvent_id() + "/image"), byte[].class);
         assertEquals(HttpStatus.NOT_FOUND, getImage.getStatusCode());
 
+        // Upload (POST) não é GET, exige auth — mas não exige host (não ganhou o gate de
+        // ensureUserIsHost(), só createEvent/updateEvent/deleteEvent).
         MultiValueMap<String, Object> multipart = new LinkedMultiValueMap<>();
         org.springframework.core.io.ByteArrayResource notAnImage =
                 new org.springframework.core.io.ByteArrayResource("nao é imagem".getBytes()) {
@@ -396,7 +507,7 @@ public class HttpContractTest {
                     }
                 };
         multipart.add("image", notAnImage);
-        HttpHeaders headers = new HttpHeaders();
+        HttpHeaders headers = authHeaders(token);
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
         HttpEntity<MultiValueMap<String, Object>> uploadEntity = new HttpEntity<>(multipart, headers);
 
@@ -407,49 +518,120 @@ public class HttpContractTest {
 
     @Test
     public void deleteEvent_returns204() {
-        User creator = createUser("event-delete-creator");
-        Event event = createEvent(creator.getId(), "Evento Para Deletar " + System.nanoTime(), 5);
+        User creator = createHostUser("event-delete-creator");
+        String token = loginAndGetToken(creator.getEmail(), "senha123");
+        Event event = createEvent(creator.getId(), "Evento Para Deletar " + System.nanoTime(), 5, token);
 
+        HttpEntity<Void> entity = new HttpEntity<>(authHeaders(token));
         ResponseEntity<Void> resp = restTemplate.exchange(
-                url("/bff/events/" + event.getEvent_id()), HttpMethod.DELETE, HttpEntity.EMPTY, Void.class);
+                url("/bff/events/" + event.getEvent_id()), HttpMethod.DELETE, entity, Void.class);
         assertEquals(HttpStatus.NO_CONTENT, resp.getStatusCode());
+    }
+
+    @Test
+    public void createEvent_nonHostUser_returns400() {
+        // Finding 2 (issue #79): usuário autenticado que NÃO é host não pode criar evento.
+        User nonHost = createUser("event-non-host-creator");
+        String token = loginAndGetToken(nonHost.getEmail(), "senha123");
+
+        Event event = new Event();
+        event.setCreator_id(nonHost.getId());
+        event.setEvent_name("Evento Não-Host " + System.nanoTime());
+        event.setIs_EAD(true);
+        event.setEvent_date(LocalDateTime.now().plusDays(10));
+        event.setLot_quantity(5);
+        event.setPresenters(new ArrayList<>());
+
+        HttpEntity<Event> entity = new HttpEntity<>(event, authHeaders(token));
+        ResponseEntity<String> resp = restTemplate.exchange(
+                url("/bff/events"), HttpMethod.POST, entity, String.class);
+
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertTrue(resp.getBody().contains("host"),
+                "esperado erro de ensureUserIsHost() mencionando 'host', veio: " + resp.getBody());
+    }
+
+    @Test
+    public void protectedRoute_withoutToken_returns401() {
+        // Caso novo da issue #79: rota que passou a exigir auth (event-wallets, por
+        // exemplo) bate 401 sem token — SecurityConfig barra ANTES do controller.
+        ResponseEntity<String> resp = restTemplate.getForEntity(url("/bff/my-wallets/1"), String.class);
+        assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
+    }
+
+    @Test
+    public void corsPreflight_onProtectedRoute_isNotBlockedByAuth() {
+        // Rodada de fix da issue #78 (achado do revisor): preflight CORS (OPTIONS +
+        // Origin + Access-Control-Request-*) numa rota protegida não pode cair em
+        // .authenticated() — o browser nunca manda Authorization no preflight. Este teste é
+        // a rede de segurança pra isso: guarda que o preflight nunca vira 401, mesmo que no
+        // futuro alguém reordene os filtros ou mude a config de CORS.
+        // TestRestTemplate não emite preflight sozinho para uma chamada normal, mas nada
+        // impede montar a requisição OPTIONS à mão como o browser faria — é isso que este
+        // teste faz.
+        //
+        // Verificado manualmente (comentando a regra .requestMatchers(HttpMethod.OPTIONS,
+        // "/**").permitAll() e rodando só este teste) que este caso já passava ANTES da
+        // regra nova: o CorsFilter que .cors(...) registra no filter chain intercepta e
+        // responde o preflight antes do AuthorizationFilter, então .authenticated() nunca
+        // chega a barrar. A regra OPTIONS→permitAll continua sendo mantida como defesa em
+        // profundidade (ver comentário em SecurityConfig), não como correção de um 401 real.
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Origin", "http://localhost:9999");
+        headers.set("Access-Control-Request-Method", "DELETE");
+        headers.set("Access-Control-Request-Headers", "authorization,content-type");
+        HttpEntity<Void> preflight = new HttpEntity<>(headers);
+
+        ResponseEntity<String> resp = restTemplate.exchange(
+                url("/bff/my-wallets/1"), HttpMethod.OPTIONS, preflight, String.class);
+
+        assertTrue(!resp.getStatusCode().equals(HttpStatus.UNAUTHORIZED),
+                "preflight numa rota protegida não deve ser barrado por auth, veio " + resp.getStatusCode());
+        assertEquals("http://localhost:9999", resp.getHeaders().getFirst("Access-Control-Allow-Origin"));
     }
 
     // ======================= /bff/event-wallets =======================
 
     @Test
     public void eventWalletFlow_addConfirmListRemove() {
-        User creator = createUser("wallet-event-creator");
+        // Todo /bff/event-wallets/** exige auth desde a issue #79 — usa o token do attendee
+        // (quem está se inscrevendo) em cada chamada.
+        User creator = createHostUser("wallet-event-creator");
+        String hostToken = loginAndGetToken(creator.getEmail(), "senha123");
         User attendee = createUser("wallet-attendee");
-        Event event = createEvent(creator.getId(), "Evento Carteira " + System.nanoTime(), 5);
+        String attendeeToken = loginAndGetToken(attendee.getEmail(), "senha123");
+        Event event = createEvent(creator.getId(), "Evento Carteira " + System.nanoTime(), 5, hostToken);
 
         EventWallet link = new EventWallet(attendee.getId(), event.getEvent_id());
+        HttpEntity<EventWallet> linkEntity = new HttpEntity<>(link, authHeaders(attendeeToken));
 
         // /validate checa se o vínculo PODERIA ser criado agora (duplicidade via
         // existsActive), não se um vínculo já existente é válido - por isso roda ANTES do
         // addLink, enquanto ainda não há vínculo pending/confirmed pra esse par usuário/evento.
-        ResponseEntity<String> valid = restTemplate.postForEntity(
-                url("/bff/event-wallets/validate"), link, String.class);
+        ResponseEntity<String> valid = restTemplate.exchange(
+                url("/bff/event-wallets/validate"), HttpMethod.POST, linkEntity, String.class);
         assertEquals(HttpStatus.OK, valid.getStatusCode());
 
-        ResponseEntity<EventWallet> added = restTemplate.postForEntity(
-                url("/bff/event-wallets"), link, EventWallet.class);
+        ResponseEntity<EventWallet> added = restTemplate.exchange(
+                url("/bff/event-wallets"), HttpMethod.POST, linkEntity, EventWallet.class);
         assertEquals(HttpStatus.CREATED, added.getStatusCode());
         assertEquals("pending", added.getBody().getStatus());
 
-        ResponseEntity<EventWallet> confirmed = restTemplate.postForEntity(
-                url("/bff/event-wallets/confirm"), link, EventWallet.class);
+        ResponseEntity<EventWallet> confirmed = restTemplate.exchange(
+                url("/bff/event-wallets/confirm"), HttpMethod.POST, linkEntity, EventWallet.class);
         assertEquals(HttpStatus.OK, confirmed.getStatusCode());
         assertEquals("confirmed", confirmed.getBody().getStatus());
 
-        ResponseEntity<EventWallet[]> byUser = restTemplate.getForEntity(
-                url("/bff/event-wallets/user/" + attendee.getId()), EventWallet[].class);
+        HttpEntity<Void> authedGet = new HttpEntity<>(authHeaders(attendeeToken));
+        ResponseEntity<EventWallet[]> byUser = restTemplate.exchange(
+                url("/bff/event-wallets/user/" + attendee.getId()), HttpMethod.GET, authedGet, EventWallet[].class);
         assertEquals(HttpStatus.OK, byUser.getStatusCode());
         assertTrue(byUser.getBody().length >= 1);
 
+        HttpEntity<Void> authedDelete = new HttpEntity<>(authHeaders(attendeeToken));
         ResponseEntity<Void> removed = restTemplate.exchange(
                 url("/bff/event-wallets?userId=" + attendee.getId() + "&eventId=" + event.getEvent_id()),
-                HttpMethod.DELETE, HttpEntity.EMPTY, Void.class);
+                HttpMethod.DELETE, authedDelete, Void.class);
         assertEquals(HttpStatus.OK, removed.getStatusCode());
     }
 
@@ -457,21 +639,26 @@ public class HttpContractTest {
 
     @Test
     public void myWallet_getByUser_validate_ensure() {
+        // Todo /bff/my-wallets/** exige auth desde a issue #79.
         User user = createUser("my-wallet-user");
+        String token = loginAndGetToken(user.getEmail(), "senha123");
+        HttpEntity<Void> authedGet = new HttpEntity<>(authHeaders(token));
 
         // criada automaticamente pelo trigger no cadastro do usuário
-        ResponseEntity<MyWallet> byUser = restTemplate.getForEntity(
-                url("/bff/my-wallets/" + user.getId()), MyWallet.class);
+        ResponseEntity<MyWallet> byUser = restTemplate.exchange(
+                url("/bff/my-wallets/" + user.getId()), HttpMethod.GET, authedGet, MyWallet.class);
         assertEquals(HttpStatus.OK, byUser.getStatusCode());
         assertEquals(user.getId(), byUser.getBody().getUserId());
 
         MyWallet toValidate = new MyWallet(user.getId());
-        ResponseEntity<String> valid = restTemplate.postForEntity(
-                url("/bff/my-wallets/validate"), toValidate, String.class);
+        HttpEntity<MyWallet> validateEntity = new HttpEntity<>(toValidate, authHeaders(token));
+        ResponseEntity<String> valid = restTemplate.exchange(
+                url("/bff/my-wallets/validate"), HttpMethod.POST, validateEntity, String.class);
         assertEquals(HttpStatus.OK, valid.getStatusCode());
 
-        ResponseEntity<MyWallet> ensured = restTemplate.postForEntity(
-                url("/bff/my-wallets/ensure/" + user.getId()), null, MyWallet.class);
+        HttpEntity<Void> ensureEntity = new HttpEntity<>(authHeaders(token));
+        ResponseEntity<MyWallet> ensured = restTemplate.exchange(
+                url("/bff/my-wallets/ensure/" + user.getId()), HttpMethod.POST, ensureEntity, MyWallet.class);
         assertEquals(HttpStatus.OK, ensured.getStatusCode());
         assertEquals(user.getId(), ensured.getBody().getUserId());
     }
@@ -491,9 +678,9 @@ public class HttpContractTest {
 
     @Test
     public void bffSurface_isPublic_noAuthorizationHeaderNeeded() {
-        // /bff/events/search é uma chamada de negócio real (não auth/health) e deve
-        // continuar pública, sem token — mesmo gate de antes da issue #78 (fora de escopo
-        // mudar isso; issue #57 trata o gate de event-wallets).
+        // /bff/events/search continua público mesmo depois da issue #79 (deny-by-default
+        // dentro de /bff/**): está na lista explícita "GET /bff/events/**" liberada em
+        // SecurityConfig, pois é chamada sem login pela tela de busca do Flutter.
         ResponseEntity<Event[]> resp = restTemplate.getForEntity(url("/bff/events/search?term="), Event[].class);
         assertEquals(HttpStatus.OK, resp.getStatusCode());
     }
@@ -501,11 +688,11 @@ public class HttpContractTest {
     @Test
     public void oldApiSurface_noLongerServesBusinessRoutes() {
         // As rotas de negócio migraram de /api/** para /bff/** (issue #78). Não há mais
-        // dispatch para controller nenhum sob /api/**: SecurityConfig só deixa /bff/** e
-        // /actuator/health públicos, então "anyRequest().authenticated()" barra a chamada
-        // ANTES do dispatch (401/403, dependendo do AuthenticationEntryPoint padrão do
-        // Spring Security) — nunca cai no controller antigo. Sem token, o importante é que
-        // NUNCA seja 2xx: não deve haver rota de negócio viva sob /api/**.
+        // dispatch para controller nenhum sob /api/**: SecurityConfig não lista /api/** em
+        // nenhum matcher público, então "anyRequest().authenticated()" barra a chamada ANTES
+        // do dispatch (401 fixo, via HttpStatusEntryPoint desde a issue #79) — nunca cai no
+        // controller antigo. Sem token, o importante é que NUNCA seja 2xx: não deve haver
+        // rota de negócio viva sob /api/**.
         ResponseEntity<String> resp = restTemplate.getForEntity(url("/api/users/999"), String.class);
         assertTrue(!resp.getStatusCode().is2xxSuccessful(),
                 "esperado não-2xx para rota /api/** removida, veio " + resp.getStatusCode());
