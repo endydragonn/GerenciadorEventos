@@ -13,3 +13,19 @@
 # Claude Code — estado local; agents/ e skills/ são versionados
 .claude/settings.local.json
 .claude/*.local.*
+
+#============================
+#      Gemini-Reviwer
+#============================
+# Node Scripts
+.github/workflows/scripts/node_modules/
+node_modules/
+
+# Java / Spring Boot
+target/
+build/
+.gradle/
+.settings/
+.classpath
+.project
+*.class
