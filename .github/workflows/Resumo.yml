@@ -22,27 +22,38 @@ jobs:
           REPO: ${{ github.repository }}
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
           SUMMARY_TYPE: ${{ github.event.client_payload.summary_type }}
+          DAYS: ${{ github.event.client_payload.days || 1 }}
 
         run: |
           set -e
 
+          # Garante que DAYS seja um número de 1 a 7
+          if ! [[ "$DAYS" =~ ^[1-7]$ ]]; then
+            DAYS=1
+          fi
+
           TODAY=$(TZ="America/Sao_Paulo" date '+%Y-%m-%d')
           DISPLAY_DATE=$(TZ="America/Sao_Paulo" date '+%d/%m/%Y')
 
+          # Calcula a data de início (offset)
+          OFFSET=$((DAYS - 1))
+          START_DATE=$(TZ="America/Sao_Paulo" date -d "$OFFSET days ago" '+%Y-%m-%d')
+          START_DISPLAY_DATE=$(TZ="America/Sao_Paulo" date -d "$OFFSET days ago" '+%d/%m/%Y')
+
           echo "======================================"
-          echo "Resumo diário"
+          echo "Resumo de Atividades"
           echo "Repositório: $REPO"
           echo "Chat ID: $CHAT_ID"
           echo "Tipo: $SUMMARY_TYPE"
-          echo "Data: $TODAY"
+          echo "Período: $DAYS dia(s) [$START_DATE a $TODAY]"
           echo "======================================"
 
 
           # ============================================================
-          # PRs MERGEADAS HOJE
+          # PRs MERGEADAS NO PERÍODO
           # ============================================================
 
-          echo "Buscando PRs mergeadas hoje..."
+          echo "Buscando PRs mergeadas..."
 
           MERGED_PRS=""
 
@@ -63,10 +74,10 @@ jobs:
               break
             fi
 
-            PAGE_DATA=$(echo "$DATA" | jq -r --arg date "$TODAY" '
+            PAGE_DATA=$(echo "$DATA" | jq -r --arg start "$START_DATE" '
               .[]
               | select(.merged_at != null)
-              | select(.merged_at | startswith($date))
+              | select((.merged_at | split("T")[0]) >= $start)
               | "• #\(.number) — \(.title)"
             ')
 
@@ -87,10 +98,10 @@ jobs:
 
 
           # ============================================================
-          # ISSUES FECHADAS HOJE
+          # ISSUES FECHADAS NO PERÍODO
           # ============================================================
 
-          echo "Buscando Issues fechadas hoje..."
+          echo "Buscando Issues fechadas..."
 
           CLOSED_ISSUES=""
 
@@ -111,11 +122,11 @@ jobs:
               break
             fi
 
-            PAGE_DATA=$(echo "$DATA" | jq -r --arg date "$TODAY" '
+            PAGE_DATA=$(echo "$DATA" | jq -r --arg start "$START_DATE" '
               .[]
               | select(.pull_request == null)
               | select(.closed_at != null)
-              | select(.closed_at | startswith($date))
+              | select((.closed_at | split("T")[0]) >= $start)
               | "• #\(.number) — \(.title)"
             ')
 
@@ -136,13 +147,19 @@ jobs:
 
 
           # ============================================================
-          # CONTADORES
+          # CONTADORES E TÍTULO
           # ============================================================
 
           MERGED_COUNT=$(echo "$MERGED_PRS" | grep -c '^• #' || true)
           ISSUES_COUNT=$(echo "$CLOSED_ISSUES" | grep -c '^• #' || true)
 
           TOTAL_COUNT=$((MERGED_COUNT + ISSUES_COUNT))
+
+          if [ "$DAYS" -eq 1 ]; then
+            HEADER="📊 Resumo — ${DISPLAY_DATE}"
+          else
+            HEADER="📊 Resumo (${DAYS} dias) — ${START_DISPLAY_DATE} até ${DISPLAY_DATE}"
+          fi
 
 
           # ============================================================
@@ -151,7 +168,7 @@ jobs:
 
           if [ "$SUMMARY_TYPE" = "completo" ]; then
 
-            MSG="📊 Resumo — ${DISPLAY_DATE}
+            MSG="${HEADER}
 
           📦 ${REPO}
 
@@ -189,7 +206,7 @@ jobs:
             # RESUMO RESUMIDO
             # ==========================================================
 
-            MSG="📊 Resumo — ${DISPLAY_DATE}
+            MSG="${HEADER}
 
           📦 ${REPO}
 
@@ -206,24 +223,12 @@ jobs:
 
 
           # ============================================================
-          # VERIFICA TAMANHO
+          # VERIFICA TAMANHO E ENVIA
           # ============================================================
 
           MESSAGE_LENGTH=${#MSG}
 
           echo "Tamanho da mensagem: ${MESSAGE_LENGTH} caracteres"
-
-          if [ "$MESSAGE_LENGTH" -gt 4000 ]; then
-            echo "AVISO: resumo possui mais de 4000 caracteres."
-            echo "Telegram possui limite de 4096 caracteres."
-          fi
-
-
-          # ============================================================
-          # ENVIA PARA O TELEGRAM
-          # ============================================================
-
-          echo "Enviando resumo..."
 
           RESPONSE=$(curl -s -X POST \
             "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
@@ -240,6 +245,4 @@ jobs:
             exit 1
           fi
 
-          echo "======================================"
           echo "Resumo enviado com sucesso."
-          echo "======================================"
