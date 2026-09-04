@@ -117,6 +117,12 @@ for i in $(seq 1 "$N"); do
 done
 TOKENS_JSON+="]"
 printf '%s\n' "$TOKENS_JSON" > "$TOKENS_FILE"
+# $TOKENS_FILE guarda JWTs válidos (mesmo que de usuários de teste descartáveis)
+# -- restringe a leitura ao dono antes de qualquer outra coisa tocar o arquivo,
+# pra não ficar 0644 em runners compartilhados (achado do Gemini na review da
+# issue #11/PR #82). chmod pode não ter efeito em todo filesystem do Windows,
+# mas é inofensivo lá e é o que protege de verdade em Linux/macOS/CI.
+chmod 600 "$TOKENS_FILE" 2>/dev/null || true
 echo "   $N attendees logados, tokens em $TOKENS_FILE" >&2
 
 # ---------------------------------------------------------------------------

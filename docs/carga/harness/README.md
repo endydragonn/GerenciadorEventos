@@ -89,6 +89,7 @@ Ver o cabeçalho de `run.sh` para a lista completa comentada. As mais usadas:
 | `BASE_URL_K6` | `http://backend:8081` | URL do backend visto de **dentro** do container do k6 — trocar pela VM da #4 quando existir |
 | `BASE_URL_PROBE` | `http://localhost:8081` | URL usada pelo probe inicial e por `setup.sh`, rodando **nesta máquina** |
 | `READPATH` | `cas` | só rotula o relatório final — **não troca o braço em runtime** (ver abaixo) |
+| `COLLECTOR_INTERVAL_S` | `1` | intervalo (s) entre amostras de lag do `collector.sh` — ver limitação abaixo em rodadas com N alto |
 
 ## Braço `cas` (default) vs. `naive` (experimento)
 
@@ -123,6 +124,22 @@ retornar `201 pending`, encadeia imediatamente um `confirm`. A corretude final
 pelo k6 — o k6 registra sucesso/lotado/erro em contadores customizados
 (`reservas_confirmadas`, `reservas_lotadas`, `reservas_erro`) só para
 diagnóstico, não como fonte de verdade.
+
+## Limitação metodológica: overhead do polling de lag em N alto
+
+`collector.sh` amostra o lag chamando `docker exec ... psql` a cada
+`COLLECTOR_INTERVAL_S` segundos (default `1`), em background, durante toda a
+rodada — cada amostra abre um processo `docker exec` + uma conexão nova ao
+Postgres. Em rodadas pequenas (dezenas de VUs, o smoke run local desta issue)
+o custo é desprezível frente à carga do k6. Em rodadas de N alto (issues
+#12/#13, contra o mesmo host de banco), esse polling compete por CPU/IO com o
+próprio banco sob teste e pode introduzir ruído na latência/throughput
+observados — achado da review automática do Gemini na PR #82. Mitigação: para
+N grande, aumente `COLLECTOR_INTERVAL_S` (ex.: `2`–`5`s) e leve isso em conta
+na seção de "ameaças à validade" do rascunho do artigo (issue #14) — o lag do
+read model muda na casca de segundos (job padrão a cada 5000ms), então uma
+amostragem mais espaçada ainda captura a série real sem perder resolução
+relevante.
 
 ## Lag do read model: por que pode aparecer `-1` nas primeiras amostras
 
