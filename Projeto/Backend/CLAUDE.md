@@ -107,6 +107,27 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 
 O `SeedController` cria inscrições já confirmadas (`addLink` seguido de `confirm`).
 
+### Feature flag `reservation.readpath` — caminho CAS (default) vs. ingênuo (experimento)
+
+`addLink` tem dois caminhos de checagem de capacidade, escolhidos por
+`reservation.readpath` (`@Value` em `EventWalletService`, env `RESERVATION_READPATH`):
+
+- **`cas`** (default) — o que está descrito acima: `EventCapRepository.tryReserve` (UPDATE
+  condicional atômico). Nunca oversella. **Zero mudança** de comportamento.
+- **`naive`** — lê o read model **defasado** `event_availability` via
+  `EventAvailabilityRepository.findAvailable` e insere em `walletevent` **sem CAS** (só
+  `reservePending`, **nunca** toca `eventcap`). `available == null` ⇒ erro "ainda não
+  calculada"; `== 0` ⇒ "Evento lotado"; `> 0` ou `-1` ⇒ segue. Oversella proporcional ao
+  lag do read model — é o **braço de controle** do experimento de concorrência da Fase 2
+  (issues #11/#12), não um bug.
+
+`Service/ReadModelRefreshService` — `@Scheduled` (a cada `readmodel.availability.refresh.ms`,
+default 5000; env `READMODEL_AVAILABILITY_REFRESH_MS`): um único
+`INSERT ... SELECT ... ON CONFLICT DO UPDATE` que recalcula `event_availability`
+(`available = capacity - reservas ativas`, piso 0; `-1` = ilimitado). Intervalo maior ⇒
+read model mais defasado ⇒ mais overselling no caminho ingênuo. `refresh()` é `public` e
+chamável direto (os testes o invocam sem esperar o timer).
+
 ## Cadastro em duas fases + e-mail
 
 1. `POST /api/users/request-verification` grava em `pending_verifications` (hash da senha +
@@ -120,7 +141,10 @@ O `SeedController` cria inscrições já confirmadas (`addLink` seguido de `conf
 ## Config
 
 - `application.properties` lê tudo de env var com default de dev:
-  `SPRING_DATASOURCE_*`, `JWT_SECRET`, `JWT_EXPIRATION_SECONDS`, `MAIL_*`, `RECAPTCHA_*`.
+  `SPRING_DATASOURCE_*`, `JWT_SECRET`, `JWT_EXPIRATION_SECONDS`, `MAIL_*`, `RECAPTCHA_*`,
+  `RESERVATION_READPATH` (default `cas`; `naive` = braço de controle do experimento da
+  Fase 2), `READMODEL_AVAILABILITY_REFRESH_MS` (default `5000`; intervalo do job de refresh
+  do read model `event_availability` = o "lag" do experimento).
   Valores reais vêm de `Projeto/.env` — não commitar, não imprimir.
 - `spring.jpa.show-sql=true` e log de SQL em DEBUG: saída verbosa é esperada em dev.
 
