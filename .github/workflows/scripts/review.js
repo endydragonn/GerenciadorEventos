@@ -82,7 +82,6 @@ Diretrizes de Formatação:
       config: {
         systemInstruction,
         temperature: 0.2,
-        maxOutputTokens: 4096 // Permite até ~3 páginas de análise detalhada sem cortes
       }
     });
 
