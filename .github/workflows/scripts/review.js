@@ -14,7 +14,7 @@ async function run() {
     const octokit = github.getOctokit(token);
     const context = github.context;
 
-    // Captura segura do número do Pull Request
+    // Captura o número do Pull Request do evento
     const pull_number = context.payload.pull_request?.number;
     if (!pull_number) {
       core.setFailed('Este workflow só pode ser executado em eventos do tipo pull_request.');
@@ -23,7 +23,7 @@ async function run() {
 
     const { owner, repo } = context.repo;
 
-    // 1. Obter as alterações (diff) do PR
+    // 1. Obter as alterações (diff) do PR via GitHub REST API
     const { data: diffData } = await octokit.rest.pulls.get({
       owner,
       repo,
@@ -38,14 +38,14 @@ async function run() {
       return;
     }
 
-    // Limita o tamanho do diff em caracteres para otimizar tempo e cota
+    // Limita o tamanho do diff (máx 30.000 caracteres) para otimizar execução e cota
     const truncatedDiff = fullDiff.slice(0, 30000);
 
-    // 2. Inicializar o cliente do Gemini
+    // 2. Inicializar o cliente do Gemini SDK
     const ai = new GoogleGenAI({ apiKey: geminiKey });
 
     const systemInstruction = `
-Você é um Arquiteto de Software e Especialista em Segurança Sênior com foco em Java, Spring Boot, Spring Security, SQL e Arquiteturas Orientadas a Eventos com Apache Kafka.
+Você é um Arquiteto de Software e Especialista em Segurança Sênior especializado em Java, Spring Boot, Spring Security, SQL e Arquiteturas Orientadas a Eventos com Apache Kafka.
 
 Sua missão é analisar o diff fornecido e apontar melhorias críticas, riscos de segurança e falhas arquiteturais no backend.
 
@@ -73,21 +73,22 @@ Diretrizes de Formatação:
 
     const prompt = `Analise o seguinte diff de Pull Request (Java / Spring Boot / Security / Kafka / SQL) e forneça seu code review:\n\n\`\`\`diff\n${truncatedDiff}\n\`\`\``;
 
-    core.info('Enviando diff para análise do Gemini...');
+    core.info('Enviando diff para análise do Gemini 3.6 Flash...');
 
-    // Chamada atualizada com o modelo ativo
+    // 3. Chamada ao modelo Gemini 3.6 Flash com limite de tokens para velocidade acelerada
     const response = await ai.models.generateContent({
       model: 'gemini-3.6-flash',
       contents: prompt,
       config: {
         systemInstruction,
         temperature: 0.2,
+        maxOutputTokens: 1200 // Limita o tamanho da resposta para otimizar o tempo de resposta
       }
     });
 
     const reviewText = response.text;
 
-    // 4. Comentar o resultado no PR
+    // 4. Comentar a análise diretamente no PR
     const commentBody = `### 🤖 Gemini Code Review (Java / Security / Kafka / SQL)\n\n${reviewText}`;
 
     await octokit.rest.issues.createComment({
