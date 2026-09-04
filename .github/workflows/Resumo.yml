@@ -27,25 +27,34 @@ jobs:
         run: |
           set -e
 
-          # Garante que DAYS seja um número de 1 a 7
-          if ! [[ "$DAYS" =~ ^[1-7]$ ]]; then
-            DAYS=1
-          fi
-
           TODAY=$(TZ="America/Sao_Paulo" date '+%Y-%m-%d')
           DISPLAY_DATE=$(TZ="America/Sao_Paulo" date '+%d/%m/%Y')
 
-          # Calcula a data de início (offset)
-          OFFSET=$((DAYS - 1))
-          START_DATE=$(TZ="America/Sao_Paulo" date -d "$OFFSET days ago" '+%Y-%m-%d')
-          START_DISPLAY_DATE=$(TZ="America/Sao_Paulo" date -d "$OFFSET days ago" '+%d/%m/%Y')
+          if [ "$DAYS" = "all" ]; then
+            START_DATE="1970-01-01"
+            HEADER="📊 Resumo (Todo o histórico) — ${DISPLAY_DATE}"
+          else
+            if ! [[ "$DAYS" =~ ^[1-7]$ ]]; then
+              DAYS=1
+            fi
+
+            OFFSET=$((DAYS - 1))
+            START_DATE=$(TZ="America/Sao_Paulo" date -d "$OFFSET days ago" '+%Y-%m-%d')
+            START_DISPLAY_DATE=$(TZ="America/Sao_Paulo" date -d "$OFFSET days ago" '+%d/%m/%Y')
+
+            if [ "$DAYS" -eq 1 ]; then
+              HEADER="📊 Resumo — ${DISPLAY_DATE}"
+            else
+              HEADER="📊 Resumo (${DAYS} dias) — ${START_DISPLAY_DATE} até ${DISPLAY_DATE}"
+            fi
+          fi
 
           echo "======================================"
           echo "Resumo de Atividades"
           echo "Repositório: $REPO"
           echo "Chat ID: $CHAT_ID"
           echo "Tipo: $SUMMARY_TYPE"
-          echo "Período: $DAYS dia(s) [$START_DATE a $TODAY]"
+          echo "Data início: $START_DATE"
           echo "======================================"
 
 
@@ -155,12 +164,6 @@ jobs:
 
           TOTAL_COUNT=$((MERGED_COUNT + ISSUES_COUNT))
 
-          if [ "$DAYS" -eq 1 ]; then
-            HEADER="📊 Resumo — ${DISPLAY_DATE}"
-          else
-            HEADER="📊 Resumo (${DAYS} dias) — ${START_DISPLAY_DATE} até ${DISPLAY_DATE}"
-          fi
-
 
           # ============================================================
           # RESUMO COMPLETO
@@ -223,7 +226,7 @@ jobs:
 
 
           # ============================================================
-          # VERIFICA TAMANHO E ENVIA
+          # ENVIA PARA O TELEGRAM
           # ============================================================
 
           MESSAGE_LENGTH=${#MSG}
