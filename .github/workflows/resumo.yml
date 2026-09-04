@@ -89,8 +89,7 @@ jobs:
 
             if [ -n "$PAGE_DATA" ]; then
               if [ -n "$MERGED_PRS" ]; then
-                MERGED_PRS="${MERGED_PRS}
-${PAGE_DATA}"
+                MERGED_PRS="${MERGED_PRS}\n${PAGE_DATA}"
               else
                 MERGED_PRS="$PAGE_DATA"
               fi
@@ -100,6 +99,9 @@ ${PAGE_DATA}"
               break
             fi
           done
+
+          # Converte sequências \n em quebras reais mantendo formato
+          MERGED_PRS=$(printf "%b" "$MERGED_PRS")
 
           # ============================================================
           # ISSUES FECHADAS NO PERÍODO
@@ -134,8 +136,7 @@ ${PAGE_DATA}"
 
             if [ -n "$PAGE_DATA" ]; then
               if [ -n "$CLOSED_ISSUES" ]; then
-                CLOSED_ISSUES="${CLOSED_ISSUES}
-${PAGE_DATA}"
+                CLOSED_ISSUES="${CLOSED_ISSUES}\n${PAGE_DATA}"
               else
                 CLOSED_ISSUES="$PAGE_DATA"
               fi
@@ -146,6 +147,9 @@ ${PAGE_DATA}"
             fi
           done
 
+          # Converte sequências \n em quebras reais mantendo formato
+          CLOSED_ISSUES=$(printf "%b" "$CLOSED_ISSUES")
+
           # ============================================================
           # CONTADORES E MONTAGEM DA MENSAGEM
           # ============================================================
@@ -154,52 +158,24 @@ ${PAGE_DATA}"
           ISSUES_COUNT=$(echo "$CLOSED_ISSUES" | grep -c '^• #' || true)
           TOTAL_COUNT=$((MERGED_COUNT + ISSUES_COUNT))
 
-          if [ "$SUMMARY_TYPE" = "completo" ]; then
-            MSG="${HEADER}
-
-📦 ${REPO}
-
-🔀 PRs mergeadas"
-
-            if [ -n "$MERGED_PRS" ]; then
-              MSG+="
-${MERGED_PRS}"
-            else
-              MSG+="
-Nenhuma."
-            fi
-
-            MSG+="
-
-📋 Issues fechadas"
-
-            if [ -n "$CLOSED_ISSUES" ]; then
-              MSG+="
-${CLOSED_ISSUES}"
-            else
-              MSG+="
-Nenhuma."
-            fi
-
-            MSG+="
-
-📈 Totais
-• ${MERGED_COUNT} PRs mergeadas
-• ${ISSUES_COUNT} Issues fechadas"
-
+          if [ -n "$MERGED_PRS" ]; then
+            PR_TEXT="$MERGED_PRS"
           else
-            MSG="${HEADER}
+            PR_TEXT="Nenhuma."
+          fi
 
-📦 ${REPO}
+          if [ -n "$CLOSED_ISSUES" ]; then
+            ISSUE_TEXT="$CLOSED_ISSUES"
+          else
+            ISSUE_TEXT="Nenhuma."
+          fi
 
-🔀 PRs
-• ${MERGED_COUNT} mergeadas
-
-📋 Issues
-• ${ISSUES_COUNT} fechadas
-
-📈 Total
-• ${TOTAL_COUNT} evento(s)"
+          if [ "$SUMMARY_TYPE" = "completo" ]; then
+            MSG=$(printf "%b\n\n📦 %s\n\n🔀 PRs mergeadas\n%s\n\n📋 Issues fechadas\n%s\n\n📈 Totais\n• %d PRs mergeadas\n• %d Issues fechadas" \
+              "$HEADER" "$REPO" "$PR_TEXT" "$ISSUE_TEXT" "$MERGED_COUNT" "$ISSUES_COUNT")
+          else
+            MSG=$(printf "%b\n\n📦 %s\n\n🔀 PRs\n• %d mergeadas\n\n📋 Issues\n• %d fechadas\n\n📈 Total\n• %d evento(s)" \
+              "$HEADER" "$REPO" "$MERGED_COUNT" "$ISSUES_COUNT" "$TOTAL_COUNT")
           fi
 
           # ============================================================
