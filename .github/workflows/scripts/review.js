@@ -75,14 +75,13 @@ Diretrizes de Formatação:
 
     core.info('Enviando diff para análise do Gemini 3.6 Flash...');
 
-    // 3. Chamada ao modelo Gemini 3.6 Flash com limite de tokens para velocidade acelerada
+    // Chamada com limite de tokens ampliado para feedback completo
     const response = await ai.models.generateContent({
       model: 'gemini-3.6-flash',
       contents: prompt,
       config: {
         systemInstruction,
         temperature: 0.2,
-        maxOutputTokens: 1200 // Limita o tamanho da resposta para otimizar o tempo de resposta
       }
     });
 
