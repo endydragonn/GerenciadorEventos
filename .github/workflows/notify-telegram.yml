@@ -1,60 +1,271 @@
-# DESCRIPTION: Notifica abertura de PRs para o servidor central do bot sem precisar de secrets de Chat ID.
-name: Notificar PR via Telegram
+# Gera resumos de PRs mergeadas e Issues fechadas (hoje, 1-7 dias ou todo o histórico).
+name: Resumo diário via Telegram
 
 on:
-  pull_request:
-    types: [opened, reopened, ready_for_review]
+  repository_dispatch:
+    types: [daily_summary]
 
 jobs:
-  notify:
+  summary:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+
     steps:
-      - name: Enviar notificação para o Bot
+      - name: Gerar resumo
         env:
-          BOT_URL: "https://telegram-bot-rcu4.onrender.com" # Substitua pela sua URL no Render
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ github.token }}
+          SERVER_URL: "https://telegram-bot-rcu4.onrender.com"
+
           REPO: ${{ github.repository }}
-          USER: ${{ github.event.pull_request.user.login }}
-          REVIEWERS: ${{ toJson(github.event.pull_request.requested_reviewers) }}
-          PR_DRAFT: ${{ github.event.pull_request.draft }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
+          SUMMARY_TYPE: ${{ github.event.client_payload.summary_type }}
+          DAYS: ${{ github.event.client_payload.days || 1 }}
 
         run: |
           set -e
 
-          # Detecção de Claude Code
-          if echo "$PR_BODY" | grep -Fq "https://claude.com/claude-code"; then
-            CLAUDE_REVIEW="true"
+          TODAY=$(TZ="America/Sao_Paulo" date '+%Y-%m-%d')
+          DISPLAY_DATE=$(TZ="America/Sao_Paulo" date '+%d/%m/%Y')
+
+          if [ "$DAYS" = "all" ]; then
+            START_DATE="1970-01-01"
+            HEADER="📊 Resumo (Todo o histórico) — ${DISPLAY_DATE}"
           else
-            CLAUDE_REVIEW="false"
+            if ! [[ "$DAYS" =~ ^[1-7]$ ]]; then
+              DAYS=1
+            fi
+
+            OFFSET=$((DAYS - 1))
+            START_DATE=$(TZ="America/Sao_Paulo" date -d "$OFFSET days ago" '+%Y-%m-%d')
+            START_DISPLAY_DATE=$(TZ="America/Sao_Paulo" date -d "$OFFSET days ago" '+%d/%m/%Y')
+
+            if [ "$DAYS" -eq 1 ]; then
+              HEADER="📊 Resumo — ${DISPLAY_DATE}"
+            else
+              HEADER="📊 Resumo (${DAYS} dias) — ${START_DISPLAY_DATE} até ${DISPLAY_DATE}"
+            fi
           fi
 
-          # Status do PR
-          if [ "$PR_DRAFT" = "true" ]; then
-            PR_STATUS="📝 Draft"
+          echo "======================================"
+          echo "Resumo de Atividades"
+          echo "Repositório: $REPO"
+          echo "Chat ID: $CHAT_ID"
+          echo "Tipo: $SUMMARY_TYPE"
+          echo "Data início: $START_DATE"
+          echo "======================================"
+
+
+          # ============================================================
+          # PRs MERGEADAS NO PERÍODO
+          # ============================================================
+
+          echo "Buscando PRs mergeadas..."
+
+          MERGED_PRS=""
+
+          for PAGE in {1..10}; do
+
+            DATA=$(gh api \
+              "repos/${REPO}/pulls" \
+              --method GET \
+              -f state=closed \
+              -f sort=updated \
+              -f direction=desc \
+              -f per_page=100 \
+              -f page="$PAGE")
+
+            COUNT=$(echo "$DATA" | jq 'length')
+
+            if [ "$COUNT" -eq 0 ]; then
+              break
+            fi
+
+            PAGE_DATA=$(echo "$DATA" | jq -r --arg start "$START_DATE" '
+              .[]
+              | select(.merged_at != null)
+              | select((.merged_at | split("T")[0]) >= $start)
+              | "• #\(.number) — \(.title)"
+            ')
+
+            if [ -n "$PAGE_DATA" ]; then
+              if [ -n "$MERGED_PRS" ]; then
+                MERGED_PRS="${MERGED_PRS}
+${PAGE_DATA}"
+              else
+                MERGED_PRS="$PAGE_DATA"
+              fi
+            fi
+
+            if [ "$COUNT" -lt 100 ]; then
+              break
+            fi
+
+          done
+
+
+          # ============================================================
+          # ISSUES FECHADAS NO PERÍODO
+          # ============================================================
+
+          echo "Buscando Issues fechadas..."
+
+          CLOSED_ISSUES=""
+
+          for PAGE in {1..10}; do
+
+            DATA=$(gh api \
+              "repos/${REPO}/issues" \
+              --method GET \
+              -f state=closed \
+              -f sort=updated \
+              -f direction=desc \
+              -f per_page=100 \
+              -f page="$PAGE")
+
+            COUNT=$(echo "$DATA" | jq 'length')
+
+            if [ "$COUNT" -eq 0 ]; then
+              break
+            fi
+
+            PAGE_DATA=$(echo "$DATA" | jq -r --arg start "$START_DATE" '
+              .[]
+              | select(.pull_request == null)
+              | select(.closed_at != null)
+              | select((.closed_at | split("T")[0]) >= $start)
+              | "• #\(.number) — \(.title)"
+            ')
+
+            if [ -n "$PAGE_DATA" ]; then
+              if [ -n "$CLOSED_ISSUES" ]; then
+                CLOSED_ISSUES="${CLOSED_ISSUES}
+${PAGE_DATA}"
+              else
+                CLOSED_ISSUES="$PAGE_DATA"
+              fi
+            fi
+
+            if [ "$COUNT" -lt 100 ]; then
+              break
+            fi
+
+          done
+
+
+          # ============================================================
+          # CONTADORES
+          # ============================================================
+
+          MERGED_COUNT=$(echo "$MERGED_PRS" | grep -c '^• #' || true)
+          ISSUES_COUNT=$(echo "$CLOSED_ISSUES" | grep -c '^• #' || true)
+
+          TOTAL_COUNT=$((MERGED_COUNT + ISSUES_COUNT))
+
+
+          # ============================================================
+          # RESUMO COMPLETO
+          # ============================================================
+
+          if [ "$SUMMARY_TYPE" = "completo" ]; then
+
+            MSG="${HEADER}
+
+📦 ${REPO}
+
+🔀 PRs mergeadas"
+
+            if [ -n "$MERGED_PRS" ]; then
+              MSG+="
+${MERGED_PRS}"
+            else
+              MSG+="
+Nenhuma."
+            fi
+
+            MSG+="
+
+📋 Issues fechadas"
+
+            if [ -n "$CLOSED_ISSUES" ]; then
+              MSG+="
+${CLOSED_ISSUES}"
+            else
+              MSG+="
+Nenhuma."
+            fi
+
+            MSG+="
+
+📈 Totais
+• ${MERGED_COUNT} PRs mergeadas
+• ${ISSUES_COUNT} Issues fechadas"
+
           else
-            PR_STATUS="🟢 Ready for review"
+
+            # ==========================================================
+            # RESUMO RESUMIDO
+            # ==========================================================
+
+            MSG="${HEADER}
+
+📦 ${REPO}
+
+🔀 PRs
+• ${MERGED_COUNT} mergeadas
+
+📋 Issues
+• ${ISSUES_COUNT} fechadas
+
+📈 Total
+• ${TOTAL_COUNT} evento(s)"
+
           fi
 
-          # Formata a lista de revisores em array JSON
-          REVIEWER_LIST=$(echo "$REVIEWERS" | jq -c '[.[].login]')
 
-          # Monta o JSON de payload
+          # ============================================================
+          # DEVOLVE O RESUMO PARA O SERVIDOR BACKEND
+          # ============================================================
+
+          MESSAGE_LENGTH=${#MSG}
+
+          echo "Tamanho da mensagem: ${MESSAGE_LENGTH} caracteres"
+
           PAYLOAD=$(jq -n \
             --arg repo "$REPO" \
-            --argjson pr_number "$PR_NUMBER" \
-            --arg pr_title "$PR_TITLE" \
-            --arg pr_url "$PR_URL" \
-            --arg author "$USER" \
-            --arg status "$PR_STATUS" \
-            --argjson reviewers "$REVIEWER_LIST" \
-            --argjson claude_review "$CLAUDE_REVIEW" \
-            '{repo: $repo, pr_number: $pr_number, pr_title: $pr_title, pr_url: $pr_url, author: $author, status: $status, reviewers: $reviewers, claude_review: $claude_review}')
+            --arg summary_type "$SUMMARY_TYPE" \
+            --arg start_date "$START_DATE" \
+            --arg chat_id "$CHAT_ID" \
+            --arg message "$MSG" \
+            --argjson total "$TOTAL_COUNT" \
+            --argjson merged "$MERGED_COUNT" \
+            --argjson issues "$ISSUES_COUNT" \
+            '{
+              repository: $repo,
+              summary_type: $summary_type,
+              start_date: $start_date,
+              chat_id: $chat_id,
+              message: $message,
+              totals: {
+                merged_prs: $merged,
+                closed_issues: $issues,
+                total: $total
+              }
+            }')
 
-          # Envia a notificação ao bot central
-          curl -s -X POST "${BOT_URL}/webhook/github-pr" \
+          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" -X POST "$SERVER_URL" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD"
+            -d "$PAYLOAD")
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "Resumo enviado com sucesso ao servidor ($HTTP_STATUS)."
+          else
+            echo "======================================"
+            echo "ERRO AO ENVIAR PARA O SERVIDOR ($HTTP_STATUS)"
+            cat response.txt
+            echo "======================================"
+            exit 1
+          fi
