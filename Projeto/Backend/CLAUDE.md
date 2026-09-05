@@ -86,7 +86,7 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 - **Nginx do frontend faz proxy de `/bff/` → `backend:8081/bff/` sem rewrite/strip**
   (`nginx.conf`): o path chega igual no backend. Em acesso direto ao backend (dev sem
   Nginx), use o mesmo path `/bff/...`.
-- `security/SecurityConfig`: stateless, CSRF off. Desde a issue #79, deny-by-default também
+- `security/SecurityConfig`: stateless, CSRF off. Desde o PR #79 (issue #78), deny-by-default também
   dentro de `/bff/**` — só a lista abaixo é pública, todo o resto exige
   `Authorization: Bearer <jwt>` (401 fixo via `HttpStatusEntryPoint`, sem token/token
   inválido numa rota protegida).
@@ -113,7 +113,7 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
   roles dinâmicas no token (authority fixa `USER`).
 - `security/AuthorizationUtil.isCurrentUserHost()` lê `users.host` (coluna criada sem aspas
   no DDL como `Host`, então o Postgres dobra pra minúsculas — `UserRepository` lê/grava com
-  `host` minúsculo, igual `isactive`). Desde a issue #79, `bff/BffEventController.createEvent`
+  `host` minúsculo, igual `isactive`). Desde o PR #79 (issue #78), `bff/BffEventController.createEvent`
   /`updateEvent`/`deleteEvent` chamam `ensureUserIsHost()` (IllegalArgumentException → HTTP
   400, padrão do projeto); leitura (get/search/list/validate) e a imagem não ganham esse
   gate. **Nenhuma rota promove um usuário a host** (de propósito — `UserRepository.save`/
@@ -190,7 +190,7 @@ chamável direto (os testes o invocam sem esperar o timer).
 ## Ao mexer aqui
 
 - Novo endpoint → entra em `bff/*` (superfície HTTP única, ver "Rotas e segurança"), no
-  controller do agregado correspondente. Desde a issue #79 o default dentro de `/bff/**` é
+  controller do agregado correspondente. Desde o PR #79 (issue #78) o default dentro de `/bff/**` é
   **autenticado**: endpoint novo já nasce protegido; só adicione em `SecurityConfig` se ele
   precisar ser público (raro — normalmente já resolvido pelo padrão `GET /bff/events/**`).
 - Mudou path, método ou forma de request/response de um endpoint consumido pelo Flutter →
