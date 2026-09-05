@@ -529,6 +529,32 @@ public class HttpContractTest {
     }
 
     @Test
+    public void updateEvent_nonExistentId_returns404() {
+        // Issue #86: PUT num event_id inexistente hoje devolve 200 (falso-positivo) porque
+        // EventService.updateEvent nunca confere se a linha existe antes de gravar. Deletamos
+        // o evento recém-criado pra garantir um id que definitivamente não existe mais.
+        User creator = createHostUser("event-update-404");
+        String token = loginAndGetToken(creator.getEmail(), "senha123");
+        Event event = createEvent(creator.getId(), "Evento Para Atualizar 404 " + System.nanoTime(), 5, token);
+        Long eventId = event.getEvent_id();
+
+        HttpEntity<Void> deleteEntity = new HttpEntity<>(authHeaders(token));
+        ResponseEntity<Void> deleteResp = restTemplate.exchange(
+                url("/bff/events/" + eventId), HttpMethod.DELETE, deleteEntity, Void.class);
+        assertEquals(HttpStatus.NO_CONTENT, deleteResp.getStatusCode());
+
+        event.setDescription("tentativa de atualizar evento inexistente");
+        HttpEntity<Event> updateEntity = new HttpEntity<>(event, authHeaders(token));
+        ResponseEntity<String> resp = restTemplate.exchange(
+                url("/bff/events/" + eventId), HttpMethod.PUT, updateEntity, String.class);
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+
+        // Nenhuma linha foi recriada pelo PUT: GET no mesmo id continua 404.
+        ResponseEntity<String> getResp = restTemplate.getForEntity(url("/bff/events/" + eventId), String.class);
+        assertEquals(HttpStatus.NOT_FOUND, getResp.getStatusCode());
+    }
+
+    @Test
     public void createEvent_nonHostUser_returns400() {
         // Finding 2 (issue #79): usuário autenticado que NÃO é host não pode criar evento.
         User nonHost = createUser("event-non-host-creator");

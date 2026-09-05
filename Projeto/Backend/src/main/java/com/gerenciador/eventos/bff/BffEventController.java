@@ -107,6 +107,9 @@ public class BffEventController {
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
         } catch (RuntimeException ex) {
+            if (ex.getMessage() != null && ex.getMessage().startsWith("Evento não encontrado")) {
+                return ResponseEntity.notFound().build();
+            }
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
         }
     }
