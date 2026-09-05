@@ -25,7 +25,7 @@ import com.gerenciador.eventos.security.AuthorizationUtil;
  * (a que o Flutter efetivamente chamava) e era duplicada em {@code Controller.EventController}
  * sob {@code /api/events} (sem chamador no frontend). Comportamento inalterado.
  *
- * <p>Issue #79: criar/editar/excluir evento agora exige que o usuário autenticado seja host
+ * <p>PR #79 (issue #78): criar/editar/excluir evento agora exige que o usuário autenticado seja host
  * ({@link AuthorizationUtil#ensureUserIsHost()}) — antes qualquer usuário logado podia.
  * Leitura (get/search/list/validate) e a imagem (upload/get) não ganham esse gate.</p>
  */

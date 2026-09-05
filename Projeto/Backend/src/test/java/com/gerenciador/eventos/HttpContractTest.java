@@ -57,7 +57,7 @@ import com.gerenciador.eventos.config.DatabaseConnection;
  * de SMTP real nem dos timeouts de rede configurados; {@code RECAPTCHA_SECRET_KEY} é forçada
  * vazia para exercitar o caminho determinístico (sem chamar a API do Google).</p>
  *
- * <p>Issue #79: {@code SecurityConfig} deixou de liberar {@code /bff/**} por inteiro — só a
+ * <p>PR #79 (issue #78): {@code SecurityConfig} deixou de liberar {@code /bff/**} por inteiro — só a
  * lista explícita de rotas públicas continua sem token, o resto exige
  * {@code Authorization: Bearer <jwt>}. O fixture {@link #createUser(String)} passou a criar o
  * usuário via {@link UserService} direto (não HTTP) porque {@code POST /bff/users} agora
