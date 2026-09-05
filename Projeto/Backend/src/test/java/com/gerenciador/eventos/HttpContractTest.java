@@ -57,7 +57,7 @@ import com.gerenciador.eventos.config.DatabaseConnection;
  * de SMTP real nem dos timeouts de rede configurados; {@code RECAPTCHA_SECRET_KEY} é forçada
  * vazia para exercitar o caminho determinístico (sem chamar a API do Google).</p>
  *
- * <p>Issue #79: {@code SecurityConfig} deixou de liberar {@code /bff/**} por inteiro — só a
+ * <p>PR #79 (issue #78): {@code SecurityConfig} deixou de liberar {@code /bff/**} por inteiro — só a
  * lista explícita de rotas públicas continua sem token, o resto exige
  * {@code Authorization: Bearer <jwt>}. O fixture {@link #createUser(String)} passou a criar o
  * usuário via {@link UserService} direto (não HTTP) porque {@code POST /bff/users} agora
@@ -96,7 +96,7 @@ public class HttpContractTest {
     // ======================= fixtures =======================
 
     /**
-     * Cria usuário direto via {@link UserService} (não HTTP): desde a issue #79
+     * Cria usuário direto via {@link UserService} (não HTTP): desde o PR #79 (issue #78)
      * {@code POST /bff/users} exige auth, e este fixture é usado por quase todo teste só
      * para ter um usuário disponível antes de logar e exercitar a rota que o teste cobre de
      * fato. O contrato HTTP de criação continua coberto por
@@ -169,7 +169,7 @@ public class HttpContractTest {
 
     @Test
     public void createUser_returns201WithUserId() {
-        // POST /bff/users exige auth desde a issue #79: loga com um usuário já existente
+        // POST /bff/users exige auth desde o PR #79 (issue #78): loga com um usuário já existente
         // (criado via service) só para ter um token, e exercita o contrato HTTP real de
         // criação com esse token.
         User existing = createUser("create-user-auth");
@@ -314,7 +314,7 @@ public class HttpContractTest {
         assertEquals(HttpStatus.OK, authed.getStatusCode());
         assertEquals("me-user@example.com", authed.getBody().getEmail());
 
-        // Desde a issue #79 /bff/users/me exige auth no próprio SecurityConfig: sem token,
+        // Desde o PR #79 (issue #78) /bff/users/me exige auth no próprio SecurityConfig: sem token,
         // a requisição é barrada ANTES do controller (401 fixo via HttpStatusEntryPoint), e
         // o corpo "Não autenticado" (que o controller monta pro caso "autenticado, mas com
         // authentication anônima") não é mais alcançado nesse caminho.
@@ -460,7 +460,7 @@ public class HttpContractTest {
     public void validateEvent_returns200ForValidAnd400ForInvalid() {
         // /bff/events/validate não é GET, então não está na lista pública de eventos —
         // exige um usuário autenticado (não precisa ser host: só createEvent/updateEvent/
-        // deleteEvent ganharam o gate de host da issue #79).
+        // deleteEvent ganharam o gate de host do PR #79 (issue #78)).
         User creator = createUser("event-validate-creator");
         String token = loginAndGetToken(creator.getEmail(), "senha123");
 
@@ -530,7 +530,7 @@ public class HttpContractTest {
 
     @Test
     public void createEvent_nonHostUser_returns400() {
-        // Finding 2 (issue #79): usuário autenticado que NÃO é host não pode criar evento.
+        // Finding 2 (PR #79, issue #78): usuário autenticado que NÃO é host não pode criar evento.
         User nonHost = createUser("event-non-host-creator");
         String token = loginAndGetToken(nonHost.getEmail(), "senha123");
 
@@ -553,7 +553,7 @@ public class HttpContractTest {
 
     @Test
     public void protectedRoute_withoutToken_returns401() {
-        // Caso novo da issue #79: rota que passou a exigir auth (event-wallets, por
+        // Caso novo do PR #79 (issue #78): rota que passou a exigir auth (event-wallets, por
         // exemplo) bate 401 sem token — SecurityConfig barra ANTES do controller.
         ResponseEntity<String> resp = restTemplate.getForEntity(url("/bff/my-wallets/1"), String.class);
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
@@ -594,7 +594,7 @@ public class HttpContractTest {
 
     @Test
     public void eventWalletFlow_addConfirmListRemove() {
-        // Todo /bff/event-wallets/** exige auth desde a issue #79 — usa o token do attendee
+        // Todo /bff/event-wallets/** exige auth desde o PR #79 (issue #78) — usa o token do attendee
         // (quem está se inscrevendo) em cada chamada.
         User creator = createHostUser("wallet-event-creator");
         String hostToken = loginAndGetToken(creator.getEmail(), "senha123");
@@ -639,7 +639,7 @@ public class HttpContractTest {
 
     @Test
     public void myWallet_getByUser_validate_ensure() {
-        // Todo /bff/my-wallets/** exige auth desde a issue #79.
+        // Todo /bff/my-wallets/** exige auth desde o PR #79 (issue #78).
         User user = createUser("my-wallet-user");
         String token = loginAndGetToken(user.getEmail(), "senha123");
         HttpEntity<Void> authedGet = new HttpEntity<>(authHeaders(token));
@@ -678,7 +678,7 @@ public class HttpContractTest {
 
     @Test
     public void bffSurface_isPublic_noAuthorizationHeaderNeeded() {
-        // /bff/events/search continua público mesmo depois da issue #79 (deny-by-default
+        // /bff/events/search continua público mesmo depois do PR #79 (issue #78) (deny-by-default
         // dentro de /bff/**): está na lista explícita "GET /bff/events/**" liberada em
         // SecurityConfig, pois é chamada sem login pela tela de busca do Flutter.
         ResponseEntity<Event[]> resp = restTemplate.getForEntity(url("/bff/events/search?term="), Event[].class);
@@ -690,7 +690,7 @@ public class HttpContractTest {
         // As rotas de negócio migraram de /api/** para /bff/** (issue #78). Não há mais
         // dispatch para controller nenhum sob /api/**: SecurityConfig não lista /api/** em
         // nenhum matcher público, então "anyRequest().authenticated()" barra a chamada ANTES
-        // do dispatch (401 fixo, via HttpStatusEntryPoint desde a issue #79) — nunca cai no
+        // do dispatch (401 fixo, via HttpStatusEntryPoint desde o PR #79, issue #78) — nunca cai no
         // controller antigo. Sem token, o importante é que NUNCA seja 2xx: não deve haver
         // rota de negócio viva sob /api/**.
         ResponseEntity<String> resp = restTemplate.getForEntity(url("/api/users/999"), String.class);

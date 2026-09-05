@@ -38,7 +38,7 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                // Superfície HTTP única sob /bff/** (issue #78). A partir da issue #79,
+                // Superfície HTTP única sob /bff/** (issue #78). A partir do PR #79 (issue #78),
                 // deny-by-default também dentro de /bff/**: só a lista explícita abaixo é
                 // pública (o que o Flutter chama sem login); todo o resto exige
                 // "Authorization: Bearer <jwt>" válido.
