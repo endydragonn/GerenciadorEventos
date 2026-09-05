@@ -50,6 +50,9 @@ public class EventService {
         if (e.getEvent_id() == null) {
             throw new IllegalArgumentException("event_id é obrigatório");
         }
+        if (eventRepository.findById(e.getEvent_id()) == null) {
+            throw new RuntimeException("Evento não encontrado: id=" + e.getEvent_id());
+        }
         applyDefaults(e); // buy_time_limit não informado -> data do evento
         validateRequired(e);
         validateRules(e);

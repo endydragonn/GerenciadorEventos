@@ -3,6 +3,8 @@ package com.gerenciador.eventos.bff;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -32,6 +34,8 @@ import com.gerenciador.eventos.security.AuthorizationUtil;
 @RestController
 @RequestMapping("/bff/events")
 public class BffEventController {
+
+    private static final Logger log = LoggerFactory.getLogger(BffEventController.class);
 
     private final EventService eventService;
     private final AuthorizationUtil authorizationUtil;
@@ -107,7 +111,15 @@ public class BffEventController {
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
         } catch (RuntimeException ex) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
+            if (ex.getMessage() != null && ex.getMessage().startsWith("Evento não encontrado")) {
+                return ResponseEntity.notFound().build();
+            }
+            // Não ecoa ex.getMessage() no corpo do 500 (pode vazar detalhe interno, ex.:
+            // mensagem de erro SQL) -- achado da review automática do Gemini na PR #88.
+            // Log completo fica só no servidor; o chamador recebe mensagem genérica.
+            log.error("Erro ao atualizar evento id={}", id, ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Erro interno ao atualizar evento");
         }
     }
 
