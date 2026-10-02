@@ -1,0 +1,5 @@
+# Saída de rodadas do harness (tokens.json, CSVs, k6-summary.json, resultado.html
+# ...) -- dados gerados a cada execução, não versionados (mesma regra do
+# CLAUDE.md da raiz para relatórios gerados). Mantém só este .gitignore.
+*
+!.gitignore
