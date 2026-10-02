@@ -616,6 +616,28 @@ public class HttpContractTest {
         assertEquals("http://localhost:9999", resp.getHeaders().getFirst("Access-Control-Allow-Origin"));
     }
 
+    // ======================= /actuator (issue #92) =======================
+
+    @Test
+    public void actuatorHealth_semToken_returns200Up() {
+        ResponseEntity<Map> resp = restTemplate.getForEntity(url("/actuator/health"), Map.class);
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals("UP", resp.getBody().get("status"));
+        assertEquals(1, resp.getBody().size(), "health público não deve expor detalhes (components)");
+    }
+
+    @Test
+    public void actuatorOutrosEndpoints_semToken_naoExpoemDados() {
+        // Só `health` está exposto (management.endpoints.web.exposure.include=health).
+        for (String path : new String[] {"/actuator/env", "/actuator/beans", "/actuator/metrics"}) {
+            HttpStatus status = HttpStatus.valueOf(restTemplate.getForEntity(url(path), String.class)
+                    .getStatusCode().value());
+            assertTrue(status == HttpStatus.NOT_FOUND || status == HttpStatus.UNAUTHORIZED,
+                    path + " não deve devolver dados sem token, veio " + status);
+        }
+    }
+
     // ======================= /bff/event-wallets =======================
 
     @Test
