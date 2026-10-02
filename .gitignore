@@ -29,3 +29,9 @@ build/
 .classpath
 .project
 *.class
+
+
+# Testes de carga: resultados podem ser versionados, mas nunca credenciais/tokens
+Projeto/carga/results/users-*.json
+Projeto/carga/results/events-*.json
+**/tokens.json
