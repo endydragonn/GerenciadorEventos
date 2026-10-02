@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<!DOCTYPE suppressions PUBLIC
+    "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+    "https://checkstyle.org/dtds/suppressions_1_2.dtd">
+
+<!--
+    Baseline de violações medidas em 2026-09-04 (issue #83), no dia em que as regras entraram
+    em checkstyle.xml. Corrigir estes arquivos é o PRÓXIMO passo, fora do escopo da issue #83
+    (que só mede e trava para código novo). Não adicione arquivo novo aqui: se um arquivo novo
+    violar uma regra, o build deve quebrar — o ponto da issue é impedir dívida nova, não
+    esconder a existente.
+
+    Removeu a violação de um arquivo listado abaixo? Remova a linha correspondente aqui.
+-->
+<suppressions>
+
+    <!-- FileLength (max=350): únicos 2 arquivos do projeto acima do teto na medição
+         original (find src/main -name '*.java' | xargs wc -l | sort -n). -->
+    <suppress checks="FileLength" files="BffUserController\.java"/>
+    <suppress checks="FileLength" files="UserRepository\.java"/>
+
+    <!-- ProibirConsoleDireto (System.out/err.print*): 5 ocorrências em 3 arquivos, medidas com
+         grep -rn 'System\.(out|err)\.print|printStackTrace' src/main/java. Nenhuma delas é
+         printStackTrace() (essa regra nasceu com zero violações e já trava sem baseline).
+         Suprimida por LINHA (atributo "lines"), não por arquivo inteiro: violação nova em
+         qualquer outra linha desses arquivos deve travar o build normalmente. -->
+    <suppress id="ProibirConsoleDireto" files="UserRepository\.java" lines="94"/>
+    <suppress id="ProibirConsoleDireto" files="EmailVerificationService\.java" lines="197,214,216"/>
+    <suppress id="ProibirConsoleDireto" files="EventRepository\.java" lines="237"/>
+
+</suppressions>

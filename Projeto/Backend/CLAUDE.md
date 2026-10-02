@@ -27,6 +27,42 @@ e roda `mvn clean test`. **Exige o container `db` no ar**: os testes batem num P
   não depender de SMTP/Google reais.
 - Não há testes unitários isolados; tudo é de integração com banco (exceto os mocks pontuais
   do `HttpContractTest` para dependências externas).
+- `LayerBoundaryArchTest` (ArchUnit) é a exceção: não usa Spring/banco, só analisa bytecode.
+  Roda em qualquer `mvn test`, com ou sem `db` no ar.
+
+## Quality gates (Checkstyle + ArchUnit) — issue #83
+
+- `maven-checkstyle-plugin` roda no `mvn test`/`mvn clean test` (preso na fase `validate`,
+  antes de compilar) — por isso `./run-tests.sh` já quebra se uma regra travar. Config em
+  `checkstyle.xml`, baseline de violações antigas em `checkstyle-suppressions.xml` (ambos na
+  raiz de `Backend/`).
+  - Rodar isolado (sem subir o resto da suíte): `mvn checkstyle:check` (ou `mvn validate`).
+    Via Docker, sem precisar do container `db`:
+    ```
+    docker run --rm -v gerenciador-eventos-m2:/root/.m2 \
+      -v "$(pwd -W)":/workspace-src:ro maven:3.9.7-eclipse-temurin-21-jammy \
+      bash -c 'mkdir -p /tmp/build && cp -r /workspace-src/* /tmp/build/ && cd /tmp/build \
+        && mvn -Dmaven.repo.local=/root/.m2/repository checkstyle:check'
+    ```
+  - Regras hoje: `FileLength` (máx. 350 linhas, só `src/main/java` — medido em 2026-09-04:
+    a maioria dos arquivos fica bem abaixo de 300; só `BffUserController.java` (465) e
+    `UserRepository.java` (351) violavam, e estão na baseline) e `RegexpSinglelineJava`
+    banindo `System.out/err.print*`/`println` (id `ProibirConsoleDireto` — baseline:
+    `UserRepository.java`, `EventRepository.java`, `EmailVerificationService.java`) e
+    `printStackTrace()` (id `ProibirPrintStackTrace` — zero ocorrências, já trava sem
+    baseline). Use um logger SLF4J (`org.slf4j.Logger`/`LoggerFactory`, ver
+    `Service/ReservationExpiryService`) em vez de escrever direto no console.
+  - Método "medir antes de travar": regra sem violação nasce em `error` sem entrada na
+    baseline; regra com violação existente também fica em `error`, mas os arquivos que já
+    violavam no dia em que a regra entrou ganham uma linha em `checkstyle-suppressions.xml`
+    (não corrigidos por essa issue — é o próximo passo). Corrigiu um arquivo da baseline?
+    Remova a linha dele do suppressions.
+- ArchUnit (`archunit-junit5`, teste `LayerBoundaryArchTest` em `src/test/java`) trava se o
+  pacote `bff` (controllers) depender direto de `Repository` (DAO) ou de JDBC cru
+  (`java.sql.Connection/PreparedStatement/Statement/ResultSet/DriverManager`) — acesso a dado
+  deve passar por `Service`. Zero violações hoje, regra já trava o build, sem baseline.
+  - Rodar isolado: `mvn -Dtest=LayerBoundaryArchTest -DfailIfNoTests=false test` (não precisa
+    do container `db`, mesmo comando funciona no container Maven efêmero do `run-tests.sh`).
 
 ## Camadas (pacote `com.gerenciador.eventos`)
 
