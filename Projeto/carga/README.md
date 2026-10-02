@@ -6,7 +6,7 @@ O k6 **nunca** roda no host: competiria por CPU/rede com o backend e invalidaria
 | Máquina | Precisa de | Não precisa de |
 |---|---|---|
 | Host | Docker Desktop, `Projeto/.env` | k6 |
-| Gerador | k6 (o `setup-gerador` instala via winget), PowerShell, clone do repo | Docker, banco, `.env` |
+| Gerador | k6 (o `setup-gerador` instala via winget), PowerShell, Git for Windows (Git Bash, usado pelo seed), clone **completo** do repo | Docker, banco, `.env` |
 
 > Nunca copie o `Projeto/.env` para o gerador (credenciais reais).
 
@@ -78,6 +78,14 @@ O backend abre uma conexão nova por requisição (`DriverManager`, sem pool). O
 é 100 conexões; os 200 threads do Tomcat podem passar disso → `too many clients` → HTTP 500.
 Compare 100 × 300 para documentar esse teto.
 
+## Seed único
+
+O seed (host + usuários + eventos via `POST /bff/seed`) mora só em `docs/carga/harness/setup.sh`,
+o mesmo do harness da issue #11. Os testes deste kit o chamam por `lib-seed.ps1` com
+`EVENTS`, `EVENT_NAME_PREFIX`, `SEM_TOKENS=1`, `USERS_FILE` e `EVENT_IDS_FILE` (ver o cabeçalho
+do script); o k6 faz o login dos usuários no `setup()`. Usuários: `carga-att<i>-<sufixo>@example.com`;
+eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
+
 ## Como ler o resultado
 
 - **`aceitas` + `lotado`** devem somar quase tudo. `erros_5xx` ou `outros` > 0 invalida a rodada.
@@ -93,7 +101,7 @@ Compare 100 × 300 para documentar esse teto.
   o que falsearia a conta de overselling.
 - O seed cria usuários com bcrypt: dezenas de segundos para centenas de usuários.
 - O host precisa estar na tomada, no plano "Alto desempenho", sem apps pesados.
-- Os scripts criam usuários/eventos de teste no banco (`carga*@teste.local`, `Carga-*`, `Rpm-*`).
+- Os scripts criam usuários/eventos de teste no banco (`carga-*@example.com`, `Carga-*`, `Rpm-*`).
   Não rode contra um banco com dados que você quer preservar.
 
 ## Arquivos
@@ -104,6 +112,7 @@ Compare 100 × 300 para documentar esse teto.
 | `setup-gerador.ps1` | gerador | instala o k6, mede a latência base |
 | `docker-compose.carga.yml` | host | override: read path, lag do read model, log de SQL desligado |
 | `rodar-teste.ps1` / `carga.js` | gerador | teste 1 |
+| `lib-seed.ps1` | gerador | `Invoke-Seed`: chama o seed único `docs/carga/harness/setup.sh` via Git Bash |
 | `rpm/*` | ambos | teste 2 |
 | `Makefile` | ambos | atalhos |
 | `results/` | gerador | CSVs e baselines (gerado) |

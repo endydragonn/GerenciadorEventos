@@ -26,8 +26,7 @@ param(
     [int[]]$Vus = @(50),
     [int]$Capacidade = 20,
     [ValidateSet('cas', 'naive')][string]$Rotulo = 'cas',
-    [int]$RefreshMs = 5000,
-    [string]$SenhaTeste = 'senha123'
+    [int]$RefreshMs = 5000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,20 +44,7 @@ if (-not (Get-Command k6 -ErrorAction SilentlyContinue)) { Fail 'k6 nao encontra
 try { Invoke-WebRequest -Uri "$Base/actuator/health" -UseBasicParsing -TimeoutSec 5 | Out-Null }
 catch { Fail "Backend inacessivel em $Base. Confira o host (setup-host.ps1) e a rede." }
 
-function Post-Json($url, $obj) {
-    $json = $obj | ConvertTo-Json -Depth 10
-    return Invoke-RestMethod -Uri $url -Method Post -Body $json -ContentType 'application/json' -TimeoutSec 120
-}
-
-function Resolve-EventId($nome, $criadorId) {
-    # GET /bff/events?creator_id=N e publico e devolve List<Event> (campos event_id / event_name).
-    # Se falhar por qualquer motivo, o script pede o id (consulta no host).
-    try { $lista = @(Invoke-RestMethod -Uri "$Base/bff/events?creator_id=$criadorId" -Method Get -TimeoutSec 30) } catch { return 0 }
-    foreach ($e in $lista) {
-        if ($e.event_name -eq $nome -and $e.event_id) { return [int]$e.event_id }
-    }
-    return 0
-}
+. (Join-Path $PSScriptRoot 'lib-seed.ps1')   # Invoke-Seed (seed unico: docs\carga\harness\setup.sh)
 
 if (-not (Test-Path $Csv)) {
     'data,rotulo,refresh_ms,clientes,capacidade,aceitas,lotado,outros,sem_login,overselling_cliente,p50_ms,p95_ms,p99_ms,max_ms,duracao_s,reservas_por_s,event_id' |
@@ -70,59 +56,16 @@ foreach ($n in $Vus) {
     Write-Host ''
     Info "=== Rodada: $n clientes, capacidade $Capacidade, rotulo=$Rotulo (run $runId) ==="
 
-    # ---- 1. usuarios
-    $users = @()
-    $usersFile = @()
-    for ($i = 1; $i -le $n; $i++) {
-        $email = 'carga{0}u{1}@teste.local' -f $runId, $i
-        $users += @{
-            name      = "Carga $runId U$i"
-            email     = $email
-            password  = $SenhaTeste
-            fone      = '11{0:D6}{1:D3}' -f $runId, $i
-            birthdate = '1990-01-15'   # chave JSON real de User (@JsonProperty("birthdate"))
-            isAdmin   = $false
-        }
-        $usersFile += @{ email = $email; password = $SenhaTeste }
-    }
-    Info "Criando $n usuarios (bcrypt no host: pode levar alguns segundos)..."
-    $r = Post-Json "$Base/bff/seed" @{ users = $users }
-    if ($r.usersCreated -ne $n) {
-        Warn "Criados $($r.usersCreated) de $n usuarios."
-        if ($r.warnings) { $r.warnings | Select-Object -First 3 | ForEach-Object { Warn $_ } }
-        if ($r.errors)   { $r.errors   | Select-Object -First 3 | ForEach-Object { Warn $_ } }
-        if ($r.usersCreated -eq 0) { Fail 'Nenhum usuario criado; abortando.' }
-    }
-
-    # ---- 2. criador do evento = primeiro usuario criado
-    $login = Post-Json "$Base/bff/users/login" @{ email = $users[0].email; password = $SenhaTeste }
-    $criador = [int]$login.user.user_id   # User serializa o id como "user_id"
-
-    # ---- 3. evento
-    $nomeEvento = "Carga-$runId-N$n"
-    $dataEvento = (Get-Date).AddYears(1).ToString('yyyy-MM-ddTHH:mm:ss')
-    $r = Post-Json "$Base/bff/seed" @{
-        events = @(@{
-            creator_id   = $criador
-            event_name   = $nomeEvento
-            is_EAD       = $true
-            address      = 'Online'
-            event_date   = $dataEvento
-            lot_quantity = $Capacidade
-            quantity     = $Capacidade
-            description  = 'Evento criado pelo teste de carga'
-            presenters   = @()
-        })
-    }
-    if ($r.eventsCreated -ne 1) { Fail "Evento nao criado: $($r | ConvertTo-Json -Compress)" }
-
-    $eventId = Resolve-EventId $nomeEvento $criador
-    if ($eventId -le 0) {
-        Warn 'Nao consegui descobrir o event_id pela API. No HOST, rode:'
-        Write-Host ("  docker exec gerenciador-db sh -c 'psql -U `"`$POSTGRES_USER`" -d `"`$POSTGRES_DB`" -At -c `"select event_id from event where event_name=''{0}''`"'" -f $nomeEvento)
-        $eventId = [int](Read-Host 'Informe o event_id')
-    }
-    Ok "Evento '$nomeEvento' (id $eventId) criado com $Capacidade vagas."
+    # ---- 1-3. usuarios + evento (seed unico)
+    $tag = "{0}-n{1}-{2}" -f $Rotulo, $n, $runId
+    $uf = (Join-Path $Results "users-$tag.json").Replace('\', '/')
+    $ef = (Join-Path $Results "events-$tag.json").Replace('\', '/')
+    $sf = (Join-Path $Results "summary-$tag.json").Replace('\', '/')
+    Info "Semeando $n usuarios + 1 evento (bcrypt no host: pode levar alguns segundos)..."
+    $seed = Invoke-Seed -BaseUrl $Base -Usuarios $n -Eventos 1 -Capacidade $Capacidade `
+        -Prefixo "Carga-$runId-N$n" -Sufixo "$runId" -UsersFile $uf -EventIdsFile $ef
+    $eventId = $seed.EventIds[0]
+    Ok "Evento '$($seed.Prefixo)-E1' (id $eventId) criado com $Capacidade vagas."
 
     # ---- 4. esperar o read model (so importa no caminho naive)
     $espera = [math]::Ceiling($RefreshMs / 1000) + 2
@@ -130,10 +73,6 @@ foreach ($n in $Vus) {
     Start-Sleep -Seconds $espera
 
     # ---- 5. k6
-    $tag = "{0}-n{1}-{2}" -f $Rotulo, $n, $runId
-    $uf = (Join-Path $Results "users-$tag.json").Replace('\', '/')
-    $sf = (Join-Path $Results "summary-$tag.json").Replace('\', '/')
-    (ConvertTo-Json -InputObject $usersFile -Depth 5) | Set-Content -Path $uf -Encoding UTF8
     $env:BASE_URL = $Base
     $env:EVENT_ID = "$eventId"
     $env:CAPACITY = "$Capacidade"
@@ -142,7 +81,7 @@ foreach ($n in $Vus) {
     Info 'Disparando k6...'
     k6 run --quiet (Join-Path $PSScriptRoot 'carga.js')
     if ($LASTEXITCODE -ne 0) { Warn "k6 terminou com codigo $LASTEXITCODE." }
-    Remove-Item $uf -ErrorAction SilentlyContinue   # contem so credenciais de teste, mas nao precisa ficar
+    Remove-Item $uf, $ef -ErrorAction SilentlyContinue   # credenciais de teste: nao precisam ficar
 
     # ---- 6. resultado
     if (-not (Test-Path $sf)) { Fail 'k6 nao gerou o resumo; veja a saida acima.' }

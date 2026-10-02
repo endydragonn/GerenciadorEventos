@@ -28,8 +28,7 @@ param(
     [int]$Capacidade = 0,          # 0 = Usuarios/2
     [ValidateSet('cas', 'naive')][string]$Rotulo = 'cas',
     [int]$MaxConnections = 0,      # so para registrar no CSV (o gerador nao enxerga o host)
-    [int]$RefreshMs = 5000,
-    [string]$SenhaTeste = 'senha123'
+    [int]$RefreshMs = 5000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,10 +47,7 @@ if (-not (Get-Command k6 -ErrorAction SilentlyContinue)) { Fail 'k6 nao encontra
 try { Invoke-WebRequest -Uri "$Base/actuator/health" -UseBasicParsing -TimeoutSec 5 | Out-Null }
 catch { Fail "Backend inacessivel em $Base." }
 
-function Post-Json($url, $obj) {
-    $json = $obj | ConvertTo-Json -Depth 10
-    return Invoke-RestMethod -Uri $url -Method Post -Body $json -ContentType 'application/json' -TimeoutSec 600
-}
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib-seed.ps1')   # Invoke-Seed (seed unico: docs\carga\harness\setup.sh)
 
 $total = [int]($Rpm * $Duracao / 60)
 $eventos = [int][math]::Ceiling($total * 1.05 / $Usuarios)
@@ -59,38 +55,14 @@ $runId = [int]((Get-Date).ToUniversalTime() - [datetime]'2026-01-01').TotalSecon
 $prefixo = "Rpm-$runId"
 Info "Alvo: $Rpm RPM por $Duracao s = $total reservas; $Usuarios usuarios x $eventos eventos (capacidade $Capacidade/evento)."
 
-# ---- usuarios
-$users = @(); $usersFile = @()
-for ($i = 1; $i -le $Usuarios; $i++) {
-    $email = 'rpm{0}u{1}@teste.local' -f $runId, $i
-    $users += @{ name = "Rpm $runId U$i"; email = $email; password = $SenhaTeste
-                 fone = '11{0:D6}{1:D3}' -f $runId, $i; birthdate = '1990-01-15'; isAdmin = $false }
-    $usersFile += @{ email = $email; password = $SenhaTeste }
-}
-Info "Criando $Usuarios usuarios (bcrypt no host: pode levar um bom tempo)..."
-$r = Post-Json "$Base/bff/seed" @{ users = $users }
-if ($r.usersCreated -ne $Usuarios) {
-    Warn "Criados $($r.usersCreated) de $Usuarios usuarios."
-    if ($r.usersCreated -eq 0) { Fail 'Nenhum usuario criado; abortando.' }
-}
-$login = Post-Json "$Base/bff/users/login" @{ email = $users[0].email; password = $SenhaTeste }
-$criador = [int]$login.user.user_id
-
-# ---- eventos (uma chamada de seed)
-$dataEvento = (Get-Date).AddYears(1).ToString('yyyy-MM-ddTHH:mm:ss')
-$evs = @()
-for ($e = 1; $e -le $eventos; $e++) {
-    $evs += @{ creator_id = $criador; event_name = "$prefixo-E$e"; is_EAD = $true; address = 'Online'
-               event_date = $dataEvento; lot_quantity = $Capacidade; quantity = $Capacidade
-               description = 'Evento do teste de taxa'; presenters = @() }
-}
-Info "Criando $eventos eventos..."
-$r = Post-Json "$Base/bff/seed" @{ events = $evs }
-if ($r.eventsCreated -ne $eventos) { Fail "Eventos criados: $($r.eventsCreated) de $eventos." }
-
-$lista = @(Invoke-RestMethod -Uri "$Base/bff/events?creator_id=$criador" -Method Get -TimeoutSec 60)
-$ids = @($lista | Where-Object { $_.event_name -like "$prefixo-E*" } | ForEach-Object { [int]$_.event_id })
-if ($ids.Count -ne $eventos) { Fail "Resolvi $($ids.Count) de $eventos event_id pela API." }
+# ---- seed unico (usuarios + eventos)
+$tag = "rpm{0}-{1}" -f $Rpm, $runId
+$uf = (Join-Path $Results "users-$tag.json").Replace('\', '/')
+$ef = (Join-Path $Results "events-$tag.json").Replace('\', '/')
+$sf = (Join-Path $Results "summary-$tag.json").Replace('\', '/')
+Info "Semeando $Usuarios usuarios + $eventos eventos (bcrypt no host: pode levar um bom tempo)..."
+$seed = Invoke-Seed -BaseUrl $Base -Usuarios $Usuarios -Eventos $eventos -Capacidade $Capacidade `
+    -Prefixo $prefixo -Sufixo "$runId" -UsersFile $uf -EventIdsFile $ef
 Ok "Prefixo '$prefixo': $eventos eventos prontos."
 
 $espera = [math]::Ceiling($RefreshMs / 1000) + 2
@@ -98,12 +70,6 @@ Info "Aguardando $espera s (read model)..."
 Start-Sleep -Seconds $espera
 
 # ---- k6
-$tag = "rpm{0}-{1}" -f $Rpm, $runId
-$uf = (Join-Path $Results "users-$tag.json").Replace('\', '/')
-$ef = (Join-Path $Results "events-$tag.json").Replace('\', '/')
-$sf = (Join-Path $Results "summary-$tag.json").Replace('\', '/')
-(ConvertTo-Json -InputObject $usersFile -Depth 5) | Set-Content -Path $uf -Encoding UTF8
-(ConvertTo-Json -InputObject $ids) | Set-Content -Path $ef -Encoding UTF8
 $env:BASE_URL = $Base; $env:RPM = "$Rpm"; $env:DURACAO_S = "$Duracao"
 $env:USERS_FILE = $uf; $env:EVENTS_FILE = $ef; $env:SUMMARY_FILE = $sf
 Info 'Disparando k6...'

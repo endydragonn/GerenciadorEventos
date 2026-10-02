@@ -38,7 +38,7 @@ reais.
 | Arquivo | Papel |
 |---|---|
 | `run.sh` | Orquestrador: probe → setup → collector (bg) → k6 → verify → report. É o que você roda. |
-| `setup.sh` | Cria a fixture: host + N attendees + evento com `capacity` fixa (via `POST /bff/seed`), loga cada attendee e escreve os tokens. |
+| `setup.sh` | Cria a fixture: host + N attendees + evento com `capacity` fixa (via `POST /bff/seed`), loga cada attendee e escreve os tokens. Também é o seed único do kit `Projeto/carga` (variáveis opcionais `EVENTS`, `EVENT_NAME_PREFIX`, `SEM_TOKENS`, `USERS_FILE`, `EVENT_IDS_FILE`; ver o cabeçalho do script). |
 | `scenario.js` | Script k6: N VUs, 1 iteração cada, disparo simultâneo (`per-vu-iterations`). Cada VU faz `addLink` e, se aceito, `confirm`. |
 | `collector.sh` | Amostra `event_availability.refreshed_at` (lag do read model) via `psql`, em background, durante a rodada. |
 | `verify.sh` | Depois da carga, lê `eventcap`/`walletevent` **direto do banco** (fonte de verdade) e calcula o veredito de corretude. |
