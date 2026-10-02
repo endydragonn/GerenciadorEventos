@@ -221,6 +221,10 @@ chamável direto (os testes o invocam sem esperar o timer).
   Fase 2), `READMODEL_AVAILABILITY_REFRESH_MS` (default `5000`; intervalo do job de refresh
   do read model `event_availability` = o "lag" do experimento).
   Valores reais vêm de `Projeto/.env` — não commitar, não imprimir.
+- Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto
+  (`management.endpoints.web.exposure.include=health`); `GET /actuator/health` público devolve
+  `{"status":"UP"}` (depende do Postgres). `management.health.mail.enabled=false` — o health do
+  SMTP derrubaria o status por falha de rede/credencial do Gmail. Cobertura em `HttpContractTest`.
 - `spring.jpa.show-sql=true` e log de SQL em DEBUG: saída verbosa é esperada em dev.
 
 ## Ao mexer aqui
