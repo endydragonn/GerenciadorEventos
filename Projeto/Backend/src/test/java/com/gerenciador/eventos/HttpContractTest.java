@@ -624,6 +624,7 @@ public class HttpContractTest {
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertEquals("UP", resp.getBody().get("status"));
+        assertEquals(1, resp.getBody().size(), "health público não deve expor detalhes (components)");
     }
 
     @Test
