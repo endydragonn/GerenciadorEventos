@@ -73,9 +73,13 @@ Start-Sleep -Seconds $espera
 $env:BASE_URL = $Base; $env:RPM = "$Rpm"; $env:DURACAO_S = "$Duracao"
 $env:USERS_FILE = $uf; $env:EVENTS_FILE = $ef; $env:SUMMARY_FILE = $sf
 Info 'Disparando k6...'
-k6 run --quiet (Join-Path $PSScriptRoot 'carga-rpm.js')
-if ($LASTEXITCODE -ne 0) { Warn "k6 terminou com codigo $LASTEXITCODE." }
-Remove-Item $uf, $ef -ErrorAction SilentlyContinue
+try {
+    k6 run --quiet (Join-Path $PSScriptRoot 'carga-rpm.js')
+    if ($LASTEXITCODE -ne 0) { Warn "k6 terminou com codigo $LASTEXITCODE." }
+} finally {
+    # credenciais de teste: apagadas mesmo se o k6 falhar ou o script for interrompido (Ctrl+C)
+    Remove-Item $uf, $ef -ErrorAction SilentlyContinue
+}
 
 if (-not (Test-Path $sf)) { Fail 'k6 nao gerou o resumo.' }
 $s = Get-Content $sf -Raw | ConvertFrom-Json

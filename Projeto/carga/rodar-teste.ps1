@@ -79,9 +79,13 @@ foreach ($n in $Vus) {
     $env:USERS_FILE = $uf
     $env:SUMMARY_FILE = $sf
     Info 'Disparando k6...'
-    k6 run --quiet (Join-Path $PSScriptRoot 'carga.js')
-    if ($LASTEXITCODE -ne 0) { Warn "k6 terminou com codigo $LASTEXITCODE." }
-    Remove-Item $uf, $ef -ErrorAction SilentlyContinue   # credenciais de teste: nao precisam ficar
+    try {
+        k6 run --quiet (Join-Path $PSScriptRoot 'carga.js')
+        if ($LASTEXITCODE -ne 0) { Warn "k6 terminou com codigo $LASTEXITCODE." }
+    } finally {
+        # credenciais de teste: apagadas mesmo se o k6 falhar ou o script for interrompido (Ctrl+C)
+        Remove-Item $uf, $ef -ErrorAction SilentlyContinue
+    }
 
     # ---- 6. resultado
     if (-not (Test-Path $sf)) { Fail 'k6 nao gerou o resumo; veja a saida acima.' }
