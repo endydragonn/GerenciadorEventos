@@ -83,7 +83,8 @@ config/                DatabaseConnection, CorsConfig, EmailTemplates
 - `DatabaseConnection` delega ao `DataSource` do Spring (pool **HikariCP**, issue #96), não a
   `DriverManager`: `close()` devolve a conexão ao pool. Tamanho do pool:
   `spring.datasource.hikari.maximum-pool-size` (env `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`,
-  default 50 — abaixo do `max_connections` padrão do Postgres, 100) e
+  default 1000, alinhado ao `max_connections=1000` do Postgres do host; o `db` do compose padrão tem
+  100, então lá reduza o pool por env) e
   `spring.datasource.hikari.minimum-idle` (env `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, default 5:
   o pool cresce sob demanda). **Cada contexto Spring de teste distinto tem seu próprio pool**; sem
   `minimum-idle` pequeno, N contextos em cache segurariam N×50 conexões e estourariam o

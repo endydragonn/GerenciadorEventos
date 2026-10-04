@@ -1,7 +1,7 @@
 # Override SO do teste de taxa (RPM). Usado JUNTO com o de carga:
 #   docker compose -f docker-compose.yml -f carga/docker-compose.carga.yml -f carga/rpm/docker-compose.rpm.yml up -d
-# O backend usa pool HikariCP (default 50 conexoes). O padrao do Postgres (100)
-# limita quanto o pool pode crescer. Valor via env para comparar 100 x 300.
+# O backend usa pool HikariCP (default 1000 conexoes, cresce sob demanda). Com o padrao do
+# Postgres (100) o pool pode pedir mais do que o db aceita; reduza SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE. Valor via env para comparar 100 x 300.
 services:
   db:
     command: ["postgres", "-c", "max_connections=${PG_MAX_CONNECTIONS:-300}"]
