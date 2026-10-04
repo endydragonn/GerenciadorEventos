@@ -1,0 +1,22 @@
+{
+  "capacidade": 20,
+  "clientes": 100,
+  "aceitas": 20,
+  "lotado": 80,
+  "outros": 0,
+  "sem_login": 0,
+  "overselling_cliente": 0,
+  "p50_ms": 42.023399999999995,
+  "p95_ms": 53.3655,
+  "p99_ms": 54.23036,
+  "max_ms": 54.563,
+  "confirmadas": 20,
+  "confirma_4xx_esperado": 0,
+  "confirma_5xx": 0,
+  "confirma_outros": 0,
+  "confirma_p50_ms": 21.68705,
+  "confirma_p95_ms": 34.366275,
+  "confirma_p99_ms": 38.144614999999995,
+  "duracao_s": 1.0142409000000001,
+  "reservas_por_s": 98.59590556839109
+}
