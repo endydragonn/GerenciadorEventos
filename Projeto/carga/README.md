@@ -78,6 +78,28 @@ O backend abre uma conexão nova por requisição (`DriverManager`, sem pool). O
 é 100 conexões; os 200 threads do Tomcat podem passar disso → `too many clients` → HTTP 500.
 Compare 100 × 300 para documentar esse teto.
 
+## Teste 3 — carga aleatória (estabilidade por tempo)
+
+Durante `TEMPO`, a taxa muda a cada `PASSO` segundos para um alvo sorteado entre `RPM_MIN` e
+`RPM_MAX` (rampa de 5 s entre alvos). `PCT_LEITURA` % das iterações são leituras sorteadas
+(evento por id, carteira do usuário, busca); o resto são reservas com pares (usuário, evento) únicos,
+espalhados entre os eventos. A mesma `SEMENTE` repete o mesmo perfil (`SEMENTE=0` sorteia e imprime).
+
+```powershell
+# gerador
+make test-aleatorio HOST_IP=<ip>                                   # 10 min, 1k-12k RPM, 30% leituras
+make test-aleatorio HOST_IP=<ip> TEMPO=30m RPM_MAX=20000 SEMENTE=42
+# host, logo após a rodada
+make verificar-rpm PREFIXO=Ale-<id impresso>
+```
+
+`TEMPO` aceita `600`, `600s`, `10m`, `1h` e **pode** passar de 110 s: aqui o foco é estabilidade e
+saturação ao longo do tempo. Como reservas `pending` expiram e devolvem a vaga, `aceitas` pode passar
+da capacidade sem ser overselling; a invariante (ativas <= capacidade) vale no `-Verificar`.
+
+Resultado: `results\resultados-aleatorio.csv` e o perfil sorteado em `results\perfil-ale-<id>.json`.
+Scripts: `aleatorio/carga-aleatoria.js`, `aleatorio/rodar-aleatorio.ps1`.
+
 ## Seed único
 
 O seed (host + usuários + eventos via `POST /bff/seed`) mora só em `docs/carga/harness/setup.sh`,
@@ -115,6 +137,7 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 | `rodar-teste.ps1` / `carga.js` | gerador | teste 1 |
 | `lib-seed.ps1` | gerador | `Invoke-Seed`: chama o seed único `docs/carga/harness/setup.sh` via Git Bash |
 | `rpm/*` | ambos | teste 2 |
+| `aleatorio/*` | gerador | teste 3 |
 | `Makefile` | ambos | atalhos |
 | `results/` | gerador | CSVs e baselines (gerado) |
 
