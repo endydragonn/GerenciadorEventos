@@ -20,11 +20,13 @@ RPM_MIN        ?= 1000
 RPM_MAX        ?= 12000
 PASSO          ?= 30
 PCT_LEITURA    ?= 30
+PCT_CONFIRMA   ?= 100
+PCT_CONFIRMA_REAL ?= 60
 SEMENTE        ?= 0
 
 need_ip = $(if $(HOST_IP),,$(error Informe HOST_IP=<ip do host>))
 
-.PHONY: help setup-host setup-gerador host-rpm test-disputa test-rpm test-aleatorio verificar-disputa verificar-rpm
+.PHONY: help setup-host setup-gerador host-rpm test-disputa test-rpm test-aleatorio test-disputa-real test-rpm-real test-aleatorio-real verificar-disputa verificar-rpm
 .DEFAULT_GOAL := help
 
 help:
@@ -32,15 +34,17 @@ help:
 	@Write-Host '  make setup-host      [READPATH=cas|naive REFRESH_MS=5000]   (no HOST: sobe a stack com override de carga)'
 	@Write-Host '  make setup-gerador   HOST_IP=<ip>                           (no GERADOR: k6 + latencia base)'
 	@Write-Host 'TESTE 1 - disputa de vagas (corretude, 1 evento, rajada)'
-	@Write-Host '  make test-disputa    HOST_IP=<ip> [VUS=50,100,200 CAPACIDADE=20 READPATH=cas]'
+	@Write-Host '  make test-disputa    HOST_IP=<ip> [VUS=50,100,200 CAPACIDADE=20 READPATH=cas PCT_CONFIRMA=100]'
 	@Write-Host '  make verificar-disputa EVENT_ID=<id>                        (no HOST)'
 	@Write-Host 'TESTE 2 - taxa fixa (RPM, varios eventos, saturacao)'
 	@Write-Host '  make host-rpm        [MAX_CONN=300 READPATH=cas]            (no HOST: stack + max_connections)'
-	@Write-Host '  make test-rpm        HOST_IP=<ip> [RPM=10000 DURACAO=90 USUARIOS=200]'
+	@Write-Host '  make test-rpm        HOST_IP=<ip> [RPM=10000 DURACAO=90 USUARIOS=200 PCT_CONFIRMA=100]'
 	@Write-Host '  make verificar-rpm   PREFIXO=Rpm-<id>                       (no HOST)'
 	@Write-Host 'TESTE 3 - carga aleatoria (taxa sorteada a cada PASSO s, reservas + leituras, por TEMPO)'
-	@Write-Host '  make test-aleatorio  HOST_IP=<ip> [TEMPO=10m RPM_MIN=1000 RPM_MAX=12000 PASSO=30 PCT_LEITURA=30 SEMENTE=0]'
+	@Write-Host '  make test-aleatorio  HOST_IP=<ip> [TEMPO=10m RPM_MIN=1000 RPM_MAX=12000 PASSO=30 PCT_LEITURA=30 PCT_CONFIRMA=100 SEMENTE=0]'
 	@Write-Host '  make verificar-rpm   PREFIXO=Ale-<id>                       (no HOST, logo apos a rodada)'
+	@Write-Host 'VERSAO REALISTA (cada aceita confirma ou nao ao acaso; as demais expiram em ~120 s)'
+	@Write-Host '  make test-disputa-real | test-rpm-real | test-aleatorio-real   (mesmos parametros dos testes 1-3; PCT_CONFIRMA_REAL=60)'
 
 setup-host:
 	.\setup-host.ps1 -ReadPath $(READPATH) -RefreshMs $(REFRESH_MS)
@@ -51,7 +55,7 @@ setup-gerador:
 
 test-disputa:
 	$(need_ip)
-	.\rodar-teste.ps1 -HostIp $(HOST_IP) -Vus $(VUS) -Capacidade $(CAPACIDADE) -Rotulo $(READPATH) -RefreshMs $(REFRESH_MS)
+	.\rodar-teste.ps1 -HostIp $(HOST_IP) -Vus $(VUS) -Capacidade $(CAPACIDADE) -Rotulo $(READPATH) -RefreshMs $(REFRESH_MS) -PctConfirma $(PCT_CONFIRMA)
 
 verificar-disputa:
 	$(if $(EVENT_ID),,$(error Informe EVENT_ID=<id>))
@@ -62,7 +66,7 @@ host-rpm:
 
 test-rpm:
 	$(need_ip)
-	.\rpm\rodar-rpm.ps1 -HostIp $(HOST_IP) -Rpm $(RPM) -Duracao $(DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -RefreshMs $(REFRESH_MS)
+	.\rpm\rodar-rpm.ps1 -HostIp $(HOST_IP) -Rpm $(RPM) -Duracao $(DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -RefreshMs $(REFRESH_MS) -PctConfirma $(PCT_CONFIRMA)
 
 verificar-rpm:
 	$(if $(PREFIXO),,$(error Informe PREFIXO=Rpm-<id>))
@@ -70,4 +74,14 @@ verificar-rpm:
 
 test-aleatorio:
 	$(need_ip)
-	.\aleatorio\rodar-aleatorio.ps1 -HostIp $(HOST_IP) -Tempo $(TEMPO) -RpmMin $(RPM_MIN) -RpmMax $(RPM_MAX) -Passo $(PASSO) -PctLeitura $(PCT_LEITURA) -Semente $(SEMENTE) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -RefreshMs $(REFRESH_MS)
+	.\aleatorio\rodar-aleatorio.ps1 -HostIp $(HOST_IP) -Tempo $(TEMPO) -RpmMin $(RPM_MIN) -RpmMax $(RPM_MAX) -Passo $(PASSO) -PctLeitura $(PCT_LEITURA) -PctConfirma $(PCT_CONFIRMA) -Semente $(SEMENTE) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -RefreshMs $(REFRESH_MS)
+
+# ---- versao realista: mesmos testes, mas so PCT_CONFIRMA_REAL % das aceitas confirmam
+test-disputa-real:
+	$(MAKE) test-disputa PCT_CONFIRMA=$(PCT_CONFIRMA_REAL)
+
+test-rpm-real:
+	$(MAKE) test-rpm PCT_CONFIRMA=$(PCT_CONFIRMA_REAL)
+
+test-aleatorio-real:
+	$(MAKE) test-aleatorio PCT_CONFIRMA=$(PCT_CONFIRMA_REAL)

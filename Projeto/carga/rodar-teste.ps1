@@ -26,7 +26,8 @@ param(
     [int[]]$Vus = @(50),
     [int]$Capacidade = 20,
     [ValidateSet('cas', 'naive')][string]$Rotulo = 'cas',
-    [int]$RefreshMs = 5000
+    [int]$RefreshMs = 5000,
+    [ValidateRange(0, 100)][int]$PctConfirma = 100
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,8 +48,13 @@ catch { Fail "Backend inacessivel em $Base. Confira o host (setup-host.ps1) e a 
 . (Join-Path $PSScriptRoot 'lib-seed.ps1')   # Invoke-Seed (seed unico: docs\carga\harness\setup.sh)
 
 if (-not (Test-Path $Csv)) {
-    'data,rotulo,refresh_ms,clientes,capacidade,aceitas,lotado,outros,sem_login,overselling_cliente,p50_ms,p95_ms,p99_ms,max_ms,duracao_s,reservas_por_s,event_id' |
+    'data,rotulo,refresh_ms,clientes,capacidade,aceitas,lotado,outros,sem_login,overselling_cliente,p50_ms,p95_ms,p99_ms,max_ms,duracao_s,reservas_por_s,event_id,pct_confirma,confirmadas,confirma_4xx_esperado,confirma_5xx,confirma_outros,confirma_p50_ms,confirma_p95_ms,confirma_p99_ms' |
         Set-Content -Path $Csv -Encoding UTF8
+} elseif ((Get-Content $Csv -TotalCount 1) -notmatch 'confirmadas') {
+    # CSV criado antes das colunas de confirma: acrescenta os nomes ao cabecalho (linhas antigas ficam curtas).
+    $linhas = Get-Content $Csv
+    $linhas[0] += ',pct_confirma,confirmadas,confirma_4xx_esperado,confirma_5xx,confirma_outros,confirma_p50_ms,confirma_p95_ms,confirma_p99_ms'
+    $linhas | Set-Content -Path $Csv -Encoding UTF8
 }
 
 foreach ($n in $Vus) {
@@ -76,6 +82,7 @@ foreach ($n in $Vus) {
     $env:BASE_URL = $Base
     $env:EVENT_ID = "$eventId"
     $env:CAPACITY = "$Capacidade"
+    $env:PCT_CONFIRMA = "$PctConfirma"
     $env:USERS_FILE = $uf
     $env:SUMMARY_FILE = $sf
     Info 'Disparando k6...'
@@ -91,10 +98,11 @@ foreach ($n in $Vus) {
     if (-not (Test-Path $sf)) { Fail 'k6 nao gerou o resumo; veja a saida acima.' }
     $s = Get-Content $sf -Raw | ConvertFrom-Json
     $inv = [System.Globalization.CultureInfo]::InvariantCulture   # ponto decimal, mesmo em pt-BR
-    [string]::Format($inv, '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10:F1},{11:F1},{12:F1},{13:F1},{14:F2},{15:F1},{16}',
+    [string]::Format($inv, '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10:F1},{11:F1},{12:F1},{13:F1},{14:F2},{15:F1},{16},{17},{18},{19},{20},{21},{22:F1},{23:F1},{24:F1}',
         (Get-Date -Format s), $Rotulo, $RefreshMs, $s.clientes, $s.capacidade, $s.aceitas, $s.lotado,
         $s.outros, $s.sem_login, $s.overselling_cliente, $s.p50_ms, $s.p95_ms, $s.p99_ms, $s.max_ms,
-        $s.duracao_s, $s.reservas_por_s, $eventId) |
+        $s.duracao_s, $s.reservas_por_s, $eventId, $PctConfirma, $s.confirmadas, $s.confirma_4xx_esperado, $s.confirma_5xx,
+        $s.confirma_outros, $s.confirma_p50_ms, $s.confirma_p95_ms, $s.confirma_p99_ms) |
         Add-Content -Path $Csv -Encoding UTF8
 
     Write-Host ''
@@ -102,6 +110,8 @@ foreach ($n in $Vus) {
     Write-Host "  capacidade .......... $($s.capacidade)"
     Write-Host "  aceitas (201) ....... $($s.aceitas)"
     Write-Host "  lotado (400) ........ $($s.lotado)"
+    Write-Host "  confirmadas (200) ... $($s.confirmadas) de $($s.aceitas) aceitas (PCT_CONFIRMA=$PctConfirma)   esperado 4xx: $($s.confirma_4xx_esperado)   5xx: $($s.confirma_5xx)   outros: $($s.confirma_outros)"
+    Write-Host ('  confirma p50/p95/p99 . {0:N1} / {1:N1} / {2:N1} ms' -f $s.confirma_p50_ms, $s.confirma_p95_ms, $s.confirma_p99_ms)
     Write-Host "  erros inesperados ... $($s.outros)"
     $cor = 'Green'
     if ($s.overselling_cliente -gt 0) { $cor = 'Red' }
@@ -111,6 +121,7 @@ foreach ($n in $Vus) {
     Write-Host "  conferir no HOST .... .\setup-host.ps1 -Verificar -EventId $eventId" -ForegroundColor Yellow
 
     if ($s.outros -gt 0) { Warn 'Houve respostas inesperadas (nem 201 nem "lotado"): a rodada pode nao ser valida.' }
+    if ($PctConfirma -eq 100 -and $s.confirmadas -lt $s.aceitas) { Warn 'Nem toda reserva aceita foi confirmada: veja confirma_5xx/outros e o -Verificar.' }
     if ($s.aceitas -lt $Capacidade -and $n -ge $Capacidade) { Warn 'Aceitas abaixo da capacidade com clientes suficientes: investigue erros/lotado.' }
 
     Start-Sleep -Seconds 5

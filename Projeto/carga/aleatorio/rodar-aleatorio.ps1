@@ -8,6 +8,8 @@
   - Cada passo: rampa de ate 5 s ate o novo alvo e mantem ate o fim do passo.
   - -PctLeitura % das iteracoes sao leituras (evento por id, carteira do usuario, busca);
     o resto sao reservas com pares (usuario, evento) unicos.
+  - Cada reserva aceita e confirmada (POST /bff/event-wallets/confirm) com -PctConfirma % de chance
+    (padrao 100), sorteada de forma deterministica pela semente (nao muda o perfil de taxa).
   - Eventos e calculado pelo total esperado de iteracoes (com 5% de folga).
 
   Diferente do teste 2, aqui -Tempo pode passar de 110 s: o objetivo e estabilidade/saturacao.
@@ -34,7 +36,8 @@ param(
     [int]$MaxVus = 500,
     [ValidateSet('cas', 'naive')][string]$Rotulo = 'cas',
     [int]$MaxConnections = 0,      # so para registrar no CSV (o gerador nao enxerga o host)
-    [int]$RefreshMs = 5000
+    [int]$RefreshMs = 5000,
+    [ValidateRange(0, 100)][int]$PctConfirma = 100
 )
 
 $ErrorActionPreference = 'Stop'
@@ -112,7 +115,7 @@ Start-Sleep -Seconds $espera
 # ---- k6
 $env:BASE_URL = $Base; $env:STAGES_FILE = $pf; $env:USERS_FILE = $uf; $env:EVENTS_FILE = $ef
 $env:SUMMARY_FILE = $sf; $env:PCT_LEITURA = "$PctLeitura"; $env:SEMENTE = "$Semente"
-$env:PREFIXO = $prefixo; $env:MAX_VUS = "$MaxVus"
+$env:PREFIXO = $prefixo; $env:MAX_VUS = "$MaxVus"; $env:PCT_CONFIRMA = "$PctConfirma"
 Info "Disparando k6 (termina por volta de $((Get-Date).AddSeconds($Duracao).ToString('HH:mm:ss')))..."
 try {
     k6 run --quiet (Join-Path $PSScriptRoot 'carga-aleatoria.js')
@@ -126,29 +129,37 @@ if (-not (Test-Path $sf)) { Fail 'k6 nao gerou o resumo.' }
 $s = Get-Content $sf -Raw | ConvertFrom-Json
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
 if (-not (Test-Path $Csv)) {
-    'data,rotulo,refresh_ms,max_connections,semente,passo_s,rpm_min,rpm_max,pct_leitura,rpm_medio,duracao_s,usuarios,eventos,capacidade,aceitas,lotado,erros_5xx,outros,leituras_ok,leituras_5xx,leituras_outros,sem_login,descartadas,vus_max,reserva_p50_ms,reserva_p95_ms,reserva_p99_ms,leitura_p50_ms,leitura_p95_ms,leitura_p99_ms,max_ms,prefixo' |
+    'data,rotulo,refresh_ms,max_connections,semente,passo_s,rpm_min,rpm_max,pct_leitura,rpm_medio,duracao_s,usuarios,eventos,capacidade,aceitas,lotado,erros_5xx,outros,leituras_ok,leituras_5xx,leituras_outros,sem_login,descartadas,vus_max,reserva_p50_ms,reserva_p95_ms,reserva_p99_ms,leitura_p50_ms,leitura_p95_ms,leitura_p99_ms,max_ms,prefixo,pct_confirma,confirmadas,confirma_4xx_esperado,confirma_5xx,confirma_outros,confirma_p50_ms,confirma_p95_ms,confirma_p99_ms' |
         Set-Content -Path $Csv -Encoding UTF8
+} elseif ((Get-Content $Csv -TotalCount 1) -notmatch 'confirmadas') {
+    # CSV criado antes das colunas de confirma: acrescenta os nomes ao cabecalho (linhas antigas ficam curtas).
+    $linhas = Get-Content $Csv
+    $linhas[0] += ',pct_confirma,confirmadas,confirma_4xx_esperado,confirma_5xx,confirma_outros,confirma_p50_ms,confirma_p95_ms,confirma_p99_ms'
+    $linhas | Set-Content -Path $Csv -Encoding UTF8
 }
-[string]::Format($inv, '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9:F0},{10:F1},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22},{23},{24:F1},{25:F1},{26:F1},{27:F1},{28:F1},{29:F1},{30:F1},{31}',
+[string]::Format($inv, '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9:F0},{10:F1},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22},{23},{24:F1},{25:F1},{26:F1},{27:F1},{28:F1},{29:F1},{30:F1},{31},{32},{33},{34},{35},{36},{37:F1},{38:F1},{39:F1}',
     (Get-Date -Format s), $Rotulo, $RefreshMs, $MaxConnections, $Semente, $Passo, $RpmMin, $RpmMax, $PctLeitura,
     $s.rpm_medio, $s.duracao_s, $s.usuarios, $s.eventos, $Capacidade, $s.aceitas, $s.lotado, $s.erros_5xx,
     $s.outros, $s.leituras_ok, $s.leituras_5xx, $s.leituras_outros, $s.sem_login, $s.descartadas, $s.vus_max,
     $s.reserva_p50_ms, $s.reserva_p95_ms, $s.reserva_p99_ms, $s.leitura_p50_ms, $s.leitura_p95_ms,
-    $s.leitura_p99_ms, $s.max_ms, $prefixo) |
+    $s.leitura_p99_ms, $s.max_ms, $prefixo, $PctConfirma, $s.confirmadas, $s.confirma_4xx_esperado,
+    $s.confirma_5xx, $s.confirma_outros, $s.confirma_p50_ms, $s.confirma_p95_ms, $s.confirma_p99_ms) |
     Add-Content -Path $Csv -Encoding UTF8
 
-$e5 = $s.erros_5xx + $s.leituras_5xx
+$e5 = $s.erros_5xx + $s.leituras_5xx + $s.confirma_5xx
 Write-Host ''
 Write-Host ('  RPM medio / pico alvo  {0:N0} / {1}' -f $s.rpm_medio, $s.rpm_alvo_max)
 Write-Host "  reservas: aceitas .... $($s.aceitas)   lotado: $($s.lotado)   outros: $($s.outros)"
+Write-Host "  confirma: ok ......... $($s.confirmadas) (PCT_CONFIRMA=$PctConfirma)   esperado 4xx: $($s.confirma_4xx_esperado)   outros: $($s.confirma_outros)"
+Write-Host ('  confirma p50/p95/p99 . {0:N1} / {1:N1} / {2:N1} ms' -f $s.confirma_p50_ms, $s.confirma_p95_ms, $s.confirma_p99_ms)
 Write-Host "  leituras ok .......... $($s.leituras_ok)   outros: $($s.leituras_outros)"
 $cor = 'Green'; if ($e5 -gt 0) { $cor = 'Red' }
-Write-Host "  erros 5xx ............ $e5 (reservas $($s.erros_5xx), leituras $($s.leituras_5xx))" -ForegroundColor $cor
+Write-Host "  erros 5xx ............ $e5 (reservas $($s.erros_5xx), leituras $($s.leituras_5xx), confirma $($s.confirma_5xx))" -ForegroundColor $cor
 Write-Host "  descartadas (k6) ..... $($s.descartadas)   VUs max: $($s.vus_max)"
 Write-Host ('  reserva p50/p95/p99 .. {0:N1} / {1:N1} / {2:N1} ms' -f $s.reserva_p50_ms, $s.reserva_p95_ms, $s.reserva_p99_ms)
 Write-Host ('  leitura p50/p95/p99 .. {0:N1} / {1:N1} / {2:N1} ms' -f $s.leitura_p50_ms, $s.leitura_p95_ms, $s.leitura_p99_ms)
 Write-Host "  conferir no HOST ..... make verificar-rpm PREFIXO=$prefixo" -ForegroundColor Yellow
-Write-Host "  repetir o perfil ..... make test-aleatorio HOST_IP=$HostIp TEMPO=$Tempo SEMENTE=$Semente RPM_MIN=$RpmMin RPM_MAX=$RpmMax PASSO=$Passo PCT_LEITURA=$PctLeitura"
+Write-Host "  repetir o perfil ..... make test-aleatorio HOST_IP=$HostIp TEMPO=$Tempo SEMENTE=$Semente RPM_MIN=$RpmMin RPM_MAX=$RpmMax PASSO=$Passo PCT_LEITURA=$PctLeitura PCT_CONFIRMA=$PctConfirma"
 if ($s.descartadas -gt 0) { Warn 'k6 descartou iteracoes: o alvo nao foi atingido (gerador ou backend saturado).' }
 if ($s.alem_dos_pares -gt 0) { Warn "$($s.alem_dos_pares) reservas alem dos pares unicos nao foram enviadas." }
 Write-Host "Resultados em $Csv (perfil em $pf)"
