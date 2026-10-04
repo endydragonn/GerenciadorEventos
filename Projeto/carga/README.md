@@ -91,6 +91,7 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 - **`aceitas` + `lotado`** devem somar quase tudo. `erros_5xx` ou `outros` > 0 invalida a rodada.
 - **`descartadas` > 0** (teste 2): o k6 não manteve a taxa; gerador ou backend saturou.
 - **Overselling** vale só no `-Verificar` (banco). O número do cliente é indicativo.
+- Cada `-Verificar` (`verificar-disputa` / `verificar-rpm`) anexa a saída em `Projeto/carga/results/verificacoes.log`, com data/hora, alvo (evento ou prefixo) e config ativa (read path / refresh). Rode logo após a rodada e cite esse arquivo na documentação.
 - **Latência:** desconte a base de rede medida no `setup-gerador`.
 - No `naive`, o overselling varia com o ponto do ciclo do read model em que a rajada cai:
   repita a rodada e reporte média e dispersão.

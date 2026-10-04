@@ -17,7 +17,9 @@ function Invoke-Seed {
         [Parameter(Mandatory)][string]$EventIdsFile # saida: [event_id,...] (k6)
     )
     # Nao usar o bash do PATH: no Windows costuma ser o do WSL, nao o Git Bash.
-    $bash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+    # ProgramW6432: sob PowerShell 32 bits (ex.: make do ezwinports), ProgramFiles aponta pro (x86).
+    $pf = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+    $bash = Join-Path $pf 'Git\bin\bash.exe'
     if (-not (Test-Path $bash)) { throw "Git Bash nao encontrado em $bash. Instale o Git for Windows." }
     $setup = Join-Path $PSScriptRoot '..\..\docs\carga\harness\setup.sh'
     if (-not (Test-Path $setup)) { throw "setup.sh nao encontrado ($setup). Use o clone completo do repositorio." }

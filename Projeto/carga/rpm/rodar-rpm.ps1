@@ -88,7 +88,7 @@ if (-not (Test-Path $Csv)) {
     'data,rotulo,refresh_ms,max_connections,rpm_alvo,rpm_real,duracao_s,usuarios,eventos,capacidade,aceitas,lotado,erros_5xx,outros,sem_login,descartadas,vus_max,p50_ms,p95_ms,p99_ms,max_ms,prefixo' |
         Set-Content -Path $Csv -Encoding UTF8
 }
-[string]::Format($inv, '{0},{1},{2},{3},{4},{5:N0},{6:N1},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17:N1},{18:N1},{19:N1},{20:N1},{21}',
+[string]::Format($inv, '{0},{1},{2},{3},{4},{5:F0},{6:F1},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17:F1},{18:F1},{19:F1},{20:F1},{21}',
     (Get-Date -Format s), $Rotulo, $RefreshMs, $MaxConnections, $s.rpm_alvo, $s.rpm_real, $s.duracao_s,
     $s.usuarios, $s.eventos, $Capacidade, $s.aceitas, $s.lotado, $s.erros_5xx, $s.outros, $s.sem_login,
     $s.descartadas, $s.vus_max, $s.p50_ms, $s.p95_ms, $s.p99_ms, $s.max_ms, $prefixo) |
