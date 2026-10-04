@@ -20,6 +20,7 @@ RPM_MIN        ?= 1000
 RPM_MAX        ?= 12000
 PASSO          ?= 30
 PCT_LEITURA    ?= 30
+PCT_CONFIRMA   ?= 100
 SEMENTE        ?= 0
 
 need_ip = $(if $(HOST_IP),,$(error Informe HOST_IP=<ip do host>))
@@ -36,10 +37,10 @@ help:
 	@Write-Host '  make verificar-disputa EVENT_ID=<id>                        (no HOST)'
 	@Write-Host 'TESTE 2 - taxa fixa (RPM, varios eventos, saturacao)'
 	@Write-Host '  make host-rpm        [MAX_CONN=300 READPATH=cas]            (no HOST: stack + max_connections)'
-	@Write-Host '  make test-rpm        HOST_IP=<ip> [RPM=10000 DURACAO=90 USUARIOS=200]'
+	@Write-Host '  make test-rpm        HOST_IP=<ip> [RPM=10000 DURACAO=90 USUARIOS=200 PCT_CONFIRMA=100]'
 	@Write-Host '  make verificar-rpm   PREFIXO=Rpm-<id>                       (no HOST)'
 	@Write-Host 'TESTE 3 - carga aleatoria (taxa sorteada a cada PASSO s, reservas + leituras, por TEMPO)'
-	@Write-Host '  make test-aleatorio  HOST_IP=<ip> [TEMPO=10m RPM_MIN=1000 RPM_MAX=12000 PASSO=30 PCT_LEITURA=30 SEMENTE=0]'
+	@Write-Host '  make test-aleatorio  HOST_IP=<ip> [TEMPO=10m RPM_MIN=1000 RPM_MAX=12000 PASSO=30 PCT_LEITURA=30 PCT_CONFIRMA=100 SEMENTE=0]'
 	@Write-Host '  make verificar-rpm   PREFIXO=Ale-<id>                       (no HOST, logo apos a rodada)'
 
 setup-host:
@@ -62,7 +63,7 @@ host-rpm:
 
 test-rpm:
 	$(need_ip)
-	.\rpm\rodar-rpm.ps1 -HostIp $(HOST_IP) -Rpm $(RPM) -Duracao $(DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -RefreshMs $(REFRESH_MS)
+	.\rpm\rodar-rpm.ps1 -HostIp $(HOST_IP) -Rpm $(RPM) -Duracao $(DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -RefreshMs $(REFRESH_MS) -PctConfirma $(PCT_CONFIRMA)
 
 verificar-rpm:
 	$(if $(PREFIXO),,$(error Informe PREFIXO=Rpm-<id>))
@@ -70,4 +71,4 @@ verificar-rpm:
 
 test-aleatorio:
 	$(need_ip)
-	.\aleatorio\rodar-aleatorio.ps1 -HostIp $(HOST_IP) -Tempo $(TEMPO) -RpmMin $(RPM_MIN) -RpmMax $(RPM_MAX) -Passo $(PASSO) -PctLeitura $(PCT_LEITURA) -Semente $(SEMENTE) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -RefreshMs $(REFRESH_MS)
+	.\aleatorio\rodar-aleatorio.ps1 -HostIp $(HOST_IP) -Tempo $(TEMPO) -RpmMin $(RPM_MIN) -RpmMax $(RPM_MAX) -Passo $(PASSO) -PctLeitura $(PCT_LEITURA) -PctConfirma $(PCT_CONFIRMA) -Semente $(SEMENTE) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -RefreshMs $(REFRESH_MS)

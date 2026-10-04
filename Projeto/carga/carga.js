@@ -4,6 +4,9 @@
 //   400 "Evento lotado"    -> rejeitada por falta de vaga
 //   outro                  -> erro inesperado
 // Overselling = aceitas - capacidade (esperado 0 no caminho CAS).
+// Cada reserva aceita (201) e finalizada na mesma iteracao com POST /bff/event-wallets/confirm
+// (200 = confirmada); ao fim as vagas do evento ficam `confirmed`. Metricas de reserva e de
+// confirma sao separadas.
 //
 // Chamado pelo rodar-teste.ps1 com as variaveis de ambiente:
 //   BASE_URL, EVENT_ID, USERS_FILE (json [{email,password}]), SUMMARY_FILE, CAPACITY
@@ -22,6 +25,11 @@ const lotado = new Counter('reservas_lotado');
 const outros = new Counter('reservas_outros');
 const semLogin = new Counter('usuarios_sem_login');
 const reservaDur = new Trend('reserva_duration', true);
+const confirmadas = new Counter('confirma_aceitas');
+const confirmaEsperado = new Counter('confirma_4xx_esperado');
+const confirma5xx = new Counter('confirma_5xx');
+const confirmaOutros = new Counter('confirma_outros');
+const confirmaDur = new Trend('confirma_duration', true);
 
 export const options = {
   scenarios: {
@@ -68,6 +76,34 @@ export function setup() {
   return sessoes;
 }
 
+// Finaliza a reserva aceita: POST /bff/event-wallets/confirm (pending -> confirmed).
+//   200                                    -> confirmada
+//   400 "ja confirmada"/"nenhuma pendente" -> esperado (reserva expirou ou ja estava confirmada)
+//   5xx                                    -> erro de servidor
+//   outro                                  -> inesperado
+function confirmar(s, eventId) {
+  const res = http.post(
+    `${BASE}/bff/event-wallets/confirm`,
+    JSON.stringify({ userId: s.id, eventId }),
+    {
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+      tags: { name: 'confirma' },
+    }
+  );
+  confirmaDur.add(res.timings.duration);
+  if (res.status === 200) {
+    confirmadas.add(1);
+  } else if (res.status === 400 && /confirmada|pendente/i.test(String(res.body))) {
+    confirmaEsperado.add(1);
+  } else if (res.status >= 500) {
+    confirma5xx.add(1);
+    console.warn(`confirma 5xx: HTTP ${res.status} ${String(res.body).slice(0, 120)}`);
+  } else {
+    confirmaOutros.add(1);
+    console.warn(`confirma inesperada: HTTP ${res.status} ${String(res.body).slice(0, 120)}`);
+  }
+}
+
 export default function (sessoes) {
   const s = sessoes[exec.scenario.iterationInTest];
   if (!s) {
@@ -85,6 +121,7 @@ export default function (sessoes) {
   reservaDur.add(res.timings.duration);
   if (res.status === 201) {
     aceitas.add(1);
+    confirmar(s, EVENT_ID);
   } else if (res.status === 400 && String(res.body).toLowerCase().indexOf('lotado') >= 0) {
     lotado.add(1);
   } else {
@@ -102,6 +139,7 @@ function contador(data, nome) {
 
 export function handleSummary(data) {
   const t = (data.metrics.reserva_duration || {}).values || {};
+  const tc = (data.metrics.confirma_duration || {}).values || {};
   const duracaoS = (data.state.testRunDurationMs || 0) / 1000;
   const tentativas = contador(data, 'reservas_aceitas') + contador(data, 'reservas_lotado') + contador(data, 'reservas_outros');
   const out = {
@@ -116,11 +154,18 @@ export function handleSummary(data) {
     p95_ms: t['p(95)'] || 0,
     p99_ms: t['p(99)'] || 0,
     max_ms: t.max || 0,
+    confirmadas: contador(data, 'confirma_aceitas'),
+    confirma_4xx_esperado: contador(data, 'confirma_4xx_esperado'),
+    confirma_5xx: contador(data, 'confirma_5xx'),
+    confirma_outros: contador(data, 'confirma_outros'),
+    confirma_p50_ms: tc.med || 0,
+    confirma_p95_ms: tc['p(95)'] || 0,
+    confirma_p99_ms: tc['p(99)'] || 0,
     duracao_s: duracaoS,
     reservas_por_s: duracaoS > 0 ? tentativas / duracaoS : 0,
   };
   return {
     [__ENV.SUMMARY_FILE]: JSON.stringify(out, null, 2),
-    stdout: `\nresumo: aceitas=${out.aceitas} lotado=${out.lotado} outros=${out.outros} p95=${out.p95_ms.toFixed(1)}ms\n`,
+    stdout: `\nresumo: aceitas=${out.aceitas} lotado=${out.lotado} outros=${out.outros} confirmadas=${out.confirmadas} confirma_5xx=${out.confirma_5xx} p95=${out.p95_ms.toFixed(1)}ms\n`,
   };
 }

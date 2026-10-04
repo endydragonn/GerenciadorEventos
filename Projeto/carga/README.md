@@ -35,7 +35,9 @@ Instala o k6, testa a conexão e salva a latência base de rede em `results\base
 ## Teste 1 — disputa de vagas (corretude)
 
 N clientes disputam as vagas de **um** evento, todos de uma vez. Verifica se o CAS impede
-overselling (`aceitas <= capacidade`) e compara com o caminho `naive`.
+overselling (`aceitas <= capacidade`) e compara com o caminho `naive`. Toda reserva aceita (201) é
+finalizada na mesma iteração com `POST /bff/event-wallets/confirm`: ao fim, as vagas do evento
+ficam `confirmed` (conferir no `verificar-disputa`).
 
 ```powershell
 # gerador
@@ -68,6 +70,10 @@ make verificar-rpm PREFIXO=Rpm-<id impresso>
 Resultado: `results\resultados-rpm.csv`. Scripts: `rpm/carga-rpm.js`, `rpm/rodar-rpm.ps1`,
 `rpm/subir-host-rpm.ps1`, `rpm/docker-compose.rpm.yml`.
 
+Cada reserva aceita é confirmada (`POST /bff/event-wallets/confirm`) com `PCT_CONFIRMA` % de
+chance (padrão 100, sorteio determinístico por iteração); as não confirmadas ficam `pending` e
+expiram. Ex.: `make test-rpm HOST_IP=<ip> PCT_CONFIRMA=50`.
+
 Como funciona: cada requisição é um par (usuário, evento) único, então poucos usuários (login e
 seed usam bcrypt, caro) geram milhares de reservas sem duplicidade.
 `requisições = RPM × DURACAO / 60 <= USUARIOS × eventos` (eventos é calculado, com 5% de folga).
@@ -86,6 +92,9 @@ Durante `TEMPO`, a taxa muda a cada `PASSO` segundos para um alvo sorteado entre
 `RPM_MAX` (rampa de 5 s entre alvos). `PCT_LEITURA` % das iterações são leituras sorteadas
 (evento por id, carteira do usuário, busca); o resto são reservas com pares (usuário, evento) únicos,
 espalhados entre os eventos. A mesma `SEMENTE` repete o mesmo perfil (`SEMENTE=0` sorteia e imprime).
+Cada reserva aceita é confirmada com `PCT_CONFIRMA` % de chance (padrão 100), sorteada de forma
+determinística por (`SEMENTE`, par) sem tocar no `Math.random` do perfil: a taxa e a ordem dos
+sorteios não mudam com o `PCT_CONFIRMA`.
 
 ```powershell
 # gerador
@@ -102,6 +111,26 @@ da capacidade sem ser overselling; a invariante (ativas <= capacidade) vale no `
 Resultado: `results\resultados-aleatorio.csv` e o perfil sorteado em `results\perfil-ale-<id>.json`.
 Scripts: `aleatorio/carga-aleatoria.js`, `aleatorio/rodar-aleatorio.ps1`.
 
+## Reserva e confirmação (métricas)
+
+As duas etapas têm métricas k6 separadas (tags `reserva` e `confirma`):
+
+| Etapa | Contadores | Latência (Trend) |
+|---|---|---|
+| reserva (`POST /bff/event-wallets`) | `reservas_aceitas`, `reservas_lotado`, `reservas_5xx`, `reservas_outros` | `reserva_duration` |
+| confirma (`POST /bff/event-wallets/confirm`) | `confirma_aceitas` (200), `confirma_4xx_esperado`, `confirma_5xx`, `confirma_outros` | `confirma_duration` |
+
+`confirma_4xx_esperado` = HTTP 400 "já confirmada" / "nenhuma reserva pendente" (a reserva expirou ou
+já estava confirmada): não é erro. Qualquer outra resposta cai em `confirma_outros` (4xx inesperado) ou
+`confirma_5xx`. No teste 1 não há contador `reservas_5xx` (5xx da reserva continua em `outros`).
+
+No summary JSON e nos CSVs `resultados*.csv` as colunas novas ficam no **fim**: `confirmadas`,
+`confirma_4xx_esperado`, `confirma_5xx`, `confirma_outros`, `confirma_p50_ms`, `confirma_p95_ms`,
+`confirma_p99_ms` (e `pct_confirma` antes delas nos testes 2 e 3). Um CSV antigo ganha os nomes no
+cabeçalho na próxima rodada; as linhas antigas ficam curtas. `rpm_real`/`rpm_medio`/`reservas_por_s`
+seguem contando iterações (reservas), não requisições de confirma; como a iteração agora dura reserva
++ confirma, cada VU fica ocupado mais tempo (atenção a `descartadas`/`vus_max`).
+
 ## Seed único
 
 O seed (host + usuários + eventos via `POST /bff/seed`) mora só em `docs/carga/harness/setup.sh`,
@@ -113,6 +142,9 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 ## Como ler o resultado
 
 - **`aceitas` + `lotado`** devem somar quase tudo. `erros_5xx` ou `outros` > 0 invalida a rodada.
+- **`confirmadas`** deve ser `aceitas × PCT_CONFIRMA / 100`; `confirma_5xx` ou `confirma_outros` > 0
+  invalida a rodada. No `-Verificar`, o status `confirmed` aparece na contagem por status e o
+  overselling é `(pending + confirmed) - capacidade` (deve ser <= 0).
 - **`descartadas` > 0** (teste 2): o k6 não manteve a taxa; gerador ou backend saturou.
 - **Overselling** vale só no `-Verificar` (banco). O número do cliente é indicativo.
 - Cada `-Verificar` (`verificar-disputa` / `verificar-rpm`) anexa a saída em `Projeto/carga/results/verificacoes.log`, com data/hora, alvo (evento ou prefixo) e config ativa (read path / refresh). Rode logo após a rodada e cite esse arquivo na documentação.
@@ -123,7 +155,8 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 ## Limites e cuidados
 
 - Mantenha `DURACAO` <= 110 s: reservas `pending` expiram em ~120 s e devolvem a vaga,
-  o que falsearia a conta de overselling.
+  o que falsearia a conta de overselling. Reservas confirmadas não expiram (`expires_at` zera);
+  com `PCT_CONFIRMA < 100` as demais continuam sujeitas a essa expiração.
 - O seed cria usuários com bcrypt: dezenas de segundos para centenas de usuários.
 - O host precisa estar na tomada, no plano "Alto desempenho", sem apps pesados.
 - Os scripts criam usuários/eventos de teste no banco (`carga-*@example.com`, `Carga-*`, `Rpm-*`).
@@ -136,7 +169,7 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 | `setup-host.ps1` | host | sobe a stack com o override; `-Verificar -EventId N` confere o banco |
 | `setup-gerador.ps1` | gerador | instala o k6, mede a latência base |
 | `docker-compose.carga.yml` | host | override: read path, lag do read model, log de SQL desligado |
-| `rodar-teste.ps1` / `carga.js` | gerador | teste 1 |
+| `rodar-teste.ps1` / `carga.js` | gerador | teste 1 (sempre confirma 100% das aceitas) |
 | `lib-seed.ps1` | gerador | `Invoke-Seed`: chama o seed único `docs/carga/harness/setup.sh` via Git Bash |
 | `rpm/*` | ambos | teste 2 |
 | `aleatorio/*` | gerador | teste 3 |

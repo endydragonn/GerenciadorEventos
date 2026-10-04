@@ -8,6 +8,9 @@
   Eventos e calculado automaticamente (com 5% de folga). Cada evento tem -Capacidade vagas;
   com Capacidade < Usuarios parte das respostas sera "lotado" (esperado).
 
+  Cada reserva aceita e confirmada (POST /bff/event-wallets/confirm) com -PctConfirma % de chance
+  (padrao 100); as nao confirmadas ficam pending e expiram. Reserva e confirma tem metricas separadas.
+
   Mantenha -Duracao abaixo de ~110 s: reservas pending expiram em ~120 s e devolvem a vaga,
   o que falsearia a conta de overselling.
 
@@ -17,6 +20,7 @@
 .EXAMPLE
   .\rpm\rodar-rpm.ps1 -HostIp 192.168.0.10                         # 10k RPM por 90 s
   .\rpm\rodar-rpm.ps1 -HostIp 192.168.0.10 -Rpm 2000 -Duracao 60   # aquecimento
+  .\rpm\rodar-rpm.ps1 -HostIp 192.168.0.10 -PctConfirma 50          # confirma metade das aceitas
 #>
 [CmdletBinding()]
 param(
@@ -28,7 +32,8 @@ param(
     [int]$Capacidade = 0,          # 0 = Usuarios/2
     [ValidateSet('cas', 'naive')][string]$Rotulo = 'cas',
     [int]$MaxConnections = 0,      # so para registrar no CSV (o gerador nao enxerga o host)
-    [int]$RefreshMs = 5000
+    [int]$RefreshMs = 5000,
+    [ValidateRange(0, 100)][int]$PctConfirma = 100
 )
 
 $ErrorActionPreference = 'Stop'
@@ -71,7 +76,7 @@ Start-Sleep -Seconds $espera
 
 # ---- k6
 $env:BASE_URL = $Base; $env:RPM = "$Rpm"; $env:DURACAO_S = "$Duracao"
-$env:USERS_FILE = $uf; $env:EVENTS_FILE = $ef; $env:SUMMARY_FILE = $sf
+$env:USERS_FILE = $uf; $env:EVENTS_FILE = $ef; $env:SUMMARY_FILE = $sf; $env:PCT_CONFIRMA = "$PctConfirma"
 Info 'Disparando k6...'
 try {
     k6 run --quiet (Join-Path $PSScriptRoot 'carga-rpm.js')
@@ -85,19 +90,30 @@ if (-not (Test-Path $sf)) { Fail 'k6 nao gerou o resumo.' }
 $s = Get-Content $sf -Raw | ConvertFrom-Json
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
 if (-not (Test-Path $Csv)) {
-    'data,rotulo,refresh_ms,max_connections,rpm_alvo,rpm_real,duracao_s,usuarios,eventos,capacidade,aceitas,lotado,erros_5xx,outros,sem_login,descartadas,vus_max,p50_ms,p95_ms,p99_ms,max_ms,prefixo' |
+    'data,rotulo,refresh_ms,max_connections,rpm_alvo,rpm_real,duracao_s,usuarios,eventos,capacidade,aceitas,lotado,erros_5xx,outros,sem_login,descartadas,vus_max,p50_ms,p95_ms,p99_ms,max_ms,prefixo,pct_confirma,confirmadas,confirma_4xx_esperado,confirma_5xx,confirma_outros,confirma_p50_ms,confirma_p95_ms,confirma_p99_ms' |
         Set-Content -Path $Csv -Encoding UTF8
+} elseif ((Get-Content $Csv -TotalCount 1) -notmatch 'confirmadas') {
+    # CSV criado antes das colunas de confirma: acrescenta os nomes ao cabecalho (linhas antigas ficam curtas).
+    $linhas = Get-Content $Csv
+    $linhas[0] += ',pct_confirma,confirmadas,confirma_4xx_esperado,confirma_5xx,confirma_outros,confirma_p50_ms,confirma_p95_ms,confirma_p99_ms'
+    $linhas | Set-Content -Path $Csv -Encoding UTF8
 }
-[string]::Format($inv, '{0},{1},{2},{3},{4},{5:F0},{6:F1},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17:F1},{18:F1},{19:F1},{20:F1},{21}',
+[string]::Format($inv, '{0},{1},{2},{3},{4},{5:F0},{6:F1},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17:F1},{18:F1},{19:F1},{20:F1},{21},{22},{23},{24},{25},{26},{27:F1},{28:F1},{29:F1}',
     (Get-Date -Format s), $Rotulo, $RefreshMs, $MaxConnections, $s.rpm_alvo, $s.rpm_real, $s.duracao_s,
     $s.usuarios, $s.eventos, $Capacidade, $s.aceitas, $s.lotado, $s.erros_5xx, $s.outros, $s.sem_login,
-    $s.descartadas, $s.vus_max, $s.p50_ms, $s.p95_ms, $s.p99_ms, $s.max_ms, $prefixo) |
+    $s.descartadas, $s.vus_max, $s.p50_ms, $s.p95_ms, $s.p99_ms, $s.max_ms, $prefixo, $PctConfirma,
+    $s.confirmadas, $s.confirma_4xx_esperado, $s.confirma_5xx, $s.confirma_outros, $s.confirma_p50_ms,
+    $s.confirma_p95_ms, $s.confirma_p99_ms) |
     Add-Content -Path $Csv -Encoding UTF8
 
 Write-Host ''
 Write-Host ('  RPM alvo / real ..... {0} / {1:N0}' -f $s.rpm_alvo, $s.rpm_real)
 Write-Host "  aceitas (201) ....... $($s.aceitas)"
 Write-Host "  lotado (400) ........ $($s.lotado)"
+Write-Host "  confirmadas (200) ... $($s.confirmadas) de $($s.aceitas) aceitas (PCT_CONFIRMA=$PctConfirma)   esperado 4xx: $($s.confirma_4xx_esperado)   outros: $($s.confirma_outros)"
+$cor = 'Green'; if ($s.confirma_5xx -gt 0) { $cor = 'Red' }
+Write-Host "  confirma 5xx ........ $($s.confirma_5xx)" -ForegroundColor $cor
+Write-Host ('  confirma p50/p95/p99 . {0:N1} / {1:N1} / {2:N1} ms' -f $s.confirma_p50_ms, $s.confirma_p95_ms, $s.confirma_p99_ms)
 $cor = 'Green'; if ($s.erros_5xx -gt 0) { $cor = 'Red' }
 Write-Host "  erros 5xx ........... $($s.erros_5xx)" -ForegroundColor $cor
 Write-Host "  outros .............. $($s.outros)"

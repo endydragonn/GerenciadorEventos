@@ -5,10 +5,13 @@
 //   400 "lotado"         -> rejeitada por falta de vaga
 //   5xx                  -> erro de servidor (ex.: too many clients no Postgres)
 //   outro                -> inesperado
+// Cada aceita (201) e confirmada na mesma iteracao (POST /bff/event-wallets/confirm, 200) com
+// PCT_CONFIRMA % de chance (deterministica por iteracao); as demais ficam pending e expiram.
+// Metricas de reserva e de confirma sao separadas.
 //
 // Variaveis (passadas pelo rodar-rpm.ps1):
 //   BASE_URL, RPM, DURACAO_S, USERS_FILE (json [{email,password}]), EVENTS_FILE (json [id,...]),
-//   SUMMARY_FILE, MAX_VUS (opcional)
+//   SUMMARY_FILE, MAX_VUS (opcional), PCT_CONFIRMA (0-100, padrao 100)
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { Counter, Trend } from 'k6/metrics';
@@ -21,6 +24,7 @@ const lerJson = (f) => JSON.parse(open(f).replace(/^﻿/, ''));
 const USERS = lerJson(__ENV.USERS_FILE);
 const EVENTS = lerJson(__ENV.EVENTS_FILE);
 const MAX_PARES = USERS.length * EVENTS.length;
+const PCT_CONFIRMA = parseInt(__ENV.PCT_CONFIRMA || '100', 10);
 
 const aceitas = new Counter('reservas_aceitas');
 const lotado = new Counter('reservas_lotado');
@@ -29,6 +33,11 @@ const outros = new Counter('reservas_outros');
 const semLogin = new Counter('usuarios_sem_login');
 const alemDosPares = new Counter('iteracoes_alem_dos_pares');
 const reservaDur = new Trend('reserva_duration', true);
+const confirmadas = new Counter('confirma_aceitas');
+const confirmaEsperado = new Counter('confirma_4xx_esperado');
+const confirma5xx = new Counter('confirma_5xx');
+const confirmaOutros = new Counter('confirma_outros');
+const confirmaDur = new Trend('confirma_duration', true);
 
 export const options = {
   scenarios: {
@@ -74,6 +83,44 @@ export function setup() {
   return sessoes;
 }
 
+// Sorteio deterministico em [0, 100) a partir de (indice, semente): decide quais aceitas confirmar
+// sem consumir Math.random (nao altera o perfil/ordem do restante do cenario).
+function sorteio100(i, semente) {
+  let h = Math.imul(i ^ Math.imul(semente, 0x9e3779b1), 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) % 100;
+}
+
+// Finaliza a reserva aceita: POST /bff/event-wallets/confirm (pending -> confirmed).
+//   200                                    -> confirmada
+//   400 "ja confirmada"/"nenhuma pendente" -> esperado (reserva expirou ou ja estava confirmada)
+//   5xx                                    -> erro de servidor
+//   outro                                  -> inesperado
+function confirmar(s, eventId) {
+  const res = http.post(
+    `${BASE}/bff/event-wallets/confirm`,
+    JSON.stringify({ userId: s.id, eventId }),
+    {
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+      tags: { name: 'confirma' },
+    }
+  );
+  confirmaDur.add(res.timings.duration);
+  if (res.status === 200) {
+    confirmadas.add(1);
+  } else if (res.status === 400 && /confirmada|pendente/i.test(String(res.body))) {
+    confirmaEsperado.add(1);
+  } else if (res.status >= 500) {
+    confirma5xx.add(1);
+    if (exec.scenario.iterationInTest < 5) console.warn(`confirma 5xx: HTTP ${res.status} ${String(res.body).slice(0, 160)}`);
+  } else {
+    confirmaOutros.add(1);
+    if (exec.scenario.iterationInTest < 5) console.warn(`confirma inesperada: HTTP ${res.status} ${String(res.body).slice(0, 160)}`);
+  }
+}
+
 export default function (sessoes) {
   const i = exec.scenario.iterationInTest;
   if (i >= MAX_PARES) {
@@ -97,6 +144,7 @@ export default function (sessoes) {
   reservaDur.add(res.timings.duration);
   if (res.status === 201) {
     aceitas.add(1);
+    if (sorteio100(i, 0) < PCT_CONFIRMA) confirmar(s, eventId);
   } else if (res.status === 400 && String(res.body).toLowerCase().indexOf('lotado') >= 0) {
     lotado.add(1);
   } else if (res.status >= 500) {
@@ -115,6 +163,7 @@ function contador(data, nome) {
 
 export function handleSummary(data) {
   const t = (data.metrics.reserva_duration || {}).values || {};
+  const tc = (data.metrics.confirma_duration || {}).values || {};
   const duracaoS = (data.state.testRunDurationMs || 0) / 1000;
   const a = contador(data, 'reservas_aceitas');
   const l = contador(data, 'reservas_lotado');
@@ -139,9 +188,17 @@ export function handleSummary(data) {
     p95_ms: t['p(95)'] || 0,
     p99_ms: t['p(99)'] || 0,
     max_ms: t.max || 0,
+    pct_confirma: PCT_CONFIRMA,
+    confirmadas: contador(data, 'confirma_aceitas'),
+    confirma_4xx_esperado: contador(data, 'confirma_4xx_esperado'),
+    confirma_5xx: contador(data, 'confirma_5xx'),
+    confirma_outros: contador(data, 'confirma_outros'),
+    confirma_p50_ms: tc.med || 0,
+    confirma_p95_ms: tc['p(95)'] || 0,
+    confirma_p99_ms: tc['p(99)'] || 0,
   };
   return {
     [__ENV.SUMMARY_FILE]: JSON.stringify(out, null, 2),
-    stdout: `\nresumo: rpm_real=${out.rpm_real.toFixed(0)}/${RPM} aceitas=${a} lotado=${l} 5xx=${e5} outros=${o} descartadas=${out.descartadas} p95=${out.p95_ms.toFixed(1)}ms\n`,
+    stdout: `\nresumo: rpm_real=${out.rpm_real.toFixed(0)}/${RPM} aceitas=${a} lotado=${l} 5xx=${e5} outros=${o} confirmadas=${out.confirmadas} confirma_5xx=${out.confirma_5xx} descartadas=${out.descartadas} p95=${out.p95_ms.toFixed(1)}ms\n`,
   };
 }
