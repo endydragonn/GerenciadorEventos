@@ -5,11 +5,12 @@
 //   outro                  -> erro inesperado
 // Overselling = aceitas - capacidade (esperado 0 no caminho CAS).
 // Cada reserva aceita (201) e finalizada na mesma iteracao com POST /bff/event-wallets/confirm
-// (200 = confirmada); ao fim as vagas do evento ficam `confirmed`. Metricas de reserva e de
+// (200 = confirmada) com PCT_CONFIRMA % de chance (padrao 100: ao fim as vagas ficam `confirmed`). Metricas de reserva e de
 // confirma sao separadas.
 //
 // Chamado pelo rodar-teste.ps1 com as variaveis de ambiente:
-//   BASE_URL, EVENT_ID, USERS_FILE (json [{email,password}]), SUMMARY_FILE, CAPACITY
+//   BASE_URL, EVENT_ID, USERS_FILE (json [{email,password}]), SUMMARY_FILE, CAPACITY,
+//   PCT_CONFIRMA (0-100, padrao 100: % das aceitas que confirmam; as demais ficam pending e expiram)
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { Counter, Trend } from 'k6/metrics';
@@ -17,6 +18,7 @@ import { Counter, Trend } from 'k6/metrics';
 const BASE = __ENV.BASE_URL;
 const EVENT_ID = parseInt(__ENV.EVENT_ID, 10);
 const CAPACITY = parseInt(__ENV.CAPACITY, 10);
+const PCT_CONFIRMA = parseInt(__ENV.PCT_CONFIRMA || '100', 10);
 // PowerShell 5.1 grava UTF8 com BOM; JSON.parse nao aceita BOM.
 const USERS = JSON.parse(open(__ENV.USERS_FILE).replace(/^﻿/, ''));
 
@@ -76,6 +78,16 @@ export function setup() {
   return sessoes;
 }
 
+// Sorteio deterministico em [0, 100) a partir do indice: decide quais aceitas confirmar
+// (mesma funcao do rpm/aleatorio, semente 0; nao consome Math.random).
+function sorteio100(i, semente) {
+  let h = Math.imul(i ^ Math.imul(semente, 0x9e3779b1), 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) % 100;
+}
+
 // Finaliza a reserva aceita: POST /bff/event-wallets/confirm (pending -> confirmed).
 //   200                                    -> confirmada
 //   400 "ja confirmada"/"nenhuma pendente" -> esperado (reserva expirou ou ja estava confirmada)
@@ -121,7 +133,7 @@ export default function (sessoes) {
   reservaDur.add(res.timings.duration);
   if (res.status === 201) {
     aceitas.add(1);
-    confirmar(s, EVENT_ID);
+    if (sorteio100(exec.scenario.iterationInTest, 0) < PCT_CONFIRMA) confirmar(s, EVENT_ID);
   } else if (res.status === 400 && String(res.body).toLowerCase().indexOf('lotado') >= 0) {
     lotado.add(1);
   } else {
@@ -154,6 +166,7 @@ export function handleSummary(data) {
     p95_ms: t['p(95)'] || 0,
     p99_ms: t['p(99)'] || 0,
     max_ms: t.max || 0,
+    pct_confirma: PCT_CONFIRMA,
     confirmadas: contador(data, 'confirma_aceitas'),
     confirma_4xx_esperado: contador(data, 'confirma_4xx_esperado'),
     confirma_5xx: contador(data, 'confirma_5xx'),

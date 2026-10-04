@@ -72,7 +72,7 @@ Resultado: `results\resultados-rpm.csv`. Scripts: `rpm/carga-rpm.js`, `rpm/rodar
 
 Cada reserva aceita é confirmada (`POST /bff/event-wallets/confirm`) com `PCT_CONFIRMA` % de
 chance (padrão 100, sorteio determinístico por iteração); as não confirmadas ficam `pending` e
-expiram. Ex.: `make test-rpm HOST_IP=<ip> PCT_CONFIRMA=50`.
+expiram. Ex.: `make test-rpm HOST_IP=<ip> PCT_CONFIRMA=50`. Atalho: `make test-rpm-real` (ver "Versão realista").
 
 Como funciona: cada requisição é um par (usuário, evento) único, então poucos usuários (login e
 seed usam bcrypt, caro) geram milhares de reservas sem duplicidade.
@@ -110,6 +110,27 @@ da capacidade sem ser overselling; a invariante (ativas <= capacidade) vale no `
 
 Resultado: `results\resultados-aleatorio.csv` e o perfil sorteado em `results\perfil-ale-<id>.json`.
 Scripts: `aleatorio/carga-aleatoria.js`, `aleatorio/rodar-aleatorio.ps1`.
+
+## Versão realista (confirmação aleatória)
+
+Nos testes 1–3 padrão toda reserva aceita é confirmada (`PCT_CONFIRMA=100`). Na versão realista cada
+aceita é confirmada ou não **ao acaso** (sorteio determinístico por iteração/semente, como já era nos testes 2 e 3);
+as não confirmadas ficam `pending` e expiram sozinhas (~120 s). O teste 1 ganhou `PCT_CONFIRMA`
+(padrão 100, comportamento anterior). Os scripts são os mesmos; só muda o percentual.
+
+```powershell
+# gerador (PCT_CONFIRMA_REAL=60 por padrão; sobrescreva para outro percentual)
+make test-disputa-real    HOST_IP=<ip>
+make test-rpm-real        HOST_IP=<ip>
+make test-aleatorio-real  HOST_IP=<ip> PCT_CONFIRMA_REAL=40
+```
+
+Como ler: `confirmadas < aceitas` é esperado (≈ `aceitas × PCT_CONFIRMA / 100`); o `-Verificar` mostra
+`confirmed`, `pending` e `expired` misturados e a invariante continua `(pending + confirmed) <= capacidade`.
+As vagas das não confirmadas só voltam após a expiração: rode o `-Verificar` logo após a rodada para ver
+`pending`, ou depois de ~120 s para ver `expired`. No teste 3 (dezenas de minutos) as vagas liberadas são
+**revendidas**, então `aceitas` pode passar da capacidade sem ser overselling. O rótulo da rodada não muda
+(`-Rotulo` precisa bater com o host); distinga as rodadas pela coluna `pct_confirma` do CSV.
 
 ## Reserva e confirmação (métricas)
 
@@ -169,7 +190,7 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 | `setup-host.ps1` | host | sobe a stack com o override; `-Verificar -EventId N` confere o banco |
 | `setup-gerador.ps1` | gerador | instala o k6, mede a latência base |
 | `docker-compose.carga.yml` | host | override: read path, lag do read model, log de SQL desligado |
-| `rodar-teste.ps1` / `carga.js` | gerador | teste 1 (sempre confirma 100% das aceitas) |
+| `rodar-teste.ps1` / `carga.js` | gerador | teste 1 (confirma `PCT_CONFIRMA` % das aceitas, padrão 100) |
 | `lib-seed.ps1` | gerador | `Invoke-Seed`: chama o seed único `docs/carga/harness/setup.sh` via Git Bash |
 | `rpm/*` | ambos | teste 2 |
 | `aleatorio/*` | gerador | teste 3 |
