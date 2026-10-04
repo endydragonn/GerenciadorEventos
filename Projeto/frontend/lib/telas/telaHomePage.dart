@@ -7,7 +7,7 @@
 // - Barra de navegação com nome do site e botões de Login/Cadastro
 // - Imagem de destaque com texto overlay
 // - Visualização pública de eventos disponíveis (sem autenticação)
-// - Busca de eventos (endpoint público: /api/bff/events/search)
+// - Busca de eventos (endpoint público: /bff/events/search)
 // - Cards de eventos com informações básicas
 // - Navegação para tela de login
 // - Navegação para tela de cadastro

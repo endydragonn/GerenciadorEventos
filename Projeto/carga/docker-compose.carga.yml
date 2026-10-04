@@ -1,0 +1,19 @@
+# Override de compose usado SO nos testes de carga (nao altera o compose normal).
+# Uso (feito pelo setup-host.ps1):
+#   docker compose -f docker-compose.yml -f carga/docker-compose.carga.yml up -d --build
+#
+# - RESERVATION_READPATH: cas (default, nunca oversella) ou naive (braco de controle).
+# - READMODEL_AVAILABILITY_REFRESH_MS: lag do read model (so afeta o caminho naive).
+# - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE / _MINIMUM_IDLE: pool do backend (issue #96).
+# - SQL/Hibernate em INFO: o application.properties liga log DEBUG de SQL, que distorce
+#   latencia sob carga. Aqui so no ambiente de teste.
+services:
+  backend:
+    environment:
+      RESERVATION_READPATH: ${RESERVATION_READPATH:-cas}
+      READMODEL_AVAILABILITY_REFRESH_MS: ${READMODEL_AVAILABILITY_REFRESH_MS:-5000}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-1000}
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-5}
+      SPRING_JPA_SHOW_SQL: "false"
+      LOGGING_LEVEL_ORG_HIBERNATE_SQL: "INFO"
+      LOGGING_LEVEL_ORG_HIBERNATE_TYPE_DESCRIPTOR_SQL_BASICBINDER: "INFO"

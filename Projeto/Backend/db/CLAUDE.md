@@ -25,7 +25,8 @@ não há migração via ORM. Leia também o CLAUDE.md da raiz e o de `Backend/`.
 | `06-mywallet.sql` | tabela `mywallet` (FK `user_id → users`, `ON DELETE CASCADE`) |
 | `07-walletevent.sql` | tabela `walletevent` (PK composta, `status`, `expires_at`) |
 | `08-pending-verifications.sql` | tabela + funções/trigger de limpeza de códigos expirados |
-| `99-tests.sql` | suíte de sanidade em `DO $$ ... $$` (trigger, CAS, CHECK, N:N, cascata, TRUNCATE) |
+| `09-event-availability.sql` | tabela `event_availability` — read model defasado de vagas (não é fonte de verdade) |
+| `99-tests.sql` | suíte de sanidade em `DO $$ ... $$` (trigger, CAS, CHECK, N:N, cascata, read model, TRUNCATE) |
 
 `db/migrations/` guarda scripts de migração idempotentes para bancos já existentes
 (ex.: `20260901-eventcap-isolation.sql`), aplicáveis a quente via `psql` sem recriar o volume.
@@ -57,8 +58,10 @@ docker compose -f Projeto/docker-compose.yml up -d --build
 ## Modelo atual
 
 - **`users`** — PK `user_id` (identity). `email`, `fone`, `user_name` são `UNIQUE` e
-  `NOT NULL`. Flags de papel: `admin` e **`Host`** (coluna com maiúscula → sempre entre aspas
-  em SQL: `"Host"`). Campos de MFA de reset de senha: `password_reset_mfa_code`,
+  `NOT NULL`. Flags de papel: `admin` e **`Host`** — DDL declara `Host boolean` **sem aspas**
+  (`db/init-scripts/02-users.sql`), então o Postgres dobra o identificador para minúsculas:
+  a coluna real é `host`, acessada sem aspas em SQL (igual `isactive`). Campos de MFA de
+  reset de senha: `password_reset_mfa_code`,
   `password_reset_mfa_expiration`. `created_at` / `updated_at` com default.
   - Trigger `trigger_create_wallet` (`AFTER INSERT`): cria automaticamente a linha em
     `mywallet`. A aplicação **nunca** insere carteira à mão.
@@ -85,6 +88,15 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   `verification_code`, `expires_at`, `attempts`/`max_attempts`). Trigger
   `trigger_cleanup_on_create_verification` + função `cleanup_expired_verifications()`
   removem expirados a cada INSERT e no startup.
+- **`event_availability`** — read model **desnormalizado e DEFASADO** da disponibilidade de
+  vagas. PK `event_id`, FK `→ event` `ON DELETE CASCADE`. `available` = `capacity` − reservas
+  ativas (`pending`/`confirmed`) em `walletevent`, piso 0; `-1` = evento ilimitado.
+  `refreshed_at` = quando o job recalculou a linha. **NÃO é fonte de verdade** (`eventcap` +
+  CAS continuam sendo): é atualizado só pelo job `ReadModelRefreshService` num timer
+  (`readmodel.availability.refresh.ms`) e serve o "caminho ingênuo" de reserva
+  (feature flag `reservation.readpath=naive`), braço de controle do experimento da Fase 2.
+  Usa `timestamptz` de propósito (código novo não propaga a dívida que a issue #58 corrige).
+  Migração a quente: `db/migrations/20260903-event-availability.sql`.
 
 ## Regras ao alterar o schema
 

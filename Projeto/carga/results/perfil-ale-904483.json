@@ -1,0 +1,26 @@
+﻿[
+    {
+        "target":  1502,
+        "duration":  "5s"
+    },
+    {
+        "target":  1502,
+        "duration":  "15s"
+    },
+    {
+        "target":  711,
+        "duration":  "5s"
+    },
+    {
+        "target":  711,
+        "duration":  "15s"
+    },
+    {
+        "target":  688,
+        "duration":  "5s"
+    },
+    {
+        "target":  688,
+        "duration":  "15s"
+    }
+]

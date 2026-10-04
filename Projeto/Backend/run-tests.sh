@@ -57,8 +57,19 @@ REPORTS_DIR="$SCRIPT_DIR/target/surefire-reports"
 mkdir -p "$SCRIPT_DIR/target"
 
 # Rodar tudo dentro do Docker, copiando fonte para /tmp dentro do container
+# Estica o intervalo do job ReadModelRefreshService (@Scheduled) para 1h durante a suíte.
+# Esse job roda em TODOS os contextos Spring em cache (só fechados no fim do JVM) contra o
+# mesmo Postgres, então um refresh disparado pelo contexto de um teste contaminaria o
+# read model event_availability que outro teste observa. Os testes chamam refresh() na mão.
+# (Mesma ideia do @TestPropertySource de ReservationExpiryTest, aqui para toda a suíte.)
+#
+# RESERVATION_READPATH=cas: pina o caminho de reserva no default previsível para a suíte
+# inteira, mesmo que o Projeto/.env tenha sido setado para "naive" (experimento #11/#12) —
+# senão os testes CAS (ex.: EventWalletTest.testEventoLotado) quebrariam.
 docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
   "${PLATFORM_ARGS[@]}" \
+  -e READMODEL_AVAILABILITY_REFRESH_MS=3600000 \
+  -e RESERVATION_READPATH=cas \
   -e "MVN_REPO=$CONTAINER_HOME/.m2/repository" \
   -v "$HOST_SRC":/workspace-src:ro \
   -v "$HOST_SRC/target":/workspace-output \

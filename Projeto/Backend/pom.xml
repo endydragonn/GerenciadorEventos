@@ -24,6 +24,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
+        <!-- Actuator: só /actuator/health exposto (ver application.properties) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
         <!-- Segurança e JWT -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -65,6 +70,13 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-mail</artifactId>
         </dependency>
+        <!-- ArchUnit: testes de fronteira de camada (issue #83) -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>1.5.0</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
     <build>
         <plugins>
@@ -82,6 +94,43 @@
                 <configuration>
                     <mainClass>com.gerenciador.eventos.Main</mainClass>
                 </configuration>
+            </plugin>
+            <!-- Quality gates de estilo/tamanho (issue #83). Preso à fase "validate" pra
+                 rodar dentro do "mvn clean test" que o run-tests.sh já invoca, sem exigir
+                 um "mvn verify" separado. Regras e baseline em checkstyle.xml /
+                 checkstyle-suppressions.xml (raiz do módulo). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+                <version>3.6.0</version>
+                <dependencies>
+                    <!-- Sobrescreve o Checkstyle 9.3 que vem por padrão no plugin 3.6.0 pela
+                         versão atual (14.1.0) — a sintaxe consultada na documentação oficial
+                         (context7) é a dessa versão. -->
+                    <dependency>
+                        <groupId>com.puppycrawl.tools</groupId>
+                        <artifactId>checkstyle</artifactId>
+                        <version>14.1.0</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <configLocation>checkstyle.xml</configLocation>
+                    <suppressionsLocation>checkstyle-suppressions.xml</suppressionsLocation>
+                    <includeTestSourceDirectory>false</includeTestSourceDirectory>
+                    <consoleOutput>true</consoleOutput>
+                    <violationSeverity>error</violationSeverity>
+                    <failOnViolation>true</failOnViolation>
+                    <failsOnError>true</failsOnError>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>checkstyle-check</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

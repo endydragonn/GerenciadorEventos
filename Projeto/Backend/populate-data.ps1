@@ -1,7 +1,7 @@
 # Script PowerShell para popular banco via API
 # Garante que senhas sejam criptografadas corretamente
 
-$apiUrl = "http://localhost:8081/api/seed"
+$apiUrl = "http://localhost:8081/bff/seed"
 
 $seedData = @{
     users = @(

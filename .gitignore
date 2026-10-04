@@ -13,3 +13,25 @@
 # Claude Code — estado local; agents/ e skills/ são versionados
 .claude/settings.local.json
 .claude/*.local.*
+
+#============================
+#      Gemini-Reviwer
+#============================
+# Node Scripts
+.github/workflows/scripts/node_modules/
+node_modules/
+
+# Java / Spring Boot
+target/
+build/
+.gradle/
+.settings/
+.classpath
+.project
+*.class
+
+
+# Testes de carga: resultados podem ser versionados, mas nunca credenciais/tokens
+Projeto/carga/results/users-*.json
+Projeto/carga/results/events-*.json
+**/tokens.json

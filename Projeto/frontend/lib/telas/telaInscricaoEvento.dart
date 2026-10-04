@@ -7,7 +7,7 @@
 // - Exibição de detalhes do evento selecionado
 // - Busca de detalhes do evento via API se necessário
 // - Verificação de autenticação do usuário
-// - Criação de inscrição via API (/api/bff/event-wallets)
+// - Criação de inscrição via API (/bff/event-wallets)
 // - Associação automática usuário-evento (userId + eventId)
 // - SnackBars para feedback de sucesso/erro
 // - Tratamento de erros (já inscrito, evento lotado, erro de conexão)
@@ -24,6 +24,7 @@ import 'telaPrincipal.dart'; // MainScreen
 import 'package:http/http.dart' as http;
 import 'modals.dart'; // SnackBars
 import 'dart:convert';
+import '../config/app_config.dart';
 
 class EventRegistrationScreen extends StatefulWidget {
   final int? eventId;
@@ -75,7 +76,7 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
       // Usar ApiAuth para obter headers (centraliza token JWT)
       final headers = ApiAuth.jsonHeaders();
       final response = await http.get(
-        Uri.parse('/api/bff/events/${widget.eventId}'),
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/events/${widget.eventId}'),
         headers: headers,
       );
 
@@ -139,7 +140,7 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
 
       // Passo 1: reservar a vaga (UPDATE condicional atômico no backend -> status 'pending')
       final reserveResp = await http.post(
-        Uri.parse('/api/bff/event-wallets'),
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/event-wallets'),
         headers: headers,
         body: jsonEncode(enrollment),
       );
@@ -163,7 +164,7 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
       // Obs.: se o usuário fechar o app antes deste passo, o job de expiração do backend
       // devolve a vaga automaticamente após eventcap.max_time_in_line.
       final confirmResp = await http.post(
-        Uri.parse('/api/bff/event-wallets/confirm'),
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/event-wallets/confirm'),
         headers: headers,
         body: jsonEncode(enrollment),
       );
@@ -279,7 +280,7 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
                     ClipRRect(
                       borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
                       child: Image.network(
-                        '/api/bff/events/$eventId/image',
+                        '${AppConfig.apiBaseUrl}/bff/events/$eventId/image',
                         width: double.infinity,
                         height: 200,
                         fit: BoxFit.cover,

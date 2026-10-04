@@ -260,6 +260,9 @@ public class UserRepository {
             user.setBirthDate(bd.toString());
         }
         user.setIsAdmin(rs.getBoolean("admin"));
+        // Coluna criada sem aspas no DDL ("Host boolean ..."), então o Postgres dobra o
+        // identificador para minúsculas — igual "isActive"/"isactive" logo abaixo.
+        user.setIsHost(rs.getBoolean("host"));
         user.setIsActive(rs.getBoolean("isactive"));
         
         Timestamp createdAt = rs.getTimestamp("created_at");

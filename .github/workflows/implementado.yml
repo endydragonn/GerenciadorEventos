@@ -1,0 +1,106 @@
+# DESCRIPTION: Gera relatório determinístico de implementações por tópicos sem uso de LLM.
+name: Relatório de Implementações via Telegram
+
+on:
+  repository_dispatch:
+    types: [implemented_summary]
+
+jobs:
+  build-summary:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+
+    steps:
+      - name: Extrair e Categorizar Implementações
+        env:
+          BOT_URL: "https://telegram-bot-rcu4.onrender.com"
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
+          DAYS: ${{ github.event.client_payload.days || 1 }}
+
+        run: |
+          set -e
+
+          TODAY=$(TZ="America/Sao_Paulo" date '+%d/%m/%Y')
+
+          if [ "$DAYS" = "all" ]; then
+            START_DATE="1970-01-01"
+            HEADER="🚀 *Implementações (Histórico Completo)* — ${TODAY}"
+          else
+            if ! [[ "$DAYS" =~ ^([1-9]|10)$ ]]; then
+              DAYS=1
+            fi
+            OFFSET=$((DAYS - 1))
+            START_DATE=$(TZ="America/Sao_Paulo" date -d "$OFFSET days ago" '+%Y-%m-%d')
+            START_DISPLAY_DATE=$(TZ="America/Sao_Paulo" date -d "$OFFSET days ago" '+%d/%m/%Y')
+
+            if [ "$DAYS" -eq 1 ]; then
+              HEADER="🚀 *Implementações de Hoje* — ${TODAY}"
+            else
+              HEADER="🚀 *Implementações (${DAYS} dias)* — ${START_DISPLAY_DATE} até ${TODAY}"
+            fi
+          fi
+
+          # Busca PRs mergeadas no período
+          DATA=$(gh api "repos/${REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=100")
+
+          # Separação por tipo usando jq
+          FEATS=$(echo "$DATA" | jq -r --arg start "$START_DATE" '
+            .[] | select(.merged_at != null and (.merged_at | split("T")[0]) >= $start)
+            | select(.title | test("(?i)^feat"))
+            | "• \(.title) (#\(.number)) por @\(.user.login)"
+          ')
+
+          FIXES=$(echo "$DATA" | jq -r --arg start "$START_DATE" '
+            .[] | select(.merged_at != null and (.merged_at | split("T")[0]) >= $start)
+            | select(.title | test("(?i)^fix"))
+            | "• \(.title) (#\(.number)) por @\(.user.login)"
+          ')
+
+          OTHERS=$(echo "$DATA" | jq -r --arg start "$START_DATE" '
+            .[] | select(.merged_at != null and (.merged_at | split("T")[0]) >= $start)
+            | select(.title | test("(?i)^(feat|fix)") | not)
+            | "• \(.title) (#\(.number)) por @\(.user.login)"
+          ')
+
+          # Montagem do texto em tópicos
+          MSG="${HEADER}\n\n📦 *${REPO}*\n\n"
+
+          HAS_CONTENT=0
+
+          if [ -n "$FEATS" ]; then
+            MSG="${MSG}✨ *Novas Funcionalidades*\n${FEATS}\n\n"
+            HAS_CONTENT=1
+          fi
+
+          if [ -n "$FIXES" ]; then
+            MSG="${MSG}🐛 *Correções e Ajustes*\n${FIXES}\n\n"
+            HAS_CONTENT=1
+          fi
+
+          if [ -n "$OTHERS" ]; then
+            MSG="${MSG}⚙️ *Outras Alterações*\n${OTHERS}\n\n"
+            HAS_CONTENT=1
+          fi
+
+          if [ "$HAS_CONTENT" -eq 0 ]; then
+            MSG="${MSG}Nenhuma implementação registrada no período."
+          fi
+
+          # Transforma sequências \n em quebras reais mantendo compatibilidade
+          FORMATTED_MSG=$(printf "%b" "$MSG")
+
+          # Envio ao Bot
+          PAYLOAD=$(jq -n \
+            --arg chat_id "$CHAT_ID" \
+            --arg text "$FORMATTED_MSG" \
+            '{chat_id: $chat_id, text: $text}')
+
+          curl -s -X POST "${BOT_URL}/webhook/github-summary" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"

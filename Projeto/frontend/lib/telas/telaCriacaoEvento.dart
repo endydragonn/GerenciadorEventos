@@ -7,7 +7,7 @@
 // - Formulário para criar evento com validação
 // - Campos: nome, data, localização, descrição, tipo (Público/Privado)
 // - Verificação de autenticação do usuário
-// - Criação via API (/api/bff/events) com JWT
+// - Criação via API (/bff/events) com JWT
 // - Associação automática do evento ao criador (creator_id)
 // - SnackBars para feedback de sucesso/erro
 // - Opção de cancelar com confirmação se houver alterações
@@ -24,6 +24,7 @@ import 'modals.dart'; // SnackBars
 import 'dart:convert';
 import '../helpers/date_input_formatter.dart';
 import 'package:flutter/services.dart';
+import '../config/app_config.dart';
 
 class CreateEventScreen extends StatefulWidget {
   const CreateEventScreen({super.key});
@@ -201,7 +202,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
 
       try {
         final response = await http.post(
-          Uri.parse('/api/bff/events'),
+          Uri.parse('${AppConfig.apiBaseUrl}/bff/events'),
           headers: ApiAuth.jsonHeaders(),
           body: jsonEncode(eventData),
         );

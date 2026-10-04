@@ -44,8 +44,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      args:
-        API_BASE_URL: http://localhost:8081
+      # API_BASE_URL vazio (default do Dockerfile) -> o app chama /bff/... relativo,
+      # atrás do proxy do Nginx (issue #78: fim da divisão URL absoluta vs relativa).
     container_name: gerenciador-frontend
     ports:
       - "8088:80"

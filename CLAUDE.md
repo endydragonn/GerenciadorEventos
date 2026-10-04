@@ -41,9 +41,9 @@ padrão do arquivo que você está editando.
 - **Nunca** commit ou push direto em `main`. Tudo entra por PR.
 - Implementação de issue (`/implement-issue`): branch `Issue-N` (uma por issue, criada no
   passo 3 com commit vazio + push). O **PR entra só no passo 7, como draft**; o passo 7.5
-  avalia a review do Copilot (findings relevantes vão pro usuário) e o PR **sai do draft
-  automaticamente** na aprovação do Copilot + validador CONFORME. Commits, pushes e
-  atualização do PR nessa branch são automáticos. **Mergear** o PR `Issue-N` → `main` **só
+  avalia as reviews do Copilot e do Gemini (findings relevantes vão pro usuário) e o PR **sai
+  do draft automaticamente** quando os findings das duas foram tratados + validador CONFORME.
+  Commits, pushes e atualização do PR nessa branch são automáticos. **Mergear** o PR `Issue-N` → `main` **só
   quando o usuário pedir**.
 - Fora desse fluxo (docs, config, etc.): **só faça commit ou push quando o usuário pedir**;
   antes de push, confirme.

@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'telas/telaHomePage.dart';
 import 'telas/telaPrincipal.dart'; // MainScreen
 import 'telas/auth.dart';
+import 'config/app_config.dart';
 
 void main() async {
   print('🏁 main() - Iniciando aplicação');
@@ -30,9 +31,8 @@ class MyApp extends StatelessWidget {
       final headers = ApiAuth.jsonHeaders();
       
       // Tentar fazer uma requisição para obter os dados do usuário atual
-      // Assumindo que existe um endpoint /api/bff/users/me
       final response = await http.get(
-        Uri.parse('/api/bff/users/me'),
+        Uri.parse('${AppConfig.apiBaseUrl}/bff/users/me'),
         headers: headers,
       );
 

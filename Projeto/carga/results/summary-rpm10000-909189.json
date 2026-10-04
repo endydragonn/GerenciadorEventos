@@ -1,0 +1,19 @@
+{
+  "rpm_alvo": 10000,
+  "rpm_real": 9643.921200102628,
+  "duracao_s": 62.22157850000001,
+  "usuarios": 200,
+  "eventos": 53,
+  "aceitas": 2917,
+  "lotado": 2697,
+  "erros_5xx": 4387,
+  "outros": 0,
+  "sem_login": 0,
+  "descartadas": 0,
+  "alem_dos_pares": 0,
+  "vus_max": 100,
+  "p50_ms": 27.4865,
+  "p95_ms": 65.1452,
+  "p99_ms": 156.4719,
+  "max_ms": 431.1246
+}

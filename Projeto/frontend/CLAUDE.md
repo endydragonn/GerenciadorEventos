@@ -9,8 +9,8 @@ raiz (regras gerais) e o de `Backend/` (contrato da API).
 lib/
 ├── main.dart                app + MyApp + Provider HomePageData; checa token no boot
 ├── config/
-│   ├── app_config.dart      API_BASE_URL (--dart-define) + endpoints montados
-│   └── recaptcha_config.dart RECAPTCHA_SITE_KEY (--dart-define)
+│   ├── app_config.dart      AppConfig.apiBaseUrl (--dart-define API_BASE_URL, default vazio)
+│   └── recaptcha_config.dart RECAPTCHA_SITE_KEY (--dart-define) + path de verify-recaptcha
 ├── telas/
 │   ├── auth.dart            ApiAuth: token JWT em memória + SharedPreferences
 │   ├── modals.dart          SnackBars padronizados (showError/showSuccess/...)
@@ -34,24 +34,29 @@ referência** — não é compilado, não edite.
   — Nginx na porta `8088` (container `:80`), container `gerenciador-frontend`.
 - Build local: `flutter build web --release --dart-define=API_BASE_URL=<url> --dart-define=RECAPTCHA_SITE_KEY=<key>`
 - Dev: `flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:8081` (aponta
-  direto pro backend, sem o proxy do Nginx).
+  direto pro backend, sem o proxy do Nginx — precisa do `backend` rodando em `:8081` com
+  CORS liberado pra origem do `flutter run`, ver `Backend/CLAUDE.md`).
 - Sem lockfile versionado; `flutter pub get` resolve pelo `pubspec.yaml`.
   Flutter 3.19.6 / Dart SDK `>=3.3.0 <4.0.0` (ver `Dockerfile`).
 
 ## Como fala com o backend
 
-- `API_BASE_URL` entra **em tempo de build** via `--dart-define` (`String.fromEnvironment`).
-  No `docker-compose.yml` é passado como `args.API_BASE_URL` pro Dockerfile. **Mudar exige
-  rebuild da imagem** — não é runtime.
-- **Nginx faz proxy de `/api/*` → `backend:8081` removendo o prefixo `/api/`**
-  (`nginx.conf`). Ex.: o app chama `/api/bff/users/login`, o backend recebe `/bff/users/login`.
-- Há inconsistência herdada: parte do código usa URL **relativa** (`/api/...`, funciona só
-  atrás do Nginx) e parte usa `AppConfig.*Endpoint` (base absoluta + path). Ao criar chamada
-  nova, siga o padrão do arquivo vizinho e prefira passar por `/api/...`.
+- Superfície HTTP única sob `/bff/**` (issue #78) — todas as chamadas seguem o mesmo padrão:
+  `Uri.parse('${AppConfig.apiBaseUrl}/bff/...')`. Não existe mais divisão entre chamada
+  relativa e absoluta: é sempre esse padrão, o que muda é só o valor de `apiBaseUrl`.
+- `AppConfig.apiBaseUrl` (`API_BASE_URL`, `--dart-define`, `String.fromEnvironment`) tem
+  **default vazio** (`''`). Vazio ⇒ path fica relativo (`/bff/...`), resolvido contra a
+  origem da página — em produção (`docker-compose.yml` não passa mais `args.API_BASE_URL`,
+  usa o default do `Dockerfile`) isso cai atrás do proxy do Nginx em `:8088`. Setado (ex.:
+  `flutter run --dart-define=API_BASE_URL=http://localhost:8081`) ⇒ aponta direto pro
+  backend, sem Nginx (uso em dev). **Mudar exige rebuild da imagem** — não é runtime.
+- **Nginx faz proxy de `/bff/` → `backend:8081/bff/` SEM rewrite/strip** (`nginx.conf`): o
+  path chega igual no backend, ex. `/bff/users/login` → `/bff/users/login`.
 - JWT: `ApiAuth.jsonHeaders()` injeta `Authorization: Bearer <token>`. O token fica em
   memória (`ApiAuth.token`) e, se persistido, em `SharedPreferences` (`jwt_token`).
-  `main.dart` tenta `GET /api/bff/users/me` no boot pra restaurar a sessão; token inválido
-  é limpo. "Lembrar de mim" também cacheia `email`/`password` em `SharedPreferences`.
+  `main.dart` tenta `GET ${AppConfig.apiBaseUrl}/bff/users/me` no boot pra restaurar a
+  sessão; token inválido é limpo. "Lembrar de mim" também cacheia `email`/`password` em
+  `SharedPreferences`.
 
 ## Estado e UI
 
@@ -70,7 +75,7 @@ pública, mas mesmo assim não hardcode — mantenha via dart-define.
 
 ## Ao mexer aqui
 
-- Novo endpoint consumido → confira o path real no `Backend/CLAUDE.md` (lembre do strip do
-  `/api/` pelo Nginx) e adicione em `config/app_config.dart` se seguir esse padrão.
+- Novo endpoint consumido → confira o path real no `Backend/CLAUDE.md` (sempre `/bff/...`) e
+  chame como `Uri.parse('${AppConfig.apiBaseUrl}/bff/...')`, igual ao resto do código.
 - Mudou `API_BASE_URL`/dart-define → rebuild da imagem (`up -d --build frontend`).
 - Não introduza pacote de state management novo (fica com `provider`).

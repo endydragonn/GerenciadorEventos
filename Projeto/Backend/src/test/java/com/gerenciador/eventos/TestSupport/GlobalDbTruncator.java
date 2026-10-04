@@ -23,7 +23,8 @@ public class GlobalDbTruncator {
     }
 
     private void truncateAll() {
-        String truncateSQL = "TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event, "
+        String truncateSQL = "TRUNCATE TABLE public.eventpresenter, public.eventcap, "
+                + "public.event_availability, public.event, "
                 + "public.walletevent, public.mywallet, public.users RESTART IDENTITY CASCADE";
         try (Connection conn = databaseConnection.getConnection();
              Statement stmt = conn.createStatement()) {
