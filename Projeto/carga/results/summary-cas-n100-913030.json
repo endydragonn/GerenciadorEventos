@@ -1,0 +1,15 @@
+{
+  "capacidade": 20,
+  "clientes": 100,
+  "aceitas": 20,
+  "lotado": 80,
+  "outros": 0,
+  "sem_login": 0,
+  "overselling_cliente": 0,
+  "p50_ms": 41.3732,
+  "p95_ms": 63.472049999999996,
+  "p99_ms": 66.329051,
+  "max_ms": 66.8192,
+  "duracao_s": 1.116258,
+  "reservas_por_s": 89.58502425066607
+}
