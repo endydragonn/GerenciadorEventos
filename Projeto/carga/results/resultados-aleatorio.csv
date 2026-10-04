@@ -1,2 +1,3 @@
 ﻿data,rotulo,refresh_ms,max_connections,semente,passo_s,rpm_min,rpm_max,pct_leitura,rpm_medio,duracao_s,usuarios,eventos,capacidade,aceitas,lotado,erros_5xx,outros,leituras_ok,leituras_5xx,leituras_outros,sem_login,descartadas,vus_max,reserva_p50_ms,reserva_p95_ms,reserva_p99_ms,leitura_p50_ms,leitura_p95_ms,leitura_p99_ms,max_ms,prefixo
 2026-10-04T13:09:40,cas,5000,1000,42,20,500,2000,30,906,62.1,200,5,100,500,151,0,0,287,0,0,0,0,100,27.3,29.8,32.1,16.0,55.5,57.5,71.0,Ale-904483
+2026-10-04T14:05:06,cas,5000,1000,617706,30,1000,12000,30,6150,2702.3,200,1464,100,81109,0,112878,0,28693,0,54306,0,1735,500,6.2,153.2,879.5,6.4,770.3,4392.5,23227.9,Ale-904991
