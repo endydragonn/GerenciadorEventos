@@ -248,3 +248,62 @@ reservas todas `expired` ao fim). Critério da #96 atendido (0 5xx, 0 descartada
 7. **Nenhum dos 3 testes finaliza vendas:** todas as reservas ficam `pending` e depois `expired`;
    nenhuma chega a `confirmed`. Isso mede só o caminho de reserva (CAS), não a confirmação. Registrado
    para o próximo trabalho (testes com vendas efetivamente finalizadas).
+
+#### Rodadas com vendas finalizadas (2026-10-04, noite) — PRs #99 e #100
+
+Mesmo host das rodadas pós-pool (pool Hikari, `max_connections=1000`). A partir do #100, os 3 testes
+chamam `POST /bff/event-wallets/confirm` em cada reserva aceita; antes as reservas ficavam `pending` e
+expiravam, e a carga só media o CAS da reserva (achado 7 acima). Resumos do k6 e CSVs: `Projeto/carga/results/`.
+
+Duas variantes: **100%** confirmadas (`PCT_CONFIRMA=100`, default) e **realista** (`make test-*-real`,
+`PCT_CONFIRMA_REAL=60`): cada aceita é confirmada ou não ao acaso (sorteio determinístico por hash);
+as não confirmadas expiram e devolvem a vaga.
+
+##### 100% confirmadas
+
+| Teste | Rodada | Aceitas | Confirmadas | 5xx (reserva / confirma) | Descartadas | Reserva p95 | Confirma p95 |
+|---|---|---|---|---|---|---|---|
+| Disputa 50 / 100 / 200 clientes | eventos 1626 / 1627 / 1628 | 20 em cada | 20/20 em cada | 0 / 0 | n/a | 45 / 53 / 63 ms | 26 / 34 / 50 ms |
+| 10k RPM, 90 s | `Rpm-917602` | 7501 | 7501 | 0 / 0 | 0 | 4,1 ms | 3,9 ms |
+
+Banco: disputa com 20 `confirmed`, 0 vagas restantes e overselling 0 por evento; `Rpm-917602` com
+7501 `confirmed`, 0 eventos com overselling, 0 `BindException`. A 7501ª aceita é a iteração extra do k6
+(15.001), que cai no 76º evento, ainda com vagas. **Motivo de a confirmação não custar nada:** é um
+`UPDATE` por chave sobre a linha já reservada, sem disputa pela vaga.
+
+##### Realista (60% de confirmação)
+
+| Teste | Rodada | Aceitas | Confirmadas | 5xx | Descartadas | Reserva p95 | Confirma p95 |
+|---|---|---|---|---|---|---|---|
+| Disputa 50 / 100 / 200 | eventos 1708 / 1709 / 1710 | 20 em cada | 9 / 9 / 8 (45 / 45 / 40%) | 0 | n/a | 42 / 44 / 48 ms | n/a |
+| 10k RPM, 90 s | `Rpm-918245` | 7500 | 4450 (59,3%) | 0 | 0 | 4,1 ms | 4,2 ms |
+| Aleatório 45 min | `Ale-919068` | 194.989 | 116.744 (59,9%) | 0 | 0 | 4,6 ms | 3,7 ms |
+
+Banco: `Rpm-918245` com 4450 `confirmed` + 1798 `pending` + 1252 `expired` (a verificação rodou antes dos
+~120 s de expiração; os `pending` viram `expired`), overselling 0. `Ale-919068`: 116.744 `confirmed` e
+78.245 `expired`, 0 `pending`, 1464 eventos, overselling 0, 0 `BindException`. Disputa 1710: 8
+`confirmed` + 12 `expired`, vagas restantes 12.
+
+Aleatório lado a lado com a `Ale-913561` (mesma semente, antes da etapa de confirmação): reserva
+p50/p95/p99 3,1 / 4,4 / 8,9 ms → 3,1 / 4,6 / 10,3 ms; leitura p95 456 → 464 ms; 0 5xx e 0 descartadas
+nas duas. **Confirmar 60% das reservas não mudou latência nem vazão.**
+
+##### Achados e motivos (vendas finalizadas)
+
+1. **Overselling 0 com vendas finalizadas.** `pending + confirmed` ≤ capacidade em todas as rodadas.
+   No aleatório as aceitas passam da capacidade (194.989 > 146.400) porque `expired` devolve a vaga e ela
+   é revendida; as 116.744 `confirmed` (definitivas) ficam abaixo de 146.400.
+2. **14 respostas `lotado` na `Ale-919068`** (contra 0 na `Ale-913561`): as `confirmed` não expiram e
+   esgotam alguns eventos, o que antes nunca acontecia porque toda reserva expirava.
+3. **A disputa realista confirma abaixo de `PCT_CONFIRMA` (40–45% em vez de 60%).** O sorteio usa
+   semente fixa 0 sobre os índices `0..N-1`; nos primeiros 50/100/200 índices a fração `< 60` é
+   38% / 52% / 53% (59,8% nos 15.000 do teste 2), e a amostra da disputa é pequena e idêntica em toda
+   rodada. Não afeta corretude (0 overselling). **Melhoria pendente:** semente por rodada (ex.: `runId`).
+4. **`rodar-teste.ps1` ainda manda "rode `-Verificar` logo após a rodada (~120 s)"**, o que não vale mais
+   quando tudo é confirmado (`confirmed` não expira). Pendente, só mensagem.
+5. **CSVs:** ganharam colunas de confirmação no cabeçalho; linhas antigas ficam com menos colunas, e o
+   `resultados.csv` recebeu `pct_confirma` (valor 100) nas 3 linhas das rodadas do `af01483`.
+6. **Leitura bimodal (p95 ~460 ms) segue em aberto** (achado 3 da seção anterior): não mudou com a
+   confirmação, o que reforça que vem da busca em memória e não da escrita.
+7. **`tw` do `sockstat` continua sem série durante a carga** (achado 4 da seção anterior); o proxy é 0
+   `BindException` e 0 5xx.
