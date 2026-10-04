@@ -34,6 +34,33 @@ Labels sugeridas: `fase/0`…`fase/11`, `area/backend`, `area/banco`, `area/infr
 
 ---
 
+## Estado (2026-10-02)
+
+Snapshot do GitHub (`gh issue list` / `gh pr list`). A definição de cada item continua sendo o
+texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
+
+| Item | Issue | Estado | PR |
+|---|---|---|---|
+| 1 | #2 | fechada | #52 |
+| 2 | #3 | fechada | #53 |
+| 3 | #4 | **aberta** — kit de carga já está no `main` (`Projeto/carga/`, `docs/carga/setup.md`); falta provisionar a 2ª máquina, medir a latência base de rede e registrá-la | #76 (draft), kit em #90 |
+| 4 | #5 | fechada | #55 |
+| 5 | #6 | fechada | #65 |
+| 6 | #7 | fechada | #66, #68 (fone obrigatório, #67) |
+| 7 | #8 | fechada | #70 |
+| 8 | #9 | fechada (roteiro em `docs/testes-manuais/`; `.sh` precisa de JWT pós-#79) | #73 |
+| 9 | #10 | fechada | #75 |
+| 10 | #11 | **aberta** — harness mergeado (`docs/carga/harness/`); falta rodar de outra máquina (depende do item 3) | #82 |
+| 11–46 | #12–#47 | abertas | — |
+
+Fora do backlog (follow-ups): #56–#61 abertas (`updatePolicy`, IDOR em `/bff/event-wallets`,
+endurecer schema, cobertura, transações do `updateEvent`, N+1/pool); #78 (BFF única + JWT
+deny-by-default, PR #79), #83 (quality gates, PR #85), #86 (PR #88), #92 (`/actuator/health`,
+PR #93) e #67 fechadas; #81, #84, #89 abertas. PR #90 adicionou os scripts de teste de carga
+(disputa de vagas e taxa fixa/RPM) em `Projeto/carga/`.
+
+Caminho crítico (issues): #2 → #5 → #7 → #10 feitas; próximo: #11 → #12 → #13.
+
 ## Fase 0 — Desbloqueio de ambiente
 
 ### 1. Instalar Docker Desktop e validar baseline verde do `main`
