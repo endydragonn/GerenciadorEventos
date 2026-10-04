@@ -85,4 +85,10 @@ Ok 'Backend respondendo.'
 # Via stdin: aspas embutidas em argumento nativo se perdem no PowerShell 5.1.
 $mc = 'SHOW max_connections;' | docker exec -i gerenciador-db sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -At'
 Write-Host "max_connections efetivo: $mc" -ForegroundColor Cyan
+Write-Host ''
+Write-Host '=== Use um destes IPs no gerador de carga (-HostIp) ===' -ForegroundColor Cyan
+Get-NetIPAddress -AddressFamily IPv4 |
+    Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+    ForEach-Object { Write-Host ("  {0,-16} ({1})" -f $_.IPAddress, $_.InterfaceAlias) }
+Write-Host ''
 Write-Host 'Proximo passo (no gerador): .\rpm\rodar-rpm.ps1 -HostIp <ip> -Rpm 10000'
