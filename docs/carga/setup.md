@@ -268,7 +268,7 @@ as não confirmadas expiram e devolvem a vaga.
 
 Banco: disputa com 20 `confirmed`, 0 vagas restantes e overselling 0 por evento; `Rpm-917602` com
 7501 `confirmed`, 0 eventos com overselling, 0 `BindException`. A 7501ª aceita é a iteração extra do k6
-(15.001), que cai no 76º evento, ainda com vagas. **Motivo de a confirmação não custar nada:** é um
+(15.001), que cai no 76º evento, ainda com vagas. **Provável motivo de a confirmação custar pouco (hipótese, não medida):** é um
 `UPDATE` por chave sobre a linha já reservada, sem disputa pela vaga.
 
 ##### Realista (60% de confirmação)
