@@ -1,3 +1,4 @@
 ﻿data,rotulo,refresh_ms,max_connections,rpm_alvo,rpm_real,duracao_s,usuarios,eventos,capacidade,aceitas,lotado,erros_5xx,outros,sem_login,descartadas,vus_max,p50_ms,p95_ms,p99_ms,max_ms,prefixo
 2026-10-04T12:48:02,cas,5000,300,2000,1930,62.2,200,11,100,1000,1000,0,0,0,0,100,27.1,31.7,40.4,51.4,Rpm-903185
 2026-10-04T12:54:01,cas,5000,300,10000,9761,92.2,200,79,100,5379,4903,4718,0,0,0,100,28.5,45.6,52.3,74.2,Rpm-903506
+2026-10-04T13:05:53,cas,5000,300,10000,9764,92.2,200,79,100,5375,4907,4718,0,0,0,100,29.3,44.5,52.1,68.9,Rpm-904217
