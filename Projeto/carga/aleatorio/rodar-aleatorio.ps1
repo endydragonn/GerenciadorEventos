@@ -100,6 +100,7 @@ $pf = (Join-Path $Results "perfil-$tag.json").Replace('\', '/')
 $uf = (Join-Path $Results "users-$tag.json").Replace('\', '/')
 $ef = (Join-Path $Results "events-$tag.json").Replace('\', '/')
 $sf = (Join-Path $Results "summary-$tag.json").Replace('\', '/')
+foreach ($f in $pf, $sf) { if (Test-Path $f) { Fail "Ja existe $f (runId repetido); nao sobrescrevo. Renomeie o arquivo antigo e rode de novo." } }
 ConvertTo-Json -InputObject $stages.ToArray() -Depth 3 | Set-Content -Path $pf -Encoding UTF8
 
 # ---- seed unico (usuarios + eventos)

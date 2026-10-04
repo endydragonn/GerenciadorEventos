@@ -65,6 +65,7 @@ $tag = "rpm{0}-{1}" -f $Rpm, $runId
 $uf = (Join-Path $Results "users-$tag.json").Replace('\', '/')
 $ef = (Join-Path $Results "events-$tag.json").Replace('\', '/')
 $sf = (Join-Path $Results "summary-$tag.json").Replace('\', '/')
+if (Test-Path $sf) { Fail "Ja existe $sf (runId repetido); nao sobrescrevo. Renomeie o arquivo antigo e rode de novo." }
 Info "Semeando $Usuarios usuarios + $eventos eventos (bcrypt no host: pode levar um bom tempo)..."
 $seed = Invoke-Seed -BaseUrl $Base -Usuarios $Usuarios -Eventos $eventos -Capacidade $Capacidade `
     -Prefixo $prefixo -Sufixo "$runId" -UsersFile $uf -EventIdsFile $ef
