@@ -36,6 +36,15 @@ function Ok($m)   { Write-Host "[ ok ] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "[aviso] $m" -ForegroundColor Yellow }
 function Fail($m) { Write-Host "[erro] $m" -ForegroundColor Red; exit 1 }
 
+# Anexa a saida da verificacao em resultserificacoes.log (config ativa + timestamp), pra documentar a rodada.
+function Registrar($alvo, $saida) {
+    $dir = Join-Path $PSScriptRoot 'results'
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $cfg = (docker exec gerenciador-backend printenv RESERVATION_READPATH READMODEL_AVAILABILITY_REFRESH_MS 2>$null) -join ' / '
+    $cab = "===== {0} | {1} | config: {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $alvo, $cfg
+    Add-Content -Path (Join-Path $dir 'verificacoes.log') -Value (@($cab, $saida, '') -join "`n") -Encoding utf8
+}
+
 # ---------------------------------------------------------------- modo verificacao
 if ($Verificar) {
     if ($EventId -le 0) { Fail 'Informe -EventId com o id do evento da rodada.' }
@@ -48,8 +57,11 @@ SELECT count(*) FILTER (WHERE status IN ('pending','confirmed')) AS ativas,
          - (SELECT capacity FROM eventcap WHERE event_id = $EventId) AS overselling
 FROM walletevent WHERE event_id = $EventId;
 "@
-    $sql | docker exec -i gerenciador-db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-    exit $LASTEXITCODE
+    $saida = $sql | docker exec -i gerenciador-db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' | Out-String
+    Write-Host $saida
+    $rc = $LASTEXITCODE
+    Registrar "evento $EventId" $saida.TrimEnd()
+    exit $rc
 }
 
 # ---------------------------------------------------------------- pre-requisitos

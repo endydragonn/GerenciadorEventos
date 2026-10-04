@@ -28,6 +28,15 @@ function Info($m) { Write-Host "[host-rpm] $m" -ForegroundColor Cyan }
 function Ok($m)   { Write-Host "[ ok ] $m" -ForegroundColor Green }
 function Fail($m) { Write-Host "[erro] $m" -ForegroundColor Red; exit 1 }
 
+# Anexa a saida da verificacao em resultserificacoes.log (config ativa + timestamp), pra documentar a rodada.
+function Registrar($alvo, $saida) {
+    $dir = Join-Path (Split-Path $PSScriptRoot -Parent) 'results'
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $cfg = (docker exec gerenciador-backend printenv RESERVATION_READPATH READMODEL_AVAILABILITY_REFRESH_MS 2>$null) -join ' / '
+    $cab = "===== {0} | {1} | config: {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $alvo, $cfg
+    Add-Content -Path (Join-Path $dir 'verificacoes.log') -Value (@($cab, $saida, '') -join "`n") -Encoding utf8
+}
+
 if ($Verificar) {
     if (-not $Prefixo) { Fail 'Informe -Prefixo (nome impresso pelo rodar-rpm.ps1, ex.: Rpm-123456).' }
     if ($Prefixo -notmatch '^[A-Za-z0-9-]+$') { Fail '-Prefixo so aceita letras, numeros e hifen.' }
@@ -44,8 +53,11 @@ FROM ativas;
 SELECT status, count(*) FROM walletevent
  WHERE event_id IN (SELECT event_id FROM event WHERE event_name LIKE '$Prefixo-%') GROUP BY status ORDER BY status;
 "@
-    $sql | docker exec -i gerenciador-db sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB'
-    exit $LASTEXITCODE
+    $saida = $sql | docker exec -i gerenciador-db sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB' | Out-String
+    Write-Host $saida
+    $rc = $LASTEXITCODE
+    Registrar "prefixo $Prefixo" $saida.TrimEnd()
+    exit $rc
 }
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Fail 'Docker nao encontrado.' }
