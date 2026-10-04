@@ -91,7 +91,7 @@ foreach ($n in $Vus) {
     if (-not (Test-Path $sf)) { Fail 'k6 nao gerou o resumo; veja a saida acima.' }
     $s = Get-Content $sf -Raw | ConvertFrom-Json
     $inv = [System.Globalization.CultureInfo]::InvariantCulture   # ponto decimal, mesmo em pt-BR
-    [string]::Format($inv, '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10:N1},{11:N1},{12:N1},{13:N1},{14:N2},{15:N1},{16}',
+    [string]::Format($inv, '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10:F1},{11:F1},{12:F1},{13:F1},{14:F2},{15:F1},{16}',
         (Get-Date -Format s), $Rotulo, $RefreshMs, $s.clientes, $s.capacidade, $s.aceitas, $s.lotado,
         $s.outros, $s.sem_login, $s.overselling_cliente, $s.p50_ms, $s.p95_ms, $s.p99_ms, $s.max_ms,
         $s.duracao_s, $s.reservas_por_s, $eventId) |
