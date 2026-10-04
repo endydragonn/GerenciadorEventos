@@ -160,15 +160,91 @@ Pendente de preencher: RPM alvo, duração, usuários e commit testado de cada r
   (112.878 erros 5xx) é a falta de pool (#96), não o CAS nem o `max_connections` (1000 foi inútil: não
   mudou o 5xx). Overselling 0 em todas.
 
-#### Rodadas pós-pool (#96, backend `275d587`, pool Hikari default 1000, `max_connections=1000`)
+#### Rodadas pós-pool (2026-10-04, tarde) — issue #96
 
-Dados do lado do host (`make verificar-rpm` + log do backend, 2026-10-04). Os números do k6 (5xx,
-latência) e o `tw` do `sockstat` vêm do gerador e ainda não foram registrados aqui.
+Backend `275d587`: `DatabaseConnection` usa o `DataSource` do Spring (HikariCP), pool
+`maximum-pool-size` 1000 (default; `minimum-idle` 5, cresce sob demanda), host com
+`max_connections=1000`. Resumos do k6 e CSVs: `Projeto/carga/results/` (PR #98). Overselling
+conferido no banco do host com `make verificar-disputa` / `make verificar-rpm`.
 
-| Rodada | Eventos | Capacidade | Reservas ativas (`pending`) | Overselling | `BindException`/`connection attempt failed` | 5xx (k6) | `tw` máx. |
-|---|---|---|---|---|---|---|---|
-| `Rpm-913181` | 79 | 7900 | 7501 | **0** | **0** | pendente | pendente |
-| `Rpm-913395` | 79 | 7900 | 7500 | **0** | **0** | pendente | pendente |
+**Ressalva de comparação:** a stack foi recriada antes dessas rodadas (banco zerado: `event_id` e
+`user_id` voltaram a 1). A única mudança de código de backend entre manhã e tarde é o pool; a carga
+(RPM, semente `617706`, mesmos 1464 eventos de 100 vagas, mesmos 200 usuários) é a mesma.
 
-Antes do pool: 4718 respostas 5xx e 39.120 linhas de `BindException` (`Rpm-909189`). A contagem de
-`BindException` foi feita no log do backend em execução no momento da conferência (0).
+##### Teste 1 — disputa (CAS, capacidade 20; eventos 1, 2, 3)
+
+| Clientes | Aceitas | Lotado | Erros | p50 / p95 | Vazão | p95 da manhã (sem pool) |
+|---|---|---|---|---|---|---|
+| 50 | 20 | 30 | 0 | 95,8 / 103,0 ms | 79,9/s | 260 ms |
+| 100 | 20 | 80 | 0 | 41,4 / 63,5 ms | 89,6/s | 414 ms |
+| 200 | 20 | 180 | 0 | 74,4 / 89,8 ms | 95,4/s | 695 ms |
+
+Overselling 0 (banco: 20 reservas por evento, ativas ≤ capacidade). Na primeira bateria da manhã
+ainda houve 13 e 105 respostas "outras" (100 e 200 clientes); agora 0. **Motivo da melhora:** cada
+operação de repositório deixou de abrir uma conexão TCP + autenticação nova no Postgres.
+
+##### Teste 2 — 10k RPM por 90 s (`Rpm-913181` e `Rpm-913395`)
+
+| Rodada | RPM real | Aceitas | Lotado | 5xx | Descartadas | p50 / p95 / p99 | Overselling | `BindException` |
+|---|---|---|---|---|---|---|---|---|
+| `Rpm-913181` | 9786 | 7501 | 7500 | **0** | 0 | 2,7 / 4,7 / 13,2 ms | **0** | **0** |
+| `Rpm-913395` | 9792 | 7500 | 7500 | **0** | 0 | 2,5 / 4,2 / 11,9 ms | **0** | **0** |
+
+Antes do pool (`Rpm-903506`, `Rpm-904217`): 4718 respostas 5xx em ~15 mil (~31%), idênticas nas duas
+rodadas, e 39.120 linhas de `BindException` na `Rpm-909189`. Agora 0 e 0. Critério da #96 atendido.
+
+- **7501 aceitas não é overselling:** o k6 fez 15001 iterações (7501 + 7500), uma além das 15000
+  planejadas. Com os pares em sequência (usuário `i % 200`, evento `i / 200`), a iteração 15000 cai
+  no 76º evento, ainda com 100 vagas livres, e é aceita. Os 75 primeiros eventos somam 7500 = 75 × 100.
+  O banco confirma: `eventos_com_overselling` 0.
+- As duas rodadas deram praticamente o mesmo resultado: sem a saturação de portas o comportamento
+  voltou a ser determinístico e limitado pelo CAS, não pelo ambiente.
+
+##### Teste 3 — aleatório, 45 min (`Ale-913561`, semente 617706, a mesma da `Ale-904991`)
+
+| Mesmo perfil (1k–12k RPM) | Manhã `Ale-904991` (sem pool) | Tarde `Ale-913561` (pool) |
+|---|---|---|
+| RPM médio (pico alvo) | 6150 (11926) | 6189 (11926) |
+| Reservas aceitas | 81.109 | 195.005 |
+| Reservas 5xx | 112.878 | **0** |
+| Leituras ok / inesperadas | 28.693 / 54.306 | 83.716 / **0** |
+| Iterações descartadas / VUs máx. | 1735 / 500 | **0** / 100 |
+| Reserva p50 / p95 / p99 | 6,2 / 153 / 880 ms | 3,1 / 4,4 / 8,9 ms |
+| Leitura p50 / p95 / p99 | 6,4 / 770 / 4393 ms | 1,9 / 456 / 492 ms |
+| Latência máxima | 23,2 s | 563 ms |
+| `BindException` no log | 110.407 | **0** |
+
+Overselling 0 (`make verificar-rpm PREFIXO=Ale-913561`: 1464 eventos, 0 com overselling, 195.005
+reservas todas `expired` ao fim). Critério da #96 atendido (0 5xx, 0 descartadas).
+
+- **195.005 aceitas > 146.400 vagas (1464 × 100) não é overselling:** em 45 min as reservas
+  `pending` expiram (~120 s) e a vaga é revendida. A invariante é ativas ≤ capacidade.
+- **Mais aceitas do que de manhã (81 mil → 195 mil)** porque antes ~31% das tentativas morriam em
+  5xx e 1735 iterações eram descartadas por falta de VU.
+
+##### Achados e motivos
+
+1. **Causa raiz confirmada: o gargalo era a falta de pool, não o CAS nem o `max_connections`.**
+   `DriverManager` abria uma conexão TCP por operação → milhares de sockets em `TIME_WAIT` (pico
+   34.199 > 28.232 portas efêmeras) → `BindException`. Com o pool: 0 5xx e 0 `BindException` nas
+   três rodadas; subir `max_connections` não tinha efeito antes, o que já apontava para a conexão
+   por operação.
+2. **Overselling 0 em todas as rodadas**, antes e depois: o CAS é correto e o problema era de
+   disponibilidade. Os números "a mais" (7501, 195.005) têm as explicações acima.
+3. **Leitura bimodal (aberto):** leitura p50 1,9 ms mas p95 456 ms e p99 492 ms. Suspeita, *não
+   medida por endpoint*: `GET /bff/events/search` varre todos os eventos em memória. Não é efeito do
+   pool. Follow-up fora do escopo da #96 (o N+1 do `hydrate` e o `LIMIT`/`SKIP LOCKED` são da #61).
+4. **`tw` do `sockstat` pós-pool não foi medido durante a carga:** o `results/sockstat.log` desta
+   tarde tem só 5 linhas (15:42, `tw` máx. 6, em repouso) e não cobre as rodadas. O critério "`tw` de
+   poucos milhares" não tem série própria; o proxy é `BindException` = 0 e 0 5xx.
+5. **Default do pool 1000 só é seguro com `max_connections` alto:** o `db` do `docker-compose.yml`
+   padrão usa `max_connections=100`; fora do host de carga, reduzir por
+   `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`. O `minimum-idle` 5 evita que cada contexto Spring
+   (inclusive os de teste) segure 1000 conexões ociosas. O tamanho ideal do pool não foi explorado:
+   com 100 VUs e latências de poucos ms, o pool nunca precisou chegar perto de 1000.
+6. **Manhã e tarde não são perfeitamente comparáveis** (banco zerado entre as baterias); a diferença
+   é grande demais (5xx 112.878 → 0) para ser explicada por isso, então a comparação de latência é
+   indicativa, não exata.
+7. **Nenhum dos 3 testes finaliza vendas:** todas as reservas ficam `pending` e depois `expired`;
+   nenhuma chega a `confirmed`. Isso mede só o caminho de reserva (CAS), não a confirmação. Registrado
+   para o próximo trabalho (testes com vendas efetivamente finalizadas).
