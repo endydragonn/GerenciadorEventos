@@ -67,6 +67,7 @@ foreach ($n in $Vus) {
     $uf = (Join-Path $Results "users-$tag.json").Replace('\', '/')
     $ef = (Join-Path $Results "events-$tag.json").Replace('\', '/')
     $sf = (Join-Path $Results "summary-$tag.json").Replace('\', '/')
+    if (Test-Path $sf) { Fail "Ja existe $sf (runId repetido); nao sobrescrevo. Renomeie o arquivo antigo e rode de novo." }
     Info "Semeando $n usuarios + 1 evento (bcrypt no host: pode levar alguns segundos)..."
     $seed = Invoke-Seed -BaseUrl $Base -Usuarios $n -Eventos 1 -Capacidade $Capacidade `
         -Prefixo "Carga-$runId-N$n" -Sufixo "$runId" -UsersFile $uf -EventIdsFile $ef
