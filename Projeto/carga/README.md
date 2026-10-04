@@ -57,7 +57,7 @@ sistema satura (erros 5xx, iterações descartadas, p95/p99).
 
 ```powershell
 # host
-make host-rpm MAX_CONN=100        # padrão do Postgres: deve estourar antes; depois repita com 300
+make host-rpm MAX_CONN=100        # padrão do Postgres: o teto é o pool (50); depois repita com 300
 # gerador
 make test-rpm HOST_IP=<ip> RPM=2000 DURACAO=60     # aquecimento
 make test-rpm HOST_IP=<ip>                         # 10k RPM por 90 s
@@ -74,9 +74,11 @@ seed usam bcrypt, caro) geram milhares de reservas sem duplicidade.
 
 ### Por que `MAX_CONN` importa
 
-O backend abre uma conexão nova por requisição (`DriverManager`, sem pool). O padrão do Postgres
-é 100 conexões; os 200 threads do Tomcat podem passar disso → `too many clients` → HTTP 500.
-Compare 100 × 300 para documentar esse teto.
+O backend usa pool HikariCP (`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`, default 50; o pool
+cresce sob demanda a partir de `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, default 5). Com o pool (50)
+abaixo do `max_connections` padrão (100), `MAX_CONN=100` não estoura mais com `too many clients`:
+o teto passa a ser o pool, e requisições além dele esperam na fila (até 30 s) antes de virar erro.
+Só vale subir o pool acima de 100 junto com `MAX_CONN` maior. Compare 100 × 300 para documentar.
 
 ## Teste 3 — carga aleatória (estabilidade por tempo)
 

@@ -1,25 +1,27 @@
 package com.gerenciador.eventos.config;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.SQLException;
 
-import org.springframework.beans.factory.annotation.Value;
+import javax.sql.DataSource;
+
 import org.springframework.stereotype.Component;
 
+/**
+ * Entrega conexões do {@link DataSource} do Spring (pool HikariCP, configurado por
+ * {@code spring.datasource.*}). O chamador continua fechando com try-with-resources: o
+ * {@code close()} devolve a conexão ao pool em vez de encerrá-la.
+ */
 @Component
 public class DatabaseConnection {
-    
-    @Value("${spring.datasource.url}")
-    private String url;
-    
-    @Value("${spring.datasource.username}")
-    private String user;
-    
-    @Value("${spring.datasource.password}")
-    private String password;
-    
+
+    private final DataSource dataSource;
+
+    public DatabaseConnection(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+
     public Connection getConnection() throws SQLException {
-        return DriverManager.getConnection(url, user, password);
+        return dataSource.getConnection();
     }
 }
