@@ -80,6 +80,15 @@ config/                DatabaseConnection, CorsConfig, EmailTemplates
 
 - `Repository/*` usam `config.DatabaseConnection.getConnection()` +
   `PreparedStatement` com SQL escrito à mão. `try-with-resources` para fechar conexão.
+- `DatabaseConnection` delega ao `DataSource` do Spring (pool **HikariCP**, issue #96), não a
+  `DriverManager`: `close()` devolve a conexão ao pool. Tamanho do pool:
+  `spring.datasource.hikari.maximum-pool-size` (env `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`,
+  default 1000, alinhado ao `max_connections=1000` do Postgres do host; o `db` do compose padrão tem
+  100, então lá reduza o pool por env) e
+  `spring.datasource.hikari.minimum-idle` (env `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, default 5:
+  o pool cresce sob demanda). **Cada contexto Spring de teste distinto tem seu próprio pool**; sem
+  `minimum-idle` pequeno, N contextos em cache segurariam N×50 conexões e estourariam o
+  `max_connections`. Coberto por `ConnectionPoolTest` e `ConnectionPoolSizeTest`.
 - `spring-boot-starter-data-jpa` está no classpath e `spring.jpa.hibernate.ddl-auto=update`
   está setado, **mas não há nenhuma `@Entity`** → Hibernate não cria/altera nada.
 - O schema é definido em `db/init-scripts/*.sql`. Para alterar o modelo, edite o SQL lá
@@ -216,7 +225,9 @@ chamável direto (os testes o invocam sem esperar o timer).
 ## Config
 
 - `application.properties` lê tudo de env var com default de dev:
-  `SPRING_DATASOURCE_*`, `JWT_SECRET`, `JWT_EXPIRATION_SECONDS`, `MAIL_*`, `RECAPTCHA_*`,
+  `SPRING_DATASOURCE_*` (inclui `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` e
+  `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`), `JWT_SECRET`, `JWT_EXPIRATION_SECONDS`, `MAIL_*`,
+  `RECAPTCHA_*`,
   `RESERVATION_READPATH` (default `cas`; `naive` = braço de controle do experimento da
   Fase 2), `READMODEL_AVAILABILITY_REFRESH_MS` (default `5000`; intervalo do job de refresh
   do read model `event_availability` = o "lag" do experimento).

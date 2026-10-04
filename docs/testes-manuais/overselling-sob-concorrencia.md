@@ -1,6 +1,21 @@
 # Teste manual — overselling sob concorrência (EventCap/CAS)
 
-**Issue:** #9 (Fase 1) · **Área:** `backend` · **Depende de:** #5, #6 (código EventCap/CAS já compila e passa na suíte)
+**Issue:** #9 (Fase 1, fechada — PR #73) · **Área:** `backend` · **Depende de:** #5, #6 (código EventCap/CAS já compila e passa na suíte)
+
+> **Atualização (2026-10-02) — leia antes de rodar.** Este roteiro foi escrito em 2026-09-03,
+> **antes** da PR #79 (issue #78), que tornou `/bff/**` *deny-by-default*. Hoje só são públicos:
+> `POST /bff/users/login`, o cadastro em duas fases, `GET /bff/events/**`, `POST /bff/seed` e
+> `GET /actuator/health` (público desde a issue #92 / PR #93). Todo o resto — inclusive
+> `POST /bff/users`, `/bff/my-wallets/**`, `POST /bff/events` e `/bff/event-wallets/**` — exige
+> `Authorization: Bearer <jwt>`, e criar evento exige usuário `host`.
+>
+> **O `.sh` ainda não foi adaptado** (pela leitura: ele não envia JWT, então os passos 2–5
+> devolveriam 401; não o executei após a #79). O que o roteiro **prova** não mudou (CAS impede
+> overselling com `capacity = 1`), só o jeito de montar a fixture: criar usuários e evento por
+> `POST /bff/seed` (público), fazer `POST /bff/users/login` para obter o token e usá-lo na
+> reserva — o mesmo caminho do kit `Projeto/carga` e do harness `docs/carga/harness/`. Adaptar o
+> `.sh` está pendente. Para N clientes e métricas de desempenho, use o harness (issue #11) e o kit
+> de carga (`Projeto/carga/README.md`); este roteiro continua sendo o sanity mínimo com 2 usuários.
 
 ## Objetivo
 
@@ -43,9 +58,9 @@ Arquivo: `Projeto/Backend/src/test/java/com/gerenciador/eventos/EventWalletTest.
 
 | Texto da issue | Valor real usado aqui |
 |---|---|
-| `POST /api/bff/event-wallets` | **`POST /bff/event-wallets`** — o prefixo `/api/` é removido pelo nginx do frontend; em acesso direto ao backend use o path real. `/bff/**` é `permitAll()` no `SecurityConfig` → **sem JWT**. |
+| `POST /api/bff/event-wallets` | **`POST /bff/event-wallets`** — o prefixo `/api/` é removido pelo nginx do frontend; em acesso direto ao backend use o path real. Quando o roteiro foi escrito, `/bff/**` era `permitAll()` (sem JWT); **desde a PR #79 é deny-by-default** (ver a atualização no topo). |
 | corpo do POST de reserva | `{"userId": <id>, "eventId": <id>}` |
-| status da recusa | **HTTP 400** (o `EventWalletBffController` traduz `IllegalArgumentException` para `badRequest`); corpo = texto puro `Evento lotado`. |
+| status da recusa | **HTTP 400** (o `BffEventWalletController` traduz `IllegalArgumentException` para `badRequest`); corpo = texto puro `Evento lotado`. |
 
 > **Nota (fora de escopo):** o `userId` vir do corpo em vez do JWT é o IDOR
 > tratado na **issue #57**. Este roteiro não tenta corrigir isso.
@@ -87,7 +102,7 @@ Variáveis de ambiente (todas opcionais):
 ## O roteiro, passo a passo
 
 1. **Espera o backend** responder (`GET /bff/events` → 200; `/actuator/health`
-   devolve 403 nesta stack, não serve de probe).
+   devolvia 403 quando o roteiro foi escrito; é público desde a issue #92 e também serve de probe).
 2. **Cria 2 usuários distintos** (`POST /bff/users`, corpo mínimo
    `{"name","email","fone"}` — o que `UserService.createUser` exige) e **garante a
    carteira** de cada um (`POST /bff/my-wallets/ensure/{userId}`).
