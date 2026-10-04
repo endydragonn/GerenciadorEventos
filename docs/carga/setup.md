@@ -159,3 +159,16 @@ Pendente de preencher: RPM alvo, duração, usuários e commit testado de cada r
 - Conclusão: o gargalo medido nas rodadas de 10k RPM (4718 erros 5xx, ~31%) e na `Ale-904991`
   (112.878 erros 5xx) é a falta de pool (#96), não o CAS nem o `max_connections` (1000 foi inútil: não
   mudou o 5xx). Overselling 0 em todas.
+
+#### Rodadas pós-pool (#96, backend `275d587`, pool Hikari default 1000, `max_connections=1000`)
+
+Dados do lado do host (`make verificar-rpm` + log do backend, 2026-10-04). Os números do k6 (5xx,
+latência) e o `tw` do `sockstat` vêm do gerador e ainda não foram registrados aqui.
+
+| Rodada | Eventos | Capacidade | Reservas ativas (`pending`) | Overselling | `BindException`/`connection attempt failed` | 5xx (k6) | `tw` máx. |
+|---|---|---|---|---|---|---|---|
+| `Rpm-913181` | 79 | 7900 | 7501 | **0** | **0** | pendente | pendente |
+| `Rpm-913395` | 79 | 7900 | 7500 | **0** | **0** | pendente | pendente |
+
+Antes do pool: 4718 respostas 5xx e 39.120 linhas de `BindException` (`Rpm-909189`). A contagem de
+`BindException` foi feita no log do backend em execução no momento da conferência (0).
