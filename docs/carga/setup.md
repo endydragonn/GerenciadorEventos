@@ -83,7 +83,7 @@ Critério: sem erros de conexão e latência p95 coerente com a base medida no p
 | Perda de pacotes | | |
 | Commit testado | | |
 
-## Critério de aceite da issue #3
+## Critério de aceite da issue #4 (item 3 do backlog)
 
 - [ ] Gerador com acesso de rede ao host-alvo.
 - [ ] Ferramenta de carga instalada e smoke test passando.

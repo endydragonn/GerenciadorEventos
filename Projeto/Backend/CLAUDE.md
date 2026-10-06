@@ -203,7 +203,7 @@ seguido de `confirm`).
   `reservePending`, **nunca** toca `eventcap`). `available == null` ⇒ erro "ainda não
   calculada"; `== 0` ⇒ "Evento lotado"; `> 0` ou `-1` ⇒ segue. Oversella proporcional ao
   lag do read model — é o **braço de controle** do experimento de concorrência da Fase 2
-  (issues #11/#12), não um bug.
+  (issues #12/#13), não um bug.
 
 `Service/ReadModelRefreshService` — `@Scheduled` (a cada `readmodel.availability.refresh.ms`,
 default 5000; env `READMODEL_AVAILABILITY_REFRESH_MS`): um único
