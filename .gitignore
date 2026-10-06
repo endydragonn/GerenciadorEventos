@@ -34,4 +34,7 @@ build/
 # Testes de carga: resultados podem ser versionados, mas nunca credenciais/tokens
 Projeto/carga/results/users-*.json
 Projeto/carga/results/events-*.json
+# Matriz do experimento: o CSV (matriz.csv) e o registro; o HTML regenera e os resumos de repeticoes invalidas sao so diagnostico
+Projeto/carga/results/matriz.html
+Projeto/carga/results/matriz-invalida-*.json
 **/tokens.json

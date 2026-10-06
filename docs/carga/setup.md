@@ -2,7 +2,8 @@
 
 > Os passos 1–4 abaixo estão automatizados em `Projeto/carga/` (`setup-host.ps1`,
 > `setup-gerador.ps1`, `rodar-teste.ps1`; ver `Projeto/carga/README.md`). Este guia fica como
-> referência manual e como lugar do registro do ambiente (seção 5).
+> referência manual e como lugar do registro do ambiente (seção 5). O runner oficial do experimento
+> (matriz de N × repetições × lag, CSV + gráfico) está descrito em `Projeto/carga/README.md`.
 
 Objetivo: uma máquina separada do host do sistema dispara a carga, para que latência e
 throughput absolutos sejam válidos (ver `BACKLOG.md`, "Decisões de arquitetura em vigor").
@@ -24,7 +25,13 @@ throughput absolutos sejam válidos (ver `BACKLOG.md`, "Decisões de arquitetura
      -Protocol TCP -LocalPort 8081 -Action Allow -Profile Private
    ```
 
-4. Deixar a rede como **Privada** (Configurações > Rede). Não expor `5433` para fora do host.
+4. Deixar a rede como **Privada** (Configurações > Rede). A `5433` (Postgres) **só** é aberta para a
+   matriz do experimento (o gerador consulta `confirmed`/`pending` e o lag por `psql` remoto): regra
+   `TCC postgres 5433`, perfil Privado, criada pelo `setup-host.ps1` **só com `-GeradorIp <ip>` e sempre
+   restrita a esse IP** (sem o parâmetro a 5433 continua fechada); remova ao fim do experimento com
+   `Remove-NetFirewallRule -DisplayName 'TCC postgres 5433'`. A senha do Postgres vai para o gerador só
+   pela variável de ambiente `PGPASSWORD` (ver `Projeto/carga/README.md`); nunca expor a `5433` para
+   fora da LAN.
 5. Do gerador, `http://<IP_HOST>:8081` deve responder (passo 4 abaixo).
 6. Para uma medição estável: ligar na tomada, plano de energia "Alto desempenho", fechar apps
    pesados e anotar CPU/RAM/disco do host na seção "Ambiente" abaixo.
@@ -72,22 +79,36 @@ Critério: sem erros de conexão e latência p95 coerente com a base medida no p
 
 ## 5. Registro (preencher no dia do teste)
 
+Preenchido com o que as rodadas de 2026-10-04 registraram (`Projeto/carga/results/baseline-20261004-122632.txt`);
+"n/d" = não foi registrado na época (não reconstruído depois).
+
 | Item | Host-alvo | Gerador |
 |---|---|---|
-| CPU / RAM / disco | | |
-| SO / versão | | |
-| Rede (cabo/Wi-Fi, velocidade) | | |
-| IP | | |
-| Ferramenta e versão | | k6 |
-| Ping min/média/máx | | |
-| Perda de pacotes | | |
-| Commit testado | | |
+| CPU / RAM / disco | n/d | AMD Ryzen 5 7600 (6 núcleos); RAM/disco n/d |
+| SO / versão | n/d | n/d |
+| Rede (cabo/Wi-Fi, velocidade) | Ethernet, mesma rede do gerador | link de 1 Gbps |
+| IP | ver "Ambiente" na seção 6 | não versionado |
+| Ferramenta e versão | Docker Desktop (stack do projeto; versão n/d) | k6 v2.2.0 (go1.26.5, windows/amd64) |
+| Ping min/média/máx | n/d | **sem resposta ao ICMP** (100 pacotes sem retorno; ICMP provavelmente bloqueado no host) |
+| Perda de pacotes | n/d | n/d (sem ICMP) |
+| Latência HTTP base (`GET /actuator/health`, n=30) | n/d | p50 14,9 / p95 19,0 / máx 21,1 ms |
+| Commit testado | por rodada: seção 6 (nem toda rodada registrou); a matriz grava `commit` em cada linha | idem |
 
 ## Critério de aceite da issue #4 (item 3 do backlog)
 
-- [ ] Gerador com acesso de rede ao host-alvo.
-- [ ] Ferramenta de carga instalada e smoke test passando.
-- [ ] Latência base entre gerador e alvo medida e registrada neste documento.
+Evidência: o baseline `Projeto/carga/results/baseline-20261004-122632.txt` (`setup-gerador.ps1`, 2026-10-04) e
+as rodadas de carga de 2026-10-04 (seção 6), todas disparadas do gerador contra o host.
+
+- [x] Gerador com acesso de rede ao host-alvo. O `setup-gerador.ps1` conectou na 8081 e o
+  `/actuator/health` respondeu; as rodadas de disputa, RPM e aleatório (seção 6) rodaram do gerador sem
+  erro de conexão.
+- [x] Ferramenta de carga instalada e smoke test passando. k6 v2.2.0 no gerador. O smoke test foi o do
+  próprio `setup-gerador.ps1` (conexão TCP + `/actuator/health` + 30 requisições HTTP sem falha) e, em
+  seguida, o teste 1 (disputa) do kit; o `smoke.js` da seção 4 não foi usado.
+- [x] Latência base entre gerador e alvo medida e registrada neste documento (seção 5). **Só a latência
+  HTTP foi medida** (p50 14,9 / p95 19,0 / máx 21,1 ms, n=30, uma medição; a recomendação de repetir 3 vezes em
+  horários diferentes não foi cumprida). **O ICMP não respondeu**: não há ping min/média/máx nem perda de
+  pacotes.
 
 ## 6. Registro das rodadas
 
@@ -95,7 +116,8 @@ Fonte dos números: `Projeto/carga/results/verificacoes.log` (cada `-Verificar` 
 alvo e config ativa). Rodar o verificador **logo após** a rodada: depois do TTL as reservas
 expiram e as vagas voltam, então só `eventos_com_overselling` continua valendo como prova.
 
-Ambiente: host `192.168.68.61` (Ethernet, mesma rede do gerador); ping do gerador < 1 ms, 0% de perda.
+Ambiente: host `192.168.68.61` (Ethernet, mesma rede do gerador). Latência base de rede medida só por HTTP
+(p50 14,9 / p95 19,0 ms; o ICMP não respondeu: seção 5); descontar da latência do gerador.
 
 | Data | Teste | Alvo | Config (read path / refresh) | Resultado do banco | Overselling |
 |---|---|---|---|---|---|
@@ -105,10 +127,22 @@ Ambiente: host `192.168.68.61` (Ethernet, mesma rede do gerador); ping do gerado
 | 2026-10-04 | Taxa fixa (RPM) | `Rpm-903506` | cas / 5000 ms | 79 eventos, capacidade total 7900, 5379 reservas (2312 `pending` ativas + 3067 `expired`), ocupação ~29% (dentro do TTL) | 0 (`eventos_com_overselling = 0`) |
 | 2026-10-04 | Taxa fixa (RPM) | `Rpm-904217` | cas / 5000 ms, `max_connections=300` (CSV do k6) | 79 eventos, capacidade total 7900, ~5375 reservas (3413 `pending` + 1962 `expired`), ocupação ~43% (dentro do TTL) | 0 (`eventos_com_overselling = 0`) |
 | 2026-10-04 | Aleatório (teste 3) | `Ale-904991` | cas / 5000 ms, `max_connections=1000`, commit `c9bd024` (PR #95); k6: 45 min, 1k–12k RPM, rpm médio 6150, **112.878 respostas 5xx**, 1735 iterações descartadas, reserva p95/p99 153/879 ms, leitura p95/p99 770/4392 ms, máx 23,2 s | 1464 eventos, capacidade total 146400, 81109 reservas `expired`, 0 ativas (após o TTL) | 0 (`eventos_com_overselling = 0`) |
-| 2026-10-04 | Taxa fixa (RPM) | `Rpm-909189` | cas / 5000 ms, `max_connections=1000` | 53 eventos, capacidade total 5300, 2917 reservas `pending` ativas (~55%, dentro do TTL); 39.120 linhas de `BindException` no log; resumo do k6 pendente (não publicado) | 0 (`eventos_com_overselling = 0`) |
-| 2026-10-04 | Taxa fixa (RPM) | `Rpm-909317` | cas / 5000 ms, `max_connections=1000` | 53 eventos, capacidade total 5300, ~2850 reservas (1343 `pending` + 1507 `expired`, parcialmente expiradas); 21.711 linhas de `BindException` no log; resumo do k6 pendente | 0 (`eventos_com_overselling = 0`) |
+| 2026-10-04 | Taxa fixa (RPM) | `Rpm-909189` | cas / 5000 ms, `max_connections=1000` | 53 eventos, capacidade total 5300, 2917 reservas `pending` ativas (~55%, dentro do TTL); 39.120 linhas de `BindException` no log; k6: 9644 RPM reais, 2917 aceitas, 2697 lotado, **4387 respostas 5xx**, p50/p95/p99 27,5 / 65,1 / 156,5 ms, máx 431 ms (`summary-rpm10000-909189.json`) | 0 (`eventos_com_overselling = 0`) |
+| 2026-10-04 | Taxa fixa (RPM) | `Rpm-909317` | cas / 5000 ms, `max_connections=1000` | 53 eventos, capacidade total 5300, ~2850 reservas (1343 `pending` + 1507 `expired`, parcialmente expiradas); 21.711 linhas de `BindException` no log; k6: 9643 RPM reais, 2850 aceitas, 2587 lotado, **4563 respostas 5xx**, p50/p95/p99 26,6 / 50,1 / 74,2 ms, máx 177 ms (`summary-rpm10000-909317.json`) | 0 (`eventos_com_overselling = 0`) |
 
-Pendente de preencher: RPM alvo, duração, usuários e commit testado de cada rodada.
+Parâmetros das rodadas RPM acima (fonte: `Projeto/carga/results/resultados-rpm.csv`; todas com 200 usuários e 100 vagas por evento):
+
+| Rodada | RPM alvo (real) | Duração | Eventos |
+|---|---|---|---|
+| `Rpm-903185` | 2000 (1930) | 62,2 s | 11 |
+| `Rpm-903506` | 10.000 (9761) | 92,2 s | 79 |
+| `Rpm-904217` | 10.000 (9764) | 92,2 s | 79 |
+| `Rpm-909189` | 10.000 (9644) | 62,2 s | 53 |
+| `Rpm-909317` | 10.000 (9643) | 62,2 s | 53 |
+
+Commit testado: **não foi registrado** nas rodadas de 2026-10-04 (as exceções estão citadas nas linhas e
+seções abaixo: `c9bd024`, `275d587`, `af01483`); não será reconstruído. A matriz do experimento grava
+`commit` em cada linha de `results/matriz.csv`.
 
 ### Observações das rodadas RPM (2026-10-04)
 
@@ -298,12 +332,10 @@ nas duas. **Confirmar 60% das reservas não mudou latência nem vazão.**
 3. **A disputa realista confirma abaixo de `PCT_CONFIRMA` (40–45% em vez de 60%).** O sorteio usa
    semente fixa 0 sobre os índices `0..N-1`; nos primeiros 50/100/200 índices a fração `< 60` é
    38% / 52% / 53% (59,8% nos 15.000 do teste 2), e a amostra da disputa é pequena e idêntica em toda
-   rodada. Não afeta corretude (0 overselling). **Melhoria pendente:** semente por rodada (ex.: `runId`).
-4. **`rodar-teste.ps1` ainda manda "rode `-Verificar` logo após a rodada (~120 s)"**, o que não vale mais
-   quando tudo é confirmado (`confirmed` não expira). Pendente, só mensagem.
-5. **CSVs:** ganharam colunas de confirmação no cabeçalho; linhas antigas ficam com menos colunas, e o
+   rodada. Não afeta corretude (0 overselling).
+4. **CSVs:** ganharam colunas de confirmação no cabeçalho; linhas antigas ficam com menos colunas, e o
    `resultados.csv` recebeu `pct_confirma` (valor 100) nas 3 linhas das rodadas do `af01483`.
-6. **Leitura bimodal (p95 ~460 ms) segue em aberto** (achado 3 da seção anterior): não mudou com a
+5. **Leitura bimodal (p95 ~460 ms) segue em aberto** (achado 3 da seção anterior): não mudou com a
    confirmação, o que reforça que vem da busca em memória e não da escrita.
-7. **`tw` do `sockstat` continua sem série durante a carga** (achado 4 da seção anterior); o proxy é 0
+6. **`tw` do `sockstat` continua sem série durante a carga** (achado 4 da seção anterior); o proxy é 0
    `BindException` e 0 5xx.

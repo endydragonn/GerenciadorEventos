@@ -1,12 +1,16 @@
 # Testes de carga
 
+Este kit é o **runner oficial do experimento** da Fase 2 (CAS × caminho ingênuo): a
+[matriz](#matriz-do-experimento-runner-oficial) (`make test-matriz`) gera o CSV e o gráfico dos
+resultados. O harness de `docs/carga/harness/` é só sanity local (stack no próprio host).
+
 Duas máquinas: o **host** (roda a stack, o alvo do teste) e o **gerador** (roda o k6).
 O k6 **nunca** roda no host: competiria por CPU/rede com o backend e invalidaria as latências.
 
 | Máquina | Precisa de | Não precisa de |
 |---|---|---|
 | Host | Docker Desktop, `Projeto/.env` | k6 |
-| Gerador | k6 (o `setup-gerador` instala via winget), PowerShell, Git for Windows (Git Bash, usado pelo seed), clone **completo** do repo | Docker, banco, `.env` |
+| Gerador | k6 (o `setup-gerador` instala via winget), PowerShell, Git for Windows (Git Bash, usado pelo seed e pelo report), clone **completo** do repo; só para a matriz: `psql` (cliente PostgreSQL 16) | Docker, banco, `.env` |
 
 > Nunca copie o `Projeto/.env` para o gerador (credenciais reais).
 
@@ -15,7 +19,7 @@ Atalhos via `make` (GNU make; `winget install ezwinports.make`). Rode em `Projet
 
 ## Preparação
 
-**No host** (PowerShell como Administrador, para criar a regra de firewall da 8081; rede como Privada):
+**No host** (PowerShell como Administrador, para criar a regra de firewall da 8081; rede como Privada). A 5433 (Postgres) **não** é aberta aqui: só a matriz usa, e só com `GERADOR_IP` (ver "Matriz do experimento"):
 
 ```powershell
 make setup-host            # ou: .\setup-host.ps1 [-ReadPath cas|naive] [-RefreshMs 5000]
@@ -31,6 +35,101 @@ make setup-gerador HOST_IP=<ip>    # ou: .\setup-gerador.ps1 -HostIp <ip>
 
 Instala o k6, testa a conexão e salva a latência base de rede em `results\baseline-*.txt`
 (o valor a descontar das medições). Registre também em `docs/carga/setup.md`, seção 5.
+
+## Matriz do experimento (runner oficial)
+
+Para **um** lag e **um** braço por vez, roda a disputa de vagas (teste 1, `PCT_CONFIRMA=100`) para
+uma lista de N e um número de repetições, e acumula **uma linha por execução** em
+`results\matriz.csv`. O lag (`READMODEL_AVAILABILITY_REFRESH_MS`) e o braço (`RESERVATION_READPATH`)
+são lidos no startup do backend e não mudam em runtime: o valor passado ao gerador
+(`READPATH` / `REFRESH_MS`) só **rotula** as colunas `braco` e `lag_ms` e precisa bater com o que o
+host está rodando. Para varrer lags e braços, troque a config no host e rode a matriz de novo; as
+linhas se acumulam no mesmo CSV.
+
+Host e gerador devem estar **no mesmo commit** (a coluna `commit` é o do checkout do gerador).
+
+```powershell
+# 1) host (PowerShell como Administrador). GERADOR_IP é obrigatório para a matriz: cria a regra de
+#    firewall da 5433 (Privada) SEMPRE restrita a esse IP; sem ele a 5433 fica fechada.
+make setup-host READPATH=naive REFRESH_MS=2000 GERADOR_IP=<ip do gerador>
+#    Ao fim do experimento, feche a 5433:  Remove-NetFirewallRule -DisplayName 'TCC postgres 5433'
+
+# 2) gerador, uma vez por sessão: senha do Postgres do host SÓ no ambiente (não ecoa, não vai pro histórico)
+$s = Read-Host 'Senha do Postgres do host' -AsSecureString
+$env:PGPASSWORD = [System.Net.NetworkCredential]::new('', $s).Password
+
+# 3) gerador: a matriz (READPATH/REFRESH_MS = os mesmos do passo 1)
+make test-matriz HOST_IP=<ip do host> VUS=50,100,200 REPETICOES=10 CAPACIDADE=20 READPATH=naive REFRESH_MS=2000
+
+# 4) outro lag/braço: volte ao passo 1 com os novos valores e repita o passo 3
+#    (ex.: REFRESH_MS=500, 1000, 5000 e READPATH=cas)
+
+# 5) gerador: gráfico (results\matriz.csv -> results\matriz.html; Git Bash + awk, sem dependência nova)
+make report-matriz
+```
+
+Sem `make`: `.\rodar-matriz.ps1 -HostIp <ip> -Vus 50,100,200 -Repeticoes 10 -Capacidade 20 -Rotulo naive -RefreshMs 2000`
+e `bash ../../docs/carga/harness/report-matriz.sh results/matriz.csv results/matriz.html`.
+`PGUSER`/`PGDATABASE` (ou `-PgUsuario`/`-PgBanco`) assumem `admin`/`meu_banco` (os do projeto; se o
+`Projeto/.env` do host usar outros, informe). A **senha** vem só de
+`PGPASSWORD`: nunca como argumento ou variável do `make` (o make ecoa a linha de comando), nunca
+impressa, nunca gravada. Instalar o `psql` no gerador: `make setup-gerador` mostra o comando
+(`winget install PostgreSQL.PostgreSQL.16 --interactive`, marcando só "Command Line Tools").
+
+Com N alto (≥ ~100) e `max_connections=100` (padrão do Postgres) o pool do backend pode estourar o
+limite (ver "Por que `MAX_CONN` importa"; o `VUS` padrão chega a 200): rode o passo 1 uma vez (firewall) e
+suba a stack com `make host-rpm MAX_CONN=300 READPATH=... REFRESH_MS=...` no lugar do `setup-host` (as
+regras de firewall persistem). Repetições afetadas por `too many clients` (5xx) são **descartadas**, não
+gravadas (ver abaixo).
+
+### O que cada execução faz
+
+1. **Seed único por N**: `N` usuários + `REPETICOES` eventos novos, todos com a mesma `capacity`
+   (um evento novo por repetição). Antes da 1ª repetição de todas, um **aquecimento descartado**
+   (rajada pequena, `-VusAquecimento`, evento próprio, sem linha no CSV).
+2. Espera o read model ter a linha do evento e depois um tempo **aleatório em `[0, lag_ms)`**: a
+   rajada cai numa fase pseudo-aleatória do job de refresh, sem sincronizar com ele.
+3. Dispara o k6 (`carga.js`, confirmação 100% embutida) e, enquanto ele roda, consulta o Postgres
+   do host por `psql` remoto (`:5433`) a cada ~`-PollMs` (padrão 250 ms):
+   `now() - refreshed_at` do evento (relógio do Postgres; o instante da amostra é o do gerador, o
+   mesmo do k6).
+4. Depois da rajada lê `confirmed` e `pending` do evento no Postgres (fonte de verdade) e grava a linha
+   — **só se a repetição for válida**: k6 com código 0, resumo com `disparo_ms`, nenhum usuário sem
+   login, nenhuma resposta inesperada/5xx (reserva ou confirma) e toda reserva aceita confirmada
+   (`Test-RepeticaoValida`, em `lib-matriz.ps1`). Uma repetição inválida (ex.: `too many clients` no
+   host) enviesaria a média/desvio do overselling, então é **pulada**: não entra no CSV, o motivo e a
+   contagem aparecem no fim, o resumo do k6 dela fica em `results\matriz-invalida-*.json` (sem
+   credenciais, ignorado pelo git) e o script sai com código **2** (matriz incompleta). Repita a matriz
+   (ou só o grupo afetado) depois de corrigir a causa.
+
+### Colunas de `results\matriz.csv`
+
+`braco,lag_ms,N,capacity,rep,confirmed,pending,oversell,p50,p95,p99,throughput,lag_obs_disparo,lag_obs_max,commit`
+
+| Coluna | Significado |
+|---|---|
+| `braco` | `cas` ou `naive` (o `READPATH` rotulado) |
+| `lag_ms` | `REFRESH_MS` rotulado (lag configurado no host) |
+| `N`, `capacity`, `rep` | clientes concorrentes, vagas do evento, repetição (1..REPETICOES) |
+| `confirmed`, `pending` | reservas do evento no Postgres do host após a rajada |
+| `oversell` | `max(0, confirmed − capacity)`: **métrica primária**; `pending + confirmed` é derivável (secundária) |
+| `p50`, `p95`, `p99` | latência da reserva (`POST /bff/event-wallets`) em ms, vista pelo gerador (descontar a base de rede) |
+| `throughput` | tentativas/s (iterações reserva + confirma) **na janela da rajada** (1ª iteração iniciada até a última terminada); exclui os logins do `setup()`, então **não** é o `reservas_por_s` do teste 1 |
+| `lag_obs_disparo` | lag observado (ms) na última amostra **antes** do disparo da rajada |
+| `lag_obs_max` | maior lag observado (ms) entre essa amostra e as da rajada |
+| `commit` | `git rev-parse --short HEAD` do checkout do gerador |
+
+`lag_obs_*` = **-1** significa "sem leitura" (linha do read model inexistente ou nenhuma amostra
+válida na janela); o report ignora o -1. A resolução é o intervalo do polling: o instante exato do
+disparo vem do k6 (`disparo_ms`/`fim_ms` no resumo, relógio do gerador, depois do `setup()` com os
+logins), mas a amostra pode ser até ~`PollMs` anterior ao disparo. A rajada em si é curta (a latência
+p95 da reserva é de dezenas de ms; o `duracao_s` do teste 1 inclui os logins do `setup()`), então
+na prática não há amostra própria na janela e `lag_obs_max` costuma igualar `lag_obs_disparo`.
+
+O report (`report-matriz.sh`) desenha, por (N, capacity), o overselling × lag (uma curva por braço: média, ±1
+desvio amostral e mín–máx das repetições) e a latência p95 × lag, mais a tabela dos agregados.
+Auto-testes (sem rede/stack): `bash ../../docs/carga/harness/report-matriz-selftest.sh` e
+`.\lib-matriz.selftest.ps1`.
 
 ## Teste 1 — disputa de vagas (corretude)
 
@@ -155,7 +254,7 @@ seguem contando iterações (reservas), não requisições de confirma; como a i
 ## Seed único
 
 O seed (host + usuários + eventos via `POST /bff/seed`) mora só em `docs/carga/harness/setup.sh`,
-o mesmo do harness da issue #11. Os testes deste kit o chamam por `lib-seed.ps1` com
+o mesmo do harness local. Os testes deste kit o chamam por `lib-seed.ps1` com
 `EVENTS`, `EVENT_NAME_PREFIX`, `SEM_TOKENS=1`, `USERS_FILE` e `EVENT_IDS_FILE` (ver o cabeçalho
 do script); o k6 faz o login dos usuários no `setup()`. Usuários: `carga-att<i>-<sufixo>@example.com`;
 eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
@@ -171,7 +270,8 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 - Cada `-Verificar` (`verificar-disputa` / `verificar-rpm`) anexa a saída em `Projeto/carga/results/verificacoes.log`, com data/hora, alvo (evento ou prefixo) e config ativa (read path / refresh). Rode logo após a rodada e cite esse arquivo na documentação.
 - **Latência:** desconte a base de rede medida no `setup-gerador`.
 - No `naive`, o overselling varia com o ponto do ciclo do read model em que a rajada cai:
-  repita a rodada e reporte média e dispersão.
+  repita a rodada e reporte média e dispersão (a matriz faz isso: repetições, rajada em fase
+  aleatória do job e `report-matriz`).
 
 ## Limites e cuidados
 
@@ -187,10 +287,12 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 
 | Arquivo | Onde roda | Função |
 |---|---|---|
-| `setup-host.ps1` | host | sobe a stack com o override; `-Verificar -EventId N` confere o banco |
-| `setup-gerador.ps1` | gerador | instala o k6, mede a latência base |
+| `setup-host.ps1` | host | sobe a stack com o override; firewall 8081 (e a 5433, só com `-GeradorIp`, restrita a esse IP); `-Verificar -EventId N` confere o banco |
+| `setup-gerador.ps1` | gerador | instala o k6, confere `psql` e a 5433, mede a latência base |
 | `docker-compose.carga.yml` | host | override: read path, lag do read model, log de SQL desligado |
 | `rodar-teste.ps1` / `carga.js` | gerador | teste 1 (confirma `PCT_CONFIRMA` % das aceitas, padrão 100) |
+| `rodar-matriz.ps1` / `lib-matriz.ps1` | gerador | matriz do experimento: usa o `carga.js` do teste 1; `lib-matriz.ps1` = linha do CSV e lag da rajada (`lib-matriz.selftest.ps1` testa) |
+| `../../docs/carga/harness/report-matriz.sh` | gerador | `make report-matriz`: `results\matriz.csv` → `results\matriz.html` (SVG, bash+awk) |
 | `lib-seed.ps1` | gerador | `Invoke-Seed`: chama o seed único `docs/carga/harness/setup.sh` via Git Bash |
 | `rpm/*` | ambos | teste 2 |
 | `aleatorio/*` | gerador | teste 3 |

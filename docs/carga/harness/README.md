@@ -6,32 +6,22 @@ corretude (`confirmed` vs `capacity`), latência p50/p95/p99, throughput
 
 Complementa `docs/testes-manuais/overselling-sob-concorrencia.sh` (que prova
 não-overselling com 2 usuários e capacity=1, no nível HTTP): este harness
-generaliza para N clientes e agrega métricas de desempenho, pensado para
-alimentar o experimento CAS vs. naive da Fase 2 (issues #12/#13).
+generaliza para N clientes e agrega métricas de desempenho.
 
-## Escopo desta rodada (issue #11) — o que falta pra rodar "de verdade"
+## Papel deste harness: sanity local
 
-A issue #11 depende da #4 ("Preparar a máquina/VM separada para geração de
-carga"), que **ainda está aberta** (PR #76 em draft, sem VM real
-provisionada). O usuário decidiu seguir com a #11 mesmo assim: o harness
-abaixo está **completo e funcional contra a stack local**, parametrizado por
-`BASE_URL_K6` para já poder apontar para a VM da #4 sem mudar código quando
-ela existir.
+Este harness é **só sanity local**: roda tudo na própria máquina da stack
+(`docker exec` para o banco, k6 em container na rede Docker), o que serve para
+conferir rapidamente que o cenário, a coleta de lag e o relatório funcionam.
+**O runner oficial do experimento da Fase 2 é o kit `Projeto/carga`** (ver o
+`README.md` de lá): o k6 roda numa máquina geradora separada, a matriz
+(`make test-matriz`) varre N e repetições com rajada em fase aleatória do job
+de refresh e consulta o Postgres do host por `psql` remoto, e `make
+report-matriz` gera o gráfico overselling × lag (`report-matriz.sh`, nesta
+pasta). Números para o artigo vêm dele, não deste harness (latência medida
+com o k6 no mesmo host não é válida).
 
-**O que falta, explicitamente, quando a #4 fechar:**
-
-- Disparar a rodada **de fato de outra máquina/VM** (hoje: `BASE_URL_K6`
-  aponta pra rede Docker local, `http://backend:8081`).
-- **Descontar a baseline de latência de rede** entre a VM de carga e o
-  backend — previsto na seção 3.4 de `docs/carga/setup.md`, que só existe na
-  branch `Issue-4`/PR #76 (não foi criado nem copiado aqui de propósito: viraria
-  duplicação divergente entre branches). Sem VM real, não há baseline de rede
-  pra medir.
-
-Nada além disso muda: os scripts abaixo já são o harness real da issue #11,
-não uma simulação — a smoke run documentada mais abaixo rodou contra a stack
-local de verdade (`docker compose up db backend`), gerando CSV e gráfico
-reais.
+O seed (`setup.sh`) é a fonte única dos dois.
 
 ## Arquivos
 
@@ -44,6 +34,8 @@ reais.
 | `verify.sh` | Depois da carga, lê `eventcap`/`walletevent` **direto do banco** (fonte de verdade) e calcula o veredito de corretude. |
 | `report.sh` | Junta k6 + verify + lag num CSV final + gráfico HTML autocontido (SVG inline, sem lib externa). |
 | `report-selftest.sh` | Auto-teste de `report.sh` com fixture sintética (sem precisar de stack no ar) — ver seção própria abaixo. |
+| `report-matriz.sh` | **Não faz parte do `run.sh`**: lê o CSV da matriz do kit `Projeto/carga` (`results/matriz.csv`) e gera o gráfico HTML/SVG (overselling × lag por braço, p95 × lag, tabela). Usado por `make report-matriz`. |
+| `report-matriz-selftest.sh` | Auto-teste de `report-matriz.sh` com fixture (2 braços × 2 lags × 2 N, BOM + CRLF). Só bash/awk. |
 | `resultados/` | Saída de cada rodada (`run.sh` cria `resultados/<sufixo>/`); **não versionado** (`.gitignore` local), mesma regra do `CLAUDE.md` da raiz para relatórios gerados. |
 
 ## Pré-requisitos
@@ -86,7 +78,7 @@ Ver o cabeçalho de `run.sh` para a lista completa comentada. As mais usadas:
 |---|---|---|
 | `N` | `10` | nº de attendees / VUs concorrentes disputando a capacity |
 | `CAPACITY` | `4` | capacity do evento-fixture (`eventcap.capacity`) |
-| `BASE_URL_K6` | `http://backend:8081` | URL do backend visto de **dentro** do container do k6 — trocar pela VM da #4 quando existir |
+| `BASE_URL_K6` | `http://backend:8081` | URL do backend visto de **dentro** do container do k6 (rede Docker local; o experimento oficial não usa este caminho — ver o kit `Projeto/carga`) |
 | `BASE_URL_PROBE` | `http://localhost:8081` | URL usada pelo probe inicial e por `setup.sh`, rodando **nesta máquina** |
 | `READPATH` | `cas` | só rotula o relatório final — **não troca o braço em runtime** (ver abaixo) |
 | `COLLECTOR_INTERVAL_S` | `1` | intervalo (s) entre amostras de lag do `collector.sh` — ver limitação abaixo em rodadas com N alto |
@@ -95,8 +87,9 @@ Ver o cabeçalho de `run.sh` para a lista completa comentada. As mais usadas:
 
 `RESERVATION_READPATH` é um `@Value` do Spring (`Service/EventWalletService`),
 lido **só no startup** do backend — o harness não troca isso em tempo de
-execução. Pra rodar o braço "ingênuo" (issues #12/#13, fora do escopo desta
-issue), suba o backend com a env var setada **antes** de chamar `run.sh`:
+execução. Pra rodar o braço "ingênuo" neste harness (sanity local; o
+experimento oficial usa a matriz do kit `Projeto/carga`), suba o backend com a
+env var setada **antes** de chamar `run.sh`:
 
 ```bash
 # Projeto/.env (ou export antes do docker compose):
@@ -130,11 +123,13 @@ diagnóstico, não como fonte de verdade.
 `collector.sh` amostra o lag chamando `docker exec ... psql` a cada
 `COLLECTOR_INTERVAL_S` segundos (default `1`), em background, durante toda a
 rodada — cada amostra abre um processo `docker exec` + uma conexão nova ao
-Postgres. Em rodadas pequenas (dezenas de VUs, o smoke run local desta issue)
-o custo é desprezível frente à carga do k6. Em rodadas de N alto (issues
-#12/#13, contra o mesmo host de banco), esse polling compete por CPU/IO com o
-próprio banco sob teste e pode introduzir ruído na latência/throughput
-observados — achado da review automática do Gemini na PR #82. Mitigação: para
+Postgres. Em rodadas pequenas (dezenas de VUs, o smoke run local) o custo é
+desprezível frente à carga do k6. Em rodadas de N alto neste harness (mesmo
+host do banco), esse polling compete por CPU/IO com o próprio banco sob teste
+e pode introduzir ruído na latência/throughput observados — achado da review
+automática do Gemini na PR #82. (O runner oficial, `Projeto/carga`, amostra por
+`psql` remoto a partir do gerador, sem `docker exec` no host; o intervalo é
+`-PollMs`, padrão 250 ms.) Mitigação: para
 N grande, aumente `COLLECTOR_INTERVAL_S` (ex.: `2`–`5`s) e leve isso em conta
 na seção de "ameaças à validade" do rascunho do artigo (issue #14) — o lag do
 read model muda na casca de segundos (job padrão a cada 5000ms), então uma
