@@ -303,8 +303,8 @@ aceita → `too many clients` → HTTP 500; para esse caso reduza o pool por env
 
 Escada de carga que estende o teste 2: degraus de taxa fixa (12k, 16k, 20k, … RPM) numa **única** execução do k6
 (seed e login uma vez só), um cenário `constant-arrival-rate` por degrau. O limiar X (`CONTEXT.md`) é o **primeiro
-degrau** com **5xx > 1%** ou **p95 da reserva > 1 s sustentado por 30 s** (alguma janela de 30 s do degrau com p95 >
-1 s; os dois limites são estritos). Os números são de **monólito + HikariCP** (pool e `max_connections` registrados no
+degrau** com **5xx > 1% das reservas** (5xx das reservas / reservas do degrau; os 5xx da confirmação não contam) ou
+**p95 da reserva > 1 s sustentado por 30 s** (alguma janela de 30 s do degrau com p95 > 1 s; os dois limites são estritos). Os números são de **monólito + HikariCP** (pool e `max_connections` registrados no
 CSV); os de antes do pool (#96) estão invalidados (ver `results/ANALISE.md`).
 
 ```powershell
@@ -333,13 +333,14 @@ A escada **vai até o máximo**, mesmo depois de o host degradar: ajuste `DEG_MA
 escada; anote o X preliminar (refinado na Fase 8, issue #40) e se o report o marcou como **limite inferior**. O `.html`
 regenera do CSV e fica fora do git.
 
-**Colunas do CSV:** `escada,rpm_alvo,rpm_efetivo,duracao_s,requisicoes,erros_5xx,taxa_5xx,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit`
+**Colunas do CSV:** `escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit`
 
 | Coluna | Significado |
 |---|---|
 | `escada` | prefixo dos eventos (`Deg-<id>`), o mesmo do `make verificar-rpm` |
 | `rpm_alvo`, `rpm_efetivo` | taxa configurada e reservas enviadas / duração × 60 (cai abaixo do alvo se o k6 descartou iterações) |
-| `requisicoes`, `erros_5xx`, `taxa_5xx` | reserva + confirma; 5xx das duas; `taxa_5xx` = `erros_5xx / requisicoes` como **fração** (0,01 = 1%) |
+| `reservas`, `erros_5xx`, `taxa_5xx` | reservas respondidas no degrau; 5xx **das reservas**; `taxa_5xx` = `erros_5xx / reservas` como **fração** (0,01 = 1%). Só a reserva: o X decide quando a reserva vai para a fila, e as confirmações diluiriam a taxa |
+| `erros_5xx_confirma` | 5xx da confirmação: só informativo, **não** entra em `taxa_5xx` nem em X (o runner avisa se houver) |
 | `outros` | respostas inesperadas da reserva (4xx fora do "lotado", timeout, conexão recusada): **não** entram em X, mas o report avisa |
 | `p50`, `p95`, `p99` | latência da reserva no degrau inteiro (ms), do k6 (descontar a base de rede) |
 | `p95_max_janela_30s` | maior p95 da reserva entre as janelas de 30 s do degrau (ms); `-1` = sem janela |
@@ -348,13 +349,15 @@ regenera do CSV e fica fora do git.
 | `braco`, `max_connections`, `pool_hikari`, `commit` | o que o host roda (rotulado) e o commit do checkout do gerador |
 
 **Regra do X** (só em `report-degraus.sh`; o runner apenas grava as colunas; `report-degraus-selftest.sh` cobre as
-fixtures): *degradou* = `taxa_5xx > 1%` ou `p95_max_janela_30s > 1000 ms`; *gerador saturado* = `iteracoes_descartadas > 0`
+fixtures): *degradou* = `taxa_5xx > 1%` (5xx das reservas / reservas) ou `p95_max_janela_30s > 1000 ms`; *gerador saturado* = `iteracoes_descartadas > 0`
 ou `rpm_efetivo < 95%` do alvo (tolerância fixa de 5%). X = primeiro degrau que degradou. Se o gerador saturou
 **estritamente antes** (ou nenhum degrau degradou e algum saturou), X vira **limite inferior**: X > último degrau sem
 saturação. Saturou já no 1º degrau: sem limite inferior. Degradou e saturou no **mesmo** degrau: X firme, com aviso
 (as descartadas podem vir do próprio host lento, que esgota os VUs; o 5xx é sinal do host). Nenhum degradou nem
 saturou: "X acima do último degrau". O report desenha latência (p50, p95, p99, pior janela), throughput × carga
-oferecida e taxa de 5xx × RPM alvo (eixo x linear, painéis separados) com a marca do X, e a tabela de todos os degraus.
+oferecida e taxa de 5xx das reservas × RPM alvo (eixo x linear, painéis separados) com a marca do X, e a tabela de todos
+os degraus. CSV no formato antigo (coluna `requisicoes`, com a taxa somando as confirmações) é recusado pelo report:
+gere a escada de novo.
 
 **A conta do seed** (`Get-PlanoEscada` em `degraus/lib-degraus.ps1` = `carga-degraus.js`): o k6 reinicia
 `iterationInTest` a cada cenário, então cada degrau usa uma faixa própria de pares (usuário, evento), de tamanho

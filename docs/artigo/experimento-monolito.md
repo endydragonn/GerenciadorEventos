@@ -156,13 +156,15 @@ As definições seguem `CONTEXT.md`. A tabela diz como cada uma é coletada.
 | **Lag observado** | `lag_obs_disparo` (última amostra antes do disparo) e `lag_obs_max` (maior valor entre essa amostra e as da rajada); `-1` = sem leitura. | `now() − refreshed_at` do evento (relógio do Postgres), amostrado a cada ~250 ms pelo gerador por `psql` remoto; o instante da amostra é o do relógio do gerador, o mesmo do k6. |
 | **Latência da reserva** | p50, p95 e p99 de `POST /bff/event-wallets`, em ms. | k6 no gerador; reportada como medida, sem subtrair a latência base HTTP (ver Setup: não é comparável). |
 | **Vazão** | Matriz: tentativas por segundo na janela da rajada (1ª iteração iniciada até a última terminada), sem os logins do `setup()`. Escada: reservas por segundo respondidas sem 5xx. | k6 (resumo da execução). |
-| **Taxa de 5xx** | `erros_5xx / requisicoes` (reserva e confirmação), como fração. Respostas inesperadas (4xx fora de "lotado", timeout, conexão recusada) vão para `outros` e não entram em X. | k6, por degrau. |
+| **Taxa de 5xx** | `erros_5xx / reservas` (só os 5xx da reserva, sobre as reservas do degrau), como fração. Os 5xx da confirmação ficam em `erros_5xx_confirma`, informativos, fora do X. Respostas inesperadas (4xx fora de "lotado", timeout, conexão recusada) vão para `outros` e não entram em X. | k6, por degrau. |
 | **p95 por janela de 30 s** | `p95_max_janela_30s`: maior p95 da reserva entre as janelas de 30 s do degrau. | k6: cada reserva é marcada pela janela do instante de **envio**; janelas fixas alinhadas ao início do degrau. |
-| **Limiar X** | Primeiro degrau da escada com 5xx acima de 1% ou p95 acima de 1 s por 30 s. | Regra aplicada só pelo report (`docs/carga/harness/report-degraus.sh`), sobre o CSV. |
+| **Limiar X** | Primeiro degrau da escada com 5xx acima de 1% das reservas ou p95 acima de 1 s por 30 s. | Regra aplicada só pelo report (`docs/carga/harness/report-degraus.sh`), sobre o CSV. |
 
 Detalhes de coleta que afetam a leitura:
 
 - Os dois limites do X são estritos (`taxa_5xx` > 1%; `p95_max_janela_30s` > 1000 ms).
+- A taxa de 5xx do X é só da reserva (5xx das reservas / reservas do degrau): o X marca o ponto em que a reserva
+  passaria a ir para a fila, e os 5xx da confirmação não entram, mas ficam registrados em `erros_5xx_confirma`.
 - O gerador é considerado **saturado** num degrau se `iteracoes_descartadas > 0` ou se `rpm_efetivo` ficar abaixo
   de 95% do alvo. Se ele saturou estritamente antes do primeiro degrau que degradou, X vira **limite inferior**
   (X maior que o último degrau sem saturação). Se degradou e saturou no mesmo degrau, X é firme, com aviso.
@@ -214,10 +216,10 @@ melhorar a curva (só as repetições inválidas são refeitas, pelas regras do 
 > **[PREENCHER — issue #14]** Escada de carga. Fonte: `Projeto/carga/results/degraus-<id>.csv` (uma linha
 > por degrau), `Projeto/carga/results/summary-degraus-<id>.json` e o gráfico de
 > `make report-degraus CSV=results\degraus-<id>.csv` (comando rodado em `Projeto/carga`).
-> Preencher: o **X** (primeiro degrau com `taxa_5xx` > 1% ou `p95_max_janela_30s` > 1000 ms), dizendo
+> Preencher: o **X** (primeiro degrau com `taxa_5xx` > 1%, de 5xx das reservas, ou `p95_max_janela_30s` > 1000 ms), dizendo
 > explicitamente se o report o marcou como **limite inferior** (gerador saturado antes), como "X acima do
 > último degrau" ou como "saturou já no 1º degrau"; `max_connections` e `pool_hikari` do CSV; a tabela por
-> degrau (`rpm_alvo`, `rpm_efetivo`, `taxa_5xx`, `p95`, `p95_max_janela_30s`, `throughput`,
+> degrau (`rpm_alvo`, `rpm_efetivo`, `taxa_5xx`, `erros_5xx_confirma`, `p95`, `p95_max_janela_30s`, `throughput`,
 > `iteracoes_descartadas`); as curvas de latência e vazão × carga oferecida e de taxa de 5xx × RPM alvo; e a
 > causa dos 5xx no log do backend (`too many clients` indicaria o teto de conexões: ver "Ameaças à validade").
 

@@ -25,6 +25,8 @@
 //
 // Respostas da reserva: 201 aceita | 400 "lotado" | >= 500 erro de servidor | outro (inclui status 0:
 // timeout/conexao) inesperado. Cada aceita e confirmada (POST /bff/event-wallets/confirm) com PCT_CONFIRMA %.
+// 5xx da reserva (reservas_5xx -> erros_5xx) e da confirmacao (confirma_5xx) sao contados SEPARADOS por degrau: so o da
+// reserva entra na taxa do limiar X (taxa_5xx = erros_5xx / reservas, em lib-degraus.ps1); o da confirmacao e informativo.
 //
 // Variaveis (passadas pelo rodar-degraus.ps1):
 //   BASE_URL, RPMS (lista crescente "12000,16000,..."), DURACAO_S (por degrau), USERS_FILE, EVENTS_FILE,
@@ -315,7 +317,7 @@ export function handleSummary(data) {
   };
   let texto = '\nresumo por degrau:\n';
   for (const d of degraus) {
-    texto += `  ${d.nome}: reservas=${d.reservas} 5xx=${d.erros_5xx + d.confirma_5xx} outros=${d.outros} descartadas=${d.descartadas} p50=${d.p50_ms.toFixed(1)}ms p95=${d.p95_ms.toFixed(1)}ms p99=${d.p99_ms.toFixed(1)}ms p95_max_janela=${d.p95_max_janela_ms.toFixed(1)}ms${d.fora_das_janelas ? ` fora_das_janelas=${d.fora_das_janelas}` : ''}\n`;
+    texto += `  ${d.nome}: reservas=${d.reservas} 5xx_reservas=${d.erros_5xx} 5xx_confirma=${d.confirma_5xx} outros=${d.outros} descartadas=${d.descartadas} p50=${d.p50_ms.toFixed(1)}ms p95=${d.p95_ms.toFixed(1)}ms p99=${d.p99_ms.toFixed(1)}ms p95_max_janela=${d.p95_max_janela_ms.toFixed(1)}ms${d.fora_das_janelas ? ` fora_das_janelas=${d.fora_das_janelas}` : ''}\n`;
   }
   if (faltando.length) texto += `  sem amostras (tratadas como 0): ${faltando.join(', ')}\n`;
   if (inconsistencias.length) texto += `  INCONSISTENTE: ${inconsistencias.join('; ')}\n`;

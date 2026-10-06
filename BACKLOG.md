@@ -143,7 +143,7 @@ Caminho crítico (issues): #2 → #5 → #7 → #10 feitas; próximo: #11 → #1
 
 ### 13. Throughput/latência preliminares do monólito + limiar X preliminar
 `fase/2` `area/carga` `artigo`
-- **Aceite:** carga em degraus a partir de 12k RPM até degradar ou até o limite do gerador; X = primeiro degrau com 5xx > 1% ou p95 > 1 s por 30 s (se o gerador saturar antes, X é limite inferior). Curva latência/throughput × carga. Ressalva: números de "monólito + HikariCP" — os números pré-pool (#96) estão invalidados.
+- **Aceite:** carga em degraus a partir de 12k RPM até degradar ou até o limite do gerador; X = primeiro degrau com 5xx > 1% das reservas ou p95 > 1 s por 30 s (se o gerador saturar antes, X é limite inferior). Curva latência/throughput × carga. Ressalva: números de "monólito + HikariCP" — os números pré-pool (#96) estão invalidados.
 - **Depende de:** #11
 
 ### 14. Consolidar o resultado da Fase 2 em rascunho de seção do artigo

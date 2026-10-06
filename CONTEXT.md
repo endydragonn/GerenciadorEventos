@@ -42,7 +42,7 @@ Evento com `confirmed` maior que `capacity`. É a métrica primária do experime
 _Avoid_: estouro, overbooking
 
 **Limiar X**:
-Primeiro degrau de carga em que o fluxo síncrono degrada, isto é, 5xx acima de 1% ou p95 acima de 1 s por 30 s.
+Primeiro degrau de carga em que o fluxo síncrono degrada, isto é, 5xx acima de 1% das reservas (só as reservas, não as confirmações) ou p95 acima de 1 s por 30 s.
 _Avoid_: ponto de saturação
 
 **Ponto da série**:

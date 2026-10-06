@@ -9,13 +9,15 @@
 #  autocontido com SVG inline (sem lib externa, no mesmo espírito do report-matriz.sh):
 #
 #    - 3 painéis, todos com o RPM alvo (linear) no eixo x: latência da reserva (p50,
-#      p95, p99 e o pior p95 de janela de 30 s), throughput (reservas/s) e taxa de 5xx.
+#      p95, p99 e o pior p95 de janela de 30 s), throughput (reservas/s) e taxa de 5xx das reservas.
 #      Latência e throughput têm escalas diferentes: painéis separados, nunca eixo duplo;
 #    - o veredito do limiar X, a marca do degrau X (ou do limite inferior) nos painéis e
 #      a "table view" com todos os degraus e a situação de cada um.
 #
 #  DEFINIÇÃO DE X (a ÚNICA implementação da regra; o runner só grava as colunas):
 #    degradou  = taxa_5xx > 1%  OU  p95_max_janela_30s > 1000 ms           (limites estritos)
+#                taxa_5xx = 5xx das RESERVAS / reservas do degrau (o runner a grava); os 5xx da confirmação ficam em
+#                erros_5xx_confirma, só informativos: X decide quando a RESERVA iria para a fila
 #    saturou   = iteracoes_descartadas > 0  OU  rpm_efetivo < 95% do alvo  (tolerância TOL_PCT)
 #    - nenhum degrau saturou antes do 1º que degradou -> X = esse degrau (firme)
 #    - o gerador saturou ESTRITAMENTE antes (ou nenhum degradou) -> X é só LIMITE INFERIOR:
@@ -136,7 +138,7 @@ HTML
 awk -v fonte="${CSV##*/}" -v gerado="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '
 BEGIN {
     FS = ","
-    LIM_5XX = 0.01      # X: taxa_5xx > 1%  (fração)
+    LIM_5XX = 0.01      # X: taxa_5xx (5xx das reservas / reservas) > 1%  (fração)
     LIM_P95 = 1000      # X: p95_max_janela_30s > 1 s (ms)
     TOL_PCT = 5         # gerador saturado: rpm_efetivo < (100 - TOL_PCT)% do alvo
 }
@@ -171,7 +173,7 @@ function xpos(rpm) { return (rmax > rmin) ? xl + (rpm - rmin) / (rmax - rmin) * 
 # situação de um degrau (tabela): por que degradou / saturou
 function situacao(o,   s, sat) {
     s = ""
-    if (t5[o] > LIM_5XX) s = s (s == "" ? "" : "; ") "5xx &gt; 1%"
+    if (t5[o] > LIM_5XX) s = s (s == "" ? "" : "; ") "5xx das reservas &gt; 1%"
     if (pj[o] >= 0 && pj[o] > LIM_P95) s = s (s == "" ? "" : "; ") "p95 de janela &gt; 1 s"
     sat = ""
     if (desc[o] > 0) sat = "iterações descartadas"
@@ -188,7 +190,7 @@ function carrega(id,   k, o) {
     ns = (id == 1) ? 4 : (id == 2) ? 2 : 1
     UN = (id == 1) ? " ms" : (id == 2) ? " reservas/s" : "%"
     DEC = (id == 3) ? "%.2f" : "%.1f"
-    RN = (id == 1) ? "limiar: p95 = 1 s" : (id == 2) ? "carga oferecida (alvo)" : "limiar: 5xx = 1%"
+    RN = (id == 1) ? "limiar: p95 = 1 s" : (id == 2) ? "carga oferecida (alvo)" : "limiar: 5xx das reservas = 1%"
     RCONST = (id != 2)
     if (id == 1) { SN[1] = "p50"; SN[2] = "p95"; SN[3] = "p99"; SN[4] = "p95 janela" }
     else if (id == 2) { SN[1] = "throughput"; SN[2] = "enviadas" }
@@ -218,7 +220,7 @@ function painel(id,   W, H, x0, x1, y0, y1, s, k, v, vmax, step, top, t, i, py, 
     if (t * step < vmax - 1e-9) t++
     if (t < 1) t = 1
     top = step * t
-    rotulo = (id == 1) ? "Latência × RPM alvo" : (id == 2) ? "Throughput × RPM alvo" : "Taxa de 5xx × RPM alvo"
+    rotulo = (id == 1) ? "Latência × RPM alvo" : (id == 2) ? "Throughput × RPM alvo" : "Taxa de 5xx das reservas × RPM alvo"
     printf "<svg viewBox=\"0 0 %d %d\" width=\"100%%\" role=\"img\" aria-label=\"%s\">\n", W, H, rotulo
 
     # grade horizontal (hairline sólida) + rótulos do eixo y; o 0 é a linha de base
@@ -296,8 +298,11 @@ function painel(id,   W, H, x0, x1, y0, y1, s, k, v, vmax, step, top, t, i, py, 
 
 !cab {
     for (i = 1; i <= NF; i++) col[trim($i)] = i
-    split("rpm_alvo rpm_efetivo taxa_5xx p50 p95 p99 p95_max_janela_30s throughput iteracoes_descartadas", req, " ")
-    for (i = 1; i <= 9; i++) if (!(req[i] in col)) { printf "ERRO: coluna obrigatória ausente no CSV: %s\n", req[i] > "/dev/stderr"; erro = 1 }
+    # CSV antigo: taxa_5xx era (5xx da reserva + da confirma) / (reservas + confirmas), diluída pelas confirmações
+    if ("requisicoes" in col) { printf "ERRO: CSV no formato antigo (coluna requisicoes): a taxa_5xx incluía as confirmações; agora é 5xx das reservas / reservas. Gere a escada de novo com o rodar-degraus.ps1 atual.\n" > "/dev/stderr"; erro = 1; exit 1 }
+    # reservas: o denominador da taxa_5xx (e a marca do formato novo)
+    nreq = split("rpm_alvo rpm_efetivo reservas taxa_5xx p50 p95 p99 p95_max_janela_30s throughput iteracoes_descartadas", req, " ")
+    for (i = 1; i <= nreq; i++) if (!(req[i] in col)) { printf "ERRO: coluna obrigatória ausente no CSV: %s\n", req[i] > "/dev/stderr"; erro = 1 }
     if (erro) exit 1
     cab = 1
     next
@@ -363,7 +368,7 @@ END {
     if (tipo == "firme") {
         o = ord[fx]
         mot = ""; dm = ""
-        if (t5[o] > LIM_5XX) { mot = sprintf("5xx &gt; 1%% (%.2f%%)", t5[o] * 100); dm = "5xx" }
+        if (t5[o] > LIM_5XX) { mot = sprintf("5xx das reservas &gt; 1%% (%.2f%%)", t5[o] * 100); dm = "5xx" }
         if (pj[o] >= 0 && pj[o] > LIM_P95) { mot = mot (mot == "" ? "" : " e ") sprintf("p95 &gt; 1 s numa janela de 30 s (%.1f ms)", pj[o]); dm = dm (dm == "" ? "" : "+") "p95" }
         satx = saturou(o) ? 1 : 0
         printf "<p class=\"veredito\" data-tipo=\"firme\" data-x=\"%d\" data-motivo=\"%s\" data-saturado=\"%d\">X = %d RPM: primeiro degrau com %s.", alvo[o], dm, satx, alvo[o], mot
@@ -382,16 +387,16 @@ END {
     # ---- painéis
     LEG[1, 1] = "p50"; LEG[1, 2] = "p95 do degrau"; LEG[1, 3] = "p99"; LEG[1, 4] = "p95 da pior janela de 30 s"
     LEG[2, 1] = "throughput (reservas/s sem 5xx)"; LEG[2, 2] = "enviadas (RPM efetivo / 60)"
-    LEG[3, 1] = "taxa de 5xx (%)"
+    LEG[3, 1] = "taxa de 5xx das reservas (%)"
     printf "<div class=\"paineis\">\n"
     printf "<div class=\"painel\"><h3>Latência da reserva (ms)</h3>\n"; carrega(1); legenda(1); painel(1); printf "</div>\n"
     printf "<div class=\"painel\"><h3>Throughput (reservas/s)</h3>\n"; carrega(2); legenda(2); painel(2); printf "</div>\n"
-    printf "<div class=\"painel\"><h3>Taxa de 5xx (%%)</h3>\n"; carrega(3); legenda(3); painel(3); printf "</div>\n"
+    printf "<div class=\"painel\"><h3>Taxa de 5xx das reservas (%%)</h3>\n"; carrega(3); legenda(3); painel(3); printf "</div>\n"
     printf "</div>\n"
     printf "<p class=\"nota\">Eixo x linear em RPM alvo (reservas por minuto), um marcador por degrau. Tracejado = limiar do critério (latência, 5xx) ou a carga oferecida (throughput). O traço vertical com rótulo marca o degrau X (ou o limite inferior). Valores exatos na tabela.</p>\n"
 
     # ---- tabela
-    printf "<h2>Tabela</h2>\n<div class=\"tabela\">\n<table>\n<thead><tr><th>RPM alvo</th><th>RPM efetivo</th><th>5xx (%%)</th><th>p50 (ms)</th><th>p95 (ms)</th><th>p99 (ms)</th><th>p95 pior janela 30 s (ms)</th><th>throughput (reservas/s)</th><th>descartadas</th><th>outros</th><th>situação</th></tr></thead>\n<tbody>\n"
+    printf "<h2>Tabela</h2>\n<div class=\"tabela\">\n<table>\n<thead><tr><th>RPM alvo</th><th>RPM efetivo</th><th>5xx das reservas (%%)</th><th>p50 (ms)</th><th>p95 (ms)</th><th>p99 (ms)</th><th>p95 pior janela 30 s (ms)</th><th>throughput (reservas/s)</th><th>descartadas</th><th>outros</th><th>situação</th></tr></thead>\n<tbody>\n"
     for (k = 1; k <= n; k++) {
         o = ord[k]
         cls = ""; pre = ""
@@ -400,7 +405,7 @@ END {
         printf "<tr%s><td>%d</td><td>%.0f</td><td>%.2f</td><td>%.1f</td><td>%.1f</td><td>%.1f</td><td>%s</td><td>%.1f</td><td>%d</td><td>%d</td><td>%s%s</td></tr>\n", cls, alvo[o], efe[o], t5[o] * 100, p50[o], p95[o], p99[o], (pj[o] >= 0 ? sprintf("%.1f", pj[o]) : "n/d"), thr[o], desc[o], out[o], pre, situacao(o)
     }
     printf "</tbody>\n</table>\n</div>\n"
-    printf "<footer>Gerado por docs/carga/harness/report-degraus.sh a partir de %s. X = primeiro degrau com taxa de 5xx &gt; 1%% OU p95 &gt; 1 s numa janela de 30 s (limites estritos). Gerador saturado = iterações descartadas &gt; 0 OU RPM efetivo &lt; %d%% do alvo; se isso ocorre antes do degrau X, X é só um limite inferior (o último degrau sem saturação). “n/d” = degrau sem janela de 30 s com amostras.</footer>\n</div>\n", esc(fonte), 100 - TOL_PCT
+    printf "<footer>Gerado por docs/carga/harness/report-degraus.sh a partir de %s. X = primeiro degrau com taxa de 5xx das reservas &gt; 1%% (5xx das reservas / reservas do degrau; os 5xx da confirmação não entram) OU p95 &gt; 1 s numa janela de 30 s (limites estritos). Gerador saturado = iterações descartadas &gt; 0 OU RPM efetivo &lt; %d%% do alvo; se isso ocorre antes do degrau X, X é só um limite inferior (o último degrau sem saturação). “n/d” = degrau sem janela de 30 s com amostras.</footer>\n</div>\n", esc(fonte), 100 - TOL_PCT
 }
 ' "$CSV" >> "$TMP" || exit 1
 

@@ -10,7 +10,8 @@
   e os planos de VUs dos cenarios nao se tocam). A escada vai
   ate o maximo configurado, mesmo depois de o host degradar: pare-a no Ctrl+C se preferir (sem CSV) ou
   configure -RpmMax perto do esperado. O limiar X NAO e decidido aqui: make report-degraus (ver
-  docs\carga\harness\report-degraus.sh) aplica a regra sobre o CSV.
+  docs\carga\harness\report-degraus.sh) aplica a regra sobre o CSV. O 5xx do criterio e so o da RESERVA
+  (taxa_5xx = erros_5xx / reservas); o da confirmacao vai em erros_5xx_confirma, so informativo.
 
   Pares (usuario, evento) unicos: cada degrau usa uma faixa propria de indices, de tamanho
   ceil(RPM * Duracao / 60) + 1; o total (soma dos degraus) tem de caber em Usuarios x Eventos. Eventos
@@ -150,22 +151,24 @@ try {
 }
 
 Write-Host ''
-Write-Host ('  {0,8} {1,8} {2,7} {3,9} {4,9} {5,9} {6,11} {7,7}' -f 'RPM alvo', 'efetivo', '5xx %', 'p50 ms', 'p95 ms', 'p99 ms', 'p95 jan. ms', 'descart.')
+Write-Host ('  {0,8} {1,8} {2,9} {3,9} {4,9} {5,9} {6,11} {7,7}' -f 'RPM alvo', 'efetivo', '5xx res %', 'p50 ms', 'p95 ms', 'p99 ms', 'p95 jan. ms', 'descart.')
 foreach ($l in $linhas) {
-    $c = $l -split ','
-    Write-Host ('  {0,8} {1,8} {2,7:N2} {3,9} {4,9} {5,9} {6,11} {7,7}' -f $c[1], $c[2], ([double]::Parse($c[6], [System.Globalization.CultureInfo]::InvariantCulture) * 100), $c[8], $c[9], $c[10], $c[11], $c[13])
+    $c = $l -split ','   # posicoes = $DegrausCabecalho (lib-degraus.selftest.ps1 confere)
+    Write-Host ('  {0,8} {1,8} {2,9:N2} {3,9} {4,9} {5,9} {6,11} {7,7}' -f $c[1], $c[2], ([double]::Parse($c[6], [System.Globalization.CultureInfo]::InvariantCulture) * 100), $c[9], $c[10], $c[11], $c[12], $c[14])
 }
 Write-Host ''
 $sl = ($s.degraus | Measure-Object -Property sem_login -Sum).Sum
 $ap = ($s.degraus | Measure-Object -Property alem_dos_pares -Sum).Sum
 $ou = ($s.degraus | Measure-Object -Property outros -Sum).Sum
 $ds = ($s.degraus | Measure-Object -Property descartadas -Sum).Sum
+$c5 = ($s.degraus | Measure-Object -Property confirma_5xx -Sum).Sum
 $fj = 0
 foreach ($d in $s.degraus) { $fj += [int]$d.fora_das_janelas }
 if ($fj -gt 0) { Warn "$fj reservas ($(@($s.degraus | Where-Object { $_.fora_das_janelas -gt 0 } | ForEach-Object { "$($_.nome): $($_.fora_das_janelas)" }) -join ', ')) ficaram fora das janelas de 30 s (<= 1% do degrau: atraso de agendamento com o gerador saturado?): contam no p50/p95/p99 do degrau, mas nao no p95 por janela." }
 if ($sl -gt 0) { Warn "$sl iteracoes sem login (usuarios cujo login falhou): reduzem o RPM efetivo e podem aparecer como saturacao do gerador." }
 if ($ap -gt 0) { Warn "$ap iteracoes alem da cota de pares nao foram enviadas (RPM efetivo abaixo do alvo)." }
 if ($ou -gt 0) { Warn "$ou respostas inesperadas ou falhas de conexao (outros): nao entram no criterio de X, mas confira." }
+if ($c5 -gt 0) { Warn "$c5 respostas 5xx na confirmacao (erros_5xx_confirma): nao entram no criterio de X (so os 5xx da reserva), mas confira." }
 if ($ds -gt 0) { Warn 'k6 descartou iteracoes: o alvo nao foi atingido em algum degrau (gerador ou host saturado); o report trata como saturacao do gerador.' }
 Write-Host "CSV da escada: $Csv"
 Write-Host "  gerar o grafico e o limiar X ... make report-degraus CSV=results\$tag.csv" -ForegroundColor Yellow

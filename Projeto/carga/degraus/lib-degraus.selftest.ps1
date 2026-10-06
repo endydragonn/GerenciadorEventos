@@ -27,8 +27,11 @@ function Lanca($nome, [scriptblock]$bloco, $trecho) {
 
 Write-Host ''
 Write-Host '==> Cabecalho do CSV'
-Confere 'colunas da spec (rpm_alvo, rpm_efetivo, taxa_5xx, p50/p95/p99, throughput, descartadas) + as do criterio' $DegrausCabecalho `
-    'escada,rpm_alvo,rpm_efetivo,duracao_s,requisicoes,erros_5xx,taxa_5xx,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit'
+Confere 'colunas da spec (rpm_alvo, rpm_efetivo, taxa_5xx, p50/p95/p99, throughput, descartadas) + as do criterio (5xx so da reserva: reservas, erros_5xx, taxa_5xx; erros_5xx_confirma e informativa)' $DegrausCabecalho `
+    'escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit'
+# o rodar-degraus.ps1 imprime a tabela final pelas POSICOES das colunas do CSV: se o cabecalho mudar, este teste acusa
+Confere 'posicoes que o rodar-degraus.ps1 imprime na tabela (rpm_alvo, rpm_efetivo, taxa_5xx, p50, p95, p99, janela, descartadas)' `
+    ((($DegrausCabecalho -split ',')[1, 2, 6, 9, 10, 11, 12, 14]) -join ',') 'rpm_alvo,rpm_efetivo,taxa_5xx,p50,p95,p99,p95_max_janela_30s,iteracoes_descartadas'
 
 Write-Host ''
 Write-Host '==> Plano da escada: degraus, cota de pares por degrau e tamanho do seed'
@@ -67,16 +70,24 @@ function Degrau($ajustes) {
     ($o | ConvertTo-Json) | ConvertFrom-Json   # como o rodar-degraus.ps1 le o resumo do k6
 }
 $f = { param($d) Format-LinhaDegrau -Escada Deg-1 -Degrau $d -DuracaoS 60 -Braco cas -MaxConnections 300 -PoolHikari 1000 -Commit abc1234 }
-Confere 'linha completa; ponto decimal mesmo em pt-BR; p95_max_janela_30s = p95_max_janela_ms do resumo; taxa = (5xx reserva + confirma) / (reservas + confirmas); throughput = (reservas - 5xx da reserva) / D' `
+Confere 'linha completa; ponto decimal mesmo em pt-BR; p95_max_janela_30s = p95_max_janela_ms do resumo; taxa = 5xx da reserva / reservas (a confirma vai so em erros_5xx_confirma); throughput = (reservas - 5xx da reserva) / D' `
     (& $f (Degrau @{})) `
-    'Deg-1,20000,19000,60,28000,400,0.014286,5,12.3,456.8,1234.5,1100.0,310.3,1000,cas,300,1000,abc1234'
+    'Deg-1,20000,19000,60,19000,380,0.020000,20,5,12.3,456.8,1234.5,1100.0,310.3,1000,cas,300,1000,abc1234'
 Confere 'rpm_efetivo = reservas / D * 60 (9500 reservas em 60 s = 9500 RPM)' `
     ((& $f (Degrau @{ reservas = 9500 })) -split ',')[2] '9500'
-Confere 'sem janela (-1 no resumo): vai como -1.0 (o report trata como n/d)' ((& $f (Degrau @{ p95_max_janela_ms = -1 })) -split ',')[11] '-1.0'
-Confere 'zero requisicoes: taxa 0, sem dividir por zero' `
+Confere 'sem janela (-1 no resumo): vai como -1.0 (o report trata como n/d)' ((& $f (Degrau @{ p95_max_janela_ms = -1 })) -split ',')[12] '-1.0'
+Confere 'zero reservas: taxa 0, sem dividir por zero' `
     ((& $f (Degrau @{ reservas = 0; confirmas = 0; erros_5xx = 0; confirma_5xx = 0; p95_max_janela_ms = -1 })) -split ',')[6] '0.000000'
-Confere 'exatamente 1% (100 de 10000): 0.010000' `
-    ((& $f (Degrau @{ reservas = 8000; confirmas = 2000; erros_5xx = 80; confirma_5xx = 20 })) -split ',')[6] '0.010000'
+Confere 'exatamente 1% (100 de 10000 reservas): 0.010000, mesmo com 5xx na confirma (nao entram na taxa)' `
+    ((& $f (Degrau @{ reservas = 10000; confirmas = 10000; erros_5xx = 100; confirma_5xx = 50 })) -split ',')[6] '0.010000'
+# a mudanca de 2026-10-06: o denominador e so a reserva. Antes a taxa era (5xx reserva + confirma) / (reservas + confirmas),
+# o que diluia: com 100% de confirmacao, 120 5xx em 10000 reservas (1,2%) davam 0.006 e nao disparavam o X.
+Confere '120 5xx em 10000 reservas (1,2%) com 10000 confirmas: taxa 0.012000 (nao diluida pelas confirmas)' `
+    ((& $f (Degrau @{ reservas = 10000; confirmas = 10000; erros_5xx = 120; confirma_5xx = 0 })) -split ',')[6] '0.012000'
+$c = (& $f (Degrau @{ reservas = 10000; confirmas = 10000; erros_5xx = 0; confirma_5xx = 500 })) -split ','
+Confere '5xx so na confirma (500): taxa 0.000000 (nao entra no X)...' $c[6] '0.000000'
+Confere '...mas fica visivel em erros_5xx_confirma (informativa)' $c[7] '500'
+Confere 'erros_5xx (coluna 5) = so os 5xx da reserva' ((& $f (Degrau @{ erros_5xx = 7; confirma_5xx = 9 })) -split ',')[5] '7'
 Lanca 'resumo sem p95_max_janela_ms (resumo de outra versao) falha alto, em vez de gravar 0' {
     $d = Degrau @{}; $d.PSObject.Properties.Remove('p95_max_janela_ms'); Format-LinhaDegrau -Escada Deg-1 -Degrau $d -DuracaoS 60 -Braco cas -MaxConnections 300 -PoolHikari 1000 -Commit abc1234 } 'p95_max_janela_ms'
 

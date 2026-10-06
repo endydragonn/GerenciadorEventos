@@ -10,7 +10,8 @@
 #  saída != 0 se algo não bater).
 #
 #  Regras (constantes no report: 5xx 1%, p95 1000 ms, tolerância do RPM efetivo 5%):
-#    X = primeiro degrau com taxa_5xx > 1% OU p95_max_janela_30s > 1000 ms
+#    X = primeiro degrau com taxa_5xx > 1% (5xx das RESERVAS / reservas; os 5xx da confirmação
+#        ficam em erros_5xx_confirma e não entram) OU p95_max_janela_30s > 1000 ms
 #        (os limites são ESTRITOS: exatamente 1% e exatamente 1000 ms NÃO disparam)
 #    gerador saturado = iteracoes_descartadas > 0 OU rpm_efetivo < 95% do alvo
 #        (exatamente 95% NÃO é saturação)
@@ -31,6 +32,11 @@
 #                                                             -> limite inferior 16000 (saturou em 20000)
 #    G  saturação no 1º degrau                                -> sem base
 #    H  degraus 12000, 16000, 20000, 32000                    -> eixo x LINEAR (posição proporcional ao RPM)
+#    K  5xx só nas reservas: 16000 com exatamente 1,00% (100 de 10000) não é X; 20000 com 1,20% é
+#                                                             -> X firme (5xx das reservas)
+#    L  5xx só nas confirmações (erros_5xx_confirma) em dois degraus -> nenhum degradou (não entram em X)
+#    (o runner calcula taxa_5xx = erros_5xx / reservas; o report só lê taxa_5xx. A conta do runner é testada em
+#    Projeto/carga/degraus/lib-degraus.selftest.ps1.) CSV no formato antigo (coluna requisicoes) é recusado.
 #
 #  Uso: docs/carga/harness/report-degraus-selftest.sh   (só bash/awk; sem stack)
 # =============================================================================
@@ -46,11 +52,16 @@ FALHAS=0
 ok() { echo "   [ok]    $1"; }
 falhar() { echo "   [FALHA] $1"; FALHAS=$((FALHAS + 1)); }
 
-CAB="escada,rpm_alvo,rpm_efetivo,duracao_s,requisicoes,erros_5xx,taxa_5xx,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit"
+CAB="escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit"
 
 # linha: L <escada> <alvo> <efetivo> <taxa_5xx> <outros> <p95> <janela> <descartadas>
 L() {
-    printf '%s,%s,%s,60,1000,0,%s,%s,10.0,%s,30.0,%s,%s.0,%s,cas,300,1000,abc1234\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$(($3 / 60))" "$8"
+    printf '%s,%s,%s,60,1000,0,%s,0,%s,10.0,%s,30.0,%s,%s.0,%s,cas,300,1000,abc1234\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$(($3 / 60))" "$8"
+}
+# degrau pelas contagens, com a taxa como o runner a grava (5xx da reserva / reservas):
+# R <escada> <alvo> <reservas> <5xx da reserva> <5xx da confirma>
+R() {
+    printf '%s,%s,%s,60,%s,%s,%s,%s,0,10.0,20.0,30.0,25.0,%s.0,0,cas,300,1000,abc1234\n' "$1" "$2" "$2" "$3" "$4" "$(awk -v e="$4" -v r="$3" 'BEGIN { printf "%.6f", e / r }')" "$5" "$(($2 / 60))"
 }
 # degrau saudável: S <escada> <alvo>
 S() { L "$1" "$2" "$2" 0.000000 0 20.0 25.0 0; }
@@ -108,21 +119,29 @@ gerar I
 # J: o CSV chega ao report fora de ordem, com BOM e CRLF (como o PowerShell 5.1 costuma gravar)
 { printf '\357\273\277%s\r\n' "$CAB"; { L Deg-1 24000 24000 0.200000 0 20.0 25.0 0; S Deg-1 12000; L Deg-1 20000 20000 0.030000 0 20.0 25.0 0; S Deg-1 16000; } | while IFS= read -r l; do printf '%s\r\n' "$l"; done; } > "$TMP/J.csv"
 gerar J
+# K: 5xx só nas reservas, a 1,00% (não é X) e a 1,20% (é X); as confirmações não diluem (antes a taxa levava as duas)
+{ S Deg-1 12000; R Deg-1 16000 10000 100 0; R Deg-1 20000 10000 120 0; } | fixture K
+gerar K
+# L: 5xx só nas confirmações (500 e 10000): taxa_5xx = 0, nenhum degrau degrada
+{ S Deg-1 12000; R Deg-1 16000 10000 0 500; R Deg-1 20000 10000 0 10000; } | fixture L
+gerar L
 
 echo ""
 echo "==> A: X por 5xx"
 assert_html A "veredito firme no degrau 20000, motivo 5xx" '<p class="veredito" data-tipo="firme" data-x="20000" data-motivo="5xx" data-saturado="0">'
-assert_html A "texto do veredito" 'X = 20000 RPM: primeiro degrau com 5xx &gt; 1% (3.00%)'
+assert_html A "texto do veredito (5xx das reservas)" 'X = 20000 RPM: primeiro degrau com 5xx das reservas &gt; 1% (3.00%)'
 assert_html A "linha do degrau X marcada na tabela" '<tr class="degrau-x"><td>20000</td>'
 refute_html A "só o primeiro degrau degradado é o X (o 24000 não é marcado)" '<tr class="degrau-x"><td>24000</td>'
-assert_html A "situação na tabela" '5xx &gt; 1%'
+assert_html A "situação na tabela" '5xx das reservas &gt; 1%'
+assert_html A "cabeçalho da tabela diz que são 5xx das reservas" '<th>5xx das reservas (%)</th>'
+assert_html A "rodapé: X = 5xx das reservas" 'X = primeiro degrau com taxa de 5xx das reservas &gt; 1%'
 assert_html A "marca vertical do X nos 3 painéis (latência, throughput, 5xx)" 'class="marca-x"'
 if [ "$(conta A 'class="marca-x"')" = 3 ]; then ok "uma marca por painel"; else falhar "esperava 3 marcas do X, achei $(conta A 'class="marca-x"')"; fi
 assert_html A "rótulo do X no gráfico (texto, não só cor)" '>X</text>'
 if [ "$(conta A '<svg')" = 3 ]; then ok "3 painéis SVG"; else falhar "esperava 3 <svg>, achei $(conta A '<svg')"; fi
 assert_html A "painel de latência" 'aria-label="Latência × RPM alvo"'
 assert_html A "painel de throughput" 'aria-label="Throughput × RPM alvo"'
-assert_html A "painel de 5xx" 'aria-label="Taxa de 5xx × RPM alvo"'
+assert_html A "painel de 5xx das reservas" 'aria-label="Taxa de 5xx das reservas × RPM alvo"'
 assert_html A "subtítulo: escada, degraus, host" 'escada Deg-1 · 4 degraus de 60 s · braço cas · max_connections 300 · pool HikariCP 1000 · commit abc1234'
 assert_html A "tokens de cor no :root, claro e escuro" ':root:where(:not([data-theme="light"])) {'
 assert_html A "tema escuro explícito" ':root[data-theme="dark"] {'
@@ -178,6 +197,17 @@ assert_html J "ordena por rpm_alvo (no arquivo o 24000 vem antes): o 1º degrau 
 assert_html J "subtítulo conta os 4 degraus" '4 degraus de 60 s'
 
 echo ""
+echo "==> K: 5xx só nas reservas (a confirmação não dilui a taxa)"
+assert_html K "X firme em 20000 (1,20% das reservas), motivo 5xx" '<p class="veredito" data-tipo="firme" data-x="20000" data-motivo="5xx" data-saturado="0">'
+assert_html K "texto do veredito com a taxa das reservas" 'primeiro degrau com 5xx das reservas &gt; 1% (1.20%)'
+refute_html K "exatamente 1,00% das reservas NÃO é X (limite estrito)" '<tr class="degrau-x"><td>16000</td>'
+
+echo ""
+echo "==> L: 5xx só nas confirmações NÃO decidem X"
+assert_html L "nenhum degrau degradou: X acima do último" '<p class="veredito" data-tipo="nao-degradou" data-x="20000">'
+refute_html L "sem degrau X" 'class="degrau-x"'
+
+echo ""
 echo "==> H: eixo x linear (posição proporcional ao RPM alvo)"
 painel() {   # imprime o 1º <svg> (latência) do html $1
     awk 'index($0, "<svg") { dentro = 1 } dentro { print } dentro && /<\/svg>/ { exit }' "$TMP/$1.html"
@@ -208,6 +238,10 @@ if [ "$(roda mista)" != 0 ] && grep -q 'mais de uma escada' "$TMP/mista.log"; th
 if [ "$(roda dup)" != 0 ] && grep -q 'repetido' "$TMP/dup.log"; then ok "rpm_alvo repetido recusa"; else falhar "rpm_alvo repetido deveria falhar"; fi
 printf 'rpm_alvo,taxa_5xx\n12000,0\n' > "$TMP/semcol.csv"
 if [ "$(roda semcol)" != 0 ] && grep -q 'coluna obrigatória' "$TMP/semcol.log"; then ok "CSV sem as colunas obrigatórias recusa"; else falhar "CSV sem colunas obrigatórias deveria falhar"; fi
+printf 'escada,rpm_alvo,rpm_efetivo,duracao_s,requisicoes,erros_5xx,taxa_5xx,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit\nDeg-1,12000,12000,60,20000,0,0.000000,0,10.0,20.0,30.0,25.0,200.0,0,cas,300,1000,abc1234\n' > "$TMP/antigo.csv"
+if [ "$(roda antigo)" != 0 ] && grep -q 'formato antigo' "$TMP/antigo.log"; then ok "CSV no formato antigo (coluna requisicoes: taxa_5xx diluída pelas confirmações) recusa com mensagem clara"; else falhar "CSV no formato antigo deveria falhar com 'formato antigo'"; fi
+printf '%s\n' "${CAB/,reservas,/,}" > "$TMP/semreservas.csv"
+if [ "$(roda semreservas)" != 0 ] && grep -q 'coluna obrigatória ausente no CSV: reservas' "$TMP/semreservas.log"; then ok "CSV sem a coluna reservas recusa"; else falhar "CSV sem a coluna reservas deveria falhar"; fi
 echo "$CAB" > "$TMP/vazio.csv"
 if [ "$(roda vazio)" != 0 ]; then ok "CSV só com o cabeçalho recusa"; else falhar "CSV vazio deveria falhar"; fi
 if bash "$REPORT" "$TMP/nao-existe.csv" "$TMP/x.html" >/dev/null 2>&1; then falhar "CSV inexistente deveria falhar"; else ok "CSV inexistente falha com código != 0"; fi
