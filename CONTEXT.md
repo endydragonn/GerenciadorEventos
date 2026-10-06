@@ -21,6 +21,14 @@ _Avoid_: caminho seguro, caminho novo
 Caminho de reserva que lê `event_availability` e depois insere, sem CAS. É o braço de controle do experimento.
 _Avoid_: caminho antigo, caminho legado
 
+**Braço**:
+Cada um dos caminhos de reserva comparados no experimento: o braço CAS (design proposto) e o braço ingênuo (controle).
+_Avoid_: variante, modo
+
+**Disputa**:
+Rajada de N clientes concorrentes tentando reservar o mesmo evento de `capacity` finita. É a unidade de execução do experimento de corretude.
+_Avoid_: corrida, stress
+
 **Read model defasado** (`event_availability`):
 Tabela desnormalizada de vagas disponíveis, recalculada por job periódico e, portanto, atrasada em relação à verdade.
 _Avoid_: cache
