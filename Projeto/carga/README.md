@@ -330,7 +330,7 @@ Parâmetros: `DEG_INICIO=12000`, `DEG_PASSO=4000`, `DEG_MAX=40000` (degraus de I
 A escada **vai até o máximo**, mesmo depois de o host degradar: ajuste `DEG_MAX` perto do esperado.
 
 **Versione** `Projeto/carga/results/degraus-<id>.csv` (uma linha por degrau) e o `summary-degraus-<id>.json` da
-escada; anote o X preliminar (refinado na Fase 8, #39) e se o report o marcou como **limite inferior**. O `.html`
+escada; anote o X preliminar (refinado na Fase 8, issue #40) e se o report o marcou como **limite inferior**. O `.html`
 regenera do CSV e fica fora do git.
 
 **Colunas do CSV:** `escada,rpm_alvo,rpm_efetivo,duracao_s,requisicoes,erros_5xx,taxa_5xx,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit`

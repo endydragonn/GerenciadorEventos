@@ -140,5 +140,6 @@ carga; **não foram medidas diretamente**.
    50/100/200 índices. Não afeta a corretude; melhoria pendente: semente por rodada.
 7. **Tamanho do pool não explorado**: com 100 VUs e latências de poucos ms o pool nunca chegou perto de 1000. O
    padrão 1000 só é seguro com `max_connections` alto (o compose padrão usa 100).
-8. **Série de 3 pontos do experimento:** estes números são o **ponto 1 (monólito + pool)**. Repetir nos marcos de
-   microsserviços e CQRS+ES.
+8. **Série de 3 pontos do experimento:** estes números são "monólito + HikariCP", **não** o ponto 1 definitivo
+   (refeito após o Supavisor, Fase 4; ver "Ponto da série" no `CONTEXT.md`). Repetir nos marcos de microsserviços e
+   CQRS+ES.
