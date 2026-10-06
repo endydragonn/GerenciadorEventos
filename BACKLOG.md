@@ -43,7 +43,7 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 |---|---|---|---|
 | 1 | #2 | fechada | #52 |
 | 2 | #3 | fechada | #53 |
-| 3 | #4 | **aberta no GitHub, trabalho feito** — 2ª máquina (gerador) provisionada e latência base HTTP medida (`Projeto/carga/results/baseline-20261004-122632.txt`; ICMP não respondeu); falta fechar a issue | #76 (draft), kit em #90 |
+| 3 | #4 | fechada — gerador provisionado e latência base HTTP medida (`Projeto/carga/results/baseline-20261004-122632.txt`; ICMP não respondeu) | #76, kit em #90 |
 | 4 | #5 | fechada | #55 |
 | 5 | #6 | fechada | #65 |
 | 6 | #7 | fechada | #66, #68 (fone obrigatório, #67) |
