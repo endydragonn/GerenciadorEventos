@@ -28,6 +28,12 @@
   invalida e pulada, contada e listada no fim (exit code 2 = matriz incompleta) e o resumo do k6 dela
   fica em results\matriz-invalida-*.json (sem credenciais).
 
+  Braco cas (issue #12): tolerancia 0. Se confirmed > capacity OU pending + confirmed > capacity
+  (Test-ToleranciaCas), a execucao FALHA: e um resultado (bug do CAS), entra no CSV normalmente
+  (nao e repeticao invalida) e o script termina com exit code 3 (prevalece sobre o 2).
+  Esperado no CAS: oversell = 0 em todas as linhas. No braco naive o overselling e o resultado
+  medido e nao reprova nada. Atalho do preset: make test-matriz-cas.
+
   throughput = reservas/s so na janela da rajada (primeira iteracao iniciada .. ultima terminada);
   nao e o reservas_por_s do k6, cujo tempo inclui os logins do setup().
 
@@ -176,6 +182,7 @@ $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("matriz-{0}" -f [guid]::N
 New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
 $gravadas = 0
 $invalidas = @()
+$falhasCas = @()
 $codigoSaida = 0
 $script:CodigoK6 = 0
 
@@ -226,6 +233,31 @@ try {
                 $s = Get-Content $sf -Raw | ConvertFrom-Json
                 $motivos = @((Test-RepeticaoValida -Resumo $s -CodigoK6 $script:CodigoK6).Motivos)
             } else { $motivos = @('k6 nao gerou o resumo') }
+
+            # confirmed/pending/capacity do evento, no Postgres do host (fonte de verdade). Lido ANTES do
+            # descarte por invalidez, mas so no braco CAS (um overselling nao pode ficar escondido atras de
+            # uma repeticao invalida, exit 2); no naive a invalida continua nao dependendo do psql.
+            if ($Rotulo -eq 'cas' -or $motivos.Count -eq 0) {
+                $linhaDb = Invoke-Psql -Sql ("SELECT count(*) FILTER (WHERE status = 'confirmed'), count(*) FILTER (WHERE status = 'pending'), " +
+                    "(SELECT capacity FROM eventcap WHERE event_id = $eventId) FROM walletevent WHERE event_id = $eventId;")
+                $c = $linhaDb -split ','
+                if ($c.Count -ne 3) { Fail "Resposta inesperada do Postgres para o evento ${eventId}: '$linhaDb'" }
+                $confirmed = [int]$c[0]; $pending = [int]$c[1]
+                if ($c[2] -ne "$Capacidade") { Warn "capacity no banco ($($c[2])) difere de -Capacidade ($Capacidade): o oversell usa -Capacidade." }
+            }
+
+            # Braco CAS: tolerancia 0 (issue #12, Test-ToleranciaCas). Overselling aqui e RESULTADO (bug do
+            # CAS), nao invalidez: a linha entra no CSV normalmente (se a repeticao for valida) e a falha
+            # fica visivel ate o fim da matriz (exit 3).
+            $tol = $null
+            if ($Rotulo -eq 'cas') {
+                $tol = Test-ToleranciaCas -Confirmed $confirmed -Pending $pending -Capacity $Capacidade
+                if (-not $tol.Ok) {
+                    $falhasCas += [pscustomobject]@{ N = $n; Rep = $rep; Evento = $eventId; Motivos = ($tol.Motivos -join '; '); Gravada = ($motivos.Count -eq 0) }
+                    Write-Host "[FALHA CAS] rep ${rep}: tolerancia 0 violada no braco CAS: $($tol.Motivos -join '; ')" -ForegroundColor Red
+                }
+            }
+
             if ($motivos.Count -gt 0) {
                 $invalidas += [pscustomobject]@{ N = $n; Rep = $rep; Evento = $eventId; Motivos = ($motivos -join '; ') }
                 Warn "rep ${rep}: INVALIDA, linha NAO gravada em matriz.csv: $($motivos -join '; ')"
@@ -236,14 +268,6 @@ try {
             # reservas/s so na janela da rajada (o duracao_s do k6 inclui os logins do setup())
             $vazao = Get-VazaoRajada -Tentativas ($s.aceitas + $s.lotado + $s.outros) -DisparoMs ([long]$s.disparo_ms) -FimMs ([long]$s.fim_ms)
 
-            # confirmed/pending/capacity do evento, no Postgres do host (fonte de verdade)
-            $linhaDb = Invoke-Psql -Sql ("SELECT count(*) FILTER (WHERE status = 'confirmed'), count(*) FILTER (WHERE status = 'pending'), " +
-                "(SELECT capacity FROM eventcap WHERE event_id = $eventId) FROM walletevent WHERE event_id = $eventId;")
-            $c = $linhaDb -split ','
-            if ($c.Count -ne 3) { Fail "Resposta inesperada do Postgres para o evento ${eventId}: '$linhaDb'" }
-            $confirmed = [int]$c[0]; $pending = [int]$c[1]
-            if ($c[2] -ne "$Capacidade") { Warn "capacity no banco ($($c[2])) difere de -Capacidade ($Capacidade): o oversell usa -Capacidade." }
-
             $linha = Format-LinhaMatriz -Braco $Rotulo -LagMs $RefreshMs -N $n -Capacity $Capacidade -Rep $rep `
                 -Confirmed $confirmed -Pending $pending -P50 $s.p50_ms -P95 $s.p95_ms -P99 $s.p99_ms `
                 -Throughput $vazao -LagDisparo $lag.Disparo -LagMax $lag.Max -Commit $commit
@@ -253,6 +277,7 @@ try {
             $oversell = [math]::Max(0, $confirmed - $Capacidade)
             $cor = 'Green'
             if ($oversell -gt 0) { $cor = 'Yellow' }
+            if ($tol -and -not $tol.Ok) { $cor = 'Red' }   # braco CAS fora da tolerancia 0 (inclui a secundaria)
             Write-Host ("  rep {0}: confirmed={1} pending={2} oversell={3}  p95={4:N1} ms  {7:N0} reservas/s  lag obs. disparo/max={5}/{6} ms" -f `
                 $rep, $confirmed, $pending, $oversell, $s.p95_ms, $lag.Disparo, $lag.Max, $vazao) -ForegroundColor $cor
         }
@@ -267,10 +292,19 @@ try {
         Write-Host 'Confira o host (max_connections, backend) e repita; o rep de cada grupo no report mostra quantas repeticoes valem.'
         $codigoSaida = 2
     }
+    if ($falhasCas.Count -gt 0) {
+        Write-Host ("[FALHA CAS] {0} execucao(oes) fora da tolerancia 0 no braco CAS (overselling primario ou secundario): e bug do CAS, nao ruido (as execucoes validas ja estao no CSV):" -f $falhasCas.Count) -ForegroundColor Red
+        foreach ($f in $falhasCas) {
+            $nota = ''
+            if (-not $f.Gravada) { $nota = ' (repeticao invalida: linha NAO gravada)' }
+            Write-Host ("  N={0} rep={1} evento={2}: {3}{4}" -f $f.N, $f.Rep, $f.Evento, $f.Motivos, $nota) -ForegroundColor Red
+        }
+        $codigoSaida = 3   # prevalece sobre 2: a falha do CAS e o achado; o 'incompleta' ja foi listado acima
+    }
     Write-Host 'Grafico: make report-matriz   (gera results\matriz.html)'
 } finally {
     Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue   # inclui os users-*.json (credenciais de teste)
     foreach ($v in $envAnterior.Keys) { [Environment]::SetEnvironmentVariable($v, $envAnterior[$v]) }
     foreach ($v in 'BASE_URL', 'EVENT_ID', 'CAPACITY', 'PCT_CONFIRMA', 'USERS_FILE', 'SUMMARY_FILE') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
 }
-exit $codigoSaida   # 2 = houve repeticao invalida (matriz incompleta)
+exit $codigoSaida   # 0 = ok; 1 = erro (Fail); 2 = houve repeticao invalida (matriz incompleta); 3 = overselling no braco CAS (prevalece sobre 2)

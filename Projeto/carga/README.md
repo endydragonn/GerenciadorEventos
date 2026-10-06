@@ -100,7 +100,8 @@ gravadas (ver abaixo).
    host) enviesaria a média/desvio do overselling, então é **pulada**: não entra no CSV, o motivo e a
    contagem aparecem no fim, o resumo do k6 dela fica em `results\matriz-invalida-*.json` (sem
    credenciais, ignorado pelo git) e o script sai com código **2** (matriz incompleta). Repita a matriz
-   (ou só o grupo afetado) depois de corrigir a causa.
+   (ou só o grupo afetado) depois de corrigir a causa. No braço `cas` há ainda a tolerância 0 e o código
+   **3** (ver "Códigos de saída").
 
 ### Colunas de `results\matriz.csv`
 
@@ -130,6 +131,57 @@ O report (`report-matriz.sh`) desenha, por (N, capacity), o overselling × lag (
 desvio amostral e mín–máx das repetições) e a latência p95 × lag, mais a tabela dos agregados.
 Auto-testes (sem rede/stack): `bash ../../docs/carga/harness/report-matriz-selftest.sh` e
 `.\lib-matriz.selftest.ps1`.
+
+### Códigos de saída do `rodar-matriz.ps1`
+
+| Código | Significado |
+|---|---|
+| `0` | matriz completa; no braço `cas`, todas as execuções dentro da tolerância 0 |
+| `1` | erro de ambiente (pré-requisito faltando, host/Postgres inacessível, resposta inesperada) |
+| `2` | houve repetição **inválida** (não gravada): matriz incompleta |
+| `3` | **braço `cas` com overselling** (tolerância 0 violada; ver abaixo). Prevalece sobre o `2` se os dois ocorrerem: ambos são listados no fim |
+
+Via `make`, o código real do runner é o `Error N` da linha `make[1]: *** [...test-matriz] Error N` (no preset
+`make test-matriz-cas`; a linha seguinte, do make-pai, mostra sempre `Error 1`); em `make test-matriz` direto é o
+`Error N` da última linha. O status do próprio `make` é sempre `2` em qualquer falha da receita. Chamando
+`.\rodar-matriz.ps1` direto, é o `$LASTEXITCODE`.
+
+**Tolerância 0 no braço `cas`** (`Test-ToleranciaCas`, em `lib-matriz.ps1`): a execução falha se
+`confirmed > capacity` (primária) **ou** `pending + confirmed > capacity` (secundária); igual a `capacity` passa.
+Isso **não** é validade: uma execução CAS que oversella é um **resultado** (bug do CAS), então a linha entra no
+`matriz.csv` normalmente, o runner a imprime em vermelho (`[FALHA CAS]`), lista no fim e sai com `3`. Se a
+repetição for, além disso, inválida (ex.: 5xx), a linha não é gravada (regra do `2`), mas o overselling é
+sinalizado do mesmo jeito. No braço `naive` não há tolerância: o overselling é o que se mede.
+
+### Rodada 1a — braço CAS (issue #12)
+
+Preset `make test-matriz-cas`: `READPATH=cas`, N ∈ {100, 200}, `capacity` 20, 5 repetições, `PCT_CONFIRMA=100`
+(fixo no runner) e `lag_ms` = default do backend (`5000`, o mesmo do `setup-host`; só rotula a coluna, pois o
+CAS não lê o read model). Sem varredura de lag (isso é do braço `naive`, issue #13). Gera **10 linhas**.
+
+```powershell
+# 1) host (PowerShell como Administrador). Uma vez, para a regra de firewall da 5433 restrita ao gerador:
+make setup-host READPATH=cas GERADOR_IP=<ip do gerador>
+#    N=100/200 pode estourar o max_connections=100 do Postgres (repetições com 5xx seriam descartadas e o CSV
+#    ficaria com menos de 10 linhas): suba de novo com max_connections maior (as regras de firewall persistem)
+make host-rpm MAX_CONN=300 READPATH=cas REFRESH_MS=5000
+
+# 2) gerador: senha do Postgres do host SÓ no ambiente
+$s = Read-Host 'Senha do Postgres do host' -AsSecureString
+$env:PGPASSWORD = [System.Net.NetworkCredential]::new('', $s).Password
+
+# 3) gerador: comece de um results\matriz.csv vazio/inexistente (as linhas se acumulam); rode o preset
+make test-matriz-cas HOST_IP=<ip do host>
+
+# 4) gerador: gráfico (results\matriz.html)
+make report-matriz
+```
+
+Versione o `Projeto/carga/results/matriz.csv` resultante (as 10 linhas); ele entra no gráfico como a curva
+"design proposto" (as rodadas do braço `naive` acrescentam linhas ao mesmo arquivo). **Esperado: `oversell = 0`
+em todas as linhas** e o `make` terminando sem erro. Qualquer valor diferente (ou `Error 3` na linha `make[1]`,
+exit `3` do script) é um bug do CAS, não ruído de medição: investigue antes de seguir. `Error 2` na linha
+`make[1]` = repetição inválida: a rodada ficou com menos de 10 linhas; corrija o host e repita.
 
 ## Teste 1 — disputa de vagas (corretude)
 
@@ -291,7 +343,7 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 | `setup-gerador.ps1` | gerador | instala o k6, confere `psql` e a 5433, mede a latência base |
 | `docker-compose.carga.yml` | host | override: read path, lag do read model, log de SQL desligado |
 | `rodar-teste.ps1` / `carga.js` | gerador | teste 1 (confirma `PCT_CONFIRMA` % das aceitas, padrão 100) |
-| `rodar-matriz.ps1` / `lib-matriz.ps1` | gerador | matriz do experimento: usa o `carga.js` do teste 1; `lib-matriz.ps1` = linha do CSV e lag da rajada (`lib-matriz.selftest.ps1` testa) |
+| `rodar-matriz.ps1` / `lib-matriz.ps1` | gerador | matriz do experimento: usa o `carga.js` do teste 1; `lib-matriz.ps1` = linha do CSV, lag da rajada e tolerância 0 do braço CAS (`lib-matriz.selftest.ps1` testa) |
 | `../../docs/carga/harness/report-matriz.sh` | gerador | `make report-matriz`: `results\matriz.csv` → `results\matriz.html` (SVG, bash+awk) |
 | `lib-seed.ps1` | gerador | `Invoke-Seed`: chama o seed único `docs/carga/harness/setup.sh` via Git Bash |
 | `rpm/*` | ambos | teste 2 |

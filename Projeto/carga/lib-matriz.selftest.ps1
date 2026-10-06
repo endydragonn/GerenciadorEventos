@@ -101,6 +101,28 @@ $v = Test-RepeticaoValida -Resumo (Resumo @{ outros = 4; sem_login = 1 }) -Codig
 Confere 'varios defeitos: todos os motivos acumulam (k6, sem_login, outros)' @($v.Motivos).Count 3
 
 Write-Host ''
+Write-Host '==> Tolerancia 0 do braco CAS (issue #12): confirmed > capacity OU pending + confirmed > capacity = falha'
+$t = Test-ToleranciaCas -Confirmed 20 -Pending 0 -Capacity 20
+Confere 'confirmed = capacity (20/0): passa' $t.Ok $true
+Confere 'confirmed = capacity: sem motivos' @($t.Motivos).Count 0
+$t = Test-ToleranciaCas -Confirmed 15 -Pending 5 -Capacity 20
+Confere 'pending + confirmed = capacity (15+5): passa' $t.Ok $true
+$t = Test-ToleranciaCas -Confirmed 0 -Pending 0 -Capacity 20
+Confere 'evento vazio (0/0): passa' $t.Ok $true
+$t = Test-ToleranciaCas -Confirmed 21 -Pending 0 -Capacity 20
+Confere 'confirmed = capacity + 1 (21/0): falha' $t.Ok $false
+Confere 'confirmed = capacity + 1: 2 motivos (primaria e secundaria)' @($t.Motivos).Count 2
+Confere 'confirmed = capacity + 1: motivo da primaria (confirmed > capacity), 1o da lista' (@($t.Motivos)[0] -match '^confirmed \(21\) > capacity \(20\)$') $true
+Confere 'confirmed = capacity + 1: a secundaria tambem estoura (pending + confirmed > capacity), 2o da lista' (@($t.Motivos)[1] -match '^pending \+ confirmed \(21\) > capacity \(20\)$') $true
+$t = Test-ToleranciaCas -Confirmed 20 -Pending 1 -Capacity 20
+Confere 'pending + confirmed = capacity + 1 (20/1): falha' $t.Ok $false
+Confere 'so a secundaria estoura: 1 motivo' @($t.Motivos).Count 1
+Confere 'so a secundaria estoura: o motivo e o de pending + confirmed' ((@($t.Motivos) -join ';') -match 'pending \+ confirmed \(21\) > capacity \(20\)') $true
+Confere 'so a secundaria estoura: confirmed = capacity nao dispara a primaria' ((@($t.Motivos) -join ';') -match '^confirmed') $false
+$t = Test-ToleranciaCas -Confirmed 19 -Pending 2 -Capacity 20
+Confere 'confirmed < capacity mas pending + confirmed = capacity + 1 (19/2): falha' $t.Ok $false
+
+Write-Host ''
 Write-Host '==> CSV acumulado (cabecalho 1 vez, UTF-8 sem BOM, LF)'
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("matriz-selftest-{0}.csv" -f [guid]::NewGuid().ToString('N'))
 try {

@@ -47,6 +47,22 @@ function Test-RepeticaoValida {
     [pscustomobject]@{ Valida = ($m.Count -eq 0); Motivos = $m.ToArray() }
 }
 
+# Tolerancia 0 do braco CAS (issue #12): a execucao FALHA se confirmed > capacity (overselling,
+# metrica primaria) OU pending + confirmed > capacity (secundaria). Igual a capacity passa. Nao e
+# criterio de validade: uma execucao CAS que oversella e um RESULTADO (bug do CAS) e entra no CSV.
+# Devolve @{ Ok; Motivos[] }; o runner so aplica quando o braco e cas.
+function Test-ToleranciaCas {
+    param(
+        [Parameter(Mandatory)][int]$Confirmed,
+        [Parameter(Mandatory)][int]$Pending,
+        [Parameter(Mandatory)][int]$Capacity
+    )
+    $m = New-Object System.Collections.Generic.List[string]
+    if ($Confirmed -gt $Capacity) { $m.Add("confirmed ($Confirmed) > capacity ($Capacity)") }
+    if ($Pending + $Confirmed -gt $Capacity) { $m.Add("pending + confirmed ($($Pending + $Confirmed)) > capacity ($Capacity)") }
+    [pscustomobject]@{ Ok = ($m.Count -eq 0); Motivos = $m.ToArray() }
+}
+
 # Vazao (reservas/s) so da janela da rajada [DisparoMs, FimMs]: tentativas = aceitas + lotado +
 # outros. NAO usar o duracao_s/reservas_por_s do k6: o testRunDurationMs inclui o setup() com os
 # logins (bcrypt), que dominam o tempo (~10 ms por cliente, contra uma rajada de ~0,1-0,3 s).
