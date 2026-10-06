@@ -50,12 +50,13 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 7 | #8 | fechada | #70 |
 | 8 | #9 | fechada (roteiro em `docs/testes-manuais/`; `.sh` precisa de JWT pós-#79) | #73 |
 | 9 | #10 | fechada | #75 |
-| 10 | #11 | **aberta** — harness mergeado (`docs/carga/harness/`); Aceite refinado em 2026-10-06: o kit `Projeto/carga` vira o runner oficial (matriz, lag coletado do gerador, CSV + gráfico) | #82 |
-| 11–14 | #12–#15 | abertas — rodadas preliminares (1 lag, 1–2 repetições) em `Projeto/carga/results/ANALISE.md`; Aceites refinados em 2026-10-06 | — |
+| 10 | #11 | fechada — o kit `Projeto/carga` virou o runner oficial (matriz, lag coletado do gerador, CSV + gráfico), na `Fase_2` | #82, #104 |
+| 11–14 | #12–#15 | **abertas** — código/docs entregues na `Fase_2` (presets CAS e ingênuo, escada de carga, rascunho do artigo); faltam as rodadas manuais no host + gerador e preencher o artigo. Rodadas preliminares (1 lag, 1–2 repetições) em `Projeto/carga/results/ANALISE.md` | — |
 | 15–46 | #16–#47 | abertas | — |
 
-Branch de integração da Fase 2: `Fase_2` (PRs `Issue-11`…`Issue-15` entram nela; ela entra em
-`main` por um PR único no fim da fase). Vocabulário do experimento em `CONTEXT.md`.
+Branch de integração da Fase 2: `Fase_2` (a #11 entrou pelo PR #104; as #12–#15 foram
+desenvolvidas direto nela; ela entra em `main` por um PR único no fim da fase). Vocabulário do
+experimento em `CONTEXT.md`.
 
 Fora do backlog (follow-ups): #56–#61 abertas (`updatePolicy`, IDOR em `/bff/event-wallets`,
 endurecer schema, cobertura, transações do `updateEvent`, N+1/pool); #78 (BFF única + JWT
