@@ -299,6 +299,103 @@ cresce só sob demanda a partir de `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, defa
 aceita → `too many clients` → HTTP 500; para esse caso reduza o pool por env (ex.: 50). Com
 `MAX_CONN` >= pool não há esse erro. Compare 100 × 300 para documentar o teto.
 
+## Limiar X preliminar (issue #14)
+
+Escada de carga que estende o teste 2: degraus de taxa fixa (12k, 16k, 20k, … RPM) numa **única** execução do k6
+(seed e login uma vez só), um cenário `constant-arrival-rate` por degrau. O limiar X (`CONTEXT.md`) é o **primeiro
+degrau** com **5xx > 1%** ou **p95 da reserva > 1 s sustentado por 30 s** (alguma janela de 30 s do degrau com p95 >
+1 s; os dois limites são estritos). Os números são de **monólito + HikariCP** (pool e `max_connections` registrados no
+CSV); os de antes do pool (#96) estão invalidados (ver `results/ANALISE.md`).
+
+```powershell
+# 1) host: stack com o max_connections e o pool HikariCP escolhidos (os dois vão para o CSV)
+$env:SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE = '1000'      # opcional (padrão do backend: 1000)
+make host-rpm MAX_CONN=300 READPATH=cas
+#    conferência: docker exec gerenciador-backend printenv SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE RESERVATION_READPATH
+
+# 2) gerador: a escada (MAX_CONN / POOL_HIKARI = o que o host roda; só rotulam o CSV)
+make test-degraus HOST_IP=<ip do host> MAX_CONN=300 POOL_HIKARI=1000
+
+# 3) gerador: gráfico + degrau X (results\degraus-<id>.csv -> results\degraus-<id>.html; Git Bash + awk)
+make report-degraus CSV=results\degraus-<id>.csv
+
+# 4) host: a verdade do banco (prefixo Deg-<id> impresso no passo 2)
+make verificar-rpm PREFIXO=Deg-<id>
+```
+
+Sem `make`: `.\degraus\rodar-degraus.ps1 -HostIp <ip> -MaxConnections 300 -PoolHikari 1000` e
+`bash ../../docs/carga/harness/report-degraus.sh results/degraus-<id>.csv results/degraus-<id>.html`.
+Parâmetros: `DEG_INICIO=12000`, `DEG_PASSO=4000`, `DEG_MAX=40000` (degraus de INICIO a MAX, no máximo 40),
+`DEG_DURACAO=60` (por degrau: ≥ 60 s e múltiplo de 30), `USUARIOS=200`, `MAX_VUS=2000`, `PCT_CONFIRMA=100`.
+A escada **vai até o máximo**, mesmo depois de o host degradar: ajuste `DEG_MAX` perto do esperado.
+
+**Versione** `Projeto/carga/results/degraus-<id>.csv` (uma linha por degrau) e o `summary-degraus-<id>.json` da
+escada; anote o X preliminar (refinado na Fase 8, #39) e se o report o marcou como **limite inferior**. O `.html`
+regenera do CSV e fica fora do git.
+
+**Colunas do CSV:** `escada,rpm_alvo,rpm_efetivo,duracao_s,requisicoes,erros_5xx,taxa_5xx,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit`
+
+| Coluna | Significado |
+|---|---|
+| `escada` | prefixo dos eventos (`Deg-<id>`), o mesmo do `make verificar-rpm` |
+| `rpm_alvo`, `rpm_efetivo` | taxa configurada e reservas enviadas / duração × 60 (cai abaixo do alvo se o k6 descartou iterações) |
+| `requisicoes`, `erros_5xx`, `taxa_5xx` | reserva + confirma; 5xx das duas; `taxa_5xx` = `erros_5xx / requisicoes` como **fração** (0,01 = 1%) |
+| `outros` | respostas inesperadas da reserva (4xx fora do "lotado", timeout, conexão recusada): **não** entram em X, mas o report avisa |
+| `p50`, `p95`, `p99` | latência da reserva no degrau inteiro (ms), do k6 (descontar a base de rede) |
+| `p95_max_janela_30s` | maior p95 da reserva entre as janelas de 30 s do degrau (ms); `-1` = sem janela |
+| `throughput` | reservas/s respondidas sem 5xx (`(reservas − 5xx da reserva) / duração`) |
+| `iteracoes_descartadas` | `dropped_iterations` do k6 no degrau |
+| `braco`, `max_connections`, `pool_hikari`, `commit` | o que o host roda (rotulado) e o commit do checkout do gerador |
+
+**Regra do X** (só em `report-degraus.sh`; o runner apenas grava as colunas; `report-degraus-selftest.sh` cobre as
+fixtures): *degradou* = `taxa_5xx > 1%` ou `p95_max_janela_30s > 1000 ms`; *gerador saturado* = `iteracoes_descartadas > 0`
+ou `rpm_efetivo < 95%` do alvo (tolerância fixa de 5%). X = primeiro degrau que degradou. Se o gerador saturou
+**estritamente antes** (ou nenhum degrau degradou e algum saturou), X vira **limite inferior**: X > último degrau sem
+saturação. Saturou já no 1º degrau: sem limite inferior. Degradou e saturou no **mesmo** degrau: X firme, com aviso
+(as descartadas podem vir do próprio host lento, que esgota os VUs; o 5xx é sinal do host). Nenhum degradou nem
+saturou: "X acima do último degrau". O report desenha latência (p50, p95, p99, pior janela), throughput × carga
+oferecida e taxa de 5xx × RPM alvo (eixo x linear, painéis separados) com a marca do X, e a tabela de todos os degraus.
+
+**A conta do seed** (`Get-PlanoEscada` em `degraus/lib-degraus.ps1` = `carga-degraus.js`): o k6 reinicia
+`iterationInTest` a cada cenário, então cada degrau usa uma faixa própria de pares (usuário, evento), de tamanho
+`ceil(RPM × duração / 60) + 1` (o `+ 1` é a iteração extra que o k6 pode emitir). O total (soma das cotas) tem de caber
+em `USUARIOS × eventos`, com `eventos = ceil(total × 1,05 / USUARIOS)`; o k6 aborta no `setup()` se não couber.
+Padrão (12k…40k de 4k em 4k, 60 s, 200 usuários): 8 degraus, 208.008 pares, 1.093 eventos, ~11,6 min de k6 (31 s
+ociosos entre degraus: 30 s de `gracefulStop`, para as iterações em voo terminarem antes do próximo, mais 1 s de folga
+para os planos de VUs dos cenários não se tocarem).
+
+**VUs:** os `MAX_VUS` (2000) VUs são **todos pré-alocados** (`preAllocatedVUs = maxVUs`). No `constant-arrival-rate` o
+k6 descarta a iteração quando não há VU livre e só aloca VU extra depois, em segundo plano (o que pesa no gerador e o
+report leria como "gerador saturado"). Com tudo pré-alocado só há descarte quando uma iteração (reserva + confirma)
+dura mais que `MAX_VUS / (RPM/60)` s: 3 s no degrau de 40k (667 it/s), isto é, quando o host já degradou (com p95 de
+1 s por requisição são ≈ 1.300 VUs). Cada VU custa ~1–2 MB (estimativa; 2000 VUs ≈ 2–4 GB, alocados antes do 1º
+degrau): dimensione pela RAM do gerador e, se baixar `MAX_VUS`, baixe `DEG_MAX` junto (o runner avisa se `MAX_VUS` cobre
+menos de 2,5 s no maior degrau).
+
+**p95 sustentado por 30 s:** o k6 tagueia cada reserva com `janela:<degrau>_<w>` pelo instante de **envio** (`w =
+floor((envio − exec.scenario.startTime) / 30 s)`: janelas fixas alinhadas ao início do degrau, só as `duração / 30`
+inteiras) e o `handleSummary` emite o p95 de cada janela (submétrica `reserva_duration{janela:…}`, declarada em
+`thresholds`); `p95_max_janela_30s` é o maior. Pelo envio, não pelo término: a reserva lenta enviada no fim do degrau
+conta na janela em que foi enviada, sem retardatária de fora. Até 1 s de jitter de relógio nas pontas vai para a janela
+da ponta. Sem série temporal em disco nem `--out csv`.
+
+**Trava do resumo:** o resumo do k6 traz as métricas por degrau (submétricas por tag `scenario`); o runner só grava o CSV se
+cada contador global (5xx, descartadas, reservas…) **fechar** com a soma dos degraus **e** no máximo 1% das reservas de
+cada degrau ficar fora das janelas de 30 s. Se não fechar ("Resumo do k6 inconsistente"), 5xx/descartadas ou o p95 por
+janela poderiam sair errados: o CSV não é gerado e o resumo fica em `results\` para diagnóstico. Até 1% fora (atraso de
+agendamento com o gerador saturado no fim do degrau) **não** recusa: a contagem vai em `fora_das_janelas` por degrau no
+`summary-degraus-<id>.json` e o runner avisa; essas reservas contam no p50/p95/p99 do degrau, mas não no p95 por janela
+(sem coluna nova no CSV). Mais de 1% é sistemático (ex.: `exec.scenario.startTime` com outra semântica). Submétrica sem amostras
+(ex.: nenhuma confirma com `PCT_CONFIRMA=0`, ou degrau em que toda reserva deu 5xx) vale 0 e só é informada. Código de
+saída do k6 ≠ 0 também impede o CSV; os thresholds do script são só declarativos (sempre verdadeiros, só materializam
+as submétricas), então nenhum deveria reprovar, e o código 99 (thresholds cruzados) só avisa.
+
+Limites: os degraus são contíguos (só os 31 s ociosos; sem resfriamento do host entre eles, então a degradação de um
+degrau pode contaminar o seguinte); um degrau cujo host trava de vez gera timeouts (`outros`), que não contam como
+5xx. O limite de 110 s do teste 2 não vale aqui: ele protege a conta de overselling contra reservas `pending` que
+expiram, e a escada não mede overselling (e com `PCT_CONFIRMA=100` nada fica `pending`). Auto-testes (sem rede/stack):
+`.\degraus\lib-degraus.selftest.ps1` e `bash ../../docs/carga/harness/report-degraus-selftest.sh`.
+
 ## Teste 3 — carga aleatória (estabilidade por tempo)
 
 Durante `TEMPO`, a taxa muda a cada `PASSO` segundos para um alvo sorteado entre `RPM_MIN` e
@@ -409,6 +506,8 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 | `../../docs/carga/harness/report-matriz.sh` | gerador | `make report-matriz`: `results\matriz.csv` → `results\matriz.html` (SVG, bash+awk) |
 | `lib-seed.ps1` | gerador | `Invoke-Seed`: chama o seed único `docs/carga/harness/setup.sh` via Git Bash |
 | `rpm/*` | ambos | teste 2 |
+| `degraus/*` | gerador | escada de carga (limiar X preliminar): `carga-degraus.js`, `rodar-degraus.ps1`, `lib-degraus.ps1` (plano, p95 em janelas de 30 s, linha do CSV; `lib-degraus.selftest.ps1` testa) |
+| `../../docs/carga/harness/report-degraus.sh` | gerador | `make report-degraus`: `results\degraus-<id>.csv` → curva × carga + degrau X (SVG, bash+awk; `report-degraus-selftest.sh` testa) |
 | `aleatorio/*` | gerador | teste 3 |
 | `Makefile` | ambos | atalhos |
 | `results/` | gerador | CSVs e baselines (gerado) |

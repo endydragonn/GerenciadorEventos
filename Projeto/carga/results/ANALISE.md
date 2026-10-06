@@ -4,6 +4,11 @@ Consolida os dados desta pasta: `resultados*.csv`, `summary-*.json`, `perfil-ale
 `verificacoes.log`, `sockstat.log` e `baseline-*.txt`. O registro cronológico e o passo a passo ficam em
 `docs/carga/setup.md`; aqui está a leitura dos números e o que eles provam.
 
+> **Ressalva (issue #14).** Os números pós-pool são de **monólito + HikariCP (pool e `max_connections` registrados)**: pool
+> de 1000 conexões (padrão do backend) e `max_connections` na coluna de mesmo nome de `resultados-rpm.csv`. Os números
+> **pré-pool** (rodadas com uma conexão TCP por operação, antes da #96: 5xx de ~31% a 10k RPM, 112.878 no aleatório, etc.)
+> estão **invalidados**: ficam abaixo só como histórico do que mudou e não servem de base de comparação.
+
 ## 1. Setup
 
 - 2 máquinas: **host** (stack Docker, alvo `:8081`) e **gerador** (k6 v2.2.0, Ryzen 5 7600, 1 Gbps).
@@ -25,7 +30,8 @@ Consolida os dados desta pasta: `resultados*.csv`, `summary-*.json`, `perfil-ale
 3. **Taxa total alta não basta para expor o `naive`**: no aleatório (tentativas espalhadas entre 1464 eventos)
    o overselling foi 0, mesmo a até 12k RPM.
 4. **O gargalo de disponibilidade da manhã era a falta de pool de conexões**, não o CAS nem o `max_connections`.
-   Com HikariCP: 5xx 112.878 → 0, reserva p95 153 → 4,4 ms (aleatório).
+   Com HikariCP: 5xx 112.878 → 0, reserva p95 153 → 4,4 ms (aleatório). Os números pré-pool (112.878, 153 ms) estão
+   invalidados (#96).
 5. **Confirmar vendas custa pouco**: 60% de confirmação não mudou latência nem vazão.
 
 ## 3. `cas`: pool de conexões (o que mudou entre manhã e tarde)
@@ -35,7 +41,7 @@ repouso ≈ 14 sockets em `TIME_WAIT`, **pico de 34.199** na carga, contra **28.
 (`32768–60999`, destino fixo `db:5432`) → `BindException: Cannot assign requested address`. Subir
 `max_connections` de 300 para 1000 não alterou o 5xx (o Postgres tinha ~16 conexões ativas).
 
-| Teste | Antes (sem pool) | Depois (HikariCP, pool 1000) |
+| Teste | Antes (sem pool; **invalidado**, #96) | Depois (HikariCP, pool 1000) |
 |---|---|---|
 | Disputa, p95 (50 / 100 / 200 clientes) | 284 / 419 / 670 ms (1ª bateria) | 103 / 64 / 90 ms |
 | Disputa, respostas "outros" | 0 / 13 / 105 | 0 / 0 / 0 |

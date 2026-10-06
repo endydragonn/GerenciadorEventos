@@ -36,6 +36,8 @@ O seed (`setup.sh`) é a fonte única dos dois.
 | `report-selftest.sh` | Auto-teste de `report.sh` com fixture sintética (sem precisar de stack no ar) — ver seção própria abaixo. |
 | `report-matriz.sh` | **Não faz parte do `run.sh`**: lê o CSV da matriz do kit `Projeto/carga` (`results/matriz.csv`) e gera o gráfico HTML/SVG (overselling × lag, p95 × lag, tabela), com eixo x linear em ms: o braço `naive` é uma curva por lag e o `cas`, que não depende do lag, uma linha de referência tracejada. Usado por `make report-matriz`. |
 | `report-matriz-selftest.sh` | Auto-teste de `report-matriz.sh` com duas fixtures (2 braços × 2 lags × 2 N, BOM + CRLF; e a forma da rodada 1b: `naive` em 4 lags + `cas` em 1, com grupo/CSV sem `cas`). Só bash/awk. |
+| `report-degraus.sh` | **Não faz parte do `run.sh`**: lê o CSV da escada de carga em degraus do kit `Projeto/carga` (`results/degraus-<id>.csv`) e gera a curva latência/throughput × carga com o degrau X (ou o limite inferior) marcado; é o único lugar onde a regra do X é decidida. Usado por `make report-degraus`. |
+| `report-degraus-selftest.sh` | Auto-teste de `report-degraus.sh` (X por 5xx, X por p95 em janela, gerador saturado antes de X, nenhum degrau degradado). Só bash/awk. |
 | `resultados/` | Saída de cada rodada (`run.sh` cria `resultados/<sufixo>/`); **não versionado** (`.gitignore` local), mesma regra do `CLAUDE.md` da raiz para relatórios gerados. |
 
 ## Pré-requisitos

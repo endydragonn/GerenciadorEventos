@@ -30,6 +30,16 @@ PG_PORTA       ?= 5433
 PGUSER         ?= admin
 PGDATABASE     ?= meu_banco
 GERADOR_IP     ?=
+# escada de carga (test-degraus, issue #14). POOL_HIKARI/MAX_CONN so REGISTRAM no CSV o que o host roda (o padrao do
+# pool do backend e 1000: se o host usar outro, informe). DEG_DURACAO: >= 60 e multiplo de 30. MAX_VUS = VUs do k6
+# todos PRE-alocados (~1-2 MB cada): dimensione pela RAM do gerador.
+DEG_INICIO     ?= 12000
+DEG_PASSO      ?= 4000
+DEG_MAX        ?= 40000
+DEG_DURACAO    ?= 60
+MAX_VUS        ?= 2000
+POOL_HIKARI    ?= 1000
+CSV            ?=
 
 need_ip = $(if $(HOST_IP),,$(error Informe HOST_IP=<ip do host>))
 
@@ -38,7 +48,7 @@ need_ip = $(if $(HOST_IP),,$(error Informe HOST_IP=<ip do host>))
 LAGS_NAIVE := 500 2000 5000 10000
 need_lag = $(if $(filter command%,$(origin REFRESH_MS)),,$(error Informe REFRESH_MS=<lag que o host esta rodando>: um de $(LAGS_NAIVE)))$(if $(filter $(LAGS_NAIVE),$(REFRESH_MS)),,$(error REFRESH_MS=$(REFRESH_MS) invalido: use um de $(LAGS_NAIVE)))
 
-.PHONY: help setup-host setup-gerador host-rpm test-disputa test-rpm test-aleatorio test-disputa-real test-rpm-real test-aleatorio-real test-matriz test-matriz-cas test-matriz-naive report-matriz verificar-disputa verificar-rpm
+.PHONY: help setup-host setup-gerador host-rpm test-disputa test-rpm test-aleatorio test-disputa-real test-rpm-real test-aleatorio-real test-matriz test-matriz-cas test-matriz-naive report-matriz test-degraus report-degraus verificar-disputa verificar-rpm
 .DEFAULT_GOAL := help
 
 help:
@@ -62,6 +72,9 @@ help:
 	@Write-Host '  make test-matriz-cas HOST_IP=<ip>                           (no GERADOR: rodada 1a, braco CAS: N=100,200 x 5 rep, capacity 20, lag 5000; host com READPATH=cas; "Error 3" na linha make[1] = overselling no CAS)'
 	@Write-Host '  make test-matriz-naive HOST_IP=<ip> REFRESH_MS=<500|2000|5000|10000>   (no GERADOR: rodada 1b, braco ingenuo, UM lag por chamada: N=100,200 x 5 rep, capacity 20; host com READPATH=naive e o MESMO REFRESH_MS; repita nos 4 lags)'
 	@Write-Host '  make report-matriz                                          (no GERADOR: results\matriz.csv -> results\matriz.html, via Git Bash)'
+	@Write-Host 'ESCADA DE CARGA - limiar X preliminar (issue #14; degraus de taxa fixa a partir de 12k RPM; host com "make host-rpm MAX_CONN=<n>")'
+	@Write-Host '  make test-degraus    HOST_IP=<ip> [DEG_INICIO=12000 DEG_PASSO=4000 DEG_MAX=40000 DEG_DURACAO=60 MAX_CONN=300 POOL_HIKARI=1000 USUARIOS=200 MAX_VUS=2000]   (no GERADOR: results\degraus-<id>.csv; MAX_CONN/POOL_HIKARI = o que o host roda)'
+	@Write-Host '  make report-degraus  CSV=results\degraus-<id>.csv           (no GERADOR: curva latencia/throughput x carga + degrau X, via Git Bash -> results\degraus-<id>.html)'
 
 setup-host:
 	.\setup-host.ps1 -ReadPath $(READPATH) -RefreshMs $(REFRESH_MS) $(if $(GERADOR_IP),-GeradorIp $(GERADOR_IP))
@@ -118,6 +131,15 @@ test-matriz-naive:
 # o report e bash+awk (Git Bash, ja exigido pelo seed); ProgramW6432: o make pode abrir um PowerShell de 32 bits
 report-matriz:
 	& "$$env:ProgramW6432\Git\bin\bash.exe" ../../docs/carga/harness/report-matriz.sh results/matriz.csv results/matriz.html
+
+# ---- escada de carga (issue #14): um CSV por escada em results\degraus-<id>.csv; o limiar X sai do report
+test-degraus:
+	$(need_ip)
+	.\degraus\rodar-degraus.ps1 -HostIp $(HOST_IP) -RpmInicio $(DEG_INICIO) -RpmPasso $(DEG_PASSO) -RpmMax $(DEG_MAX) -Duracao $(DEG_DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -PoolHikari $(POOL_HIKARI) -RefreshMs $(REFRESH_MS) -PctConfirma $(PCT_CONFIRMA) -MaxVus $(MAX_VUS)
+
+report-degraus:
+	$(if $(CSV),,$(error Informe CSV=results\degraus-<id>.csv))
+	& "$$env:ProgramW6432\Git\bin\bash.exe" ../../docs/carga/harness/report-degraus.sh $(subst \,/,$(CSV)) $(subst \,/,$(CSV:.csv=.html))
 
 # ---- versao realista: mesmos testes, mas so PCT_CONFIRMA_REAL % das aceitas confirmam
 test-disputa-real:
