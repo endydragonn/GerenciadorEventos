@@ -33,7 +33,12 @@ GERADOR_IP     ?=
 
 need_ip = $(if $(HOST_IP),,$(error Informe HOST_IP=<ip do host>))
 
-.PHONY: help setup-host setup-gerador host-rpm test-disputa test-rpm test-aleatorio test-disputa-real test-rpm-real test-aleatorio-real test-matriz test-matriz-cas report-matriz verificar-disputa verificar-rpm
+# lags da rodada 1b (braco ingenuo, issue #13). REFRESH_MS tem default (5000): sem olhar o $(origin), esquecer o
+# REFRESH_MS rodaria a rodada no lag errado (rotulado 5000); aqui ele tem de ser informado e ser um dos 4 lags.
+LAGS_NAIVE := 500 2000 5000 10000
+need_lag = $(if $(filter command%,$(origin REFRESH_MS)),,$(error Informe REFRESH_MS=<lag que o host esta rodando>: um de $(LAGS_NAIVE)))$(if $(filter $(LAGS_NAIVE),$(REFRESH_MS)),,$(error REFRESH_MS=$(REFRESH_MS) invalido: use um de $(LAGS_NAIVE)))
+
+.PHONY: help setup-host setup-gerador host-rpm test-disputa test-rpm test-aleatorio test-disputa-real test-rpm-real test-aleatorio-real test-matriz test-matriz-cas test-matriz-naive report-matriz verificar-disputa verificar-rpm
 .DEFAULT_GOAL := help
 
 help:
@@ -55,6 +60,7 @@ help:
 	@Write-Host 'MATRIZ DO EXPERIMENTO (oficial: 1 lag + 1 braco por vez; lista de N x repeticoes; PCT_CONFIRMA=100; precisa de PGPASSWORD e psql)'
 	@Write-Host '  make test-matriz     HOST_IP=<ip> [VUS=50,100,200 REPETICOES=10 CAPACIDADE=20 READPATH=cas REFRESH_MS=5000]   (no GERADOR; READPATH/REFRESH_MS = o que o host roda)'
 	@Write-Host '  make test-matriz-cas HOST_IP=<ip>                           (no GERADOR: rodada 1a, braco CAS: N=100,200 x 5 rep, capacity 20, lag 5000; host com READPATH=cas; "Error 3" na linha make[1] = overselling no CAS)'
+	@Write-Host '  make test-matriz-naive HOST_IP=<ip> REFRESH_MS=<500|2000|5000|10000>   (no GERADOR: rodada 1b, braco ingenuo, UM lag por chamada: N=100,200 x 5 rep, capacity 20; host com READPATH=naive e o MESMO REFRESH_MS; repita nos 4 lags)'
 	@Write-Host '  make report-matriz                                          (no GERADOR: results\matriz.csv -> results\matriz.html, via Git Bash)'
 
 setup-host:
@@ -98,6 +104,16 @@ test-matriz:
 # runner), lag = default do backend/setup-host (5000, so rotulo: o CAS nao le o read model). O host deve rodar READPATH=cas.
 test-matriz-cas:
 	$(MAKE) test-matriz READPATH=cas VUS=100,200 REPETICOES=5 CAPACIDADE=20 REFRESH_MS=5000
+
+# preset da rodada 1b (issue #13), braco ingenuo: N=100,200, 5 repeticoes, capacity 20, PCT_CONFIRMA=100 (fixo no
+# runner). Uma chamada = UM lag: o lag e lido no startup do backend, entao o operador reinicia o host por lag
+# (make host-rpm READPATH=naive REFRESH_MS=<lag>) e roda este alvo com o MESMO REFRESH_MS (aqui so rotula a coluna
+# lag_ms). 4 lags x 2 N x 5 rep = 40 linhas no results\matriz.csv. Pinado como o preset CAS: VUS/REPETICOES/etc. da
+# linha de comando nao valem.
+test-matriz-naive:
+	$(need_ip)
+	$(need_lag)
+	$(MAKE) test-matriz READPATH=naive VUS=100,200 REPETICOES=5 CAPACIDADE=20 REFRESH_MS=$(REFRESH_MS)
 
 # o report e bash+awk (Git Bash, ja exigido pelo seed); ProgramW6432: o make pode abrir um PowerShell de 32 bits
 report-matriz:

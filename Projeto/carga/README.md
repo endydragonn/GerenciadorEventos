@@ -127,8 +127,10 @@ logins), mas a amostra pode ser até ~`PollMs` anterior ao disparo. A rajada em 
 p95 da reserva é de dezenas de ms; o `duracao_s` do teste 1 inclui os logins do `setup()`), então
 na prática não há amostra própria na janela e `lag_obs_max` costuma igualar `lag_obs_disparo`.
 
-O report (`report-matriz.sh`) desenha, por (N, capacity), o overselling × lag (uma curva por braço: média, ±1
-desvio amostral e mín–máx das repetições) e a latência p95 × lag, mais a tabela dos agregados.
+O report (`report-matriz.sh`) desenha, por (N, capacity), o overselling × lag e a latência p95 × lag, mais a
+tabela dos agregados. Eixo x linear em ms (de 0 ao maior lag). Cada braço tem média, ±1 desvio amostral e mín–máx
+das repetições por lag; o `naive` é uma curva e o `cas`, que não depende do lag, uma linha de referência
+tracejada (média de todas as suas execuções do grupo) com marcadores nos lags em que foi medido.
 Auto-testes (sem rede/stack): `bash ../../docs/carga/harness/report-matriz-selftest.sh` e
 `.\lib-matriz.selftest.ps1`.
 
@@ -177,11 +179,71 @@ make test-matriz-cas HOST_IP=<ip do host>
 make report-matriz
 ```
 
-Versione o `Projeto/carga/results/matriz.csv` resultante (as 10 linhas); ele entra no gráfico como a curva
-"design proposto" (as rodadas do braço `naive` acrescentam linhas ao mesmo arquivo). **Esperado: `oversell = 0`
+Versione o `Projeto/carga/results/matriz.csv` resultante (as 10 linhas); ele entra no gráfico como a linha de
+referência "design proposto" (a rodada 1b, braço `naive`, acrescenta linhas ao mesmo arquivo). **Esperado: `oversell = 0`
 em todas as linhas** e o `make` terminando sem erro. Qualquer valor diferente (ou `Error 3` na linha `make[1]`,
 exit `3` do script) é um bug do CAS, não ruído de medição: investigue antes de seguir. `Error 2` na linha
 `make[1]` = repetição inválida: a rodada ficou com menos de 10 linhas; corrija o host e repita.
+
+### Rodada 1b — braço ingênuo (issue #13)
+
+Preset `make test-matriz-naive`: `READPATH=naive`, N ∈ {100, 200}, `capacity` 20, 5 repetições, `PCT_CONFIRMA=100`
+(fixo no runner) e **um lag por chamada**: `REFRESH_MS` ∈ {500, 2000, 5000, 10000} é **obrigatório** e você o
+informa na linha de comando a cada chamada (sem ele, ou com outro valor, o `make` para com erro; ele só rotula a coluna `lag_ms`, e
+tem de ser o lag que o host está rodando). Cada lag gera **10 linhas**; os 4 lags, **40 linhas**, que se acumulam
+no **mesmo** `results\matriz.csv` das 10 linhas CAS da rodada 1a (**não apague o CSV**; se a 1a ainda não foi
+rodada, o gráfico sai só com o ingênuo). Como o lag é lido só no startup do backend, a sequência é **por lag** e se
+repete 4 vezes (500, 2000, 5000, 10000):
+
+```powershell
+# 0) host, uma vez (PowerShell como Administrador): firewall da 8081 e da 5433 restrita ao gerador (já feito na 1a: pule)
+make setup-host READPATH=naive REFRESH_MS=500 GERADOR_IP=<ip do gerador>
+
+# 1) gerador, uma vez por sessão: PGPASSWORD só no ambiente (igual à 1a)
+$s = Read-Host 'Senha do Postgres do host' -AsSecureString
+$env:PGPASSWORD = [System.Net.NetworkCredential]::new('', $s).Password
+
+# 2) POR LAG, nesta ordem: host (reinicia a stack com o braço ingênuo, o lag e max_connections=300, como na 1a:
+#    N=200 estoura o padrão 100) -> conferência no host -> gerador (o MESMO lag do host).
+#    A conferência vale depois de CADA host-rpm: deve imprimir "naive" e o lag que você acabou de subir:
+#      docker exec gerenciador-backend printenv RESERVATION_READPATH READMODEL_AVAILABILITY_REFRESH_MS
+
+# lag 500
+make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=500                  # host
+make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=500                # gerador
+
+# lag 2000
+make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=2000                 # host
+make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=2000               # gerador
+
+# lag 5000
+make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=5000                 # host
+make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=5000               # gerador
+
+# lag 10000
+make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=10000                # host
+make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=10000              # gerador
+
+# 3) depois dos 4 lags, no gerador: gráfico sobre o mesmo CSV (50 linhas: 10 CAS + 40 ingênuo)
+make report-matriz
+```
+
+Não use `make setup-host` para trocar o lag entre as chamadas: ele recria a stack sem o override do `host-rpm` e o
+`max_connections` pode voltar ao padrão (100), o que derruba repetições do N=200 (`too many clients`).
+
+- **Esperado:** cada (ingênuo, lag, N) com 5 linhas no CSV e o `make` sem erro. No ingênuo não há tolerância: o
+  overselling é o que se mede, então `oversell > 0` **não** é falha. `Error 2` na linha `make[1]` = repetição
+  inválida (5xx etc.): o lag ficou com menos de 10 linhas. Se a chamada de um lag for interrompida no meio por
+  qualquer motivo (`Error 1`, `Error 2`, Ctrl+C), **apague do `matriz.csv` as linhas desse lag** (`naive` + esse
+  `lag_ms`) antes de repetir; senão as repetições já gravadas se duplicam e distorcem média e desvio.
+- **Versione** o `Projeto/carga/results/matriz.csv` final (50 linhas: 10 CAS + 40 ingênuo); o gráfico se gera a
+  partir dele.
+- **Resultado como medido.** Se o overselling não crescer com o lag (platô, queda, ruído), isso é o achado: registre
+  como saiu, sem repetir rodadas para "achar" a tendência esperada nem descartar lags.
+- **Gráfico:** eixo x **linear** em ms (a hipótese é "overselling proporcional ao lag"); o ingênuo é a curva (média,
+  ±1 desvio e mín–máx por lag) e o `cas`, que não depende do lag, uma **linha de referência tracejada** (média de
+  todas as suas execuções) com marcador onde foi medido. O lag observado no disparo (`lag_obs_disparo`) vai em cada
+  linha do CSV e, em média, na tabela do report.
 
 ## Teste 1 — disputa de vagas (corretude)
 

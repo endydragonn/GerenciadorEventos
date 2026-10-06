@@ -10,15 +10,23 @@
 #
 #    - uma linha de painéis por (N, capacity) (o CSV acumula execuções; capacities
 #      diferentes não se misturam):
-#        . overselling (y) por lag (x): uma curva por braço, marcador = média
-#          das repetições, barra grossa = ±1 desvio amostral, linha fina =
+#        . overselling (y) por lag (x): uma curva por braço (o cas é referência,
+#          ver abaixo), marcador = média das repetições, barra grossa = ±1 desvio amostral, linha fina =
 #          mín–máx;
 #        . latência p95 da reserva (y) por lag (x), mesma anatomia;
 #    - a "table view" com os agregados por (braço, lag, N, capacity), incluindo
 #      pending+confirmed (métrica secundária) e o lag observado médio.
 #
-#  Eixo x ORDINAL: os lags presentes no CSV, em ordem crescente e igualmente
-#  espaçados (lags costumam ser geométricos: 500, 1000, 5000...).
+#  Eixo x LINEAR em ms, de 0 ao maior lag do CSV: a posição é proporcional ao lag
+#  (a hipótese do experimento é "overselling cresce com o lag"; um eixo ordinal
+#  distorceria a proporção). Marcas (e rótulos, se couberem) nos lags presentes.
+#
+#  Braço cas = linha de REFERÊNCIA horizontal (tracejada), não curva: ele não lê o
+#  read model, então não depende do lag (o CSV costuma ter só 1 lag dele). A linha é
+#  a média de todas as execuções cas do grupo (N, capacity), de lag 0 ao maior lag;
+#  média ± desvio e mín/máx (de todas) no tooltip, e os marcadores com ±desvio e
+#  mín–máx ficam em cada lag em que o cas foi de fato medido. Sem cas no grupo, o
+#  painel mostra só os demais braços.
 #
 #  Uso:  report-matriz.sh <matriz.csv> <saida.html>
 #  Roda em qualquer bash com awk (o Git Bash do gerador serve; não precisa
@@ -100,7 +108,7 @@ cat > "$TMP" <<'HTML'
   .legenda { display: flex; gap: 16px; margin: 12px 0 4px; font-size: 13px; color: var(--text-secondary); }
   .item { display: inline-flex; align-items: center; gap: 6px; }
   .chave { display: inline-block; width: 16px; height: 3px; border-radius: 2px; }
-  .chave-cas { background: var(--series-1); }
+  .chave-cas { background: repeating-linear-gradient(90deg, var(--series-1) 0 6px, transparent 6px 10px); }
   .chave-naive { background: var(--series-2); }
   .chave-s3 { background: var(--series-3); }
   .chave-s4 { background: var(--series-4); }
@@ -164,8 +172,11 @@ function ordenar_grupos(n,   i, j, v) {
     }
 }
 
+# x de um lag no eixo LINEAR (de 0 ao maior lag, lmax): proporcional ao lag
+function xpos(lag, x0, x1) { return x0 + lag / lmax * (x1 - x0) }
+
 # um painel SVG: n = índice em G[] (grupo = N + capacity), m = "o" (overselling) ou "p" (p95)
-function painel(n, m,   W, H, x0, x1, y0, y1, a, l, k, vmax, v, step, top, t, i, xc, dx, px, py, pts, np, mean, sd, mn, mx, lo, hi, nlab, ylast, xlast, ok, b, rotulo, un, tt, ymn, ymx) {
+function painel(n, m,   W, H, x0, x1, y0, y1, a, l, k, vmax, v, step, top, t, i, xc, px, py, pts, np, mean, sd, mn, mx, lo, hi, nlab, ylast, xlast, ok, b, rotulo, un, tt, ymn, ymx, xlab, c, sm, ss, rmn, rmx, rmean, rsd, ref, yref) {
     W = 420; H = 250; x0 = 52; x1 = W - 56; y0 = 14; y1 = H - 36
     vmax = 0
     for (a = 1; a <= na; a++) for (l = 1; l <= nl; l++) {
@@ -194,22 +205,56 @@ function painel(n, m,   W, H, x0, x1, y0, y1, a, l, k, vmax, v, step, top, t, i,
         printf "<line class=\"%s\" x1=\"%d\" y1=\"%.1f\" x2=\"%d\" y2=\"%.1f\"/>\n", (i == 0 ? "baseline" : "grid"), x0, py, x1, py
         printf "<text class=\"eixo\" x=\"%d\" y=\"%.1f\" text-anchor=\"end\">%s</text>\n", x0 - 8, py + 4, fmt(v)
     }
-    # eixo x ordinal
+    # eixo x linear em ms, a partir de 0: marca em cada lag presente; rótulo só se couber (>= 32px do anterior)
+    xlab = -1000
     for (l = 1; l <= nl; l++) {
-        xc = x0 + (l - 0.5) * (x1 - x0) / nl
-        printf "<text class=\"eixo\" x=\"%.1f\" y=\"%d\" text-anchor=\"middle\">%s</text>\n", xc, y1 + 16, L[l]
+        xc = xpos(L[l], x0, x1)
+        printf "<line class=\"baseline\" x1=\"%.1f\" y1=\"%d\" x2=\"%.1f\" y2=\"%d\"/>\n", xc, y1, xc, y1 + 4
+        if (xc - xlab < 32) continue
+        xlab = xc
+        printf "<text class=\"eixo eixo-x\" x=\"%.1f\" y=\"%d\" text-anchor=\"middle\">%s</text>\n", xc, y1 + 16, L[l]
     }
-    printf "<text class=\"eixo\" x=\"%.1f\" y=\"%d\" text-anchor=\"middle\">lag (ms)</text>\n", (x0 + x1) / 2, H - 4
+    printf "<text class=\"eixo\" x=\"%.1f\" y=\"%d\" text-anchor=\"middle\">lag (ms) · escala linear</text>\n", (x0 + x1) / 2, H - 4
 
-    # 1) curvas (médias), 2) mín–máx e ±desvio, 3) marcadores por cima
+    # referência do cas: todas as execuções cas do grupo, em qualquer lag (ele não depende do lag)
+    ref = 0
+    if ("cas" in slot) {
+        c = 0; sm = 0; ss = 0
+        for (l = 1; l <= nl; l++) {
+            k = "cas" SUBSEP L[l] SUBSEP G[n]
+            if (!(k in cnt)) continue
+            for (i = 1; i <= cnt[k]; i++) {
+                v = (m == "o") ? ov[k, i] : pv[k, i]
+                sm += v; ss += v * v
+                if (!c || v < rmn) rmn = v
+                if (!c || v > rmx) rmx = v
+                c++
+            }
+        }
+        if (c) {
+            ref = 1; rmean = sm / c; rsd = -1
+            if (c > 1) { v = (ss - c * rmean * rmean) / (c - 1); rsd = (v > 0) ? sqrt(v) : 0 }
+        }
+    }
+    if (ref) {
+        yref = y1 - rmean / top * (y1 - y0)
+        tt = sprintf("cas · independe do lag · média %.2f%s", rmean, un)
+        if (rsd >= 0) tt = tt sprintf(" ± %.2f", rsd)
+        tt = tt sprintf(" (mín %s, máx %s) · %d execuções", fmt(rmn), fmt(rmx), c)
+        printf "<g><title>%s</title>\n", tt
+        printf "<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"transparent\" stroke-width=\"14\" pointer-events=\"stroke\"/>\n", x0, yref, x1, yref
+        printf "<line class=\"ref-cas\" x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"var(--series-%d)\" stroke-width=\"2\" stroke-dasharray=\"6 4\" stroke-linecap=\"round\"/>\n</g>\n", x0, yref, x1, yref, slot["cas"]
+    }
+
+    # 1) curvas (médias; o cas é a referência acima), 2) mín–máx e ±desvio, 3) marcadores por cima
     for (a = 1; a <= na; a++) {
+        if (A[a] == "cas") continue
         pts = ""; np = 0
-        dx = (na > 1) ? (a - (na + 1) / 2) * 12 : 0
         for (l = 1; l <= nl; l++) {
             k = A[a] SUBSEP L[l] SUBSEP G[n]
             if (!(k in cnt)) continue
             mean = (m == "o") ? mo[k] : mp[k]
-            xc = x0 + (l - 0.5) * (x1 - x0) / nl + dx
+            xc = xpos(L[l], x0, x1)
             py = y1 - mean / top * (y1 - y0)
             pts = pts sprintf("%.1f,%.1f ", xc, py); np++
         }
@@ -217,12 +262,11 @@ function painel(n, m,   W, H, x0, x1, y0, y1, a, l, k, vmax, v, step, top, t, i,
             printf "<polyline class=\"serie serie-%s\" points=\"%s\" fill=\"none\" stroke=\"var(--series-%d)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n", armcls(A[a]), pts, slot[A[a]]
     }
     for (a = 1; a <= na; a++) {
-        dx = (na > 1) ? (a - (na + 1) / 2) * 12 : 0
         for (l = 1; l <= nl; l++) {
             k = A[a] SUBSEP L[l] SUBSEP G[n]
             if (!(k in cnt)) continue
             if (m == "o") { mean = mo[k]; sd = sdo[k]; mn = mno[k]; mx = mxo[k] } else { mean = mp[k]; sd = sdp[k]; mn = mnp[k]; mx = mxp[k] }
-            px = x0 + (l - 0.5) * (x1 - x0) / nl + dx
+            px = xpos(L[l], x0, x1)
             ymn = y1 - mn / top * (y1 - y0); ymx = y1 - mx / top * (y1 - y0)
             printf "<path d=\"M%.1f %.1fV%.1fM%.1f %.1fh6M%.1f %.1fh6\" fill=\"none\" stroke=\"var(--series-%d)\" stroke-width=\"1.5\" stroke-opacity=\".6\" stroke-linecap=\"round\"/>\n", px, ymx, ymn, px - 3, ymx, px - 3, ymn, slot[A[a]]
             if (sd > 0) {
@@ -232,12 +276,11 @@ function painel(n, m,   W, H, x0, x1, y0, y1, a, l, k, vmax, v, step, top, t, i,
         }
     }
     for (a = 1; a <= na; a++) {
-        dx = (na > 1) ? (a - (na + 1) / 2) * 12 : 0
         for (l = 1; l <= nl; l++) {
             k = A[a] SUBSEP L[l] SUBSEP G[n]
             if (!(k in cnt)) continue
             if (m == "o") { mean = mo[k]; sd = sdo[k]; mn = mno[k]; mx = mxo[k] } else { mean = mp[k]; sd = sdp[k]; mn = mnp[k]; mx = mxp[k] }
-            px = x0 + (l - 0.5) * (x1 - x0) / nl + dx
+            px = xpos(L[l], x0, x1)
             py = y1 - mean / top * (y1 - y0)
             tt = sprintf("%s · lag %s ms · N=%s · capacity %s · %d repetições · média %.2f%s", esc(A[a]), L[l], gN[G[n]], gC[G[n]], cnt[k], mean, un)
             if (sd >= 0) tt = tt sprintf(" ± %.2f", sd)
@@ -246,16 +289,16 @@ function painel(n, m,   W, H, x0, x1, y0, y1, a, l, k, vmax, v, step, top, t, i,
         }
     }
 
-    # rótulo direto no fim de cada curva; se dois fins estão a menos de 13px, não rotula (a legenda cobre)
+    # rótulo direto no fim de cada curva (do cas: no fim da referência); se dois fins estão a menos de 13px, não rotula (a legenda cobre)
     for (a = 1; a <= na; a++) {
         ylast[a] = ""
-        dx = (na > 1) ? (a - (na + 1) / 2) * 12 : 0
+        if (A[a] == "cas") { if (ref) { ylast[a] = yref; xlast[a] = x1 }; continue }
         for (l = nl; l >= 1; l--) {
             k = A[a] SUBSEP L[l] SUBSEP G[n]
             if (!(k in cnt)) continue
             mean = (m == "o") ? mo[k] : mp[k]
             ylast[a] = y1 - mean / top * (y1 - y0)
-            xlast[a] = x0 + (l - 0.5) * (x1 - x0) / nl + dx
+            xlast[a] = xpos(L[l], x0, x1)
             break
         }
     }
@@ -317,6 +360,7 @@ END {
     for (s = 1; s <= 4; s++) if (s in bySlot) A[++na] = bySlot[s]
     for (x in lagset) L[++nl] = x + 0
     ordenar(L, nl)
+    lmax = L[nl]; if (lmax <= 0) lmax = 1   # domínio do eixo x: de 0 ao maior lag
     ordenar_grupos(ng)
 
     for (k in cnt) {
@@ -334,9 +378,9 @@ END {
     printf "<p class=\"subtitulo\">Fonte: %s · %d execuções · commit: %s · gerado em %s</p>\n", esc(fonte), total, (commits == "" ? "n/d" : esc(commits)), gerado
     if (ncommit > 1) printf "<p class=\"aviso\">AVISO: o CSV mistura mais de um commit (%s); host e gerador devem estar no mesmo commit, e as execuções devem ser comparáveis.</p>\n", esc(commits)
     printf "<div class=\"legenda\">"
-    for (a = 1; a <= na; a++) printf "<span class=\"item\"><span class=\"chave chave-%s\"></span>%s</span>", armcls(A[a]), esc(A[a])
+    for (a = 1; a <= na; a++) printf "<span class=\"item\"><span class=\"chave chave-%s\"></span>%s%s</span>", armcls(A[a]), esc(A[a]), (A[a] == "cas" ? " · independe do lag" : "")
     printf "</div>\n"
-    printf "<p class=\"nota\">Marcador = média das repetições · barra grossa = ±1 desvio amostral · linha fina = mín–máx · eixo x ordinal (lags igualmente espaçados). Overselling = max(0, confirmed − capacity); valores exatos na tabela.</p>\n"
+    printf "<p class=\"nota\">Marcador = média das repetições · barra grossa = ±1 desvio amostral · linha fina = mín–máx · eixo x linear em ms, a partir de 0 (a posição é proporcional ao lag; marcas nos lags medidos).%s Overselling = max(0, confirmed − capacity); valores exatos na tabela.</p>\n", ("cas" in slot ? " A linha tracejada do cas é a média de todas as suas execuções do grupo, repetida em todos os lags: o cas não lê o read model, então não depende do lag; os marcadores mostram onde ele foi medido." : "")
 
     for (n = 1; n <= ng; n++) {
         printf "<h2>N = %s · capacity %s</h2>\n<div class=\"paineis\">\n", gN[G[n]], gC[G[n]]

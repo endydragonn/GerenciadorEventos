@@ -34,8 +34,8 @@ O seed (`setup.sh`) é a fonte única dos dois.
 | `verify.sh` | Depois da carga, lê `eventcap`/`walletevent` **direto do banco** (fonte de verdade) e calcula o veredito de corretude. |
 | `report.sh` | Junta k6 + verify + lag num CSV final + gráfico HTML autocontido (SVG inline, sem lib externa). |
 | `report-selftest.sh` | Auto-teste de `report.sh` com fixture sintética (sem precisar de stack no ar) — ver seção própria abaixo. |
-| `report-matriz.sh` | **Não faz parte do `run.sh`**: lê o CSV da matriz do kit `Projeto/carga` (`results/matriz.csv`) e gera o gráfico HTML/SVG (overselling × lag por braço, p95 × lag, tabela). Usado por `make report-matriz`. |
-| `report-matriz-selftest.sh` | Auto-teste de `report-matriz.sh` com fixture (2 braços × 2 lags × 2 N, BOM + CRLF). Só bash/awk. |
+| `report-matriz.sh` | **Não faz parte do `run.sh`**: lê o CSV da matriz do kit `Projeto/carga` (`results/matriz.csv`) e gera o gráfico HTML/SVG (overselling × lag, p95 × lag, tabela), com eixo x linear em ms: o braço `naive` é uma curva por lag e o `cas`, que não depende do lag, uma linha de referência tracejada. Usado por `make report-matriz`. |
+| `report-matriz-selftest.sh` | Auto-teste de `report-matriz.sh` com duas fixtures (2 braços × 2 lags × 2 N, BOM + CRLF; e a forma da rodada 1b: `naive` em 4 lags + `cas` em 1, com grupo/CSV sem `cas`). Só bash/awk. |
 | `resultados/` | Saída de cada rodada (`run.sh` cria `resultados/<sufixo>/`); **não versionado** (`.gitignore` local), mesma regra do `CLAUDE.md` da raiz para relatórios gerados. |
 
 ## Pré-requisitos
