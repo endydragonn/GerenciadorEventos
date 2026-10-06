@@ -34,7 +34,7 @@ Labels sugeridas: `fase/0`…`fase/11`, `area/backend`, `area/banco`, `area/infr
 
 ---
 
-## Estado (2026-10-02)
+## Estado (2026-10-06)
 
 Snapshot do GitHub (`gh issue list` / `gh pr list`). A definição de cada item continua sendo o
 texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
@@ -43,15 +43,19 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 |---|---|---|---|
 | 1 | #2 | fechada | #52 |
 | 2 | #3 | fechada | #53 |
-| 3 | #4 | **aberta** — kit de carga já está no `main` (`Projeto/carga/`, `docs/carga/setup.md`); falta provisionar a 2ª máquina, medir a latência base de rede e registrá-la | #76 (draft), kit em #90 |
+| 3 | #4 | fechada — gerador provisionado e latência base HTTP medida (`Projeto/carga/results/baseline-20261004-122632.txt`; ICMP não respondeu) | #76, kit em #90 |
 | 4 | #5 | fechada | #55 |
 | 5 | #6 | fechada | #65 |
 | 6 | #7 | fechada | #66, #68 (fone obrigatório, #67) |
 | 7 | #8 | fechada | #70 |
 | 8 | #9 | fechada (roteiro em `docs/testes-manuais/`; `.sh` precisa de JWT pós-#79) | #73 |
 | 9 | #10 | fechada | #75 |
-| 10 | #11 | **aberta** — harness mergeado (`docs/carga/harness/`); falta rodar de outra máquina (depende do item 3) | #82 |
-| 11–46 | #12–#47 | abertas | — |
+| 10 | #11 | **aberta** — harness mergeado (`docs/carga/harness/`); Aceite refinado em 2026-10-06: o kit `Projeto/carga` vira o runner oficial (matriz, lag coletado do gerador, CSV + gráfico) | #82 |
+| 11–14 | #12–#15 | abertas — rodadas preliminares (1 lag, 1–2 repetições) em `Projeto/carga/results/ANALISE.md`; Aceites refinados em 2026-10-06 | — |
+| 15–46 | #16–#47 | abertas | — |
+
+Branch de integração da Fase 2: `Fase_2` (PRs `Issue-11`…`Issue-15` entram nela; ela entra em
+`main` por um PR único no fim da fase). Vocabulário do experimento em `CONTEXT.md`.
 
 Fora do backlog (follow-ups): #56–#61 abertas (`updatePolicy`, IDOR em `/bff/event-wallets`,
 endurecer schema, cobertura, transações do `updateEvent`, N+1/pool); #78 (BFF única + JWT
@@ -122,28 +126,28 @@ Caminho crítico (issues): #2 → #5 → #7 → #10 feitas; próximo: #11 → #1
 
 ### 10. Harness de carga rodando da máquina/VM separada
 `fase/2` `area/carga` `artigo`
-- **Aceite:** cenário de N clientes concorrentes disputando `capacity` finita, disparado de #3; coleta: contagem de corretude (`confirmed` vs `capacity`), latência p50/p95/p99, throughput (reservas/s), lag observado do read model. Saída em CSV + gráfico.
+- **Aceite:** o kit `Projeto/carga` é o runner oficial (o harness de `docs/carga/harness/` fica como sanity local). Alvo de matriz: para um lag fixo, N × repetições, evento novo por repetição, `PCT_CONFIRMA=100`, rajada em instante pseudo-aleatório. O gerador coleta `confirmed`/`pending` e o lag observado via `psql` remoto (`:5433`). CSV com uma linha por execução (`braco, lag_ms, N, capacity, rep, confirmed, pending, oversell, p50, p95, p99, throughput, lag_obs_disparo, lag_obs_max, commit`) + gráfico SVG (overselling × lag, uma curva por braço, e painel de p95). Spec completa na issue #11.
 - **Depende de:** #3, #9
 
 ### 11. Rodada 1a — no-overselling pelo caminho CAS
 `fase/2` `area/carga` `artigo`
-- **Aceite:** sob N concorrentes, total de `confirmed` nunca excede `capacity`. Números registrados como a curva "design proposto".
+- **Aceite:** preset do runner: `readpath=cas`, N ∈ {100, 200}, `capacity` 20, 5 repetições. Overselling = `confirmed > capacity` (primária) e `pending + confirmed > capacity` (secundária), tolerância 0. Execução no gerador pelo usuário; CSV versionado vira a curva "design proposto".
 - **Depende de:** #10
 
 ### 12. Rodada 1b — braço de controle: caminho ingênuo oversella
 `fase/2` `area/carga` `artigo`
 - **O diferencial do trabalho.** "O design ingênuo oversella, o nosso não — eis os números."
-- **Aceite:** mesmo N concorrentes, feature flag no caminho ingênuo (read model defasado) → `confirmed > capacity`, proporcional ao lag. Mesmo gráfico, duas curvas.
+- **Aceite:** preset do runner: `readpath=naive`, lags ∈ {500, 2000, 5000, 10000} ms × N ∈ {100, 200} × 5 repetições (40 execuções). Gráfico de duas curvas (CAS e ingênuo, overselling × lag, média ± desvio). Execução no gerador pelo usuário; o resultado é reportado como medido.
 - **Depende de:** #11
 
 ### 13. Throughput/latência preliminares do monólito + limiar X preliminar
 `fase/2` `area/carga` `artigo`
-- **Aceite:** curva de latência/throughput vs. carga; ponto onde o fluxo síncrono começa a degradar, anotado como X preliminar (refinado na Fase 8). Ressalva: DB atual sem pool — números absolutos indicativos.
+- **Aceite:** carga em degraus a partir de 12k RPM até degradar ou até o limite do gerador; X = primeiro degrau com 5xx > 1% ou p95 > 1 s por 30 s (se o gerador saturar antes, X é limite inferior). Curva latência/throughput × carga. Ressalva: números de "monólito + HikariCP" — os números pré-pool (#96) estão invalidados.
 - **Depende de:** #11
 
 ### 14. Consolidar o resultado da Fase 2 em rascunho de seção do artigo
 `fase/2` `artigo`
-- **Aceite:** `docs/artigo/experimento-monolito.md` com metodologia, setup (máquina separada), números, gráficos, ameaças à validade e limitações. Revisado com o orientador.
+- **Aceite:** `docs/artigo/experimento-monolito.md` com hipótese, setup (2 PCs, 1 Gbps), workload, métricas (`CONTEXT.md`), resultados (duas curvas + X), ameaças à validade e limitações. Números "monólito + HikariCP", não o ponto 1 definitivo da série. Revisado com o orientador.
 - **Depende de:** #12, #13
 
 ---

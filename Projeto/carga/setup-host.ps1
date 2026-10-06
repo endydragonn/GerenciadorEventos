@@ -5,7 +5,10 @@
 .DESCRIPTION
   - confere Docker e Projeto\.env (sem imprimir o conteudo)
   - plano de energia "Alto desempenho" (se existir)
-  - regra de firewall para a porta 8081 (somente rede Privada) - exige PowerShell como Administrador
+  - regra de firewall para a 8081 (API), somente rede Privada - exige PowerShell como Administrador
+  - com -GeradorIp <ip>: regra para a 5433 (Postgres, psql remoto da matriz do experimento), Privada e
+    SEMPRE restrita a esse IP; sem -GeradorIp a 5433 nao e aberta (so aviso). Desfazer ao fim:
+    Remove-NetFirewallRule -DisplayName 'TCC postgres 5433'
   - sobe a stack com o override de carga (read path cas|naive, lag do read model, log de SQL desligado)
   - espera o backend ficar saudavel e mostra os IPs para usar no gerador
 
@@ -15,6 +18,7 @@
 .EXAMPLE
   .\setup-host.ps1                       # caminho CAS (default)
   .\setup-host.ps1 -ReadPath naive -RefreshMs 5000
+  .\setup-host.ps1 -ReadPath naive -RefreshMs 2000 -GeradorIp 192.168.0.20   # para a matriz (abre a 5433 so p/ o gerador)
   .\setup-host.ps1 -Verificar -EventId 12
 #>
 [CmdletBinding()]
@@ -23,7 +27,8 @@ param(
     [int]$RefreshMs = 5000,
     [switch]$SemBuild,
     [switch]$Verificar,
-    [int]$EventId = 0
+    [int]$EventId = 0,
+    [string]$GeradorIp = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,9 +94,29 @@ if ($isAdmin) {
             -Action Allow -Profile Private | Out-Null
         Ok "Regra de firewall criada: $regra (somente perfil Privado)."
     } else { Ok "Regra de firewall ja existe: $regra." }
+    # Postgres (5433): so a matriz do experimento usa (o gerador consulta confirmed/pending e o lag por
+    # psql remoto). O Postgres tem a senha real do .env, entao a regra SO existe restrita ao IP do
+    # gerador (-GeradorIp): sem ele nao se cria regra nenhuma, so se avisa. Desfazer ao fim:
+    #   Remove-NetFirewallRule -DisplayName 'TCC postgres 5433'
+    $regraPg = 'TCC postgres 5433'
+    if ($GeradorIp) {
+        $ip = $null
+        if (-not [System.Net.IPAddress]::TryParse($GeradorIp, [ref]$ip)) { Fail "-GeradorIp '$GeradorIp' nao e um IP valido (use o IP do gerador, nao 'Any' nem faixa)." }
+        if (-not (Get-NetFirewallRule -DisplayName $regraPg -ErrorAction SilentlyContinue)) {
+            New-NetFirewallRule -DisplayName $regraPg -Direction Inbound -Protocol TCP -LocalPort 5433 `
+                -Action Allow -Profile Private -RemoteAddress $GeradorIp | Out-Null
+            Ok "Regra de firewall criada: $regraPg (perfil Privado, so o gerador $GeradorIp)."
+        } else {
+            Set-NetFirewallRule -DisplayName $regraPg -RemoteAddress $GeradorIp
+            Ok "Regra de firewall $regraPg atualizada: so o gerador $GeradorIp."
+        }
+    } else {
+        Warn 'Regra do Postgres (5433) NAO criada: so a matriz do experimento precisa dela. Para a matriz rode com -GeradorIp <ip do gerador> (make setup-host GERADOR_IP=<ip>).'
+    }
 } else {
-    Warn 'Sem Administrador: regra de firewall NAO criada. Rode este script como Administrador ou execute:'
+    Warn 'Sem Administrador: regras de firewall NAO criadas. Rode este script como Administrador ou execute:'
     Write-Host '  New-NetFirewallRule -DisplayName "TCC backend 8081" -Direction Inbound -Protocol TCP -LocalPort 8081 -Action Allow -Profile Private'
+    Write-Host '  (so para a matriz) New-NetFirewallRule -DisplayName "TCC postgres 5433" -Direction Inbound -Protocol TCP -LocalPort 5433 -Action Allow -Profile Private -RemoteAddress <ip do gerador>'
 }
 Get-NetConnectionProfile | ForEach-Object {
     if ($_.NetworkCategory -eq 'Public') {

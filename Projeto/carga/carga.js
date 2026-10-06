@@ -8,12 +8,15 @@
 // (200 = confirmada) com PCT_CONFIRMA % de chance (padrao 100: ao fim as vagas ficam `confirmed`). Metricas de reserva e de
 // confirma sao separadas.
 //
-// Chamado pelo rodar-teste.ps1 com as variaveis de ambiente:
+// O resumo tambem traz disparo_ms/fim_ms (epoch ms: 1a iteracao iniciada / ultima terminada), usados
+// pelo rodar-matriz.ps1 para alinhar o lag observado do read model a rajada.
+//
+// Chamado pelo rodar-teste.ps1 e pelo rodar-matriz.ps1 com as variaveis de ambiente:
 //   BASE_URL, EVENT_ID, USERS_FILE (json [{email,password}]), SUMMARY_FILE, CAPACITY,
 //   PCT_CONFIRMA (0-100, padrao 100: % das aceitas que confirmam; as demais ficam pending e expiram)
 import http from 'k6/http';
 import exec from 'k6/execution';
-import { Counter, Trend } from 'k6/metrics';
+import { Counter, Gauge, Trend } from 'k6/metrics';
 
 const BASE = __ENV.BASE_URL;
 const EVENT_ID = parseInt(__ENV.EVENT_ID, 10);
@@ -32,6 +35,11 @@ const confirmaEsperado = new Counter('confirma_4xx_esperado');
 const confirma5xx = new Counter('confirma_5xx');
 const confirmaOutros = new Counter('confirma_outros');
 const confirmaDur = new Trend('confirma_duration', true);
+// Instantes (epoch ms, relogio do gerador) de cada iteracao: o min do primeiro e o max do segundo
+// delimitam a rajada. O rodar-matriz.ps1 usa isso para alinhar o lag observado do Postgres ao
+// disparo real (o setup() com os logins vem ANTES e dura segundos).
+const rajadaInicio = new Gauge('rajada_inicio_ms');
+const rajadaFim = new Gauge('rajada_fim_ms');
 
 export const options = {
   scenarios: {
@@ -117,6 +125,12 @@ function confirmar(s, eventId) {
 }
 
 export default function (sessoes) {
+  rajadaInicio.add(Date.now());
+  disputar(sessoes);
+  rajadaFim.add(Date.now());
+}
+
+function disputar(sessoes) {
   const s = sessoes[exec.scenario.iterationInTest];
   if (!s) {
     semLogin.add(1);
@@ -149,6 +163,12 @@ function contador(data, nome) {
   return m && m.values && m.values.count ? m.values.count : 0;
 }
 
+// min/max de um Gauge (0 se a metrica nao existir, ex.: nenhuma iteracao rodou).
+function extremo(data, nome, qual) {
+  const m = data.metrics[nome];
+  return m && m.values && m.values[qual] ? m.values[qual] : 0;
+}
+
 export function handleSummary(data) {
   const t = (data.metrics.reserva_duration || {}).values || {};
   const tc = (data.metrics.confirma_duration || {}).values || {};
@@ -176,6 +196,8 @@ export function handleSummary(data) {
     confirma_p99_ms: tc['p(99)'] || 0,
     duracao_s: duracaoS,
     reservas_por_s: duracaoS > 0 ? tentativas / duracaoS : 0,
+    disparo_ms: extremo(data, 'rajada_inicio_ms', 'min'),
+    fim_ms: extremo(data, 'rajada_fim_ms', 'max'),
   };
   return {
     [__ENV.SUMMARY_FILE]: JSON.stringify(out, null, 2),
