@@ -130,4 +130,8 @@ foreach ($n in $Vus) {
 
 Write-Host ''
 Ok "Resultados acumulados em $Csv"
-Write-Host 'Reservas pending expiram em ~120 s (devolvem a vaga); rode -Verificar logo apos a rodada.'
+if ($PctConfirma -eq 100) {
+    Write-Host 'Reservas confirmadas nao expiram; rode -Verificar quando quiser (esperado: todas confirmed).'
+} else {
+    Write-Host 'As nao confirmadas (pending) expiram em ~120 s e devolvem a vaga; rode -Verificar logo apos a rodada para ver o pending, ou depois para ver o expired.'
+}
