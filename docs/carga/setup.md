@@ -275,7 +275,7 @@ Banco: disputa com 20 `confirmed`, 0 vagas restantes e overselling 0 por evento;
 
 | Teste | Rodada | Aceitas | Confirmadas | 5xx | Descartadas | Reserva p95 | Confirma p95 |
 |---|---|---|---|---|---|---|---|
-| Disputa 50 / 100 / 200 | eventos 1708 / 1709 / 1710 | 20 em cada | 9 / 9 / 8 (45 / 45 / 40%) | 0 | n/a | 42 / 44 / 48 ms | n/a |
+| Disputa 50 / 100 / 200 | eventos 1708 / 1709 / 1710 | 20 em cada | 9 / 9 / 8 (45 / 45 / 40%) | 0 | n/a | 42 / 44 / 48 ms | 28 / 19 / 34 ms |
 | 10k RPM, 90 s | `Rpm-918245` | 7500 | 4450 (59,3%) | 0 | 0 | 4,1 ms | 4,2 ms |
 | Aleatório 45 min | `Ale-919068` | 194.989 | 116.744 (59,9%) | 0 | 0 | 4,6 ms | 3,7 ms |
 
