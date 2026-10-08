@@ -2,6 +2,7 @@ package com.gerenciador.eventos.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -170,21 +171,7 @@ public class EventService {
     }
 
     public List<Event> searchEvents(String term) {
-        List<Event> all = eventRepository.findAll();
-        List<Event> base;
-        if (term == null || term.isBlank()) {
-            base = all;
-        } else {
-            String q = term.toLowerCase();
-            base = new ArrayList<>();
-            for (Event e : all) {
-                if (e.getEvent_name() != null && e.getEvent_name().toLowerCase().contains(q)) {
-                    base.add(e);
-                }
-            }
-        }
-        base.forEach(this::hydrate);
-        return base;
+        return hydrateAll(eventRepository.searchByName(term)); // filtro no banco + hydrate em lote
     }
 
     public List<Event> findByCreatorId(Long creatorId) {
@@ -212,5 +199,24 @@ public class EventService {
         }
         e.setPresenters(eventPresenterRepository.findByEventId(e.getEvent_id()));
         return e;
+    }
+
+    /** Mesma lógica de {@link #hydrate}, mas com 2 consultas para a lista toda (sem N+1). */
+    public List<Event> hydrateAll(List<Event> events) {
+        if (events == null || events.isEmpty()) return events;
+        List<Long> ids = events.stream().map(Event::getEvent_id).filter(java.util.Objects::nonNull).toList();
+        Map<Long, EventCap> caps = eventCapRepository.findByEventIds(ids);
+        Map<Long, List<String>> presenters = eventPresenterRepository.findByEventIds(ids);
+        for (Event e : events) {
+            if (e.getEvent_id() == null) continue;
+            EventCap cap = caps.get(e.getEvent_id());
+            if (cap != null) {
+                e.setLot_quantity(cap.getCapacity());
+                e.setQuantity(cap.getQuant() != null ? cap.getQuant() : 0);
+                e.setBuy_time_limit(cap.getBuyTimeLimit());
+            }
+            e.setPresenters(presenters.getOrDefault(e.getEvent_id(), new ArrayList<>()));
+        }
+        return events;
     }
 }
