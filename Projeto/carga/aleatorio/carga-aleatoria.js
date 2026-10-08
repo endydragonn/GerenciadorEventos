@@ -59,6 +59,9 @@ const leituraDur = new Trend('leitura_duration', true);
 const leituraEventoDur = new Trend('leitura_evento_duration', true);
 const leituraCarteiraDur = new Trend('leitura_carteira_duration', true);
 const leituraBuscaDur = new Trend('leitura_busca_duration', true);
+const leituraEventoN = new Counter('leitura_evento_n');
+const leituraCarteiraN = new Counter('leitura_carteira_n');
+const leituraBuscaN = new Counter('leitura_busca_n');
 const confirmadas = new Counter('confirma_aceitas');
 const confirmaEsperado = new Counter('confirma_4xx_esperado');
 const confirma5xx = new Counter('confirma_5xx');
@@ -194,10 +197,12 @@ function ler(sessoes) {
   const sorteio = Math.random();
   let res;
   let trend;
+  let cont;
   if (sorteio < 0.5) {
     const eventId = EVENTS[Math.floor(Math.random() * EVENTS.length)];
     res = http.get(`${BASE}/bff/events/${eventId}`, { tags: { name: 'leitura_evento' } });
     trend = leituraEventoDur;
+    cont = leituraEventoN;
   } else if (sorteio < 0.8) {
     const s = sessoes[Math.floor(Math.random() * sessoes.length)];
     if (!s) {
@@ -209,14 +214,17 @@ function ler(sessoes) {
       tags: { name: 'leitura_carteira' },
     });
     trend = leituraCarteiraDur;
+    cont = leituraCarteiraN;
   } else {
     res = http.get(`${BASE}/bff/events/search?term=${encodeURIComponent(PREFIXO)}`, {
       tags: { name: 'leitura_busca' },
     });
     trend = leituraBuscaDur;
+    cont = leituraBuscaN;
   }
   leituraDur.add(res.timings.duration);
   trend.add(res.timings.duration);
+  cont.add(1);
   if (res.status >= 200 && res.status < 300) {
     leiturasOk.add(1);
   } else if (res.status >= 500) {
@@ -308,9 +316,12 @@ export function handleSummary(data) {
     leitura_busca_p50_ms: tlb.med || 0,
     leitura_busca_p95_ms: tlb['p(95)'] || 0,
     leitura_busca_p99_ms: tlb['p(99)'] || 0,
+    leitura_evento_n: contador(data, 'leitura_evento_n'),
+    leitura_carteira_n: contador(data, 'leitura_carteira_n'),
+    leitura_busca_n: contador(data, 'leitura_busca_n'),
   };
   return {
     [__ENV.SUMMARY_FILE]: JSON.stringify(out, null, 2),
-    stdout: `\nresumo: rpm_medio=${out.rpm_medio.toFixed(0)} (pico alvo ${rpmAlvoMax}) aceitas=${a} confirmadas=${out.confirmadas} lotado=${l} 5xx=${e5 + l5 + out.confirma_5xx} leituras=${lok} descartadas=${out.descartadas}\nleitura p95 (n): evento=${out.leitura_evento_p95_ms.toFixed(0)}ms (${contador(data, 'leitura_evento_duration')}) carteira=${out.leitura_carteira_p95_ms.toFixed(0)}ms (${contador(data, 'leitura_carteira_duration')}) busca=${out.leitura_busca_p95_ms.toFixed(0)}ms (${contador(data, 'leitura_busca_duration')})\n`,
+    stdout: `\nresumo: rpm_medio=${out.rpm_medio.toFixed(0)} (pico alvo ${rpmAlvoMax}) aceitas=${a} confirmadas=${out.confirmadas} lotado=${l} 5xx=${e5 + l5 + out.confirma_5xx} leituras=${lok} descartadas=${out.descartadas}\nleitura p95 (n): evento=${out.leitura_evento_p95_ms.toFixed(0)}ms (${contador(data, 'leitura_evento_n')}) carteira=${out.leitura_carteira_p95_ms.toFixed(0)}ms (${contador(data, 'leitura_carteira_n')}) busca=${out.leitura_busca_p95_ms.toFixed(0)}ms (${contador(data, 'leitura_busca_n')})\n`,
   };
 }
