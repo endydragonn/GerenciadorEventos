@@ -108,6 +108,11 @@ make verificar-rpm PREFIXO=Ale-<id impresso>
 saturação ao longo do tempo. Como reservas `pending` expiram e devolvem a vaga, `aceitas` pode passar
 da capacidade sem ser overselling; a invariante (ativas <= capacidade) vale no `-Verificar`.
 
+Leitura por endpoint: o `summary-<tag>.json` e a última linha do stdout trazem p50/p95/p99 de
+`leitura_evento_*`, `leitura_carteira_*` e `leitura_busca_*` (o `leitura_*` agregado continua). Se
+`leitura_busca_p95_ms` ficar muito acima de evento/carteira, confirma a suspeita de varredura em
+memória em `/bff/events/search`. Não entram no CSV.
+
 Resultado: `results\resultados-aleatorio.csv` e o perfil sorteado em `results\perfil-ale-<id>.json`.
 Scripts: `aleatorio/carga-aleatoria.js`, `aleatorio/rodar-aleatorio.ps1`.
 

@@ -55,6 +55,10 @@ const semLogin = new Counter('usuarios_sem_login');
 const alemDosPares = new Counter('iteracoes_alem_dos_pares');
 const reservaDur = new Trend('reserva_duration', true);
 const leituraDur = new Trend('leitura_duration', true);
+// Leitura por endpoint (leituraDur segue sendo o agregado das tres).
+const leituraEventoDur = new Trend('leitura_evento_duration', true);
+const leituraCarteiraDur = new Trend('leitura_carteira_duration', true);
+const leituraBuscaDur = new Trend('leitura_busca_duration', true);
 const confirmadas = new Counter('confirma_aceitas');
 const confirmaEsperado = new Counter('confirma_4xx_esperado');
 const confirma5xx = new Counter('confirma_5xx');
@@ -189,9 +193,11 @@ function reservar(sessoes, i) {
 function ler(sessoes) {
   const sorteio = Math.random();
   let res;
+  let trend;
   if (sorteio < 0.5) {
     const eventId = EVENTS[Math.floor(Math.random() * EVENTS.length)];
     res = http.get(`${BASE}/bff/events/${eventId}`, { tags: { name: 'leitura_evento' } });
+    trend = leituraEventoDur;
   } else if (sorteio < 0.8) {
     const s = sessoes[Math.floor(Math.random() * sessoes.length)];
     if (!s) {
@@ -202,12 +208,15 @@ function ler(sessoes) {
       headers: { Authorization: `Bearer ${s.token}` },
       tags: { name: 'leitura_carteira' },
     });
+    trend = leituraCarteiraDur;
   } else {
     res = http.get(`${BASE}/bff/events/search?term=${encodeURIComponent(PREFIXO)}`, {
       tags: { name: 'leitura_busca' },
     });
+    trend = leituraBuscaDur;
   }
   leituraDur.add(res.timings.duration);
+  trend.add(res.timings.duration);
   if (res.status >= 200 && res.status < 300) {
     leiturasOk.add(1);
   } else if (res.status >= 500) {
@@ -243,6 +252,9 @@ function contador(data, nome) {
 export function handleSummary(data) {
   const tr = (data.metrics.reserva_duration || {}).values || {};
   const tl = (data.metrics.leitura_duration || {}).values || {};
+  const tle = (data.metrics.leitura_evento_duration || {}).values || {};
+  const tlc = (data.metrics.leitura_carteira_duration || {}).values || {};
+  const tlb = (data.metrics.leitura_busca_duration || {}).values || {};
   const tc = (data.metrics.confirma_duration || {}).values || {};
   const duracaoS = (data.state.testRunDurationMs || 0) / 1000;
   const a = contador(data, 'reservas_aceitas');
@@ -287,9 +299,18 @@ export function handleSummary(data) {
     confirma_p50_ms: tc.med || 0,
     confirma_p95_ms: tc['p(95)'] || 0,
     confirma_p99_ms: tc['p(99)'] || 0,
+    leitura_evento_p50_ms: tle.med || 0,
+    leitura_evento_p95_ms: tle['p(95)'] || 0,
+    leitura_evento_p99_ms: tle['p(99)'] || 0,
+    leitura_carteira_p50_ms: tlc.med || 0,
+    leitura_carteira_p95_ms: tlc['p(95)'] || 0,
+    leitura_carteira_p99_ms: tlc['p(99)'] || 0,
+    leitura_busca_p50_ms: tlb.med || 0,
+    leitura_busca_p95_ms: tlb['p(95)'] || 0,
+    leitura_busca_p99_ms: tlb['p(99)'] || 0,
   };
   return {
     [__ENV.SUMMARY_FILE]: JSON.stringify(out, null, 2),
-    stdout: `\nresumo: rpm_medio=${out.rpm_medio.toFixed(0)} (pico alvo ${rpmAlvoMax}) aceitas=${a} confirmadas=${out.confirmadas} lotado=${l} 5xx=${e5 + l5 + out.confirma_5xx} leituras=${lok} descartadas=${out.descartadas}\n`,
+    stdout: `\nresumo: rpm_medio=${out.rpm_medio.toFixed(0)} (pico alvo ${rpmAlvoMax}) aceitas=${a} confirmadas=${out.confirmadas} lotado=${l} 5xx=${e5 + l5 + out.confirma_5xx} leituras=${lok} descartadas=${out.descartadas}\nleitura p95 (n): evento=${out.leitura_evento_p95_ms.toFixed(0)}ms (${contador(data, 'leitura_evento_duration')}) carteira=${out.leitura_carteira_p95_ms.toFixed(0)}ms (${contador(data, 'leitura_carteira_duration')}) busca=${out.leitura_busca_p95_ms.toFixed(0)}ms (${contador(data, 'leitura_busca_duration')})\n`,
   };
 }
