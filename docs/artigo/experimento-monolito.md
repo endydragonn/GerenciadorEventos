@@ -1,8 +1,7 @@
 # Experimento de reserva concorrente no monólito: reserva por CAS × caminho ingênuo
 
 > **Status: rascunho de seção do artigo (issue #15).** Os resultados das rodadas 1a e 1b e da escada de
-> carga (issues #12, #13 e #14) ainda não foram preenchidos: aparecem como `[PREENCHER — …]`, com a
-> issue (`#12`, `#13`, `#14`) ou "usuário" (dado que só o usuário tem). Todos se localizam por `grep PREENCHER`.
+> carga (issues #12, #13 e #14) foram preenchidos com as rodadas de 2026-10-16.
 > Revisão com o orientador pendente. Caminhos de arquivo são relativos à raiz do repositório (nos comandos
 > `make`, relativos a `Projeto/carga`); os termos seguem o glossário de `CONTEXT.md`.
 >
@@ -74,9 +73,9 @@ Configuração levantada em 2026-10-16, dia das escadas da #14. Fontes: `docs/ca
 | PostgreSQL | 16.15 (imagem `postgres:16-alpine`, `Projeto/Backend/db/Dockerfile`) |
 | Backend | Spring Boot 3.5.7, Java 21 na compilação e `temurin:25-jre` na execução (`Projeto/Backend/CLAUDE.md`) |
 | HikariCP | 6.3.3 (gerenciada pelo Spring Boot; lida do jar do backend); `maximum-pool-size` padrão 1000 e `minimum-idle` 5 (o pool cresce sob demanda) |
-| `max_connections` do Postgres | Escadas da #14: **100** até a `degraus-959190` (o `make setup-host` sobe o Postgres com o padrão) e **1000** nas `degraus-959765`, `-962591` e `-963487` (`make host-rpm MAX_CONN=1000`), valores lidos no host com `SHOW max_connections`. A coluna `max_connections` dos CSVs é só um rótulo passado ao gerador e diz 300 nas escadas com 100: vale o valor medido no host. `pool_hikari` = 1000 em todas. O `matriz.csv` não grava esses campos, então o valor das rodadas 1a e 1b também deve ser registrado aqui: **[PREENCHER — issues #12 e #13]** |
+| `max_connections` do Postgres | Escadas da #14: **100** até a `degraus-959190` (o `make setup-host` sobe o Postgres com o padrão) e **1000** nas `degraus-959765`, `-962591` e `-963487` (`make host-rpm MAX_CONN=1000`), valores lidos no host com `SHOW max_connections`. A coluna `max_connections` dos CSVs é só um rótulo passado ao gerador e diz 300 nas escadas com 100: vale o valor medido no host. `pool_hikari` = 1000 em todas. O `matriz.csv` não grava esses campos: nas rodadas 1a e 1b o host rodou com **300** (`make host-rpm MAX_CONN=300`, conferido com `SHOW max_connections`) e Tomcat com 200 threads (padrão). |
 | Braço e lag | `RESERVATION_READPATH` (`cas` \| `naive`) e `READMODEL_AVAILABILITY_REFRESH_MS`, lidos no startup do backend (`Projeto/carga/docker-compose.carga.yml`); log de SQL desligado no host de carga para não distorcer a latência |
-| Commit testado | coluna `commit` dos CSVs (checkout do gerador); host e gerador no mesmo commit: `5120412` em todas as escadas da #14 (a `degraus-963487` rodou com o `.js` editado localmente, ver "Limiar X"); **[PREENCHER — issues #12 e #13]** |
+| Commit testado | coluna `commit` dos CSVs (checkout do gerador); host e gerador no mesmo commit: `5120412` em todas as escadas da #14 (a `degraus-963487` rodou com o `.js` editado localmente, ver "Limiar X"); `569d1be` nas 50 linhas da matriz (rodadas 1a e 1b), sem mudança de código em relação ao `5120412` |
 
 **Latência base HTTP (não comparável; não subtraída).** O `setup-gerador.ps1` mediu, em 2026-10-04, 30
 requisições `GET /actuator/health` cronometradas com `Stopwatch` em torno de `Invoke-WebRequest` (PowerShell):
@@ -190,28 +189,40 @@ melhorar a curva (só as repetições inválidas são refeitas, pelas regras do 
 
 ### Overselling × lag (duas curvas: CAS e ingênuo)
 
-> **[PREENCHER — issue #12]** Braço CAS (rodada 1a). Fonte: linhas `braco=cas` de
-> `Projeto/carga/results/matriz.csv` (10 linhas: N ∈ {100, 200} × 5 repetições) e gráfico de
-> `make report-matriz`. Preencher: `confirmed`, `pending` e `oversell` por execução; confirmar `oversell = 0`
-> nas 10 linhas e a ausência de `[FALHA CAS]` (código de saída 3); p95 da reserva por N; número de repetições
-> inválidas descartadas. Se algum `oversell > 0`, reportar como achado (defeito do CAS), não como ruído.
+Rodadas de 2026-10-16, capacidade 20, 100% de confirmação, `max_connections` 300, commit `569d1be`. Fonte:
+`Projeto/carga/results/matriz.csv` (50 linhas, commit `1fbe12b`); gráfico regenerável com `make report-matriz`.
+Nenhuma repetição foi descartada nos dois braços.
 
-> **[PREENCHER — issue #13]** Braço ingênuo (rodada 1b). Fonte: linhas `braco=naive` do mesmo
-> `Projeto/carga/results/matriz.csv` (40 linhas: 4 lags × 2 valores de N × 5 repetições) e gráfico de
-> `make report-matriz`. Preencher a tabela abaixo, a figura (overselling × lag, eixo x linear, braço CAS como
-> linha de referência) e um comentário sobre a forma observada (crescente, patamar no teto N − capacidade,
-> queda, ruído), sem repetir rodadas nem descartar lags.
+**Braço CAS (rodada 1a, #12).** `oversell = 0` nas 10 linhas (N ∈ {100, 200} × 5 repetições), com
+`confirmed = 20` e `pending = 0` em todas: exatamente a capacidade, nenhuma a mais. Sem `[FALHA CAS]` (código
+de saída 0). p95 da reserva: média de 53,7 ms (46,9–66,3) com N = 100 e 77,1 ms (64,5–86,2) com N = 200.
 
-| Lag (ms) | N | `oversell` média ± desvio | `oversell` mín–máx | `lag_obs_disparo` médio (ms) | p95 da reserva (ms) |
+**Braço ingênuo (rodada 1b, #13).**
+
+| Lag (ms) | N | `oversell` média ± desvio | `oversell` mín–máx | `lag_obs_disparo` médio (ms) | p95 da reserva, média (mín–máx) (ms) |
 |---|---|---|---|---|---|
-| 500 | 100 | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] |
-| 500 | 200 | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] |
-| 2000 | 100 | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] |
-| 2000 | 200 | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] |
-| 5000 | 100 | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] |
-| 5000 | 200 | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] |
-| 10000 | 100 | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] |
-| 10000 | 200 | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] | [PREENCHER — issue #13] |
+| 500 | 100 | 80 ± 0 | 80–80 | 1714 | 102,8 (77,3–135,2) |
+| 500 | 200 | 180 ± 0 | 180–180 | 1470 | 118,1 (113,3–127,7) |
+| 2000 | 100 | 80 ± 0 | 80–80 | 2408 | 95,2 (61,5–170,6) |
+| 2000 | 200 | 180 ± 0 | 180–180 | 2678 | 111,3 (99,4–133,5) |
+| 5000 | 100 | 80 ± 0 | 80–80 | 3620 | 92,3 (68,1–140,4) |
+| 5000 | 200 | 180 ± 0 | 180–180 | 3344 | 121,3 (104,4–139,4) |
+| 10000 | 100 | 80 ± 0 | 80–80 | 5541 | 95,9 (74,6–139,3) |
+| 10000 | 200 | 180 ± 0 | 180–180 | 6337 | 115,7 (98,9–145,1) |
+
+**Forma observada: patamar no teto N − capacidade, sem variação com o lag.** Em todas as 40 execuções todos
+os N clientes foram aceitos e confirmaram (`confirmed = N`), então o overselling é sempre o máximo possível
+(80 e 180) e o desvio é zero. A hipótese de que o overselling cresce com o lag **não foi observada** nesta
+faixa: a rajada dura de ~0,1 a 0,2 s (N ÷ vazão, com vazão de 518 a 1449 tentativas por segundo), menos que o menor período
+efetivo de refresh, então o read model nunca reflete a lotação durante a rajada, em nenhum lag. Para ver a
+curva subir seria preciso um lag menor que a duração da rajada ou rajadas espalhadas no tempo (não testado).
+
+**Lag observado acima do configurado.** No lag de 500 ms, o `lag_obs_disparo` médio ficou em ~1,5–1,7 s; nos
+lags maiores, em ~metade do lag, como se espera de um disparo em fase aleatória do ciclo. O período efetivo é o
+lag mais a duração do refresh (`fixedDelay`), e o refresh recalcula a disponibilidade de **todos** os eventos.
+No dia das rodadas, o banco do host acumulava ~35 mil eventos e ~2 milhões de linhas em `walletevent` das
+escadas da #14, o que alonga cada refresh. O lag de 500 ms, portanto, não foi atingido de fato. O resultado
+não muda (o teto já é atingido), mas a coluna `lag_ms` deve ser lida junto com `lag_obs_disparo`.
 
 ### Limiar X (escada de carga)
 
