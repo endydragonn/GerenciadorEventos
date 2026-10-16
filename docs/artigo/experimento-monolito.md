@@ -59,24 +59,24 @@ gerador, por `psql` remoto na `:5433`, porta aberta apenas para o IP do gerador 
 
 | Item | Host (alvo) | Gerador |
 |---|---|---|
-| CPU / RAM / disco | **[PREENCHER — usuário]** | AMD Ryzen 5 7600 (6 núcleos); RAM e disco: **[PREENCHER — usuário]** |
-| SO | **[PREENCHER — usuário]** | **[PREENCHER — usuário]** |
-| Rede | Ethernet, mesma rede do gerador | link de 1 Gbps; meio físico (cabo ou Wi-Fi): **[PREENCHER — usuário]** |
-| Ferramentas | Docker Desktop, versão: **[PREENCHER — usuário]** | k6 v2.2.0 (go1.26.5, windows/amd64); `psql`, versão: **[PREENCHER — usuário]** |
+| CPU / RAM / disco | AMD Ryzen 7 7700X (8 núcleos / 16 threads), 63 GB de RAM (31 GB e 16 CPUs para a VM do Docker), SSD NVMe | AMD Ryzen 5 7600 (6 núcleos / 6 threads, SMT desligado), 15,2 GB de RAM (DDR5-5200), SSD NVMe |
+| SO | Windows 11 Home (build 26300) | Windows 11 Pro (build 26200), plano de energia "Alto desempenho" |
+| Rede | Ethernet a 1 Gbps, por cabo, mesma rede do gerador | Ethernet a 1 Gbps, por cabo |
+| Ferramentas | Docker Desktop (engine 29.8.2) | k6 v2.2.0 (go1.26.5, windows/amd64); `psql` 16.15 |
 
-Os campos `[PREENCHER — usuário]` deste Setup são n/d ou não constam nos registros do repositório e não
-foram reconstruídos depois. Fontes: `docs/carga/setup.md` (seção 5) e `Projeto/carga/results/baseline-20261004-122632.txt`.
+Configuração levantada em 2026-10-16, dia das escadas da #14. Fontes: `docs/carga/setup.md` (seção 5),
+`Projeto/carga/results/baseline-20261004-122632.txt` e `Projeto/carga/results/smoke-20261016/baseline-20261016-162438.txt`.
 
 **Versões e configuração do backend e do banco.**
 
 | Componente | Valor |
 |---|---|
-| PostgreSQL | 16 (imagem `postgres:16-alpine`, `Projeto/Backend/db/Dockerfile`); versão menor **[PREENCHER — usuário]** |
+| PostgreSQL | 16.15 (imagem `postgres:16-alpine`, `Projeto/Backend/db/Dockerfile`) |
 | Backend | Spring Boot 3.5.7, Java 21 na compilação e `temurin:25-jre` na execução (`Projeto/Backend/CLAUDE.md`) |
-| HikariCP | versão **[PREENCHER — usuário]** (gerenciada pelo Spring Boot; não registrada no repositório); `maximum-pool-size` padrão 1000 e `minimum-idle` 5 (o pool cresce sob demanda) |
-| `max_connections` do Postgres | **[PREENCHER — issue #14]** (colunas `max_connections` e `pool_hikari` de `Projeto/carga/results/degraus-<id>.csv`); o `matriz.csv` não grava esses campos, então o valor das rodadas 1a e 1b também deve ser registrado aqui: **[PREENCHER — issues #12 e #13]** |
+| HikariCP | 6.3.3 (gerenciada pelo Spring Boot; lida do jar do backend); `maximum-pool-size` padrão 1000 e `minimum-idle` 5 (o pool cresce sob demanda) |
+| `max_connections` do Postgres | Escadas da #14: **100** até a `degraus-959190` (o `make setup-host` sobe o Postgres com o padrão) e **1000** nas `degraus-959765`, `-962591` e `-963487` (`make host-rpm MAX_CONN=1000`), valores lidos no host com `SHOW max_connections`. A coluna `max_connections` dos CSVs é só um rótulo passado ao gerador e diz 300 nas escadas com 100: vale o valor medido no host. `pool_hikari` = 1000 em todas. O `matriz.csv` não grava esses campos, então o valor das rodadas 1a e 1b também deve ser registrado aqui: **[PREENCHER — issues #12 e #13]** |
 | Braço e lag | `RESERVATION_READPATH` (`cas` \| `naive`) e `READMODEL_AVAILABILITY_REFRESH_MS`, lidos no startup do backend (`Projeto/carga/docker-compose.carga.yml`); log de SQL desligado no host de carga para não distorcer a latência |
-| Commit testado | coluna `commit` dos CSVs (checkout do gerador); host e gerador no mesmo commit: **[PREENCHER — issues #12, #13 e #14]** |
+| Commit testado | coluna `commit` dos CSVs (checkout do gerador); host e gerador no mesmo commit: `5120412` em todas as escadas da #14 (a `degraus-963487` rodou com o `.js` editado localmente, ver "Limiar X"); **[PREENCHER — issues #12 e #13]** |
 
 **Latência base HTTP (não comparável; não subtraída).** O `setup-gerador.ps1` mediu, em 2026-10-04, 30
 requisições `GET /actuator/health` cronometradas com `Stopwatch` em torno de `Invoke-WebRequest` (PowerShell):
@@ -85,7 +85,9 @@ outro cliente que não o k6 e de um endpoint que consulta o Postgres; portanto n
 não é comparável ao tempo de requisição do k6 (excede, por exemplo, a latência de reserva medida pelo k6 nas
 rodadas preliminares). Por isso **não é subtraído**: as latências do k6 são reportadas como medidas, com o RTT
 embutido e não isolado. O ICMP não respondeu (100 pacotes sem retorno), então não há ping nem perda de
-pacotes. Nova medição para as rodadas #12–#14, se houver: **[PREENCHER — usuário]**.
+pacotes. Nova medição em 2026-10-16, antes das escadas da #14, pelo mesmo método: p50 14,7 / p95 18,2 / máx
+20,1 ms (n = 30; `Projeto/carga/results/smoke-20261016/baseline-20261016-162438.txt`); de novo maior que a
+latência de reserva do k6 nos degraus baixos (p95 de 7,7 a 10,9 ms na `degraus-953959`).
 
 ## Workload
 
@@ -213,15 +215,60 @@ melhorar a curva (só as repetições inválidas são refeitas, pelas regras do 
 
 ### Limiar X (escada de carga)
 
-> **[PREENCHER — issue #14]** Escada de carga. Fonte: `Projeto/carga/results/degraus-<id>.csv` (uma linha
-> por degrau), `Projeto/carga/results/summary-degraus-<id>.json` e o gráfico de
-> `make report-degraus CSV=results\degraus-<id>.csv` (comando rodado em `Projeto/carga`).
-> Preencher: o **X** (primeiro degrau com `taxa_5xx` > 1%, de 5xx das reservas, ou `p95_max_janela_30s` > 1000 ms), dizendo
-> explicitamente se o report o marcou como **limite inferior** (gerador saturado antes), como "X acima do
-> último degrau" ou como "saturou já no 1º degrau"; `max_connections` e `pool_hikari` do CSV; a tabela por
-> degrau (`rpm_alvo`, `rpm_efetivo`, `taxa_5xx`, `erros_5xx_confirma`, `p95`, `p95_max_janela_30s`, `throughput`,
-> `iteracoes_descartadas`); as curvas de latência e vazão × carga oferecida e de taxa de 5xx × RPM alvo; e a
-> causa dos 5xx no log do backend (`too many clients` indicaria o teto de conexões: ver "Ameaças à validade").
+Escadas de 2026-10-16, braço CAS, 200 usuários. Fonte: `Projeto/carga/results/degraus-<id>.csv` e
+`summary-degraus-<id>.json` (commit `5caac91`); veredito de `make report-degraus`. Em **todas** as escadas:
+`taxa_5xx = 0` e `erros_5xx_confirma = 0`. O host nunca respondeu 5xx: quando satura, ele fica lento e o critério
+que dispara é o p95 por janela de 30 s.
+
+**Escada do protocolo (`degraus-953959`, 12k → 40k, 2000 VUs, `max_connections` 100).** Nenhum degrau
+degradou: **X > 40.000 RPM (acima do último degrau)**. p95 de 7,7 a 10,9 ms, 0 descartes, gerador sem
+saturação. Como o protocolo não achou o X, as escadas seguintes estenderam a faixa. Essa extensão foi
+decidida depois de ver o resultado, então está **fora do pré-registro**.
+
+**Escadas estendidas (fora do pré-registro).**
+
+| Escada | Faixa (RPM) | VUs | `max_connections` (host) | Veredito | Observação |
+|---|---|---|---|---|---|
+| `degraus-954833` | 50k → 120k | 2000 | 100 | X > 100k, **limite inferior** | gerador esgotou as portas efêmeras do Windows a partir de 60k (`outros` = erros de cliente); descartado como medida do host |
+| `degraus-956799` | 60k → 130k | 3000 | 100 | **X = 100.000** | p95 de janela de 1339,8 ms; rpm efetivo estaciona em 97–99,8k |
+| `degraus-958305` | 95k → 100k, passo 1k | 3000 | 100 | **X = 97.000**; último degrau limpo 96.000 | 97k teve pico isolado (p95 de janela de 4254,3 ms); 98k–100k estáveis em ~1,3 s |
+| `degraus-959190` | 96k → 97k, **60% de confirmação** | 3000 | 100 | X > 97.000 | p95 de 205,8 / 216,2 ms: com 40% menos confirmações o host passa no X |
+| `degraus-959765` | 60k → 130k | 3000 | 1000 | **X = 100.000** | rpm efetivo de 94–95k; mais conexões não subiram o teto |
+| `degraus-962591` | 95k (diagnóstico) | 3000 | 1000 | — | Tomcat com 400 threads (override local): p95 de 582,2 ms contra 242,5 ms com 200 threads e 100 conexões |
+| `degraus-963487` | 100k → 160k, passo 20k | 3000 | 1000 | 120k e 140k limpos | mapeamento **intercalado** (ver abaixo); em 160k o gerador saturou (portas, VUs, CPU de 99%) |
+
+Degraus da escada que define o X (`degraus-956799`), em ms:
+
+| `rpm_alvo` | `rpm_efetivo` | `taxa_5xx` | `p95` | `p95_max_janela_30s` | `throughput` (reservas/s) | `iteracoes_descartadas` |
+|---|---|---|---|---|---|---|
+| 60.000 | 60.001 | 0 | 105,6 | 126,0 | 1000,0 | 0 |
+| 70.000 | 70.001 | 0 | 122,4 | 125,0 | 1166,7 | 0 |
+| 80.000 | 80.001 | 0 | 177,7 | 178,2 | 1333,4 | 0 |
+| 90.000 | 90.001 | 0 | 221,6 | 235,5 | 1500,0 | 0 |
+| 100.000 | 99.033 | 0 | 1315,9 | 1339,8 | 1650,6 | 967 |
+| 110.000 | 99.784 | 0 | 1351,8 | 1369,8 | 1663,1 | 10.218 |
+| 120.000 | 97.156 | 0 | 1405,7 | 1406,6 | 1619,3 | 22.845 |
+| 130.000 | 98.139 | 0 | 1396,5 | 1422,1 | 1635,7 | 31.862 |
+
+Os descartes a partir de 100k vêm da latência do host: com os VUs pré-alocados, só há descarte quando a
+iteração passa de `MAX_VUS ÷ (RPM/60)` s. O gerador ficou com CPU de no máximo 66% e mais de 4 GB livres. O
+report marca X como firme, com aviso de descartes no mesmo degrau.
+
+**Causa do teto: contenção na linha do `eventcap`.** Nem conexões (100 → 1000) nem threads do Tomcat
+(200 → 400) subiram o teto; as duas mudanças só aumentaram a latência na saturação. O container do backend
+não tem limite de CPU (a JVM enxerga 16 CPUs) e ficou em ~420–470%. Durante a `degraus-962591`, o Postgres
+tinha 162 sessões em `LWLock:LockManager`, 119 em `Lock:transactionid` e 90 em `Lock:tuple` (amostra de
+`pg_stat_activity` no host). O motivo está no mapeamento da escada: a iteração `i` usa o evento `floor(i / U)`,
+então 200 reservas seguidas fazem o `UPDATE` condicional (CAS) na **mesma linha** de `eventcap`, e essas
+atualizações se serializam. Com o mapeamento intercalado (evento `i % E`, `.js` editado só localmente para o
+diagnóstico e revertido; a coluna `commit` não reflete a edição), as esperas por lock de linha somem (só
+sobra `LWLock:WALWrite`) e o host sustenta **120k e 140k RPM** com p95 de 317,1 e 262,7 ms.
+
+**Leitura.** O X medido, ≈ 97–100k RPM (~1650 reservas/s), é a vazão de **um evento disputado** no CAS
+(todas as reservas no mesmo `eventcap`), não a capacidade do host. Com a carga espalhada entre eventos, o
+host passa de 140k RPM, e esse teto não é mensurável com um único gerador. Como o gargalo é uma linha do banco,
+adicionar réplicas do backend não deve subir o X de um evento disputado (hipótese, não medida). A opção de
+mapeamento na escada é a issue #113.
 
 ### Resultados preliminares (fora do protocolo)
 
@@ -316,10 +363,17 @@ Ameaças adicionais, sustentadas pelos documentos do kit:
    o pool padrão de 1000 (o valor efetivo é o registrado no Setup), então 5xx na escada podem ser artefato de
    configuração, o que pode antecipar o X. Mitigação parcial: `max_connections` e `pool_hikari` vão para o
    CSV, e a causa dos 5xx deve ser conferida no log. Na matriz, repetições com 5xx são descartadas, não
-   gravadas.
+   gravadas. Nas escadas de 2026-10-16 isso não aconteceu: com `max_connections` 100 e pool de 1000, o Postgres
+   chegou a recusar um `psql` externo (`too many clients`), mas o backend não registrou erro de conexão e a
+   `taxa_5xx` ficou em 0. O risco que se confirmou foi outro: a coluna `max_connections` do CSV é um rótulo e
+   divergiu do valor real (300 no CSV, 100 no host).
 9. **Saturação do gerador.** Se o k6 não sustenta a taxa (iterações descartadas ou `rpm_efetivo` abaixo de
    95% do alvo), o degrau mede o gerador, e X passa a limite inferior; a tolerância de 5% é fixa. Os 2000 VUs
-   pré-alocados custam memória no gerador (estimativa de 1–2 MB por VU).
+   pré-alocados custam memória no gerador (estimativa de 1–2 MB por VU). Em 2026-10-16 o gerador limitou de três
+   formas: portas efêmeras do Windows acima de ~60k RPM (corrigido com
+   `netsh int ipv4 set dynamicport tcp start=10000 num=55535`; a `degraus-954833` fica como limitada pelo
+   gerador), memória com 4000 VUs (escada interrompida, sem dados) e, com a carga intercalada, CPU e portas em
+   160k RPM. Acima de ~140k RPM é preciso um segundo gerador.
 10. **Concentração por evento crescente com o RPM na escada.** Os pares (usuário, evento) são consumidos em
     sequência (usuário `i % U`, evento `floor(i / U)`, com U = 200 usuários;
     `Projeto/carga/degraus/carga-degraus.js`), então cada evento recebe até 200 tentativas, uma após a outra
