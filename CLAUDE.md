@@ -67,6 +67,10 @@ ou registre em log. Para exemplos, use placeholders (`<...>`). O `.env` é lido 
 `application.properties` e pelo `docker-compose.yml`; código-fonte lê via variável de
 ambiente, nunca com valor hardcoded.
 
+Os segredos do Supabase self-hosted ficam em `Projeto/supabase/.env` (gitignored, gerado a
+partir do `.env.example` pelo `generate-keys.sh`), com a mesma política: nunca imprimir,
+commitar ou registrar em log.
+
 ## Código
 
 - Siga o estilo e a estrutura do código vizinho. Não reformate arquivos inteiros.
