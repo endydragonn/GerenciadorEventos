@@ -18,7 +18,16 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
 e roda `mvn clean test`. **Exige o container `db` no ar**: os testes batem num Postgres real.
 
 - `src/test/.../SchemaValidationTest` valida o schema real contra o esperado.
-- `TestSupport/GlobalDbTruncator` dá `TRUNCATE` nas tabelas entre testes — não há mock de banco.
+- `TestSupport/GlobalDbTruncator` dá `TRUNCATE` (início/fim da suíte) em **todas** as tabelas dos
+  schemas configurados, descobertas por catálogo (`TestSupport/TestSchemas`) — não há mock de banco.
+  Schemas alvo: propriedade `test.db.schemas` (lista separada por vírgula, default `public`; vale
+  também via env `TEST_DB_SCHEMAS` ou `-Dtest.db.schemas=`), usada também por `SchemaValidationTest`
+  (`table_schema = any(?)`). Nomes validados por `[a-z_][a-z0-9_]*` (identificador não é
+  parametrizável em SQL). **Mantenha o default `public`**: os schemas do Supabase (`auth`, `storage`,
+  `extensions`...) vivem no mesmo banco e não podem ser truncados nem validados. Fase 5
+  (schema por serviço): `test.db.schemas=catalog,reservation,...`. O `run-tests.sh` roda o mvn num
+  container com env fixo (`--env-file ../.env`): para mudar `test.db.schemas` por ali, passe
+  `-e TEST_DB_SCHEMAS=...` no `docker run` do script. Coberto por `TestSchemasTest`.
 - `EventTest`, `UserTest`, `EventWalletTest`, `MyWalletTest` exercitam services + repositories.
 - `HttpContractTest` (`webEnvironment = RANDOM_PORT` + `TestRestTemplate`) fixa path + método
   + forma de request/response de cada endpoint `/bff/**` que o Flutter consome — bate no

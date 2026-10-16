@@ -10,10 +10,12 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
+import com.gerenciador.eventos.TestSupport.TestSchemas;
 import com.gerenciador.eventos.config.DatabaseConnection;
 
 @SpringBootTest
@@ -23,15 +25,18 @@ public class SchemaValidationTest {
     @Autowired
     private DatabaseConnection databaseConnection;
 
+    @Value(TestSchemas.PROPERTY)
+    private String schemasConfig;
+
     @Test
     void shouldHaveRequiredTables() throws Exception {
-        assertTrue(tableExists("public", "users"), "Tabela 'users' não existe");
-        assertTrue(tableExists("public", "event"), "Tabela 'event' não existe");
-        assertTrue(tableExists("public", "eventcap"), "Tabela 'eventcap' não existe");
-        assertTrue(tableExists("public", "eventpresenter"), "Tabela 'eventpresenter' não existe");
-        assertTrue(tableExists("public", "mywallet"), "Tabela 'mywallet' não existe");
-        assertTrue(tableExists("public", "walletevent"), "Tabela 'walletevent' não existe");
-        assertTrue(tableExists("public", "event_availability"), "Tabela 'event_availability' não existe");
+        assertTrue(tableExists("users"), "Tabela 'users' não existe");
+        assertTrue(tableExists("event"), "Tabela 'event' não existe");
+        assertTrue(tableExists("eventcap"), "Tabela 'eventcap' não existe");
+        assertTrue(tableExists("eventpresenter"), "Tabela 'eventpresenter' não existe");
+        assertTrue(tableExists("mywallet"), "Tabela 'mywallet' não existe");
+        assertTrue(tableExists("walletevent"), "Tabela 'walletevent' não existe");
+        assertTrue(tableExists("event_availability"), "Tabela 'event_availability' não existe");
     }
 
     @Test
@@ -83,11 +88,11 @@ public class SchemaValidationTest {
         );
     }
 
-    private boolean tableExists(String schema, String table) throws Exception {
-        String sql = "select count(*) from information_schema.tables where table_schema = ? and table_name = ?";
+    private boolean tableExists(String table) throws Exception {
+        String sql = "select count(*) from information_schema.tables where table_schema = any(?) and table_name = ?";
         try (Connection c = databaseConnection.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setString(1, schema);
+            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
             ps.setString(2, table);
             try (ResultSet rs = ps.executeQuery()) {
                 rs.next();
@@ -97,12 +102,13 @@ public class SchemaValidationTest {
     }
 
     private void assertColumns(String table, String... expected) throws Exception {
-        String sql = "select column_name from information_schema.columns where table_schema = 'public' and table_name = ?";
+        String sql = "select column_name from information_schema.columns where table_schema = any(?) and table_name = ?";
         Set<String> expectedSet = new HashSet<>(Arrays.asList(expected));
         Set<String> actual = new HashSet<>();
         try (Connection c = databaseConnection.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setString(1, table);
+            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
+            ps.setString(2, table);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     actual.add(rs.getString(1).toLowerCase());
