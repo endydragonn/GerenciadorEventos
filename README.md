@@ -33,7 +33,7 @@ Pense no sistema como um clube de eventos: o back-end é a administração nos b
   - [Guia de Comandos](#guia-de-comandos)
   - [Considerações Finais](#considerações-finais)
 - [Front-end](#front-end)
-  - [Introdução ao Projeto](#introdução-ao-projeto-1)
+  - [Introdução ao Projeto](#introdução-ao-projeto)
   - [Configuração de Implantação (Dockerfile e nginx.conf)](#configuração-de-implantação-dockerfile-e-nginxconf)
   - [Dependências e Configuração (pubspec.yaml)](#dependências-e-configuração-pubspecyaml)
   - [Página de Entrada (index.html)](#página-de-entrada-indexhtml)

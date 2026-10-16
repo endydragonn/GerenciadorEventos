@@ -13,19 +13,17 @@
 #    5. verify.sh                  corretude lida direto do banco
 #    6. report.sh                  CSV final + gráfico HTML
 #
-#  PENDÊNCIA CONHECIDA (documentada, não fingida como feita — ver README):
-#  esta rodada é disparada da MESMA máquina que roda a stack (BASE_URL default
-#  aponta pra rede Docker local). A execução "de verdade" da issue #11
-#  (disparada da máquina/VM separada da issue #4, com desconto da baseline de
-#  latência de rede) depende da #4, que ainda está aberta -- só o parâmetro
-#  BASE_URL muda quando a VM existir, nada de código.
+#  SÓ SANITY LOCAL (ver README): esta rodada é disparada da MESMA máquina que
+#  roda a stack (BASE_URL default aponta pra rede Docker local), então a
+#  latência não vale como medida do experimento. O runner oficial é o kit
+#  Projeto/carga (gerador separado: make test-matriz).
 #
 #  Variáveis de ambiente (todas opcionais):
 #    BASE_URL_PROBE   URL do backend visto DESTA máquina (probe HTTP inicial)
 #                      (default http://localhost:8081)
 #    BASE_URL_K6      URL do backend visto de DENTRO do container do k6
 #                      (default http://backend:8081 -- nome do serviço na rede
-#                      gerenciador-net; aponte para a VM da #4 quando existir)
+#                      gerenciador-net)
 #    NETWORK          rede Docker do k6                  (default gerenciador-net)
 #    CONTAINER_DB     container do Postgres               (default gerenciador-db)
 #    K6_IMAGE         imagem do k6                         (default grafana/k6)
