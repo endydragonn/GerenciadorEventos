@@ -40,3 +40,10 @@ Projeto/carga/results/matriz-invalida-*.json
 # Escada de carga (#14): o CSV (degraus-<id>.csv) e o resumo (summary-degraus-<id>.json) sao versionados; o HTML regenera do CSV
 Projeto/carga/results/degraus-*.html
 **/tokens.json
+
+# Supabase self-hosted: backup do sed -i.old do generate-keys.sh (o .env já é coberto pela regra acima)
+.env.old
+
+# Supabase self-hosted: dados do Postgres e snippets do Studio (volumes locais)
+Projeto/supabase/volumes/db/data/
+Projeto/supabase/volumes/snippets/
