@@ -156,6 +156,12 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
   testes e psql); com `carga/rpm` (`max_connections=300`) o pool vai para 245 sozinho (override + `subir-host-rpm.ps1`). Ou seja,
   o `too many clients` não vem mais do Hikari, e sim do pool do Supavisor + o resto passar do
   `max_connections`.
+- **Threads do Tomcat** (issue #124): `server.tomcat.threads.max` = 300 (env `SERVER_TOMCAT_THREADS_MAX`;
+  o default do Spring Boot é 200). Na configuração de carga: Tomcat 300, Hikari 1000, pool do Supavisor
+  245. Os testes de 2026-10-17 pelo pooler deram o mesmo teto de vazão com 200, 300 e 400 threads, mas 300
+  teve o menor p95 (matriz CAS N=200: 155 → 114 ms; escada 50k–70k: 180–319 ms contra 192–392 ms com 200).
+  **Virtual threads ficam desligadas** (padrão; não há `spring.threads.virtual.enabled`): sobem a vazão
+  (~99k efetivos), mas pioram o p95 — a prioridade é a menor latência. Coberto por `TomcatThreadsTest`.
 - Os logs do Supavisor trazem `User requested SSL connection but no downstream cert/key found`:
   o PgJDBC tenta SSL (`sslmode=prefer`), o pooler (sem cert) recusa e ele cai para texto puro, na
   rede interna do Docker. É inofensivo.
@@ -276,7 +282,7 @@ chamável direto (os testes o invocam sem esperar o timer).
 - `application.properties` lê tudo de env var com default de dev:
   `SPRING_DATASOURCE_*` (inclui `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` e
   `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`), `JWT_SECRET`, `JWT_EXPIRATION_SECONDS`, `MAIL_*`,
-  `RECAPTCHA_*`,
+  `RECAPTCHA_*`, `SERVER_TOMCAT_THREADS_MAX` (default `300`),
   `RESERVATION_READPATH` (default `cas`; `naive` = braço de controle do experimento da
   Fase 2), `READMODEL_AVAILABILITY_REFRESH_MS` (default `5000`; intervalo do job de refresh
   do read model `event_availability` = o "lag" do experimento).

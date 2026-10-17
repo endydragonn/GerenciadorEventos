@@ -91,6 +91,7 @@ e o estado do banco. Rodadas de 2026-10-16, por volta de 21:38 a 21:49 (horário
 | PostgreSQL | 17.6 (imagem `supabase/postgres:17.6.1.136`, locale `en_US` ICU); antes, 16.15 (`postgres:16-alpine`, `pt_BR`) |
 | Pooler | Supavisor 2.9.13 em transaction mode; o backend conecta em `supabase-pooler:6543` com `prepareThreshold=0` |
 | Conexões | `max_connections` 300 (`subir-host-rpm.ps1 -MaxConnections 300`); pool do Supavisor no Postgres **245** (`max_connections − 55`); `POOLER_MAX_CLIENT_CONN` 1500; HikariCP `maximum-pool-size` 1000 e `minimum-idle` 5 (só enfileira no pooler) |
+| Threads do Tomcat | **200** (padrão do Spring Boot): o ponto 1 foi medido assim; a partir do ponto 2 o backend usa **300** (issue #124; no teste de 2026-10-17 pelo pooler, mesmo teto de vazão, menor p95) |
 | Role do app | `admin`, sem superuser |
 | Estado do banco | **limpo** (volume novo) no começo da rodada 1a |
 | Braço e lag | por lag, o host foi reiniciado em `naive` e conferido com `printenv RESERVATION_READPATH READMODEL_AVAILABILITY_REFRESH_MS` |
