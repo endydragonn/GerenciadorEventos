@@ -5,8 +5,11 @@ sidebar_position: 3
 # Matriz CAS × ingênuo: resultados de 2026-10-16
 
 Rodadas oficiais das issues #12 (braço CAS) e #13 (braço ingênuo). Capacidade de 20 vagas, 100% de
-confirmação, Postgres com 300 conexões, commit `569d1be`. Fonte: `Projeto/carga/results/matriz.csv`
-(50 linhas). Nenhuma repetição foi descartada. Máquinas: ver
+confirmação, Postgres com 300 conexões, commit `569d1be`. Fonte:
+`Projeto/carga/results/02-hikari/matriz-prepooler-20261016.csv` (50 linhas; versionado em `1fbe12b` como
+`matriz.csv`). Nenhuma repetição foi descartada. É a matriz **pré-pooler** (monólito + HikariCP); a repetição com o
+pooler, o ponto 1 da série, está em
+[Matriz CAS × ingênuo depois do pooler](./resultados-matriz-pospooler-2026-10-16.md). Máquinas: ver
 [Escada de degraus: resultados de 2026-10-16](./resultados-escada-2026-10-16.md).
 
 ## Resumo

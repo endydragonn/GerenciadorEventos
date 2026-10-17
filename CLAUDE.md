@@ -106,8 +106,13 @@ TCC (ADRs). O roadmap de execução está em `BACKLOG.md` (raiz) e, navegável, 
 `eventpresenter` como tabela filha, máquina de estados `walletevent`
 (`pending → confirmed / expired / cancelled`) com job `@Scheduled` de expiração.
 
+**Implementado (Fase 4, 2026-10-16):** Supabase self-hosted enxuto — `supabase-db`
+(`supabase/postgres` 17) no lugar do `db`, `supabase-pooler` (Supavisor, transaction mode) entre o
+backend e o Postgres, e Studio com a cadeia mínima. O ponto 1 da série de 3 (monólito CRUD +
+pooler) foi medido com isso (`docs/artigo/experimento-monolito.md`).
+
 **Decidido, não implementado:** back-end em microsserviços (Opção B — `gateway`, `identity`,
 `catalog`, `reservation`, `notification`, `admission`); CQRS + Event Sourcing em `catalog` e
 no lado wallet de `reservation` (`eventcap` fica relacional/CAS); backbone Kafka-compatível;
-Supabase self-hosted enxuto; camada de alta carga (Redis RPM + fila + worker pool). Nada
-disso existe no código — ver `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.
+camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
+`Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.

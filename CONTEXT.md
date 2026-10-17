@@ -46,5 +46,5 @@ Primeiro degrau de carga em que o fluxo síncrono degrada, isto é, 5xx acima de
 _Avoid_: ponto de saturação
 
 **Ponto da série**:
-Medição do experimento em um marco da arquitetura (monólito CRUD, monólito ES, distribuído). Os números da Fase 2 são "monólito + HikariCP", não o ponto 1 definitivo.
+Medição do experimento em um marco da arquitetura (monólito CRUD, monólito ES, distribuído). Os números da Fase 2 são "monólito + HikariCP" (pré-pooler); o ponto 1 oficial é a matriz pós-pooler da #22 (`Projeto/carga/results/03-supabase-pooler/`).
 _Avoid_: rodada

@@ -79,7 +79,7 @@ Critério: sem erros de conexão e latência p95 coerente com a base medida no p
 
 ## 5. Registro (preencher no dia do teste)
 
-Preenchido com o que as rodadas de 2026-10-04 registraram (`Projeto/carga/results/baseline-20261004-122632.txt`);
+Preenchido com o que as rodadas de 2026-10-04 registraram (`Projeto/carga/results/01-sem-pool/baseline-20261004-122632.txt`);
 "n/d" = não foi registrado na época (não reconstruído depois).
 
 | Item | Host-alvo | Gerador |
@@ -96,7 +96,7 @@ Preenchido com o que as rodadas de 2026-10-04 registraram (`Projeto/carga/result
 
 ## Critério de aceite da issue #4 (item 3 do backlog)
 
-Evidência: o baseline `Projeto/carga/results/baseline-20261004-122632.txt` (`setup-gerador.ps1`, 2026-10-04) e
+Evidência: o baseline `Projeto/carga/results/01-sem-pool/baseline-20261004-122632.txt` (`setup-gerador.ps1`, 2026-10-04) e
 as rodadas de carga de 2026-10-04 (seção 6), todas disparadas do gerador contra o host.
 
 - [x] Gerador com acesso de rede ao host-alvo. O `setup-gerador.ps1` conectou na 8081 e o
@@ -112,7 +112,7 @@ as rodadas de carga de 2026-10-04 (seção 6), todas disparadas do gerador contr
 
 ## 6. Registro das rodadas
 
-Fonte dos números: `Projeto/carga/results/verificacoes.log` (cada `-Verificar` anexa data/hora,
+Fonte dos números: `Projeto/carga/results/02-hikari/verificacoes.log` (cada `-Verificar` anexa data/hora,
 alvo e config ativa). Rodar o verificador **logo após** a rodada: depois do TTL as reservas
 expiram e as vagas voltam, então só `eventos_com_overselling` continua valendo como prova.
 
@@ -130,7 +130,7 @@ Ambiente: host `192.168.68.61` (Ethernet, mesma rede do gerador). Latência base
 | 2026-10-04 | Taxa fixa (RPM) | `Rpm-909189` | cas / 5000 ms, `max_connections=1000` | 53 eventos, capacidade total 5300, 2917 reservas `pending` ativas (~55%, dentro do TTL); 39.120 linhas de `BindException` no log; k6: 9644 RPM reais, 2917 aceitas, 2697 lotado, **4387 respostas 5xx**, p50/p95/p99 27,5 / 65,1 / 156,5 ms, máx 431 ms (`summary-rpm10000-909189.json`) | 0 (`eventos_com_overselling = 0`) |
 | 2026-10-04 | Taxa fixa (RPM) | `Rpm-909317` | cas / 5000 ms, `max_connections=1000` | 53 eventos, capacidade total 5300, ~2850 reservas (1343 `pending` + 1507 `expired`, parcialmente expiradas); 21.711 linhas de `BindException` no log; k6: 9643 RPM reais, 2850 aceitas, 2587 lotado, **4563 respostas 5xx**, p50/p95/p99 26,6 / 50,1 / 74,2 ms, máx 177 ms (`summary-rpm10000-909317.json`) | 0 (`eventos_com_overselling = 0`) |
 
-Parâmetros das rodadas RPM acima (fonte: `Projeto/carga/results/resultados-rpm.csv`; todas com 200 usuários e 100 vagas por evento):
+Parâmetros das rodadas RPM acima (fonte: `Projeto/carga/results/02-hikari/resultados-rpm.csv`; todas com 200 usuários e 100 vagas por evento):
 
 | Rodada | RPM alvo (real) | Duração | Eventos |
 |---|---|---|---|
@@ -182,7 +182,7 @@ seções abaixo: `c9bd024`, `275d587`, `af01483`); não será reconstruído. A m
 
 #### Evidência de esgotamento de portas (série de `sockstat`, backend, 2026-10-04 14:26–14:30)
 
-`results/sockstat.log` (amostragem a cada 2 s de `TCP: ... tw`):
+Série de `sockstat` (amostragem a cada 2 s de `TCP: ... tw`; **não versionada**: o `results/02-hikari/sockstat.log` só tem 5 amostras pós-pool, das 15:42):
 
 - Repouso: `tw` ≈ 14. Durante a carga: **pico de 34.199 sockets em `TIME_WAIT`** às 14:30:20.
 - A faixa de portas efêmeras do container é `32768–60999` = **28.232 portas**. Como o destino é
@@ -198,7 +198,7 @@ seções abaixo: `c9bd024`, `275d587`, `af01483`); não será reconstruído. A m
 
 Backend `275d587`: `DatabaseConnection` usa o `DataSource` do Spring (HikariCP), pool
 `maximum-pool-size` 1000 (default; `minimum-idle` 5, cresce sob demanda), host com
-`max_connections=1000`. Resumos do k6 e CSVs: `Projeto/carga/results/` (PR #98). Overselling
+`max_connections=1000`. Resumos do k6 e CSVs: `Projeto/carga/results/02-hikari/` (PR #98). Overselling
 conferido no banco do host com `make verificar-disputa` / `make verificar-rpm`.
 
 **Ressalva de comparação:** a stack foi recriada antes dessas rodadas (banco zerado: `event_id` e
@@ -268,7 +268,7 @@ reservas todas `expired` ao fim). Critério da #96 atendido (0 5xx, 0 descartada
 3. **Leitura bimodal (aberto):** leitura p50 1,9 ms mas p95 456 ms e p99 492 ms. Suspeita, *não
    medida por endpoint*: `GET /bff/events/search` varre todos os eventos em memória. Não é efeito do
    pool. Follow-up fora do escopo da #96 (o N+1 do `hydrate` e o `LIMIT`/`SKIP LOCKED` são da #61).
-4. **`tw` do `sockstat` pós-pool não foi medido durante a carga:** o `results/sockstat.log` desta
+4. **`tw` do `sockstat` pós-pool não foi medido durante a carga:** o `results/02-hikari/sockstat.log` desta
    tarde tem só 5 linhas (15:42, `tw` máx. 6, em repouso) e não cobre as rodadas. O critério "`tw` de
    poucos milhares" não tem série própria; o proxy é `BindException` = 0 e 0 5xx.
 5. **Default do pool 1000 só é seguro com `max_connections` alto:** o `db` do `docker-compose.yml`
@@ -287,7 +287,7 @@ reservas todas `expired` ao fim). Critério da #96 atendido (0 5xx, 0 descartada
 
 Mesmo host das rodadas pós-pool (pool Hikari, `max_connections=1000`). A partir do #100, os 3 testes
 chamam `POST /bff/event-wallets/confirm` em cada reserva aceita; antes as reservas ficavam `pending` e
-expiravam, e a carga só media o CAS da reserva (achado 7 acima). Resumos do k6 e CSVs: `Projeto/carga/results/`.
+expiravam, e a carga só media o CAS da reserva (achado 7 acima). Resumos do k6 e CSVs: `Projeto/carga/results/02-hikari/`.
 
 Duas variantes: **100%** confirmadas (`PCT_CONFIRMA=100`, default) e **realista** (`make test-*-real`,
 `PCT_CONFIRMA_REAL=60`): cada aceita é confirmada ou não ao acaso (sorteio determinístico por hash);
