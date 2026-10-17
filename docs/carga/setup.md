@@ -339,3 +339,27 @@ nas duas. **Confirmar 60% das reservas não mudou latência nem vazão.**
    confirmação, o que reforça que vem da busca em memória e não da escrita.
 6. **`tw` do `sockstat` continua sem série durante a carga** (achado 4 da seção anterior); o proxy é 0
    `BindException` e 0 5xx.
+
+##### Busca filtrando no banco (issue #109, PR #110) — aleatório de 45 min pelo pooler (`Ale-29057`, 2026-10-17)
+
+Mesmo perfil da `Ale-913561` (semente 617706, 1k–12k RPM, passo 30 s, 30% de leitura, 200 usuários,
+`PCT_CONFIRMA=100`), com o host no código da branch `Issue-109` (`15eddaa` = `main` com a Fase 4 + busca
+com `LIKE` no banco e hidratação em lote). Host com pooler (Supavisor, pool 245), `max_connections` 300,
+`cas`, banco limpo. Arquivos em `Projeto/carga/results/03-supabase-pooler/` (`resultados-aleatorio-109.csv`,
+`summary-ale-29057.json`, `perfil-ale-29057.json`).
+
+| Leitura (p50 / p95 / p99, ms) | `Ale-913561` (pool, sem pooler, busca em memória) | **`Ale-29057` (#109, pelo pooler)** |
+|---|---|---|
+| Busca | — (o summary não separava por endpoint) | **11,4 / 15,0 / 21,8** (16.820 leituras) |
+| Evento | — | 1,9 / 3,4 / 6,2 (41.820) |
+| Carteira | — | 3,2 / 12,6 / 25,0 (25.069) |
+| Leitura agregada | 1,9 / 456 / 492 | **2,6 / 12,9 / 19,9** |
+| Reserva | 3,1 / 4,4 / 8,9 | 3,9 / 5,7 / 10,7 |
+| 5xx / descartadas | 0 / 0 | 0 / 0 |
+
+- **Aceite da #109 atendido:** p95 da busca **15,0 ms ≤ 50 ms**. A leitura agregada perdeu o segundo
+  "montinho" (p95 456 → 12,9 ms): a leitura bimodal (achado 5 acima) vinha da busca em memória.
+- **Evento e carteira não pioraram por causa da #109**; a comparação direta com a `Ale-913561` mistura a
+  troca de infraestrutura (pooler + PG17, Fase 4), que encarece um pouco a reserva (p95 4,4 → 5,7 ms).
+- 146.400 aceitas = 1464 × 100 vagas, todas `confirmed` (`PCT_CONFIRMA=100`), e 48.612 `lotado`: com
+  100% de confirmação nenhuma reserva expira, então os eventos esgotam. Overselling 0.
