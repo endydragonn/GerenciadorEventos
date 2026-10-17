@@ -1,5 +1,13 @@
 name: gerenciador-eventos
 
+# Studio + meta + Kong (issue #20) vêm de um arquivo próprio. A interpolação ${...} dele lê o
+# .env da pasta dele (supabase/.env), mas o Projeto/.env do backend (que também tem
+# JWT_SECRET/POSTGRES_PASSWORD, com outro sentido) vence em nomes iguais; por isso studio/meta
+# leem esses dois pelo env_file do serviço e o kong só usa nomes sem colisão (ver
+# supabase/docker-compose.studio.yml e supabase/README.md).
+include:
+  - path: ./supabase/docker-compose.studio.yml
+
 services:
   # Postgres do Supabase (issue #18). Pré-requisito: Projeto/supabase/.env existente (ver
   # supabase/README.md). O POSTGRES_USER do container fica o default da imagem

@@ -1,0 +1,127 @@
+# Studio + postgres-meta + Kong (issue #20): inspeção visual do banco.
+#
+# Incluído por Projeto/docker-compose.yml. Os caminhos ./volumes/... e ./.env resolvem
+# relativos a esta pasta (Projeto/supabase/).
+#
+# INTERPOLAÇÃO: ${...} aqui lê o .env da pasta deste arquivo (Projeto/supabase/.env) e, depois,
+# o ambiente do projeto principal (Projeto/.env, do backend), que VENCE em nomes iguais.
+# Só POSTGRES_PASSWORD e JWT_SECRET colidem (o backend os define com outro sentido). Por isso:
+#  - quem usa nomes sem colisão (ANON_KEY, SERVICE_ROLE_KEY, PG_META_CRYPTO_KEY, DASHBOARD_*,
+#    STUDIO_DEFAULT_*) interpola normalmente com ${...}; o kong só usa esses;
+#  - meta e studio carregam o .env inteiro pelo `env_file` do serviço (literal, sem interpolação)
+#    e um shim no entrypoint mapeia só o que colide para o nome esperado pela imagem
+#    (POSTGRES_PASSWORD -> PG_META_DB_PASSWORD; JWT_SECRET -> AUTH_JWT_SECRET).
+# Nunca ponha POSTGRES_PASSWORD/JWT_SECRET em `environment:` aqui: sobrescreveria o env_file
+# com o valor do backend.
+#
+# Derivado do docker-compose.yml (studio, meta) e do docker-compose.kong.yml do upstream
+# (ver README.md). Cortes: nada de GoTrue, PostgREST, Realtime, Storage, imgproxy,
+# edge functions, analytics. O kong.yml vendorizado ainda tem rotas para esses serviços;
+# o Kong resolve o DNS só na requisição, então elas só dão erro se alguém chamá-las.
+# Os hostnames `kong`, `meta` e `studio` são os que o kong.yml e o Studio esperam.
+
+services:
+  meta:
+    image: supabase/postgres-meta:v0.100.0
+    container_name: gerenciador-meta
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ./.env
+    environment:
+      PG_META_PORT: 8080
+      CRYPTO_KEY: ${PG_META_CRYPTO_KEY}
+      PG_META_DB_HOST: db
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: meu_banco
+      # supabase_admin (superuser, senha = POSTGRES_PASSWORD do Supabase) e não `postgres` como
+      # no upstream: as tabelas do app pertencem à role `admin` e o `postgres` não tem grant nelas.
+      PG_META_DB_USER: supabase_admin
+    # Shim: só o que colide (POSTGRES_PASSWORD do env_file -> PG_META_DB_PASSWORD).
+    # Entrypoint/cmd originais da imagem: docker-entrypoint.sh + node dist/server/server.js.
+    entrypoint:
+      - sh
+      - -c
+      - 'export PG_META_DB_PASSWORD="$$POSTGRES_PASSWORD"; exec docker-entrypoint.sh node dist/server/server.js'
+
+  studio:
+    image: supabase/studio:2026.10.12-sha-3699278
+    container_name: gerenciador-studio
+    restart: unless-stopped
+    depends_on:
+      meta:
+        condition: service_started
+    env_file:
+      - ./.env
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://localhost:3000/api/platform/profile').then((r) => {if (r.status !== 200) throw new Error(r.status)})\""
+        ]
+      timeout: 10s
+      interval: 5s
+      retries: 3
+      start_period: 20s
+    environment:
+      HOSTNAME: "0.0.0.0"
+      STUDIO_PG_META_URL: http://meta:8080
+      # Do env_file (mesmo nome): POSTGRES_HOST/PORT/DB/PASSWORD, PG_META_CRYPTO_KEY,
+      # PGRST_DB_SCHEMAS, SUPABASE_PUBLIC_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY.
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      DEFAULT_ORGANIZATION_NAME: ${STUDIO_DEFAULT_ORGANIZATION}
+      DEFAULT_PROJECT_NAME: ${STUDIO_DEFAULT_PROJECT}
+      # Mesma role do meta, explícita (o upstream usa `postgres` aqui; ver comentário no meta).
+      POSTGRES_USER_READ_WRITE: supabase_admin
+      ENABLED_FEATURES_LOGS_ALL: "false"
+      SNIPPETS_MANAGEMENT_FOLDER: /app/snippets
+    # Shim: só o que colide (JWT_SECRET do env_file -> AUTH_JWT_SECRET). Entrypoint/cmd originais:
+    # docker-entrypoint.sh + node apps/studio/server.js.
+    entrypoint:
+      - sh
+      - -c
+      - 'export AUTH_JWT_SECRET="$$JWT_SECRET"; exec docker-entrypoint.sh node apps/studio/server.js'
+    volumes:
+      - ./volumes/snippets:/app/snippets
+
+  kong:
+    image: kong/kong:3.9.3
+    container_name: gerenciador-kong
+    restart: unless-stopped
+    depends_on:
+      studio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      # Só local: atrás da 8000 há um console SQL de superuser (Studio).
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./volumes/api/kong.yml:/home/kong/temp.yml:ro
+      - ./volumes/api/kong-entrypoint.sh:/home/kong/kong-entrypoint.sh:ro
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /usr/local/kong/kong.yml
+      KONG_ROUTER_FLAVOR: expressions
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_DNS_NOT_FOUND_TTL: 1
+      KONG_DNS_VALID_TTL: 5
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth,request-termination,ip-restriction,post-function
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+      KONG_PROXY_ACCESS_LOG: /dev/stdout combined
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      # Precisam EXISTIR, mesmo vazias: sem elas o kong-entrypoint.sh deixa `$VAR` literal como credencial.
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+    entrypoint: ["/bin/sh", "/home/kong/kong-entrypoint.sh"]
