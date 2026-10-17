@@ -2,8 +2,8 @@
 
 Origem: repositório `supabase/supabase`, pasta `docker/`, commit
 `bc27d2661edd09a5d0b8d76ce33da6d4071a756e` (2026-10-16).
-Os arquivos vendorizados são cópia fiel do upstream; não os edite aqui (a única exceção local é
-`functions-role.sql`, abaixo).
+Os arquivos vendorizados são cópia fiel do upstream; não os edite aqui (as exceções locais são
+`functions-role.sql` e `pooler-upsert.exs`, abaixo).
 
 Nesse commit o gateway padrão do upstream é o Envoy; o Kong vem do overlay
 `docker-compose.kong.yml`, que é a referência de ligação para o `kong.yml` e o
@@ -14,8 +14,10 @@ Nesse commit o gateway padrão do upstream é o Envoy; o Kong vem do overlay
 - `volumes/db/` — `roles.sql`, `jwt.sql`, `_supabase.sql`, `pooler.sql` (init do Postgres) e
   `functions-role.sql` (adição local, não vem do upstream: cria a role `supabase_functions_admin`
   que o `roles.sql` altera, já que o `webhooks.sql` do upstream que a cria não foi trazido).
-  Hoje o compose monta só `roles.sql` e `functions-role.sql`; `_supabase.sql`/`pooler.sql` são da #19.
-- `volumes/pooler/pooler.exs` — configuração do Supavisor.
+  O compose monta `roles.sql`, `functions-role.sql`, `_supabase.sql` e `pooler.sql`.
+- `volumes/pooler/pooler.exs` — configuração do Supavisor (upstream, vendorizado, **não montado**) e
+  `volumes/pooler/pooler-upsert.exs` (variante local, a que o compose monta; ver "Ligação no compose").
+- `docker-compose.pooler.yml` — serviço `supabase-pooler` (adaptado do `supavisor` do upstream).
 - `volumes/api/` — `kong.yml` e `kong-entrypoint.sh` (gateway Kong do Studio).
 - `utils/generate-keys.sh` — gera os segredos.
 - `.env.example` — versão reduzida do upstream, só com o que db, Supavisor, Studio, meta e kong usam.
@@ -50,8 +52,59 @@ O `.env` gerado nunca é commitado. Estes segredos são independentes do `Projet
 
 ## Ligação no compose
 
-O `db` já está ligado (issue #18): o serviço `db` de `Projeto/docker-compose.yml` usa a imagem
+O `db` está ligado (issue #18): o serviço `db` de `Projeto/docker-compose.yml` usa a imagem
 `supabase/postgres` com `env_file: ./supabase/.env`, então **`Projeto/supabase/.env` precisa
 existir antes do `up`** (gere-o como acima). O banco é `meu_banco` (ver `Projeto/Backend/db/CLAUDE.md`),
-montado com `volumes/db/roles.sql` e `volumes/db/functions-role.sql`. Pooler (#19) e Studio (#20)
-ainda não estão ligados.
+montado com `volumes/db/roles.sql` e `volumes/db/functions-role.sql`.
+
+O pooler (Supavisor, issue #19) está ligado:
+
+- `docker-compose.pooler.yml` (aqui) define o serviço `supabase-pooler` (`supabase/supavisor:2.9.13`,
+  container `supabase-pooler`, rede `gerenciador-net`, **sem porta no host**) e é trazido pelo
+  `include:` de `Projeto/docker-compose.yml`. Cada Supabase compose futuro entra como um item
+  próprio desse `include:`.
+- **Segredos sem colisão:** a interpolação `${VAR}` do compose lê o `Projeto/.env` do backend, que
+  também tem `JWT_SECRET`/`POSTGRES_PASSWORD` com outro sentido, e ele **vence** o `env_file` do
+  `include` (verificado: o pooler subiu com a senha do app e falhou a autenticação do
+  `supabase_admin`). Por isso o arquivo incluído não usa `${VAR}`: o serviço lê `supabase/.env`
+  pelo próprio `env_file:` e o `command` exporta as variáveis derivadas (`DATABASE_URL`,
+  `API_JWT_SECRET`, `METRICS_JWT_SECRET`); os valores não secretos (`POOLER_*`, `DB_POOL_SIZE`)
+  são literais no `environment:`.
+- O `db` monta `volumes/db/_supabase.sql` (cria o banco `_supabase`, estado interno do Supavisor)
+  e `volumes/db/pooler.sql` (schema `_supavisor`) em `migrations/97-` e `99-pooler.sql`. Como todo
+  init, só rodam na **primeira** criação do volume `supabase-db-data`; em um volume já existente
+  recrie-o (`down -v` ou `docker volume rm gerenciador-eventos_supabase-db-data gerenciador-eventos_db-config`).
+- `volumes/pooler/pooler-upsert.exs` (montado no lugar do `pooler.exs` do upstream, que fica
+  intocado) cria o tenant `gerenciador-eventos` no banco `meu_banco`, com `auth_query` em
+  `pgbouncer.get_auth` e `require_user=false`: qualquer role do Postgres loga pelo pooler com a
+  própria senha, no formato `<role>.<tenant>`. **Exceção local ao upstream:** o `pooler.exs` só
+  chama `create_tenant` quando o tenant não existe, e o tenant persiste no banco `_supabase` (volume
+  do db), então mudar o tamanho do pool e subir de novo não mudaria nada. O `pooler-upsert.exs`
+  acrescenta o ramo "já existe": `Supavisor.Tenants.update_user` (`pool_size` do usuário
+  `pgbouncer`) e `update_tenant` (`default_pool_size`, `default_max_clients`), que na v2.9.13 também
+  limpa o cache e encerra os pools do tenant. Resultado: o dimensionamento vale a cada partida do
+  container, sem apagar volume.
+- O backend usa `SPRING_DATASOURCE_URL=jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0`
+  e `SPRING_DATASOURCE_USERNAME=${POSTGRES_USER}.gerenciador-eventos` (no `environment:` do
+  `backend` em `Projeto/docker-compose.yml`, sobrepondo o `env_file`). O tenant é fixo (não é
+  segredo); se mudar `POOLER_TENANT_ID` aqui, mude lá. Os testes (`run-tests.sh`) e o gerador de
+  carga (`:5433`) continuam **direto** no `db`.
+- Modo `transaction` (`POOLER_POOL_MODE`): a conexão real só é presa durante a transação. O backend
+  é compatível (auditoria em `Projeto/Backend/CLAUDE.md`, "Pooler").
+
+### Dimensionamento
+
+Os valores moram, literais e versionados, no `environment:` de `docker-compose.pooler.yml` (vencem o
+`supabase/.env`; um `.env` antigo não os muda e o `.env.example` não os tem):
+
+| Variável | Valor | Por quê |
+|---|---|---|
+| `POOLER_MAX_CLIENT_CONN` | 1500 | Conexões de cliente aceitas. Tem que ser >= o pool máximo do Hikari (1000, `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`), senão o Supavisor recusa clientes; 1500 dá folga. |
+| `POOLER_DEFAULT_POOL_SIZE` | 45 | Conexões **reais** ao Postgres (por role/banco). O `db` do compose padrão tem `max_connections=100`, e o Supavisor **não devolve conexão ociosa**: depois de uma rajada o pool inteiro fica preso. Folga de 55: 3 reservadas do superuser (a role `admin` não é superuser), ~9 do próprio Supavisor (`DB_POOL_SIZE` 5 + auth_query + cluster), ~40 da suíte `run-tests.sh` (que vai direto no `db`; pico medido ~36) e `psql`. Com 70 a suíte falhou com `remaining connection slots are reserved`. |
+| `DB_POOL_SIZE` | 5 | Conexões do próprio Supavisor ao banco `_supabase`. |
+| `POOLER_TENANT_ID` | `gerenciador-eventos` | Tenant fixo; o usuário do JDBC (`Projeto/docker-compose.yml`) é `<role>.gerenciador-eventos`. Mude os dois juntos. |
+
+Com o override de carga (`carga/rpm/docker-compose.rpm.yml`, `make host-rpm MAX_CONN=300`) o
+`max_connections` sobe para 300 e o pool do pooler acompanha: `POOLER_DEFAULT_POOL_SIZE` vira
+`${PG_POOLER_POOL_SIZE:-245}` (o `subir-host-rpm.ps1` exporta `MaxConnections - 55`, a mesma folga do
+padrão 100 → 45). Ao voltar ao compose padrão, o `up -d` reaplica 45 (o `pooler-upsert.exs` atualiza o tenant).

@@ -1,5 +1,12 @@
 name: gerenciador-eventos
 
+# Cada item abaixo é um arquivo de compose do Supabase, com segredos próprios em
+# supabase/.env. O arquivo incluído NÃO pode usar `${VAR}`: a interpolação lê o Projeto/.env do
+# backend (que também tem JWT_SECRET/POSTGRES_PASSWORD, mas com outro sentido) e ele vence o
+# `env_file` do `include`; por isso o serviço incluído usa `env_file:` próprio.
+include:
+  - path: ./supabase/docker-compose.pooler.yml
+
 services:
   # Postgres do Supabase (issue #18). Pré-requisito: Projeto/supabase/.env existente (ver
   # supabase/README.md). O POSTGRES_USER do container fica o default da imagem
@@ -24,6 +31,9 @@ services:
       - supabase-db-data:/var/lib/postgresql/data
       - db-config:/etc/postgresql-custom
       - ./supabase/volumes/db/functions-role.sql:/docker-entrypoint-initdb.d/init-scripts/98-functions-role.sql:ro
+      # Banco _supabase e schema _supavisor: estado interno do Supavisor (issue #19).
+      - ./supabase/volumes/db/_supabase.sql:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql:ro
+      - ./supabase/volumes/db/pooler.sql:/docker-entrypoint-initdb.d/migrations/99-pooler.sql:ro
       - ./supabase/volumes/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
       - ./Backend/db/supabase-app-init.sql:/docker-entrypoint-initdb.d/migrations/99-app.sql:ro
       - ./Backend/db/init-scripts:/app-init:ro
@@ -43,6 +53,14 @@ services:
     env_file:
       - ./.env
     environment:
+      # O backend fala com o Postgres pelo Supavisor (transaction mode, porta 6543), não direto.
+      # prepareThreshold=0: sem prepared statement nomeado no servidor (o PgJDBC só os cria após 5
+      # execuções do mesmo PreparedStatement), que em transaction pooling cairia em outra
+      # conexão. Usuário no formato <role>.<tenant>; o tenant é o POOLER_TENANT_ID literal do
+      # supabase/docker-compose.pooler.yml (não é segredo; se mudar lá, mude aqui). Sobrepõe o env_file ./.env;
+      # os testes (run-tests.sh) seguem direto no db, pela URL do Projeto/.env.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}.gerenciador-eventos
       RECAPTCHA_SECRET_KEY: ${RECAPTCHA_SECRET_KEY}
       RECAPTCHA_SITE_KEY: ${RECAPTCHA_SITE_KEY}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -52,7 +70,7 @@ services:
     ports:
       - "8081:8081"
     depends_on:
-      db:
+      supabase-pooler:
         condition: service_healthy
     restart: unless-stopped
 

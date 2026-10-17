@@ -6,7 +6,8 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
 ## Rodar
 
 - Via Docker (recomendado): `docker compose -f Projeto/docker-compose.yml up -d --build backend`
-  — porta `8081`, container `gerenciador-backend`.
+  — porta `8081`, container `gerenciador-backend`. Sobe junto `db` e `supabase-pooler`; no Docker o
+  backend fala **pelo pooler** (Supavisor), ver "Pooler" em Persistência.
 - Local: `cd Projeto/Backend && mvn spring-boot:run` — precisa de um Postgres em
   `localhost:5433`. `application.properties` tem defaults de dev para as vars do `.env`.
 - Entrypoint do jar: `com.gerenciador.eventos.Main` (fixado no `pom.xml` e no `Dockerfile`).
@@ -14,7 +15,8 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
 
 ## Testes
 
-`./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`,
+`./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`
+(URL direta `db:5432`, **sem passar pelo pooler**),
 e roda `mvn clean test`. **Exige o container `db` no ar**: os testes batem num Postgres real.
 
 - `src/test/.../SchemaValidationTest` valida o schema real contra o esperado.
@@ -83,7 +85,8 @@ config/                DatabaseConnection, CorsConfig, EmailTemplates
 - `DatabaseConnection` delega ao `DataSource` do Spring (pool **HikariCP**, issue #96), não a
   `DriverManager`: `close()` devolve a conexão ao pool. Tamanho do pool:
   `spring.datasource.hikari.maximum-pool-size` (env `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`,
-  default 1000, alinhado ao `max_connections=1000` do Postgres do host; o `db` do compose padrão tem
+  default 1000; o Hikari pede conexões ao **pooler** (não ao Postgres), então quem limita o Postgres é
+  `POOLER_DEFAULT_POOL_SIZE` (ver "Pooler"). Em conexão direta (testes), o `db` do compose padrão tem
   100, então lá reduza o pool por env) e
   `spring.datasource.hikari.minimum-idle` (env `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, default 5:
   o pool cresce sob demanda). **Cada contexto Spring de teste distinto tem seu próprio pool**; sem
@@ -110,6 +113,43 @@ config/                DatabaseConnection, CorsConfig, EmailTemplates
   `EventWalletService` trata a reserva como sempre permitida.
 - Nomes de tabela em minúsculas: `users`, `event`, `eventcap`, `eventpresenter`, `mywallet`,
   `walletevent`, `pending_verifications`.
+
+### Pooler (Supavisor, transaction mode) — issue #19
+
+O backend **em Docker** fala com o Postgres pelo Supavisor, não direto: no `environment:` do
+`backend` em `Projeto/docker-compose.yml`,
+`SPRING_DATASOURCE_URL=jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0` e
+`SPRING_DATASOURCE_USERNAME=${POSTGRES_USER}.gerenciador-eventos` (formato `<role>.<tenant>`; o
+tenant `gerenciador-eventos` é fixo, ver `Projeto/supabase/README.md`). O `application.properties`
+mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`, `--env-file
+../.env`) seguem **direto** no `db:5432`, pela URL do `Projeto/.env`.
+
+- **`prepareThreshold=0`** é o que o PgJDBC precisa: ele só promove um `PreparedStatement` a
+  prepared statement nomeado no servidor depois de 5 execuções, e em transaction pooling a próxima
+  execução cairia em outra conexão do Postgres (erro típico "prepared statement ... does not exist").
+  Com `0`, tudo vai pelo protocolo estendido não nomeado, que o Supavisor aceita.
+- **Compatível com transaction pooling porque** (auditoria de `src/main`, 2026-10-16): nenhum
+  `SET`/`SET LOCAL`/`SET ROLE`/`set_config`, `search_path`, advisory lock (`pg_advisory*`),
+  `LISTEN`/`NOTIFY`, `TEMP TABLE`, `PREPARE`/`DECLARE CURSOR` nem `DISCARD`. Os 15 `SET` do código
+  são todos de `UPDATE ... SET` / `ON CONFLICT DO UPDATE SET`. Não há `connectionInitSql` no Hikari
+  nem `setReadOnly`/`setCatalog`/`setSchema`/`setTransactionIsolation`. O único estado de conexão
+  mexido é `setAutoCommit(false)` → `commit`/`rollback` → `setAutoCommit(true)` (em
+  `EventWalletService`, `ReservationExpiryService`, `EventRepository`, `EventPresenterRepository`),
+  que o PgJDBC traduz em `BEGIN`/`COMMIT`: a transação inteira (incl. o CAS de `eventcap` e o
+  `walletevent`) roda numa conexão real só, que o Supavisor segura até o `COMMIT`/`ROLLBACK`.
+  `DatabaseConnection` só devolve conexões do `DataSource`. **Código novo não pode** depender de
+  estado de sessão (`SET`, advisory lock de sessão, `LISTEN`, temp table, prepared statement
+  nomeado): em transaction mode ele vaza entre clientes ou some.
+- **Dimensionamento** (números literais em `Projeto/supabase/docker-compose.pooler.yml`): Hikari `maximum-pool-size` 1000
+  (default) / `minimum-idle` 5 → `POOLER_MAX_CLIENT_CONN=1500` (>= Hikari; senão o Supavisor recusa
+  cliente). Conexões reais ao Postgres: `POOLER_DEFAULT_POOL_SIZE=45` para o `max_connections=100`
+  do compose padrão (+ `DB_POOL_SIZE=5` do próprio Supavisor, 3 reservadas do superuser,
+  testes e psql); com `carga/rpm` (`max_connections=300`) o pool vai para 245 sozinho (override + `subir-host-rpm.ps1`). Ou seja,
+  o `too many clients` não vem mais do Hikari, e sim do pool do Supavisor + o resto passar do
+  `max_connections`.
+- Os logs do Supavisor trazem `User requested SSL connection but no downstream cert/key found`:
+  o PgJDBC tenta SSL (`sslmode=prefer`), o pooler (sem cert) recusa e ele cai para texto puro, na
+  rede interna do Docker. É inofensivo.
 
 ## Padrão dos Services
 
