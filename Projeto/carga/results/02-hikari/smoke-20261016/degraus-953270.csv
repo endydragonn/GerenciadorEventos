@@ -1,0 +1,4 @@
+escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit
+Deg-953270,60,61,60,61,0,0.000000,0,0,7.1,10.6,18.3,14.1,1.0,0,cas,300,1000,5120412
+Deg-953270,120,120,60,120,0,0.000000,0,0,4.8,7.8,9.1,8.3,2.0,0,cas,300,1000,5120412
+Deg-953270,180,180,60,180,0,0.000000,0,0,5.1,6.5,9.1,6.6,3.0,0,cas,300,1000,5120412

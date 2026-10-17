@@ -1,12 +1,16 @@
 # Testes de carga
 
+Este kit é o **runner oficial do experimento** da Fase 2 (CAS × caminho ingênuo): a
+[matriz](#matriz-do-experimento-runner-oficial) (`make test-matriz`) gera o CSV e o gráfico dos
+resultados. O harness de `docs/carga/harness/` é só sanity local (stack no próprio host).
+
 Duas máquinas: o **host** (roda a stack, o alvo do teste) e o **gerador** (roda o k6).
 O k6 **nunca** roda no host: competiria por CPU/rede com o backend e invalidaria as latências.
 
 | Máquina | Precisa de | Não precisa de |
 |---|---|---|
 | Host | Docker Desktop, `Projeto/.env` | k6 |
-| Gerador | k6 (o `setup-gerador` instala via winget), PowerShell, Git for Windows (Git Bash, usado pelo seed), clone **completo** do repo | Docker, banco, `.env` |
+| Gerador | k6 (o `setup-gerador` instala via winget), PowerShell, Git for Windows (Git Bash, usado pelo seed e pelo report), clone **completo** do repo; só para a matriz: `psql` (cliente PostgreSQL 16) | Docker, banco, `.env` |
 
 > Nunca copie o `Projeto/.env` para o gerador (credenciais reais).
 
@@ -15,7 +19,7 @@ Atalhos via `make` (GNU make; `winget install ezwinports.make`). Rode em `Projet
 
 ## Preparação
 
-**No host** (PowerShell como Administrador, para criar a regra de firewall da 8081; rede como Privada):
+**No host** (PowerShell como Administrador, para criar a regra de firewall da 8081; rede como Privada). A 5433 (Postgres) **não** é aberta aqui: só a matriz usa, e só com `GERADOR_IP` (ver "Matriz do experimento"):
 
 ```powershell
 make setup-host            # ou: .\setup-host.ps1 [-ReadPath cas|naive] [-RefreshMs 5000]
@@ -31,6 +35,215 @@ make setup-gerador HOST_IP=<ip>    # ou: .\setup-gerador.ps1 -HostIp <ip>
 
 Instala o k6, testa a conexão e salva a latência base de rede em `results\baseline-*.txt`
 (o valor a descontar das medições). Registre também em `docs/carga/setup.md`, seção 5.
+
+## Matriz do experimento (runner oficial)
+
+Para **um** lag e **um** braço por vez, roda a disputa de vagas (teste 1, `PCT_CONFIRMA=100`) para
+uma lista de N e um número de repetições, e acumula **uma linha por execução** em
+`results\matriz.csv`. O lag (`READMODEL_AVAILABILITY_REFRESH_MS`) e o braço (`RESERVATION_READPATH`)
+são lidos no startup do backend e não mudam em runtime: o valor passado ao gerador
+(`READPATH` / `REFRESH_MS`) só **rotula** as colunas `braco` e `lag_ms` e precisa bater com o que o
+host está rodando. Para varrer lags e braços, troque a config no host e rode a matriz de novo; as
+linhas se acumulam no mesmo CSV.
+
+Host e gerador devem estar **no mesmo commit** (a coluna `commit` é o do checkout do gerador).
+
+```powershell
+# 1) host (PowerShell como Administrador). GERADOR_IP é obrigatório para a matriz: cria a regra de
+#    firewall da 5433 (Privada) SEMPRE restrita a esse IP; sem ele a 5433 fica fechada.
+make setup-host READPATH=naive REFRESH_MS=2000 GERADOR_IP=<ip do gerador>
+#    Ao fim do experimento, feche a 5433:  Remove-NetFirewallRule -DisplayName 'TCC postgres 5433'
+
+# 2) gerador, uma vez por sessão: senha do Postgres do host SÓ no ambiente (não ecoa, não vai pro histórico)
+$s = Read-Host 'Senha do Postgres do host' -AsSecureString
+$env:PGPASSWORD = [System.Net.NetworkCredential]::new('', $s).Password
+
+# 3) gerador: a matriz (READPATH/REFRESH_MS = os mesmos do passo 1)
+make test-matriz HOST_IP=<ip do host> VUS=50,100,200 REPETICOES=10 CAPACIDADE=20 READPATH=naive REFRESH_MS=2000
+
+# 4) outro lag/braço: volte ao passo 1 com os novos valores e repita o passo 3
+#    (ex.: REFRESH_MS=500, 1000, 5000 e READPATH=cas)
+
+# 5) gerador: gráfico (results\matriz.csv -> results\matriz.html; Git Bash + awk, sem dependência nova)
+make report-matriz
+```
+
+Sem `make`: `.\rodar-matriz.ps1 -HostIp <ip> -Vus 50,100,200 -Repeticoes 10 -Capacidade 20 -Rotulo naive -RefreshMs 2000`
+e `bash ../../docs/carga/harness/report-matriz.sh results/matriz.csv results/matriz.html`.
+`PGUSER`/`PGDATABASE` (ou `-PgUsuario`/`-PgBanco`) assumem `admin`/`meu_banco` (os do projeto; se o
+`Projeto/.env` do host usar outros, informe). A **senha** vem só de
+`PGPASSWORD`: nunca como argumento ou variável do `make` (o make ecoa a linha de comando), nunca
+impressa, nunca gravada. Instalar o `psql` no gerador: `make setup-gerador` mostra o comando
+(`winget install PostgreSQL.PostgreSQL.16 --interactive`, marcando só "Command Line Tools").
+
+Com N alto (≥ ~100) e `max_connections=100` (padrão do Postgres) o pool do backend pode estourar o
+limite (ver "Por que `MAX_CONN` importa"; o `VUS` padrão chega a 200): rode o passo 1 uma vez (firewall) e
+suba a stack com `make host-rpm MAX_CONN=300 READPATH=... REFRESH_MS=...` no lugar do `setup-host` (as
+regras de firewall persistem). Repetições afetadas por `too many clients` (5xx) são **descartadas**, não
+gravadas (ver abaixo).
+
+### O que cada execução faz
+
+1. **Seed único por N**: `N` usuários + `REPETICOES` eventos novos, todos com a mesma `capacity`
+   (um evento novo por repetição). Antes da 1ª repetição de todas, um **aquecimento descartado**
+   (rajada pequena, `-VusAquecimento`, evento próprio, sem linha no CSV).
+2. Espera o read model ter a linha do evento e depois um tempo **aleatório em `[0, lag_ms)`**: a
+   rajada cai numa fase pseudo-aleatória do job de refresh, sem sincronizar com ele.
+3. Dispara o k6 (`carga.js`, confirmação 100% embutida) e, enquanto ele roda, consulta o Postgres
+   do host por `psql` remoto (`:5433`) a cada ~`-PollMs` (padrão 250 ms):
+   `now() - refreshed_at` do evento (relógio do Postgres; o instante da amostra é o do gerador, o
+   mesmo do k6).
+4. Depois da rajada lê `confirmed` e `pending` do evento no Postgres (fonte de verdade) e grava a linha
+   — **só se a repetição for válida**: k6 com código 0, resumo com `disparo_ms`, nenhum usuário sem
+   login, nenhuma resposta inesperada/5xx (reserva ou confirma) e toda reserva aceita confirmada
+   (`Test-RepeticaoValida`, em `lib-matriz.ps1`). Uma repetição inválida (ex.: `too many clients` no
+   host) enviesaria a média/desvio do overselling, então é **pulada**: não entra no CSV, o motivo e a
+   contagem aparecem no fim, o resumo do k6 dela fica em `results\matriz-invalida-*.json` (sem
+   credenciais, ignorado pelo git) e o script sai com código **2** (matriz incompleta). Repita a matriz
+   (ou só o grupo afetado) depois de corrigir a causa. No braço `cas` há ainda a tolerância 0 e o código
+   **3** (ver "Códigos de saída").
+
+### Colunas de `results\matriz.csv`
+
+`braco,lag_ms,N,capacity,rep,confirmed,pending,oversell,p50,p95,p99,throughput,lag_obs_disparo,lag_obs_max,commit`
+
+| Coluna | Significado |
+|---|---|
+| `braco` | `cas` ou `naive` (o `READPATH` rotulado) |
+| `lag_ms` | `REFRESH_MS` rotulado (lag configurado no host) |
+| `N`, `capacity`, `rep` | clientes concorrentes, vagas do evento, repetição (1..REPETICOES) |
+| `confirmed`, `pending` | reservas do evento no Postgres do host após a rajada |
+| `oversell` | `max(0, confirmed − capacity)`: **métrica primária**; `pending + confirmed` é derivável (secundária) |
+| `p50`, `p95`, `p99` | latência da reserva (`POST /bff/event-wallets`) em ms, vista pelo gerador (descontar a base de rede) |
+| `throughput` | tentativas/s (iterações reserva + confirma) **na janela da rajada** (1ª iteração iniciada até a última terminada); exclui os logins do `setup()`, então **não** é o `reservas_por_s` do teste 1 |
+| `lag_obs_disparo` | lag observado (ms) na última amostra **antes** do disparo da rajada |
+| `lag_obs_max` | maior lag observado (ms) entre essa amostra e as da rajada |
+| `commit` | `git rev-parse --short HEAD` do checkout do gerador |
+
+`lag_obs_*` = **-1** significa "sem leitura" (linha do read model inexistente ou nenhuma amostra
+válida na janela); o report ignora o -1. A resolução é o intervalo do polling: o instante exato do
+disparo vem do k6 (`disparo_ms`/`fim_ms` no resumo, relógio do gerador, depois do `setup()` com os
+logins), mas a amostra pode ser até ~`PollMs` anterior ao disparo. A rajada em si é curta (a latência
+p95 da reserva é de dezenas de ms; o `duracao_s` do teste 1 inclui os logins do `setup()`), então
+na prática não há amostra própria na janela e `lag_obs_max` costuma igualar `lag_obs_disparo`.
+
+O report (`report-matriz.sh`) desenha, por (N, capacity), o overselling × lag e a latência p95 × lag, mais a
+tabela dos agregados. Eixo x linear em ms (de 0 ao maior lag). Cada braço tem média, ±1 desvio amostral e mín–máx
+das repetições por lag; o `naive` é uma curva e o `cas`, que não depende do lag, uma linha de referência
+tracejada (média de todas as suas execuções do grupo) com marcadores nos lags em que foi medido.
+Auto-testes (sem rede/stack): `bash ../../docs/carga/harness/report-matriz-selftest.sh` e
+`.\lib-matriz.selftest.ps1`.
+
+### Códigos de saída do `rodar-matriz.ps1`
+
+| Código | Significado |
+|---|---|
+| `0` | matriz completa; no braço `cas`, todas as execuções dentro da tolerância 0 |
+| `1` | erro de ambiente (pré-requisito faltando, host/Postgres inacessível, resposta inesperada) |
+| `2` | houve repetição **inválida** (não gravada): matriz incompleta |
+| `3` | **braço `cas` com overselling** (tolerância 0 violada; ver abaixo). Prevalece sobre o `2` se os dois ocorrerem: ambos são listados no fim |
+
+Via `make`, o código real do runner é o `Error N` da linha `make[1]: *** [...test-matriz] Error N` (no preset
+`make test-matriz-cas`; a linha seguinte, do make-pai, mostra sempre `Error 1`); em `make test-matriz` direto é o
+`Error N` da última linha. O status do próprio `make` é sempre `2` em qualquer falha da receita. Chamando
+`.\rodar-matriz.ps1` direto, é o `$LASTEXITCODE`.
+
+**Tolerância 0 no braço `cas`** (`Test-ToleranciaCas`, em `lib-matriz.ps1`): a execução falha se
+`confirmed > capacity` (primária) **ou** `pending + confirmed > capacity` (secundária); igual a `capacity` passa.
+Isso **não** é validade: uma execução CAS que oversella é um **resultado** (bug do CAS), então a linha entra no
+`matriz.csv` normalmente, o runner a imprime em vermelho (`[FALHA CAS]`), lista no fim e sai com `3`. Se a
+repetição for, além disso, inválida (ex.: 5xx), a linha não é gravada (regra do `2`), mas o overselling é
+sinalizado do mesmo jeito. No braço `naive` não há tolerância: o overselling é o que se mede.
+
+### Rodada 1a — braço CAS (issue #12)
+
+Preset `make test-matriz-cas`: `READPATH=cas`, N ∈ {100, 200}, `capacity` 20, 5 repetições, `PCT_CONFIRMA=100`
+(fixo no runner) e `lag_ms` = default do backend (`5000`, o mesmo do `setup-host`; só rotula a coluna, pois o
+CAS não lê o read model). Sem varredura de lag (isso é do braço `naive`, issue #13). Gera **10 linhas**.
+
+```powershell
+# 1) host (PowerShell como Administrador). Uma vez, para a regra de firewall da 5433 restrita ao gerador:
+make setup-host READPATH=cas GERADOR_IP=<ip do gerador>
+#    N=100/200 pode estourar o max_connections=100 do Postgres (repetições com 5xx seriam descartadas e o CSV
+#    ficaria com menos de 10 linhas): suba de novo com max_connections maior (as regras de firewall persistem)
+make host-rpm MAX_CONN=300 READPATH=cas REFRESH_MS=5000
+
+# 2) gerador: senha do Postgres do host SÓ no ambiente
+$s = Read-Host 'Senha do Postgres do host' -AsSecureString
+$env:PGPASSWORD = [System.Net.NetworkCredential]::new('', $s).Password
+
+# 3) gerador: comece de um results\matriz.csv vazio/inexistente (as linhas se acumulam); rode o preset
+make test-matriz-cas HOST_IP=<ip do host>
+
+# 4) gerador: gráfico (results\matriz.html)
+make report-matriz
+```
+
+Versione o `Projeto/carga/results/matriz.csv` resultante (as 10 linhas); ele entra no gráfico como a linha de
+referência "design proposto" (a rodada 1b, braço `naive`, acrescenta linhas ao mesmo arquivo). **Esperado: `oversell = 0`
+em todas as linhas** e o `make` terminando sem erro. Qualquer valor diferente (ou `Error 3` na linha `make[1]`,
+exit `3` do script) é um bug do CAS, não ruído de medição: investigue antes de seguir. `Error 2` na linha
+`make[1]` = repetição inválida: a rodada ficou com menos de 10 linhas; corrija o host e repita.
+
+### Rodada 1b — braço ingênuo (issue #13)
+
+Preset `make test-matriz-naive`: `READPATH=naive`, N ∈ {100, 200}, `capacity` 20, 5 repetições, `PCT_CONFIRMA=100`
+(fixo no runner) e **um lag por chamada**: `REFRESH_MS` ∈ {500, 2000, 5000, 10000} é **obrigatório** e você o
+informa na linha de comando a cada chamada (sem ele, ou com outro valor, o `make` para com erro; ele só rotula a coluna `lag_ms`, e
+tem de ser o lag que o host está rodando). Cada lag gera **10 linhas**; os 4 lags, **40 linhas**, que se acumulam
+no **mesmo** `results\matriz.csv` das 10 linhas CAS da rodada 1a (**não apague o CSV**; se a 1a ainda não foi
+rodada, o gráfico sai só com o ingênuo). Como o lag é lido só no startup do backend, a sequência é **por lag** e se
+repete 4 vezes (500, 2000, 5000, 10000):
+
+```powershell
+# 0) host, uma vez (PowerShell como Administrador): firewall da 8081 e da 5433 restrita ao gerador (já feito na 1a: pule)
+make setup-host READPATH=naive REFRESH_MS=500 GERADOR_IP=<ip do gerador>
+
+# 1) gerador, uma vez por sessão: PGPASSWORD só no ambiente (igual à 1a)
+$s = Read-Host 'Senha do Postgres do host' -AsSecureString
+$env:PGPASSWORD = [System.Net.NetworkCredential]::new('', $s).Password
+
+# 2) POR LAG, nesta ordem: host (reinicia a stack com o braço ingênuo, o lag e max_connections=300, como na 1a:
+#    N=200 estoura o padrão 100) -> conferência no host -> gerador (o MESMO lag do host).
+#    A conferência vale depois de CADA host-rpm: deve imprimir "naive" e o lag que você acabou de subir:
+#      docker exec gerenciador-backend printenv RESERVATION_READPATH READMODEL_AVAILABILITY_REFRESH_MS
+
+# lag 500
+make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=500                  # host
+make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=500                # gerador
+
+# lag 2000
+make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=2000                 # host
+make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=2000               # gerador
+
+# lag 5000
+make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=5000                 # host
+make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=5000               # gerador
+
+# lag 10000
+make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=10000                # host
+make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=10000              # gerador
+
+# 3) depois dos 4 lags, no gerador: gráfico sobre o mesmo CSV (50 linhas: 10 CAS + 40 ingênuo)
+make report-matriz
+```
+
+Não use `make setup-host` para trocar o lag entre as chamadas: ele recria a stack sem o override do `host-rpm` e o
+`max_connections` pode voltar ao padrão (100), o que derruba repetições do N=200 (`too many clients`).
+
+- **Esperado:** cada (ingênuo, lag, N) com 5 linhas no CSV e o `make` sem erro. No ingênuo não há tolerância: o
+  overselling é o que se mede, então `oversell > 0` **não** é falha. `Error 2` na linha `make[1]` = repetição
+  inválida (5xx etc.): o lag ficou com menos de 10 linhas. Se a chamada de um lag for interrompida no meio por
+  qualquer motivo (`Error 1`, `Error 2`, Ctrl+C), **apague do `matriz.csv` as linhas desse lag** (`naive` + esse
+  `lag_ms`) antes de repetir; senão as repetições já gravadas se duplicam e distorcem média e desvio.
+- **Versione** o `Projeto/carga/results/matriz.csv` final (50 linhas: 10 CAS + 40 ingênuo); o gráfico se gera a
+  partir dele.
+- **Resultado como medido.** Se o overselling não crescer com o lag (platô, queda, ruído), isso é o achado: registre
+  como saiu, sem repetir rodadas para "achar" a tendência esperada nem descartar lags.
+- **Gráfico:** eixo x **linear** em ms (a hipótese é "overselling proporcional ao lag"); o ingênuo é a curva (média,
+  ±1 desvio e mín–máx por lag) e o `cas`, que não depende do lag, uma **linha de referência tracejada** (média de
+  todas as suas execuções) com marcador onde foi medido. O lag observado no disparo (`lag_obs_disparo`) vai em cada
+  linha do CSV e, em média, na tabela do report.
 
 ## Teste 1 — disputa de vagas (corretude)
 
@@ -85,6 +298,124 @@ cresce só sob demanda a partir de `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, defa
 `MAX_CONN=100` (padrão do Postgres) o pool de 1000 pode pedir mais conexões do que o Postgres
 aceita → `too many clients` → HTTP 500; para esse caso reduza o pool por env (ex.: 50). Com
 `MAX_CONN` >= pool não há esse erro. Compare 100 × 300 para documentar o teto.
+
+**Desde a issue #19 o backend fala com o Postgres pelo Supavisor** (transaction mode), então quem
+chega ao Postgres não é mais o pool Hikari (1000) e sim o pool do Supavisor
+(`POOLER_DEFAULT_POOL_SIZE`, literal em `Projeto/supabase/docker-compose.pooler.yml`, 45 para o `max_connections=100`
+padrão). O Hikari só enfileira no pooler, e o `too many clients` do parágrafo acima só ocorre se
+esse pool passar do `max_connections`. O `make host-rpm MAX_CONN=<n>` acompanha: o
+override `rpm/docker-compose.rpm.yml` põe o pool do Supavisor em `PG_POOLER_POOL_SIZE` (o
+`subir-host-rpm.ps1` exporta `MAX_CONN - 55`; 245 para 300), e ao voltar ao compose padrão o pooler
+reaplica 45. Registre o pool do pooler junto de `MAX_CONN`/`POOL_HIKARI` nas rodadas.
+
+**Mudança de condição do experimento (atenção ao comparar rodadas).** Sem pooler (antes da #19), o
+Hikari ia direto ao Postgres e podia abrir até ~`MAX_CONN` conexões reais (a role `admin` era superuser e usava também as 3
+reservadas: ~100 e ~300). Com o pooler, o teto real passou a ser o pool do Supavisor, `MAX_CONN − 55` (45 para
+100, 245 para 300); a folga de 55 cobre o próprio Supavisor, as reservadas e a suíte de testes.
+Por isso rodadas pré-#19 e pós-#19 com o mesmo `MAX_CONN` **não são comparáveis 1:1**: parte da
+diferença vem do teto de conexões, não só do pooler. Os CSVs gravam só `MAX_CONN`/`POOL_HIKARI`;
+o pool do pooler é derivável (`MAX_CONN − 55`) apenas quando o host sobe pelo `subir-host-rpm.ps1`
+(`make host-rpm`); no `make setup-host` (sem override rpm) ele é 45.
+
+## Limiar X preliminar (issue #14)
+
+Escada de carga que estende o teste 2: degraus de taxa fixa (12k, 16k, 20k, … RPM) numa **única** execução do k6
+(seed e login uma vez só), um cenário `constant-arrival-rate` por degrau. O limiar X (`CONTEXT.md`) é o **primeiro
+degrau** com **5xx > 1% das reservas** (5xx das reservas / reservas do degrau; os 5xx da confirmação não contam) ou
+**p95 da reserva > 1 s sustentado por 30 s** (alguma janela de 30 s do degrau com p95 > 1 s; os dois limites são estritos). Os números são de **monólito + HikariCP** (pool e `max_connections` registrados no
+CSV); os de antes do pool (#96) estão invalidados (ver `results/02-hikari/ANALISE.md`).
+
+```powershell
+# 1) host: stack com o max_connections e o pool HikariCP escolhidos (os dois vão para o CSV)
+$env:SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE = '1000'      # opcional (padrão do backend: 1000)
+make host-rpm MAX_CONN=300 READPATH=cas
+#    conferência: docker exec gerenciador-backend printenv SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE RESERVATION_READPATH
+
+# 2) gerador: a escada (MAX_CONN / POOL_HIKARI = o que o host roda; só rotulam o CSV)
+make test-degraus HOST_IP=<ip do host> MAX_CONN=300 POOL_HIKARI=1000
+
+# 3) gerador: gráfico + degrau X (results\degraus-<id>.csv -> results\degraus-<id>.html; Git Bash + awk)
+make report-degraus CSV=results\degraus-<id>.csv
+
+# 4) host: a verdade do banco (prefixo Deg-<id> impresso no passo 2)
+make verificar-rpm PREFIXO=Deg-<id>
+```
+
+Sem `make`: `.\degraus\rodar-degraus.ps1 -HostIp <ip> -MaxConnections 300 -PoolHikari 1000` e
+`bash ../../docs/carga/harness/report-degraus.sh results/degraus-<id>.csv results/degraus-<id>.html`.
+Parâmetros: `DEG_INICIO=12000`, `DEG_PASSO=4000`, `DEG_MAX=40000` (degraus de INICIO a MAX, no máximo 40),
+`DEG_DURACAO=60` (por degrau: ≥ 60 s e múltiplo de 30), `USUARIOS=200`, `MAX_VUS=2000`, `PCT_CONFIRMA=100`.
+A escada **vai até o máximo**, mesmo depois de o host degradar: ajuste `DEG_MAX` perto do esperado.
+
+**Versione** `Projeto/carga/results/degraus-<id>.csv` (uma linha por degrau) e o `summary-degraus-<id>.json` da
+escada; anote o X preliminar (refinado na Fase 8, issue #40) e se o report o marcou como **limite inferior**. O `.html`
+regenera do CSV e fica fora do git.
+
+**Colunas do CSV:** `escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit`
+
+| Coluna | Significado |
+|---|---|
+| `escada` | prefixo dos eventos (`Deg-<id>`), o mesmo do `make verificar-rpm` |
+| `rpm_alvo`, `rpm_efetivo` | taxa configurada e reservas enviadas / duração × 60 (cai abaixo do alvo se o k6 descartou iterações) |
+| `reservas`, `erros_5xx`, `taxa_5xx` | reservas respondidas no degrau; 5xx **das reservas**; `taxa_5xx` = `erros_5xx / reservas` como **fração** (0,01 = 1%). Só a reserva: o X decide quando a reserva vai para a fila, e as confirmações diluiriam a taxa |
+| `erros_5xx_confirma` | 5xx da confirmação: só informativo, **não** entra em `taxa_5xx` nem em X (o runner avisa se houver) |
+| `outros` | respostas inesperadas da reserva (4xx fora do "lotado", timeout, conexão recusada): **não** entram em X, mas o report avisa |
+| `p50`, `p95`, `p99` | latência da reserva no degrau inteiro (ms), do k6 (descontar a base de rede) |
+| `p95_max_janela_30s` | maior p95 da reserva entre as janelas de 30 s do degrau (ms); `-1` = sem janela |
+| `throughput` | reservas/s respondidas sem 5xx (`(reservas − 5xx da reserva) / duração`) |
+| `iteracoes_descartadas` | `dropped_iterations` do k6 no degrau |
+| `braco`, `max_connections`, `pool_hikari`, `commit` | o que o host roda (rotulado) e o commit do checkout do gerador |
+
+**Regra do X** (só em `report-degraus.sh`; o runner apenas grava as colunas; `report-degraus-selftest.sh` cobre as
+fixtures): *degradou* = `taxa_5xx > 1%` (5xx das reservas / reservas) ou `p95_max_janela_30s > 1000 ms`; *gerador saturado* = `iteracoes_descartadas > 0`
+ou `rpm_efetivo < 95%` do alvo (tolerância fixa de 5%). X = primeiro degrau que degradou. Se o gerador saturou
+**estritamente antes** (ou nenhum degrau degradou e algum saturou), X vira **limite inferior**: X > último degrau sem
+saturação. Saturou já no 1º degrau: sem limite inferior. Degradou e saturou no **mesmo** degrau: X firme, com aviso
+(as descartadas podem vir do próprio host lento, que esgota os VUs; o 5xx é sinal do host). Nenhum degradou nem
+saturou: "X acima do último degrau". O report desenha latência (p50, p95, p99, pior janela), throughput × carga
+oferecida e taxa de 5xx das reservas × RPM alvo (eixo x linear, painéis separados) com a marca do X, e a tabela de todos
+os degraus. CSV no formato antigo (coluna `requisicoes`, com a taxa somando as confirmações) é recusado pelo report:
+gere a escada de novo.
+
+**A conta do seed** (`Get-PlanoEscada` em `degraus/lib-degraus.ps1` = `carga-degraus.js`): o k6 reinicia
+`iterationInTest` a cada cenário, então cada degrau usa uma faixa própria de pares (usuário, evento), de tamanho
+`ceil(RPM × duração / 60) + 1` (o `+ 1` é a iteração extra que o k6 pode emitir). O total (soma das cotas) tem de caber
+em `USUARIOS × eventos`, com `eventos = ceil(total × 1,05 / USUARIOS)`; o k6 aborta no `setup()` se não couber.
+Padrão (12k…40k de 4k em 4k, 60 s, 200 usuários): 8 degraus, 208.008 pares, 1.093 eventos, ~11,6 min de k6 (31 s
+ociosos entre degraus: 30 s de `gracefulStop`, para as iterações em voo terminarem antes do próximo, mais 1 s de folga
+para os planos de VUs dos cenários não se tocarem).
+
+**VUs:** os `MAX_VUS` (2000) VUs são **todos pré-alocados** (`preAllocatedVUs = maxVUs`). No `constant-arrival-rate` o
+k6 descarta a iteração quando não há VU livre e só aloca VU extra depois, em segundo plano (o que pesa no gerador e o
+report leria como "gerador saturado"). Com tudo pré-alocado só há descarte quando uma iteração (reserva + confirma)
+dura mais que `MAX_VUS / (RPM/60)` s: 3 s no degrau de 40k (667 it/s), isto é, quando o host já degradou (com p95 de
+1 s por requisição são ≈ 1.300 VUs). Cada VU custa ~1–2 MB (estimativa; 2000 VUs ≈ 2–4 GB, alocados antes do 1º
+degrau): dimensione pela RAM do gerador e, se baixar `MAX_VUS`, baixe `DEG_MAX` junto (o runner avisa se `MAX_VUS` cobre
+menos de 2,5 s no maior degrau).
+
+**p95 sustentado por 30 s:** o k6 tagueia cada reserva com `janela:<degrau>_<w>` pelo instante de **envio** (`w =
+floor((envio − exec.scenario.startTime) / 30 s)`: janelas fixas alinhadas ao início do degrau, só as `duração / 30`
+inteiras) e o `handleSummary` emite o p95 de cada janela (submétrica `reserva_duration{janela:…}`, declarada em
+`thresholds`); `p95_max_janela_30s` é o maior. Pelo envio, não pelo término: a reserva lenta enviada no fim do degrau
+conta na janela em que foi enviada, sem retardatária de fora. Até 1 s de jitter de relógio nas pontas vai para a janela
+da ponta. Sem série temporal em disco nem `--out csv`.
+
+**Trava do resumo:** o resumo do k6 traz as métricas por degrau (submétricas por tag `scenario`); o runner só grava o CSV se
+cada contador global (5xx, descartadas, reservas…) **fechar** com a soma dos degraus **e** no máximo 1% das reservas de
+cada degrau ficar fora das janelas de 30 s. Se não fechar ("Resumo do k6 inconsistente"), 5xx/descartadas ou o p95 por
+janela poderiam sair errados: o CSV não é gerado e o resumo fica em `results\` para diagnóstico. Até 1% fora (atraso de
+agendamento com o gerador saturado no fim do degrau) **não** recusa: a contagem vai em `fora_das_janelas` por degrau no
+`summary-degraus-<id>.json` e o runner avisa; essas reservas contam no p50/p95/p99 do degrau, mas não no p95 por janela
+(sem coluna nova no CSV). Mais de 1% é sistemático (ex.: `exec.scenario.startTime` com outra semântica). Submétrica sem amostras
+(ex.: nenhuma confirma com `PCT_CONFIRMA=0`, ou degrau em que toda reserva deu 5xx) vale 0 e só é informada. Código de
+saída do k6 ≠ 0 também impede o CSV; os thresholds do script são só declarativos (sempre verdadeiros, só materializam
+as submétricas), então nenhum deveria reprovar, e o código 99 (thresholds cruzados) só avisa.
+
+Limites: os degraus são contíguos (só os 31 s ociosos; sem resfriamento do host entre eles, então a degradação de um
+degrau pode contaminar o seguinte); um degrau cujo host trava de vez gera timeouts (`outros`), que não contam como
+5xx. O limite de 110 s do teste 2 não vale aqui: ele protege a conta de overselling contra reservas `pending` que
+expiram, e a escada não mede overselling (e com `PCT_CONFIRMA=100` nada fica `pending`). Auto-testes (sem rede/stack):
+`.\degraus\lib-degraus.selftest.ps1` e `bash ../../docs/carga/harness/report-degraus-selftest.sh`.
 
 ## Teste 3 — carga aleatória (estabilidade por tempo)
 
@@ -160,7 +491,7 @@ seguem contando iterações (reservas), não requisições de confirma; como a i
 ## Seed único
 
 O seed (host + usuários + eventos via `POST /bff/seed`) mora só em `docs/carga/harness/setup.sh`,
-o mesmo do harness da issue #11. Os testes deste kit o chamam por `lib-seed.ps1` com
+o mesmo do harness local. Os testes deste kit o chamam por `lib-seed.ps1` com
 `EVENTS`, `EVENT_NAME_PREFIX`, `SEM_TOKENS=1`, `USERS_FILE` e `EVENT_IDS_FILE` (ver o cabeçalho
 do script); o k6 faz o login dos usuários no `setup()`. Usuários: `carga-att<i>-<sufixo>@example.com`;
 eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
@@ -176,7 +507,8 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 - Cada `-Verificar` (`verificar-disputa` / `verificar-rpm`) anexa a saída em `Projeto/carga/results/verificacoes.log`, com data/hora, alvo (evento ou prefixo) e config ativa (read path / refresh). Rode logo após a rodada e cite esse arquivo na documentação.
 - **Latência:** desconte a base de rede medida no `setup-gerador`.
 - No `naive`, o overselling varia com o ponto do ciclo do read model em que a rajada cai:
-  repita a rodada e reporte média e dispersão.
+  repita a rodada e reporte média e dispersão (a matriz faz isso: repetições, rajada em fase
+  aleatória do job e `report-matriz`).
 
 ## Limites e cuidados
 
@@ -188,18 +520,47 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 - Os scripts criam usuários/eventos de teste no banco (`carga-*@example.com`, `Carga-*`, `Rpm-*`).
   Não rode contra um banco com dados que você quer preservar.
 
+## Resultados (`results/`)
+
+Regra: **resultados em `results/NN-etapa/`, cada pasta com um `README.md` sintético do que estava implementado
+naquela etapa; a raiz de `results/` é a área de trabalho da rodada corrente.** O índice das etapas está em
+[`results/README.md`](results/README.md).
+
+- **Raiz = rodada corrente.** Os scripts gravam em `results/` fixo: `matriz.csv`, `degraus-<id>.csv`,
+  `summary-*.json`, `resultados*.csv`, `verificacoes.log` e `baseline-*.txt`. Uma matriz nova começa de um
+  `results/matriz.csv` inexistente (as linhas se acumulam).
+- **Ao fechar a etapa**, mova os arquivos dela para `results/NN-etapa/` com `git mv`, escreva o `README.md` da
+  pasta (o que estava implementado, período, arquivos) e ajuste as citações em `docs/`: o que é **protocolo**
+  (o runner grava `results/matriz.csv`) continua apontando para a raiz; o que é **fonte dos números** aponta para a etapa.
+- **Nunca mova `users-*.json` nem `events-*.json`**: têm credenciais de teste. O `.gitignore` os ignora na raiz e nas
+  subpastas (`Projeto/carga/results/**/users-*.json`, `events-*.json`), mas não os coloque lá de propósito.
+- **Gráfico de uma etapa.** `make report-matriz` lê só o `results/matriz.csv` da raiz. Para uma etapa, rode o report
+  sobre o CSV dela (Git Bash, a partir de `Projeto/carga`):
+
+  ```bash
+  bash ../../docs/carga/harness/report-matriz.sh results/03-supabase-pooler/matriz.csv results/03-supabase-pooler/matriz.html
+  ```
+
+  A escada é análoga, com `report-degraus.sh results/02-hikari/degraus-<id>.csv results/02-hikari/degraus-<id>.html`.
+  O `.gitignore` ignora esses HTMLs dentro das etapas (`results/**/matriz.html`, `results/**/degraus-*.html`);
+  só o CSV é versionado.
+
 ## Arquivos
 
 | Arquivo | Onde roda | Função |
 |---|---|---|
-| `setup-host.ps1` | host | sobe a stack com o override; `-Verificar -EventId N` confere o banco |
-| `setup-gerador.ps1` | gerador | instala o k6, mede a latência base |
+| `setup-host.ps1` | host | sobe a stack com o override; firewall 8081 (e a 5433, só com `-GeradorIp`, restrita a esse IP); `-Verificar -EventId N` confere o banco |
+| `setup-gerador.ps1` | gerador | instala o k6, confere `psql` e a 5433, mede a latência base |
 | `docker-compose.carga.yml` | host | override: read path, lag do read model, log de SQL desligado |
 | `rodar-teste.ps1` / `carga.js` | gerador | teste 1 (confirma `PCT_CONFIRMA` % das aceitas, padrão 100) |
+| `rodar-matriz.ps1` / `lib-matriz.ps1` | gerador | matriz do experimento: usa o `carga.js` do teste 1; `lib-matriz.ps1` = linha do CSV, lag da rajada e tolerância 0 do braço CAS (`lib-matriz.selftest.ps1` testa) |
+| `../../docs/carga/harness/report-matriz.sh` | gerador | `make report-matriz`: `results\matriz.csv` → `results\matriz.html` (SVG, bash+awk) |
 | `lib-seed.ps1` | gerador | `Invoke-Seed`: chama o seed único `docs/carga/harness/setup.sh` via Git Bash |
 | `rpm/*` | ambos | teste 2 |
+| `degraus/*` | gerador | escada de carga (limiar X preliminar): `carga-degraus.js`, `rodar-degraus.ps1`, `lib-degraus.ps1` (plano, p95 em janelas de 30 s, linha do CSV; `lib-degraus.selftest.ps1` testa) |
+| `../../docs/carga/harness/report-degraus.sh` | gerador | `make report-degraus`: `results\degraus-<id>.csv` → curva × carga + degrau X (SVG, bash+awk; `report-degraus-selftest.sh` testa) |
 | `aleatorio/*` | gerador | teste 3 |
 | `Makefile` | ambos | atalhos |
-| `results/` | gerador | CSVs e baselines (gerado) |
+| `results/` | gerador | resultados: uma pasta por etapa (`NN-etapa/`) e, na raiz, a rodada corrente (ver "Resultados") |
 
 Guia manual e tabela de registro do ambiente: `docs/carga/setup.md`.

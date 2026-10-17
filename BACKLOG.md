@@ -34,7 +34,7 @@ Labels sugeridas: `fase/0`…`fase/11`, `area/backend`, `area/banco`, `area/infr
 
 ---
 
-## Estado (2026-10-02)
+## Estado (2026-10-16)
 
 Snapshot do GitHub (`gh issue list` / `gh pr list`). A definição de cada item continua sendo o
 texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
@@ -43,15 +43,30 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 |---|---|---|---|
 | 1 | #2 | fechada | #52 |
 | 2 | #3 | fechada | #53 |
-| 3 | #4 | **aberta** — kit de carga já está no `main` (`Projeto/carga/`, `docs/carga/setup.md`); falta provisionar a 2ª máquina, medir a latência base de rede e registrá-la | #76 (draft), kit em #90 |
+| 3 | #4 | fechada — gerador provisionado e latência base HTTP medida (`Projeto/carga/results/01-sem-pool/baseline-20261004-122632.txt`; ICMP não respondeu) | #76, kit em #90 |
 | 4 | #5 | fechada | #55 |
 | 5 | #6 | fechada | #65 |
 | 6 | #7 | fechada | #66, #68 (fone obrigatório, #67) |
 | 7 | #8 | fechada | #70 |
 | 8 | #9 | fechada (roteiro em `docs/testes-manuais/`; `.sh` precisa de JWT pós-#79) | #73 |
 | 9 | #10 | fechada | #75 |
-| 10 | #11 | **aberta** — harness mergeado (`docs/carga/harness/`); falta rodar de outra máquina (depende do item 3) | #82 |
-| 11–46 | #12–#47 | abertas | — |
+| 10 | #11 | fechada — o kit `Projeto/carga` virou o runner oficial (matriz, lag coletado do gerador, CSV + gráfico), na `Fase_2` | #82, #104 |
+| 11–13 | #12–#14 | fechadas — rodadas oficiais na `Fase_2`: matriz CAS × ingênuo (#12, #13) e escada de carga/limiar X (#14); resultados pré-pooler em `Projeto/carga/results/02-hikari/` | #114, #115 |
+| 14 | #15 | aberta — rascunho da seção do artigo preenchido com a Fase 2; revisão com o orientador pendente | — |
+| 15 | #16 | aberta, **pulada pelo usuário** (2026-10-16): os segredos ficam como estão até o fim do TCC | — |
+| 16 | #17 | fechada | #116 |
+| 17 | #18 | fechada | #118 |
+| 18 | #19 | fechada | #119 |
+| 19 | #20 | fechada | #120 |
+| 20 | #21 | fechada | #117 |
+| 21 | #22 | fechada — matriz refeita pelo pooler, o ponto 1 da série (`docs/carga/resultados-matriz-pospooler-2026-10-16.md`); a escada X não foi refeita | #121 |
+| 22–46 | #23–#47 | abertas | — |
+| 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
+
+Branch de integração da Fase 2: `Fase_2` (a #11 entrou pelo PR #104; as #12–#15 foram
+desenvolvidas direto nela; entrou em `main` pelos PRs #114 e #115). Branch de integração da Fase 4: `Fase_4`
+(cada `Issue-N` abre PR com base nela; o PR final `Fase_4` → `main` é o #122, cujo merge fica para o usuário). Vocabulário do
+experimento em `CONTEXT.md`.
 
 Fora do backlog (follow-ups): #56–#61 abertas (`updatePolicy`, IDOR em `/bff/event-wallets`,
 endurecer schema, cobertura, transações do `updateEvent`, N+1/pool); #78 (BFF única + JWT
@@ -59,7 +74,8 @@ deny-by-default, PR #79), #83 (quality gates, PR #85), #86 (PR #88), #92 (`/actu
 PR #93) e #67 fechadas; #81, #84, #89 abertas. PR #90 adicionou os scripts de teste de carga
 (disputa de vagas e taxa fixa/RPM) em `Projeto/carga/`.
 
-Caminho crítico (issues): #2 → #5 → #7 → #10 feitas; próximo: #11 → #12 → #13.
+Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feitas (marco de banca atingido); Fase 4: #17 → #18
+→ #19/#20/#21 → #22 feitas (ponto 1 da série; Fase 4 inteira na `Fase_4`, PR #122 para a `main`); próximo: a Fase 5 (#23).
 
 ## Fase 0 — Desbloqueio de ambiente
 
@@ -122,28 +138,28 @@ Caminho crítico (issues): #2 → #5 → #7 → #10 feitas; próximo: #11 → #1
 
 ### 10. Harness de carga rodando da máquina/VM separada
 `fase/2` `area/carga` `artigo`
-- **Aceite:** cenário de N clientes concorrentes disputando `capacity` finita, disparado de #3; coleta: contagem de corretude (`confirmed` vs `capacity`), latência p50/p95/p99, throughput (reservas/s), lag observado do read model. Saída em CSV + gráfico.
+- **Aceite:** o kit `Projeto/carga` é o runner oficial (o harness de `docs/carga/harness/` fica como sanity local). Alvo de matriz: para um lag fixo, N × repetições, evento novo por repetição, `PCT_CONFIRMA=100`, rajada em instante pseudo-aleatório. O gerador coleta `confirmed`/`pending` e o lag observado via `psql` remoto (`:5433`). CSV com uma linha por execução (`braco, lag_ms, N, capacity, rep, confirmed, pending, oversell, p50, p95, p99, throughput, lag_obs_disparo, lag_obs_max, commit`) + gráfico SVG (overselling × lag, uma curva por braço, e painel de p95). Spec completa na issue #11.
 - **Depende de:** #3, #9
 
 ### 11. Rodada 1a — no-overselling pelo caminho CAS
 `fase/2` `area/carga` `artigo`
-- **Aceite:** sob N concorrentes, total de `confirmed` nunca excede `capacity`. Números registrados como a curva "design proposto".
+- **Aceite:** preset do runner: `readpath=cas`, N ∈ {100, 200}, `capacity` 20, 5 repetições. Overselling = `confirmed > capacity` (primária) e `pending + confirmed > capacity` (secundária), tolerância 0. Execução no gerador pelo usuário; CSV versionado vira a curva "design proposto".
 - **Depende de:** #10
 
 ### 12. Rodada 1b — braço de controle: caminho ingênuo oversella
 `fase/2` `area/carga` `artigo`
 - **O diferencial do trabalho.** "O design ingênuo oversella, o nosso não — eis os números."
-- **Aceite:** mesmo N concorrentes, feature flag no caminho ingênuo (read model defasado) → `confirmed > capacity`, proporcional ao lag. Mesmo gráfico, duas curvas.
+- **Aceite:** preset do runner: `readpath=naive`, lags ∈ {500, 2000, 5000, 10000} ms × N ∈ {100, 200} × 5 repetições (40 execuções). Gráfico de duas curvas (CAS e ingênuo, overselling × lag, média ± desvio). Execução no gerador pelo usuário; o resultado é reportado como medido.
 - **Depende de:** #11
 
 ### 13. Throughput/latência preliminares do monólito + limiar X preliminar
 `fase/2` `area/carga` `artigo`
-- **Aceite:** curva de latência/throughput vs. carga; ponto onde o fluxo síncrono começa a degradar, anotado como X preliminar (refinado na Fase 8). Ressalva: DB atual sem pool — números absolutos indicativos.
+- **Aceite:** carga em degraus a partir de 12k RPM até degradar ou até o limite do gerador; X = primeiro degrau com 5xx > 1% das reservas ou p95 > 1 s por 30 s (se o gerador saturar antes, X é limite inferior). Curva latência/throughput × carga. Ressalva: números de "monólito + HikariCP" — os números pré-pool (#96) estão invalidados.
 - **Depende de:** #11
 
 ### 14. Consolidar o resultado da Fase 2 em rascunho de seção do artigo
 `fase/2` `artigo`
-- **Aceite:** `docs/artigo/experimento-monolito.md` com metodologia, setup (máquina separada), números, gráficos, ameaças à validade e limitações. Revisado com o orientador.
+- **Aceite:** `docs/artigo/experimento-monolito.md` com hipótese, setup (2 PCs, 1 Gbps), workload, métricas (`CONTEXT.md`), resultados (duas curvas + X), ameaças à validade e limitações. Números "monólito + HikariCP", não o ponto 1 definitivo da série. Revisado com o orientador.
 - **Depende de:** #12, #13
 
 ---
@@ -161,6 +177,13 @@ Caminho crítico (issues): #2 → #5 → #7 → #10 feitas; próximo: #11 → #1
 
 > Não bloqueia o experimento — destrava os números absolutos comparáveis.
 > Ver `Architecture-Decision-Supabase-Self-Host`.
+>
+> **Implementado na `Fase_4` (2026-10-16):** `supabase/docker` vendorizado e gerador de segredos (item 16);
+> `supabase-db` (`supabase/postgres:17.6.1.136`) no lugar do `db` (17); `supabase-pooler` (Supavisor 2.9.13, transaction
+> mode, backend em `:6543` com `prepareThreshold=0`) (18); Studio + cadeia mínima (19); harness schema-per-service
+> (20). O item 15 (segredos) foi pulado. O item 21 refez a matriz pelo pooler (ponto 1 da série): CAS com
+> overselling 0 e cerca de 2× mais lento que no pré-pooler, mas o efeito mistura três mudanças e o estado do banco
+> (artigo, ameaças 14 e 15).
 
 ### 16. Vendorizar `supabase/docker/` e gerar segredos
 `fase/4` `area/infra` `bloqueado/docker`
@@ -315,7 +338,7 @@ Caminho crítico (issues): #2 → #5 → #7 → #10 feitas; próximo: #11 → #1
 
 ### 42. Integração do modo de alta carga
 `fase/9` `area/backend`
-- **Aceite:** `RPM ≥ X` → `admission` enfileira → worker chama a API interna de `reservation` (CAS) → `walletevent` `pending` + `expires_at = now + max_time_in_line` (snapshot); `RPM < X` → síncrono direto. Testes dos dois regimes.
+- **Aceite:** uso ≥ 80% (uso = `RPM ÷ (X × réplicas ativas do reservation)`; com 1 réplica, `RPM ≥ 0,8·X`) → `admission` enfileira → worker chama a API interna de `reservation` (CAS) → `walletevent` `pending` + `expires_at = now + max_time_in_line` (snapshot); uso < 80% → síncrono direto, voltando só com uso < 70% e fila vazia. Testes dos dois regimes.
 - **Depende de:** #41
 
 ### 43. UI de reserva `pending` no Flutter
@@ -323,6 +346,16 @@ Caminho crítico (issues): #2 → #5 → #7 → #10 feitas; próximo: #11 → #1
 - **Prioridade baixa.** Só depois de #42.
 - **Aceite:** contagem regressiva até `expires_at` + botão "Confirmar" separado; tela "aguardando confirmação" quando passa pela fila; trata "Evento lotado" e `quantity == -1`.
 - **Depende de:** #42
+
+### 47. Autoescala de réplicas de `gateway` e `reservation` sob alta demanda
+`fase/9` `area/infra` `area/backend` `area/carga` — issue #111
+- **Aceite:** ADR curta escolhe o mecanismo (`docker compose --scale` + scaler lendo o RPM do `admission` vs. orquestrador com autoscaler); `gateway` e `reservation` sobem com N réplicas sem `container_name`/porta fixa, com balanceamento e contrato externo inalterado; réplicas sem estado em memória; job de expiração correto com 2+ réplicas; regra com uso = RPM ÷ (X × réplicas): > 50% sobe réplica em stand-by sem tráfego, > 80% redireciona (no `reservation`, para a fila, que entrega ao serviço já com a réplica nova; no `gateway`, direto à réplica), volta ao síncrono com < 70% e fila vazia, scale-down com histerese, mín./máx. por env; mede se X cresce com réplicas ou se o gargalo é a linha do `eventcap`; conexões das réplicas cabem no Supavisor; escada de carga com autoescala ligada mantém overselling = 0 e registra réplicas × tempo.
+- **Depende de:** #42, #39
+
+### 48. Autoescala de `admission`, `identity`, `catalog` e `notification`
+`fase/9` `area/infra` `area/backend` `area/eventos` `area/carga` — issue #112
+- **Aceite:** mesmo mecanismo e regra do item 47; `admission` sem estado em memória e RPM correto com N réplicas; `identity` emite/valida JWT igual em todas as réplicas; `catalog` com leitura escalada e comando sob concorrência otimista sem evento duplicado; projetor do `catalog` e `notification` como consumer group escalado por lag, no máximo uma réplica por partição, idempotentes pelo id do evento; carga com todos escalando mantém overselling = 0, sem e-mail duplicado, e registra réplicas × tempo por serviço. Fora: Postgres, Redis, backbone.
+- **Depende de:** #47
 
 ---
 
@@ -361,7 +394,7 @@ F5:  4 → 22 → 24                  6 + 22 → 23
 F6:  22 → 25 → 26 → 27, 28 → 29   (20 trava 27/28; 23 trava 28)     29 + 21 → 30
 F7:  24 + 26 + 29 → 31 → 32 → 33          32 → 34 → 35 → 36
 F8:  36 + 33 → 37 → 38            37 → 39
-F9:  36 + 39 → 40 → 41 → 42 → 43
+F9:  36 + 39 → 40 → 41 → 42 → 43       42 + 39 → 47 → 48
 F10: 38 + 33 → 44                 36 → 45
 F11: 32 → 46
 ```
@@ -369,4 +402,5 @@ F11: 32 → 46
 ## Caminho crítico até o resultado de banca
 
 `1 → 4 → 6 → 9 → 10 → 11 → 12` (7 issues). O resto da Fase 2 (13, 14) consolida.
-Tudo de Supabase/ES/microsserviços vem **depois** desse marco.
+Esse marco foi atingido em 2026-10-16. A Fase 4 (Supabase, itens 16–20) entrou em seguida e o item 21 refaz o
+experimento como ponto 1 da série; ES/microsserviços vêm **depois**.

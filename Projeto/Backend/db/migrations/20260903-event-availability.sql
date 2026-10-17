@@ -1,6 +1,6 @@
 -- Migração: read model desnormalizado e defasado public.event_availability (issue #10 / #09 do BACKLOG).
 -- Idempotente. Aplicável a quente num banco já existente, SEM recriar o volume:
---   docker exec -i gerenciador-db psql -U admin -d meu_banco \
+--   docker exec -i gerenciador-db psql -h localhost -U admin -d meu_banco \
 --     < Projeto/Backend/db/migrations/20260903-event-availability.sql
 --
 -- Para bancos NOVOS o schema já vem correto pelo init-script 09-event-availability.sql;

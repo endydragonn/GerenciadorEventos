@@ -32,6 +32,19 @@ build/
 
 
 # Testes de carga: resultados podem ser versionados, mas nunca credenciais/tokens
-Projeto/carga/results/users-*.json
-Projeto/carga/results/events-*.json
+# (os padroes valem na raiz de results/ e nas pastas de etapa: results/NN-etapa/)
+Projeto/carga/results/**/users-*.json
+Projeto/carga/results/**/events-*.json
+# Matriz do experimento: o CSV (matriz.csv) e o registro; o HTML regenera e os resumos de repeticoes invalidas sao so diagnostico
+Projeto/carga/results/**/matriz.html
+Projeto/carga/results/**/matriz-invalida-*.json
+# Escada de carga (#14): o CSV (degraus-<id>.csv) e o resumo (summary-degraus-<id>.json) sao versionados; o HTML regenera do CSV
+Projeto/carga/results/**/degraus-*.html
 **/tokens.json
+
+# Supabase self-hosted: backup do sed -i.old do generate-keys.sh (o .env já é coberto pela regra acima)
+.env.old
+
+# Supabase self-hosted: dados do Postgres e snippets do Studio (volumes locais)
+Projeto/supabase/volumes/db/data/
+Projeto/supabase/volumes/snippets/

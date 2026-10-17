@@ -67,6 +67,10 @@ ou registre em log. Para exemplos, use placeholders (`<...>`). O `.env` é lido 
 `application.properties` e pelo `docker-compose.yml`; código-fonte lê via variável de
 ambiente, nunca com valor hardcoded.
 
+Os segredos do Supabase self-hosted ficam em `Projeto/supabase/.env` (gitignored, gerado a
+partir do `.env.example` pelo `generate-keys.sh`), com a mesma política: nunca imprimir,
+commitar ou registrar em log.
+
 ## Código
 
 - Siga o estilo e a estrutura do código vizinho. Não reformate arquivos inteiros.
@@ -80,10 +84,15 @@ ambiente, nunca com valor hardcoded.
 
 ## Rodar e testar
 
+- Pré-requisito: `Projeto/supabase/.env` existir (o `db` é o `supabase/postgres` e lê os segredos de lá;
+  gerar conforme `Projeto/supabase/README.md`).
 - Stack completa: `docker compose -f Projeto/docker-compose.yml up -d --build`
-  (frontend :8088, backend :8081, Postgres host :5433).
+  (frontend :8088, backend :8081, Postgres host :5433, Supabase Studio :8000 — login com
+  `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`; sobe junto `meta` e `kong`).
+  O backend em Docker fala com o Postgres pelo `supabase-pooler` (Supavisor, sem porta no host);
+  os testes e a porta 5433 vão direto no `db`.
 - Antes de considerar uma tarefa de backend pronta: `Projeto/Backend/run-tests.sh`
-  (precisa do container `db` no ar — os testes usam Postgres real).
+  (precisa do container `db` no ar — os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`).
 - Relate o resultado real dos testes; se algo falhou ou foi pulado, diga.
 
 ## Documentação de arquitetura (vault Obsidian)
@@ -97,8 +106,13 @@ TCC (ADRs). O roadmap de execução está em `BACKLOG.md` (raiz) e, navegável, 
 `eventpresenter` como tabela filha, máquina de estados `walletevent`
 (`pending → confirmed / expired / cancelled`) com job `@Scheduled` de expiração.
 
+**Implementado (Fase 4, 2026-10-16):** Supabase self-hosted enxuto — `supabase-db`
+(`supabase/postgres` 17) no lugar do `db`, `supabase-pooler` (Supavisor, transaction mode) entre o
+backend e o Postgres, e Studio com a cadeia mínima. O ponto 1 da série de 3 (monólito CRUD +
+pooler) foi medido com isso (`docs/artigo/experimento-monolito.md`).
+
 **Decidido, não implementado:** back-end em microsserviços (Opção B — `gateway`, `identity`,
 `catalog`, `reservation`, `notification`, `admission`); CQRS + Event Sourcing em `catalog` e
 no lado wallet de `reservation` (`eventcap` fica relacional/CAS); backbone Kafka-compatível;
-Supabase self-hosted enxuto; camada de alta carga (Redis RPM + fila + worker pool). Nada
-disso existe no código — ver `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.
+camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
+`Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.

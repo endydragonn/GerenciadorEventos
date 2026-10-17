@@ -33,7 +33,7 @@ Pense no sistema como um clube de eventos: o back-end é a administração nos b
   - [Guia de Comandos](#guia-de-comandos)
   - [Considerações Finais](#considerações-finais)
 - [Front-end](#front-end)
-  - [Introdução ao Projeto](#introdução-ao-projeto-1)
+  - [Introdução ao Projeto](#introdução-ao-projeto)
   - [Configuração de Implantação (Dockerfile e nginx.conf)](#configuração-de-implantação-dockerfile-e-nginxconf)
   - [Dependências e Configuração (pubspec.yaml)](#dependências-e-configuração-pubspecyaml)
   - [Página de Entrada (index.html)](#página-de-entrada-indexhtml)
@@ -544,7 +544,7 @@ Essa parte configura a caixa (container) onde o banco roda, isolada do resto do 
 Esse arquivo é o "manual de montagem" que define as caixas e como elas se conectam.
 
 - **Serviços (caixas)**:
-  - **db (banco de dados)**: Usa PostgreSQL 16. Porta 5433 no seu computador (dentro da caixa é 5432). Guarda dados em um "armário persistente" (volume db-data) para não perder ao desligar. Verifica se está "saudável" antes de prosseguir.
+  - **db (banco de dados)**: Usa PostgreSQL 17 (imagem do Supabase). Porta 5433 no seu computador (dentro da caixa é 5432). Guarda dados em um "armário persistente" (volume supabase-db-data) para não perder ao desligar. Verifica se está "saudável" antes de prosseguir.
   - **backend (servidor)**: Constrói a partir do Dockerfile. Porta 8081. Espera o banco estar pronto (depends_on). Reinicia sozinho se cair.
 - **Outros itens**:
   - **Volumes**: Armário para dados do banco (não some ao parar).
