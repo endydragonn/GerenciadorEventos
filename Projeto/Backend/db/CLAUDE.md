@@ -23,8 +23,11 @@ não há migração via ORM. Leia também o CLAUDE.md da raiz e o de `Backend/`.
   (`PGDATABASE=meu_banco`) não mudam, e o tenant do Supavisor (#19) aponta para um banco só, que
   já tem o `pgbouncer.get_auth` e as tabelas do app.
 - Role do app: `admin` (de `APP_DB_USER`) é criada por `supabase-app-init.sql` como
-  `LOGIN SUPERUSER`, dona das tabelas — paridade com o superuser de bootstrap antigo (os testes
-  dão `TRUNCATE` etc.). Os init-scripts têm `OWNER TO admin` fixo, então `POSTGRES_USER` do
+  `LOGIN` **sem superuser** (menor privilégio) e vira **dona do banco** `meu_banco` — no PG15+
+  o schema `public` pertence ao dono do banco, então isso lhe dá `CREATE` no `public` e no banco
+  (o `TestSchemasTest` cria um schema temporário). É dona das tabelas (os testes dão `TRUNCATE`
+  como dona). Tarefa que exija superuser: `docker exec gerenciador-db psql -U supabase_admin`
+  (trust no socket). Os init-scripts têm `OWNER TO admin` fixo, então `POSTGRES_USER` do
   `Projeto/.env` precisa continuar `admin`.
 - Locale/encoding: UTF-8, locale `en_US.UTF-8` (ICU) da imagem — antes era pt_BR. Postgres 17.6
   (antes 16).
