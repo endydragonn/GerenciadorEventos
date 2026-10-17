@@ -59,13 +59,13 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 18 | #19 | fechada | #119 |
 | 19 | #20 | fechada | #120 |
 | 20 | #21 | fechada | #117 |
-| 21 | #22 | aberta — com PR (`Issue-22`, base `Fase_4`): matriz refeita pelo pooler, o ponto 1 da série (`docs/carga/resultados-matriz-pospooler-2026-10-16.md`) | este PR |
+| 21 | #22 | fechada — matriz refeita pelo pooler, o ponto 1 da série (`docs/carga/resultados-matriz-pospooler-2026-10-16.md`); a escada X não foi refeita | #121 |
 | 22–46 | #23–#47 | abertas | — |
 | 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
 
 Branch de integração da Fase 2: `Fase_2` (a #11 entrou pelo PR #104; as #12–#15 foram
 desenvolvidas direto nela; entrou em `main` pelos PRs #114 e #115). Branch de integração da Fase 4: `Fase_4`
-(cada `Issue-N` abre PR com base nela; o PR final `Fase_4` → `main` fica para o usuário). Vocabulário do
+(cada `Issue-N` abre PR com base nela; o PR final `Fase_4` → `main` é o #122, cujo merge fica para o usuário). Vocabulário do
 experimento em `CONTEXT.md`.
 
 Fora do backlog (follow-ups): #56–#61 abertas (`updatePolicy`, IDOR em `/bff/event-wallets`,
@@ -75,7 +75,7 @@ PR #93) e #67 fechadas; #81, #84, #89 abertas. PR #90 adicionou os scripts de te
 (disputa de vagas e taxa fixa/RPM) em `Projeto/carga/`.
 
 Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feitas (marco de banca atingido); Fase 4: #17 → #18
-→ #19/#20/#21 feitas; próximo: #22 (este PR, ponto 1 da série), depois a Fase 5 (#23).
+→ #19/#20/#21 → #22 feitas (ponto 1 da série; Fase 4 inteira na `Fase_4`, PR #122 para a `main`); próximo: a Fase 5 (#23).
 
 ## Fase 0 — Desbloqueio de ambiente
 
