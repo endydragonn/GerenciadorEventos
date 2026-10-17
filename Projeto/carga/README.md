@@ -323,7 +323,7 @@ Escada de carga que estende o teste 2: degraus de taxa fixa (12k, 16k, 20k, … 
 (seed e login uma vez só), um cenário `constant-arrival-rate` por degrau. O limiar X (`CONTEXT.md`) é o **primeiro
 degrau** com **5xx > 1% das reservas** (5xx das reservas / reservas do degrau; os 5xx da confirmação não contam) ou
 **p95 da reserva > 1 s sustentado por 30 s** (alguma janela de 30 s do degrau com p95 > 1 s; os dois limites são estritos). Os números são de **monólito + HikariCP** (pool e `max_connections` registrados no
-CSV); os de antes do pool (#96) estão invalidados (ver `results/ANALISE.md`).
+CSV); os de antes do pool (#96) estão invalidados (ver `results/02-hikari/ANALISE.md`).
 
 ```powershell
 # 1) host: stack com o max_connections e o pool HikariCP escolhidos (os dois vão para o CSV)

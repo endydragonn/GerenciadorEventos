@@ -64,7 +64,7 @@ gerador, por `psql` remoto na `:5433`, porta aberta apenas para o IP do gerador 
 | Ferramentas | Docker Desktop (engine 29.8.2) | k6 v2.2.0 (go1.26.5, windows/amd64); `psql` 16.15 |
 
 Configuração levantada em 2026-10-16, dia das escadas da #14. Fontes: `docs/carga/setup.md` (seção 5),
-`Projeto/carga/results/baseline-20261004-122632.txt` e `Projeto/carga/results/smoke-20261016/baseline-20261016-162438.txt`.
+`Projeto/carga/results/01-sem-pool/baseline-20261004-122632.txt` e `Projeto/carga/results/02-hikari/smoke-20261016/baseline-20261016-162438.txt`.
 
 **Versões e configuração do backend e do banco.**
 
@@ -85,7 +85,7 @@ não é comparável ao tempo de requisição do k6 (excede, por exemplo, a latê
 rodadas preliminares). Por isso **não é subtraído**: as latências do k6 são reportadas como medidas, com o RTT
 embutido e não isolado. O ICMP não respondeu (100 pacotes sem retorno), então não há ping nem perda de
 pacotes. Nova medição em 2026-10-16, antes das escadas da #14, pelo mesmo método: p50 14,7 / p95 18,2 / máx
-20,1 ms (n = 30; `Projeto/carga/results/smoke-20261016/baseline-20261016-162438.txt`); de novo maior que a
+20,1 ms (n = 30; `Projeto/carga/results/02-hikari/smoke-20261016/baseline-20261016-162438.txt`); de novo maior que a
 latência de reserva do k6 nos degraus baixos (p95 de 7,7 a 10,9 ms na `degraus-953959`).
 
 ## Workload
@@ -226,7 +226,7 @@ não muda (o teto já é atingido), mas a coluna `lag_ms` deve ser lida junto co
 
 ### Limiar X (escada de carga)
 
-Escadas de 2026-10-16, braço CAS, 200 usuários. Fonte: `Projeto/carga/results/degraus-<id>.csv` e
+Escadas de 2026-10-16, braço CAS, 200 usuários. Fonte: `Projeto/carga/results/02-hikari/degraus-<id>.csv` e
 `summary-degraus-<id>.json` (commit `5caac91`); veredito de `make report-degraus`. Em **todas** as escadas:
 `taxa_5xx = 0` e `erros_5xx_confirma = 0`. O host nunca respondeu 5xx: quando satura, ele fica lento e o critério
 que dispara é o p95 por janela de 30 s.
@@ -283,7 +283,7 @@ mapeamento na escada é a issue #113.
 
 ### Resultados preliminares (fora do protocolo)
 
-Antes do protocolo acima, rodadas de 2026-10-04 (`Projeto/carga/results/ANALISE.md`) mediram os dois braços
+Antes do protocolo acima, rodadas de 2026-10-04 (`Projeto/carga/results/02-hikari/ANALISE.md`) mediram os dois braços
 com **um único lag (5 s) e uma ou duas repetições por configuração** (`BACKLOG.md`, seção "Estado";
 `ANALISE.md`, seção 6: "uma rodada por configuração"). Servem como motivação e como expectativa, **não**
 como resultado do protocolo: não entram nas curvas nem no X. A tabela traz só overselling, medido no banco
@@ -425,7 +425,7 @@ Ameaças adicionais, sustentadas pelos documentos do kit:
   (com leituras) ficou fora do protocolo.
 - **Vazão do kit anterior não usada.** Os números de "Vazão" e `reservas_por_s` do teste 1 anterior à matriz
   (`docs/carga/setup.md`, seção 6, tabela da disputa; coluna `reservas_por_s` de
-  `Projeto/carga/results/resultados.csv`) não são reportados aqui. Há uma hipótese, **não confirmada**, de que meçam a taxa de login do
+  `Projeto/carga/results/02-hikari/resultados.csv`) não são reportados aqui. Há uma hipótese, **não confirmada**, de que meçam a taxa de login do
   `setup()` (bcrypt) e não a de reserva: o `duracao_s` desse teste inclui o `setup()` (`Projeto/carga/README.md`;
   `Projeto/carga/lib-matriz.ps1`). Não se afirma que estejam errados; a vazão desta seção vem só do
   `throughput` da matriz (janela da rajada) e do `throughput` da escada.

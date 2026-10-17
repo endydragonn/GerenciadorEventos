@@ -43,7 +43,7 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 |---|---|---|---|
 | 1 | #2 | fechada | #52 |
 | 2 | #3 | fechada | #53 |
-| 3 | #4 | fechada — gerador provisionado e latência base HTTP medida (`Projeto/carga/results/baseline-20261004-122632.txt`; ICMP não respondeu) | #76, kit em #90 |
+| 3 | #4 | fechada — gerador provisionado e latência base HTTP medida (`Projeto/carga/results/01-sem-pool/baseline-20261004-122632.txt`; ICMP não respondeu) | #76, kit em #90 |
 | 4 | #5 | fechada | #55 |
 | 5 | #6 | fechada | #65 |
 | 6 | #7 | fechada | #66, #68 (fone obrigatório, #67) |
@@ -51,7 +51,7 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 8 | #9 | fechada (roteiro em `docs/testes-manuais/`; `.sh` precisa de JWT pós-#79) | #73 |
 | 9 | #10 | fechada | #75 |
 | 10 | #11 | fechada — o kit `Projeto/carga` virou o runner oficial (matriz, lag coletado do gerador, CSV + gráfico), na `Fase_2` | #82, #104 |
-| 11–14 | #12–#15 | **abertas** — código/docs entregues na `Fase_2` (presets CAS e ingênuo, escada de carga, rascunho do artigo); faltam as rodadas manuais no host + gerador e preencher o artigo. Rodadas preliminares (1 lag, 1–2 repetições) em `Projeto/carga/results/ANALISE.md` | — |
+| 11–14 | #12–#15 | **abertas** — código/docs entregues na `Fase_2` (presets CAS e ingênuo, escada de carga, rascunho do artigo); faltam as rodadas manuais no host + gerador e preencher o artigo. Rodadas preliminares (1 lag, 1–2 repetições) em `Projeto/carga/results/02-hikari/ANALISE.md` | — |
 | 15–46 | #16–#47 | abertas | — |
 | 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
 
