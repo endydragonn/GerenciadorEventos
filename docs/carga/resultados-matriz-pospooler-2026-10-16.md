@@ -18,7 +18,9 @@ Máquinas: ver [Escada de degraus: resultados de 2026-10-16](./resultados-escada
 - **A latência e a vazão do CAS pioraram**: p95 de 53,7 para 103,9 ms com N = 100 e de 77,1 para 155,3 ms com
   N = 200 (cerca de 2×); vazão −47% e −43%. A mudança mistura **três alterações simultâneas** (pooler, PG 16 → 17 com
   outro locale e teto de conexões reais) e também o estado do banco (limpo agora, inchado antes). **Não dá para
-  atribuí-la ao pooler.** Separar os efeitos exigiria rodadas extras que não foram feitas.
+  atribuí-la ao pooler.** Separar os efeitos exigiu rodadas extras, feitas depois: ver
+  [Isolamento do pooler e escada X pelo pooler](./resultados-isolamento-escada-pospooler-2026-10-17.md) (o Supavisor
+  responde pela maior parte da piora).
 - **Ingênuo: o lag observado agora respeita o configurado** (no lag de 500 ms, `lag_obs_disparo` médio de 275 ms; antes, 1592 ms),
   porque o banco começou limpo. Com isso, pela primeira vez o overselling **não** ficou sempre no teto: em 4 das 40
   repetições a rajada atravessou um refresh que "fechou" o evento no meio (68, 15, 25 e 64). As outras 36 ficaram no teto
@@ -140,7 +142,8 @@ E mudou o **estado do banco**: limpo agora, com ~35 mil eventos e ~2 milhões de
 Os dados não separam esses efeitos. Uma leitura plausível, mas **não medida**, é que o teto de 245 não limite estas rodadas:
 no máximo 200 clientes (N) disputam ao mesmo tempo e cada reserva ou confirmação usa uma transação por vez. Para
 separar de fato seriam necessárias rodadas extras, por exemplo **pooler com pool de ~300** (isola a mudança 3) ou **PG 17
-sem pooler** (isola a mudança 1). Elas **não foram feitas**.
+sem pooler** (isola a mudança 1). Elas foram feitas em 2026-10-17 e estão em
+[Isolamento do pooler e escada X pelo pooler](./resultados-isolamento-escada-pospooler-2026-10-17.md).
 
 ## Cuidados na leitura
 
@@ -150,7 +153,9 @@ sem pooler** (isola a mudança 1). Elas **não foram feitas**.
 - **O CAS não depende do lag.** O `lag_ms = 5000` do CAS só rotula a coluna; o lag observado dele não é uma variável do braço.
 - **Latência absoluta inclui o RTT** do link do gerador (não subtraído, como na matriz anterior).
 - **Uma rodada, um dia.** 5 repetições por configuração, sem repetir lags para melhorar a curva.
-- **A escada de carga (limiar X) não foi refeita** depois do pooler: o X continua o da etapa de HikariCP direto.
+- **A escada de carga (limiar X)** não faz parte desta matriz. Foi refeita pelo pooler em 2026-10-17: X ≈ 78k RPM, contra
+  97k da etapa de HikariCP direto
+  ([resultados](./resultados-isolamento-escada-pospooler-2026-10-17.md)).
 - O gráfico se gera com
   `bash ../../docs/carga/harness/report-matriz.sh results/03-supabase-pooler/matriz.csv results/03-supabase-pooler/matriz.html`
   (de `Projeto/carga`); o HTML não é versionado.
