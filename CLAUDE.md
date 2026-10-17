@@ -84,10 +84,12 @@ commitar ou registrar em log.
 
 ## Rodar e testar
 
+- Pré-requisito: `Projeto/supabase/.env` existir (o `db` é o `supabase/postgres` e lê os segredos de lá;
+  gerar conforme `Projeto/supabase/README.md`).
 - Stack completa: `docker compose -f Projeto/docker-compose.yml up -d --build`
   (frontend :8088, backend :8081, Postgres host :5433).
 - Antes de considerar uma tarefa de backend pronta: `Projeto/Backend/run-tests.sh`
-  (precisa do container `db` no ar — os testes usam Postgres real).
+  (precisa do container `db` no ar — os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`).
 - Relate o resultado real dos testes; se algo falhou ou foi pulado, diga.
 
 ## Documentação de arquitetura (vault Obsidian)
