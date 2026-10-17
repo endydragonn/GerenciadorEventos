@@ -4,7 +4,8 @@ sidebar_position: 2
 
 # Escada de degraus: resultados de 2026-10-16
 
-Rodada da issue #14 (limiar X), braço `cas`, com o host e o gerador descritos abaixo. Os números vêm
+Rodada da issue #14 (limiar X), braço `cas`, com o host e o gerador descritos abaixo. É o X **pré-pooler**; a escada pelo
+pooler (X ≈ 78k RPM) está em [Isolamento do pooler e escada X pelo pooler](./resultados-isolamento-escada-pospooler-2026-10-17.md). Os números vêm
 dos CSVs em `Projeto/carga/results/02-hikari/` (commit `5caac91` na branch `Fase_2`). O texto do artigo, com as
 ameaças à validade, está em `docs/artigo/experimento-monolito.md`, seção "Limiar X".
 

@@ -59,7 +59,7 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 18 | #19 | fechada | #119 |
 | 19 | #20 | fechada | #120 |
 | 20 | #21 | fechada | #117 |
-| 21 | #22 | fechada — matriz refeita pelo pooler, o ponto 1 da série (`docs/carga/resultados-matriz-pospooler-2026-10-16.md`); a escada X não foi refeita | #121 |
+| 21 | #22 | fechada — matriz refeita pelo pooler, o ponto 1 da série (`docs/carga/resultados-matriz-pospooler-2026-10-16.md`); a escada X e o isolamento do pooler foram refeitos em 2026-10-17 (X ≈ 78k RPM pelo pooler; `docs/carga/resultados-isolamento-escada-pospooler-2026-10-17.md`) | #121 |
 | 22–46 | #23–#47 | abertas | — |
 | 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
 

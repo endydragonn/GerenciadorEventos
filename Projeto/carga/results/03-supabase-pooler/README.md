@@ -24,11 +24,26 @@ A partir de 2026-10-16.
 - `matriz.csv`: matriz CAS × ingênuo depois do pooler (#22), 50 linhas (10 CAS + 40 ingênuo; commit `12fc154`),
   no mesmo protocolo da `../02-hikari/matriz-prepooler-20261016.csv`. Rodadas de 2026-10-16, no commit `8ba01b4`.
   Condições: banco limpo, `max_connections` 300 e pool do Supavisor de 245. É o ponto 1 da série.
+- Rodadas de 2026-10-17 (host na `main` `a8fc86a`, braço `cas`, Hikari 1000, banco novo em cada bloco, Studio/meta/kong parados;
+  commit `7f30308`):
+  - `matriz-isola-pool300.csv`: matriz CAS (10 linhas) com pool do Supavisor de 300 e `max_connections` 355; isola o teto de conexões.
+  - `matriz-isola-sem-pooler.csv`: matriz CAS (10 linhas) com PG 17 sem pooler (backend direto em `db:5432`, override local não versionado); isola o Supavisor.
+  - `degraus-28082.csv` e `summary-degraus-28082.json`: escada pelo pooler de 20k a 55k, passo 5k, sem `netsh`; o degrau de 55k está contaminado por erros de porta do cliente.
+  - `degraus-32105.csv` e `summary-degraus-32105.json`: escada pelo pooler de 50k a 130k, passo 10k, com `netsh`; satura em 80k.
+  - `degraus-33459.csv` e `summary-degraus-33459.json`: refinamento de 70k a 80k, passo 1k; o 1º degrau é aquecimento. X pelo pooler ≈ 78k RPM.
+  - Escadas com pool de 245, `max_connections` 300, `MAX_VUS` 3000 e 200 usuários.
 
 ## Análise
 
+- [`docs/carga/resultados-isolamento-escada-pospooler-2026-10-17.md`](../../../../docs/carga/resultados-isolamento-escada-pospooler-2026-10-17.md):
+  isolamento do pooler (pool 300 e PG 17 sem pooler) e escada X pelo pooler.
 - [`docs/carga/resultados-matriz-pospooler-2026-10-16.md`](../../../../docs/carga/resultados-matriz-pospooler-2026-10-16.md):
   resultados e comparação com o pré-pooler.
 - [`docs/artigo/experimento-monolito.md`](../../../../docs/artigo/experimento-monolito.md): texto do artigo, subseção
   "Ponto 1 (pós-pooler)".
 - Pré-pooler (referência): [`docs/carga/resultados-matriz-2026-10-16.md`](../../../../docs/carga/resultados-matriz-2026-10-16.md).
+- Threads do backend (2026-10-17, mesma condição do ponto 1; detalhes em
+  [`resultados-isolamento-escada-pospooler-2026-10-17.md`](../../../../docs/carga/resultados-isolamento-escada-pospooler-2026-10-17.md)):
+  - `matriz-virtual-threads.csv`, `degraus-38530.*`: virtual threads ligadas.
+  - `matriz-tomcat300.csv`, `degraus-39710.*`: Tomcat com 300 threads.
+  - `matriz-tomcat400.csv`, `degraus-40664.*`: Tomcat com 400 threads.
