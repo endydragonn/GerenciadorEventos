@@ -1,0 +1,57 @@
+# Supavisor (pooler de conexões do Supabase) — issue #19. Incluído por Projeto/docker-compose.yml
+# (`include`); os caminhos relativos daqui partem de Projeto/supabase/. Adaptado do serviço
+# `supavisor` do docker-compose do upstream (ver README.md): sem portas no host (o backend fala
+# pela rede gerenciador-net).
+#
+# NÃO use `${VAR}` aqui para JWT_SECRET/POSTGRES_PASSWORD: a interpolação do compose lê o
+# Projeto/.env do backend (que também os tem, com outro sentido) e ele vence o .env desta pasta
+# (ver README.md, "Segredos nos compose incluídos"). Os
+# SEGREDOS entram pelo `env_file:` do próprio serviço (supabase/.env) e o `command` monta as
+# variáveis derivadas (DATABASE_URL, API_JWT_SECRET...). Os valores NÃO secretos do pooler
+# (tenant, tamanhos de pool, modo) são literais versionados no `environment:`, que vence o
+# `env_file` (um supabase/.env antigo não os muda). Para o teste de taxa (max_connections=300) o
+# tamanho do pool é sobreposto por carga/rpm/docker-compose.rpm.yml.
+services:
+  supabase-pooler:
+    image: supabase/supavisor:2.9.13
+    container_name: supabase-pooler
+    env_file:
+      - ./.env
+    healthcheck:
+      test: ["CMD", "curl", "-sSfL", "--head", "-o", "/dev/null", "http://127.0.0.1:4000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      CLUSTER_POSTGRES: true
+      REGION: local
+      ERL_AFLAGS: -proto_dist inet_tcp
+      # Tenant do Supavisor: o usuário do JDBC é <role>.<tenant> (Projeto/docker-compose.yml, backend).
+      POOLER_TENANT_ID: gerenciador-eventos
+      POOLER_POOL_MODE: transaction
+      # Conexões de cliente aceitas: >= Hikari máximo (1000), com folga.
+      POOLER_MAX_CLIENT_CONN: 1500
+      # Conexões REAIS ao Postgres. max_connections=100 no compose padrão; o Supavisor NÃO devolve
+      # conexão ociosa, então o pool inteiro fica preso depois de uma rajada. Folga de 55: 3
+      # reservadas do superuser (a role admin não é superuser), ~9 do próprio Supavisor, ~40 da
+      # suíte (run-tests.sh, pico medido ~36) e psql. Com 70 a suíte falhava com "remaining
+      # connection slots are reserved".
+      POOLER_DEFAULT_POOL_SIZE: 45
+      # Conexões do próprio Supavisor ao banco _supabase.
+      DB_POOL_SIZE: 5
+    command:
+      - /bin/sh
+      - -c
+      - |
+        export DATABASE_URL="ecto://supabase_admin:$$POSTGRES_PASSWORD@$$POSTGRES_HOST:$$POSTGRES_PORT/_supabase"
+        export API_JWT_SECRET="$$JWT_SECRET" METRICS_JWT_SECRET="$$JWT_SECRET"
+        /app/bin/migrate && /app/bin/supavisor eval "$$(cat /etc/pooler/pooler.exs)" && /app/bin/server
+    volumes:
+      # Variante local do pooler.exs do upstream (upsert do tenant); ver volumes/pooler/pooler-upsert.exs.
+      - ./volumes/pooler/pooler-upsert.exs:/etc/pooler/pooler.exs:ro
+    restart: unless-stopped

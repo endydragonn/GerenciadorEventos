@@ -5,7 +5,7 @@ sidebar_position: 2
 # Escada de degraus: resultados de 2026-10-16
 
 Rodada da issue #14 (limiar X), braço `cas`, com o host e o gerador descritos abaixo. Os números vêm
-dos CSVs em `Projeto/carga/results/` (commit `5caac91` na branch `Fase_2`). O texto do artigo, com as
+dos CSVs em `Projeto/carga/results/02-hikari/` (commit `5caac91` na branch `Fase_2`). O texto do artigo, com as
 ameaças à validade, está em `docs/artigo/experimento-monolito.md`, seção "Limiar X".
 
 ## Resumo

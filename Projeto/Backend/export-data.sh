@@ -64,7 +64,7 @@ if [[ "$RUN_POPULATE" == true ]]; then
         exit 1
     fi
     echo "🌱 Populando banco (seed-data.sql)..."
-    docker compose -f "$SCRIPT_DIR/../docker-compose.yml" exec -T db psql -U admin -d meu_banco < "$SEED_FILE" >/dev/null 2>&1 || {
+    docker compose -f "$SCRIPT_DIR/../docker-compose.yml" exec -T db psql -h localhost -U admin -d meu_banco < "$SEED_FILE" >/dev/null 2>&1 || {
         echo "Falha ao executar seed" >&2
         exit 1
     }
@@ -87,7 +87,7 @@ COMPOSE_FILE="$SCRIPT_DIR/../docker-compose.yml"
         echo ""
     
         echo "👥 ═══════════════════ USUÁRIOS ═══════════════════"
-        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -h localhost -U admin -d meu_banco -c "
                 SELECT 
                         user_id as ID,
                         user_name as Nome,
@@ -117,7 +117,7 @@ COMPOSE_FILE="$SCRIPT_DIR/../docker-compose.yml"
     
         echo ""
         echo "🎫 ═══════════════════ EVENTOS ═══════════════════"
-        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -h localhost -U admin -d meu_banco -c "
                 SELECT 
                         event_id as ID,
                         event_name as Evento,
@@ -132,7 +132,7 @@ COMPOSE_FILE="$SCRIPT_DIR/../docker-compose.yml"
     
         echo ""
         echo "💰 ═══════════════════ CARTEIRAS ═══════════════════"
-        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -h localhost -U admin -d meu_banco -c "
                 SELECT 
                         w.user_id as \"ID Usuario\",
                         u.user_name as Usuario,
@@ -144,7 +144,7 @@ COMPOSE_FILE="$SCRIPT_DIR/../docker-compose.yml"
     
         echo ""
         echo "📝 ═══════════════════ INSCRIÇÕES ═══════════════════"
-        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -h localhost -U admin -d meu_banco -c "
                 SELECT 
                         u.user_name as Usuario,
                         e.event_name as Evento,
@@ -158,7 +158,7 @@ COMPOSE_FILE="$SCRIPT_DIR/../docker-compose.yml"
     
         echo ""
         echo "📊 ═══════════════════ ESTATÍSTICAS ═══════════════════"
-        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -h localhost -U admin -d meu_banco -c "
                 SELECT 
                         (SELECT COUNT(*) FROM users) as \"Total Usuários\",
                         (SELECT COUNT(*) FROM users WHERE admin = true) as Admins,
@@ -169,7 +169,7 @@ COMPOSE_FILE="$SCRIPT_DIR/../docker-compose.yml"
     
         echo ""
         echo "🏆 ═══════════════ EVENTO MAIS POPULAR ═══════════════"
-        docker compose -f "$COMPOSE_FILE" exec -T db psql -U admin -d meu_banco -c "
+        docker compose -f "$COMPOSE_FILE" exec -T db psql -h localhost -U admin -d meu_banco -c "
                 SELECT 
                         e.event_name as Evento,
                         COUNT(we.user_id) as Inscrições

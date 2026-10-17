@@ -1,6 +1,6 @@
 # Análise dos resultados de carga (2026-10-04)
 
-Consolida os dados desta pasta: `resultados*.csv`, `summary-*.json`, `perfil-ale-*.json`,
+Consolida os dados desta pasta e de `../01-sem-pool/` (rodadas sem pool): `resultados*.csv`, `summary-*.json`, `perfil-ale-*.json`,
 `verificacoes.log`, `sockstat.log` e `baseline-*.txt`. O registro cronológico e o passo a passo ficam em
 `docs/carga/setup.md`; aqui está a leitura dos números e o que eles provam.
 
@@ -36,7 +36,8 @@ Consolida os dados desta pasta: `resultados*.csv`, `summary-*.json`, `perfil-ale
 
 ## 3. `cas`: pool de conexões (o que mudou entre manhã e tarde)
 
-Antes do pool, `DriverManager` abria uma conexão TCP por operação. O `sockstat.log` mostra o efeito:
+Antes do pool, `DriverManager` abria uma conexão TCP por operação. A série de `sockstat` medida na hora mostrou o efeito
+(ela não foi versionada; o `sockstat.log` desta pasta só tem 5 amostras pós-pool, em repouso):
 repouso ≈ 14 sockets em `TIME_WAIT`, **pico de 34.199** na carga, contra **28.232** portas efêmeras
 (`32768–60999`, destino fixo `db:5432`) → `BindException: Cannot assign requested address`. Subir
 `max_connections` de 300 para 1000 não alterou o 5xx (o Postgres tinha ~16 conexões ativas).

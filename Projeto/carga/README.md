@@ -299,13 +299,31 @@ cresce só sob demanda a partir de `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, defa
 aceita → `too many clients` → HTTP 500; para esse caso reduza o pool por env (ex.: 50). Com
 `MAX_CONN` >= pool não há esse erro. Compare 100 × 300 para documentar o teto.
 
+**Desde a issue #19 o backend fala com o Postgres pelo Supavisor** (transaction mode), então quem
+chega ao Postgres não é mais o pool Hikari (1000) e sim o pool do Supavisor
+(`POOLER_DEFAULT_POOL_SIZE`, literal em `Projeto/supabase/docker-compose.pooler.yml`, 45 para o `max_connections=100`
+padrão). O Hikari só enfileira no pooler, e o `too many clients` do parágrafo acima só ocorre se
+esse pool passar do `max_connections`. O `make host-rpm MAX_CONN=<n>` acompanha: o
+override `rpm/docker-compose.rpm.yml` põe o pool do Supavisor em `PG_POOLER_POOL_SIZE` (o
+`subir-host-rpm.ps1` exporta `MAX_CONN - 55`; 245 para 300), e ao voltar ao compose padrão o pooler
+reaplica 45. Registre o pool do pooler junto de `MAX_CONN`/`POOL_HIKARI` nas rodadas.
+
+**Mudança de condição do experimento (atenção ao comparar rodadas).** Sem pooler (antes da #19), o
+Hikari ia direto ao Postgres e podia abrir até ~`MAX_CONN` conexões reais (a role `admin` era superuser e usava também as 3
+reservadas: ~100 e ~300). Com o pooler, o teto real passou a ser o pool do Supavisor, `MAX_CONN − 55` (45 para
+100, 245 para 300); a folga de 55 cobre o próprio Supavisor, as reservadas e a suíte de testes.
+Por isso rodadas pré-#19 e pós-#19 com o mesmo `MAX_CONN` **não são comparáveis 1:1**: parte da
+diferença vem do teto de conexões, não só do pooler. Os CSVs gravam só `MAX_CONN`/`POOL_HIKARI`;
+o pool do pooler é derivável (`MAX_CONN − 55`) apenas quando o host sobe pelo `subir-host-rpm.ps1`
+(`make host-rpm`); no `make setup-host` (sem override rpm) ele é 45.
+
 ## Limiar X preliminar (issue #14)
 
 Escada de carga que estende o teste 2: degraus de taxa fixa (12k, 16k, 20k, … RPM) numa **única** execução do k6
 (seed e login uma vez só), um cenário `constant-arrival-rate` por degrau. O limiar X (`CONTEXT.md`) é o **primeiro
 degrau** com **5xx > 1% das reservas** (5xx das reservas / reservas do degrau; os 5xx da confirmação não contam) ou
 **p95 da reserva > 1 s sustentado por 30 s** (alguma janela de 30 s do degrau com p95 > 1 s; os dois limites são estritos). Os números são de **monólito + HikariCP** (pool e `max_connections` registrados no
-CSV); os de antes do pool (#96) estão invalidados (ver `results/ANALISE.md`).
+CSV); os de antes do pool (#96) estão invalidados (ver `results/02-hikari/ANALISE.md`).
 
 ```powershell
 # 1) host: stack com o max_connections e o pool HikariCP escolhidos (os dois vão para o CSV)
@@ -502,6 +520,31 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 - Os scripts criam usuários/eventos de teste no banco (`carga-*@example.com`, `Carga-*`, `Rpm-*`).
   Não rode contra um banco com dados que você quer preservar.
 
+## Resultados (`results/`)
+
+Regra: **resultados em `results/NN-etapa/`, cada pasta com um `README.md` sintético do que estava implementado
+naquela etapa; a raiz de `results/` é a área de trabalho da rodada corrente.** O índice das etapas está em
+[`results/README.md`](results/README.md).
+
+- **Raiz = rodada corrente.** Os scripts gravam em `results/` fixo: `matriz.csv`, `degraus-<id>.csv`,
+  `summary-*.json`, `resultados*.csv`, `verificacoes.log` e `baseline-*.txt`. Uma matriz nova começa de um
+  `results/matriz.csv` inexistente (as linhas se acumulam).
+- **Ao fechar a etapa**, mova os arquivos dela para `results/NN-etapa/` com `git mv`, escreva o `README.md` da
+  pasta (o que estava implementado, período, arquivos) e ajuste as citações em `docs/`: o que é **protocolo**
+  (o runner grava `results/matriz.csv`) continua apontando para a raiz; o que é **fonte dos números** aponta para a etapa.
+- **Nunca mova `users-*.json` nem `events-*.json`**: têm credenciais de teste. O `.gitignore` os ignora na raiz e nas
+  subpastas (`Projeto/carga/results/**/users-*.json`, `events-*.json`), mas não os coloque lá de propósito.
+- **Gráfico de uma etapa.** `make report-matriz` lê só o `results/matriz.csv` da raiz. Para uma etapa, rode o report
+  sobre o CSV dela (Git Bash, a partir de `Projeto/carga`):
+
+  ```bash
+  bash ../../docs/carga/harness/report-matriz.sh results/03-supabase-pooler/matriz.csv results/03-supabase-pooler/matriz.html
+  ```
+
+  A escada é análoga, com `report-degraus.sh results/02-hikari/degraus-<id>.csv results/02-hikari/degraus-<id>.html`.
+  O `.gitignore` ignora esses HTMLs dentro das etapas (`results/**/matriz.html`, `results/**/degraus-*.html`);
+  só o CSV é versionado.
+
 ## Arquivos
 
 | Arquivo | Onde roda | Função |
@@ -518,6 +561,6 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
 | `../../docs/carga/harness/report-degraus.sh` | gerador | `make report-degraus`: `results\degraus-<id>.csv` → curva × carga + degrau X (SVG, bash+awk; `report-degraus-selftest.sh` testa) |
 | `aleatorio/*` | gerador | teste 3 |
 | `Makefile` | ambos | atalhos |
-| `results/` | gerador | CSVs e baselines (gerado) |
+| `results/` | gerador | resultados: uma pasta por etapa (`NN-etapa/`) e, na raiz, a rodada corrente (ver "Resultados") |
 
 Guia manual e tabela de registro do ambiente: `docs/carga/setup.md`.
