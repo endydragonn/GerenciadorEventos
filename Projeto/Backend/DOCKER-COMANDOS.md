@@ -19,8 +19,6 @@ Start-Sleep -Seconds 15
 # 3. Popular banco via API (senhas criptografadas)
 .\populate-data.ps1
 
-# 4. (Opcional) Exportar dados para arquivo
-wsl ./export-data.sh
 ```
 
 **Para parar:**
@@ -204,29 +202,11 @@ docker compose exec db psql -h localhost -U admin -d meu_banco \
 **Atenção:** Este método insere dados diretamente no banco **SEM** criptografar senhas. Use apenas para testes básicos de estrutura.
 
 ```bash
-# Opção 1 (Recomendado): Popular e já exportar para arquivo formatado (Unix / WSL / Git Bash)
-./export-data.sh --populate
-
-# Opção 1 (PowerShell - via WSL ou Git Bash)
-# Use WSL (recomendado no Windows) ou Git Bash para executar o script sem alterações:
-wsl ./export-data.sh --populate
-# ou, se tiver Git Bash instalado
-bash ./export-data.sh --populate
-
-# Opção 2: Apenas popular (sem exportar) - Unix style
+# Unix style
 docker compose exec -T db psql -h localhost -U admin -d meu_banco < db/seed-data.sql
 
-# Opção 2 (PowerShell nativo): pipe do arquivo para o psql dentro do container
+# PowerShell nativo: pipe do arquivo para o psql dentro do container
 Get-Content db/seed-data.sql -Raw | docker compose exec -T db psql -h localhost -U admin -d meu_banco
-
-# (Opcional) Exportar depois (o script gera um arquivo com timestamp)
-./export-data.sh
-
-# Exportar em PowerShell (se preferir abrir o arquivo no Windows):
-# - usando WSL/Git Bash (gera o arquivo no diretório do projeto)
-wsl ./export-data.sh
-# - ou executar o script via Git Bash
-bash ./export-data.sh
 ```
 
 **O seed (db/seed-data.sql) faz:**
@@ -254,41 +234,11 @@ bash ./export-data.sh
 - Meetup de Spring Boot (EAD, 500 vagas)
 - Curso de Docker (presencial, 30 vagas)
 
-### Exportar Dados do Banco para Arquivo
+### Inspecionar os dados do banco
 
-O script `export-data.sh` gera um relatório completo do banco em formato texto, **incluindo as senhas criptografadas (hash BCrypt)**.
-
-```bash
-# Unix / WSL / Git Bash
-./export-data.sh
-
-# PowerShell (via WSL - recomendado)
-wsl ./export-data.sh
-
-# PowerShell (via Git Bash)
-bash ./export-data.sh
-```
-
-**O export inclui:**
-
-- 👥 Usuários (com **senha hash BCrypt completa**)
-- 🎫 Eventos
-- 💰 Carteiras
-- 📝 Inscrições
-- 📊 Estatísticas
-- 🏆 Eventos mais populares
-
-**Arquivo gerado:** `database-export-<timestamp>.txt`
-
-**Visualizar o arquivo:**
-
-```powershell
-# PowerShell - ver arquivo mais recente
-Get-Content (Get-ChildItem database-export-*.txt | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name
-
-# Abrir no VS Code
-code (Get-ChildItem database-export-*.txt | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name
-```
+Use o **Supabase Studio** (`http://localhost:8000`, login `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` de
+`Projeto/supabase/.env`): o Table Editor mostra as tabelas do schema `public`. Para SQL avulso, use as
+consultas abaixo. (O antigo `export-data.sh` foi removido: estava quebrado desde a #5 e o Studio cobre o uso.)
 
 ### Consultas Úteis
 
