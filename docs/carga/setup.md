@@ -182,7 +182,7 @@ seções abaixo: `c9bd024`, `275d587`, `af01483`); não será reconstruído. A m
 
 #### Evidência de esgotamento de portas (série de `sockstat`, backend, 2026-10-04 14:26–14:30)
 
-`results/02-hikari/sockstat.log` (amostragem a cada 2 s de `TCP: ... tw`):
+Série de `sockstat` (amostragem a cada 2 s de `TCP: ... tw`; **não versionada**: o `results/02-hikari/sockstat.log` só tem 5 amostras pós-pool, das 15:42):
 
 - Repouso: `tw` ≈ 14. Durante a carga: **pico de 34.199 sockets em `TIME_WAIT`** às 14:30:20.
 - A faixa de portas efêmeras do container é `32768–60999` = **28.232 portas**. Como o destino é

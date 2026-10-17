@@ -34,7 +34,7 @@ Labels sugeridas: `fase/0`…`fase/11`, `area/backend`, `area/banco`, `area/infr
 
 ---
 
-## Estado (2026-10-06)
+## Estado (2026-10-16)
 
 Snapshot do GitHub (`gh issue list` / `gh pr list`). A definição de cada item continua sendo o
 texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
@@ -51,12 +51,21 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 8 | #9 | fechada (roteiro em `docs/testes-manuais/`; `.sh` precisa de JWT pós-#79) | #73 |
 | 9 | #10 | fechada | #75 |
 | 10 | #11 | fechada — o kit `Projeto/carga` virou o runner oficial (matriz, lag coletado do gerador, CSV + gráfico), na `Fase_2` | #82, #104 |
-| 11–14 | #12–#15 | **abertas** — código/docs entregues na `Fase_2` (presets CAS e ingênuo, escada de carga, rascunho do artigo); faltam as rodadas manuais no host + gerador e preencher o artigo. Rodadas preliminares (1 lag, 1–2 repetições) em `Projeto/carga/results/02-hikari/ANALISE.md` | — |
-| 15–46 | #16–#47 | abertas | — |
+| 11–13 | #12–#14 | fechadas — rodadas oficiais na `Fase_2`: matriz CAS × ingênuo (#12, #13) e escada de carga/limiar X (#14); resultados pré-pooler em `Projeto/carga/results/02-hikari/` | #114, #115 |
+| 14 | #15 | aberta — rascunho da seção do artigo preenchido com a Fase 2; revisão com o orientador pendente | — |
+| 15 | #16 | aberta, **pulada pelo usuário** (2026-10-16): os segredos ficam como estão até o fim do TCC | — |
+| 16 | #17 | fechada | #116 |
+| 17 | #18 | fechada | #118 |
+| 18 | #19 | fechada | #119 |
+| 19 | #20 | fechada | #120 |
+| 20 | #21 | fechada | #117 |
+| 21 | #22 | aberta — com PR (`Issue-22`, base `Fase_4`): matriz refeita pelo pooler, o ponto 1 da série (`docs/carga/resultados-matriz-pospooler-2026-10-16.md`) | este PR |
+| 22–46 | #23–#47 | abertas | — |
 | 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
 
 Branch de integração da Fase 2: `Fase_2` (a #11 entrou pelo PR #104; as #12–#15 foram
-desenvolvidas direto nela; ela entra em `main` por um PR único no fim da fase). Vocabulário do
+desenvolvidas direto nela; entrou em `main` pelos PRs #114 e #115). Branch de integração da Fase 4: `Fase_4`
+(cada `Issue-N` abre PR com base nela; o PR final `Fase_4` → `main` fica para o usuário). Vocabulário do
 experimento em `CONTEXT.md`.
 
 Fora do backlog (follow-ups): #56–#61 abertas (`updatePolicy`, IDOR em `/bff/event-wallets`,
@@ -65,7 +74,8 @@ deny-by-default, PR #79), #83 (quality gates, PR #85), #86 (PR #88), #92 (`/actu
 PR #93) e #67 fechadas; #81, #84, #89 abertas. PR #90 adicionou os scripts de teste de carga
 (disputa de vagas e taxa fixa/RPM) em `Projeto/carga/`.
 
-Caminho crítico (issues): #2 → #5 → #7 → #10 feitas; próximo: #11 → #12 → #13.
+Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feitas (marco de banca atingido); Fase 4: #17 → #18
+→ #19/#20/#21 feitas; próximo: #22 (este PR, ponto 1 da série), depois a Fase 5 (#23).
 
 ## Fase 0 — Desbloqueio de ambiente
 
@@ -167,6 +177,13 @@ Caminho crítico (issues): #2 → #5 → #7 → #10 feitas; próximo: #11 → #1
 
 > Não bloqueia o experimento — destrava os números absolutos comparáveis.
 > Ver `Architecture-Decision-Supabase-Self-Host`.
+>
+> **Implementado na `Fase_4` (2026-10-16):** `supabase/docker` vendorizado e gerador de segredos (item 16);
+> `supabase-db` (`supabase/postgres:17.6.1.136`) no lugar do `db` (17); `supabase-pooler` (Supavisor 2.9.13, transaction
+> mode, backend em `:6543` com `prepareThreshold=0`) (18); Studio + cadeia mínima (19); harness schema-per-service
+> (20). O item 15 (segredos) foi pulado. O item 21 refez a matriz pelo pooler (ponto 1 da série): CAS com
+> overselling 0 e cerca de 2× mais lento que no pré-pooler, mas o efeito mistura três mudanças e o estado do banco
+> (artigo, ameaças 14 e 15).
 
 ### 16. Vendorizar `supabase/docker/` e gerar segredos
 `fase/4` `area/infra` `bloqueado/docker`
@@ -385,4 +402,5 @@ F11: 32 → 46
 ## Caminho crítico até o resultado de banca
 
 `1 → 4 → 6 → 9 → 10 → 11 → 12` (7 issues). O resto da Fase 2 (13, 14) consolida.
-Tudo de Supabase/ES/microsserviços vem **depois** desse marco.
+Esse marco foi atingido em 2026-10-16. A Fase 4 (Supabase, itens 16–20) entrou em seguida e o item 21 refaz o
+experimento como ponto 1 da série; ES/microsserviços vêm **depois**.

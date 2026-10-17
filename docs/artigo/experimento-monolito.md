@@ -1,14 +1,19 @@
 # Experimento de reserva concorrente no monólito: reserva por CAS × caminho ingênuo
 
 > **Status: rascunho de seção do artigo (issue #15).** Os resultados das rodadas 1a e 1b e da escada de
-> carga (issues #12, #13 e #14) foram preenchidos com as rodadas de 2026-10-16.
+> carga (issues #12, #13 e #14) foram preenchidos com as rodadas de 2026-10-16. O **ponto 1 da série** (monólito
+> CRUD + pooler) foi medido depois, com as rodadas 1a e 1b repetidas com o Supavisor (issue #22).
 > Revisão com o orientador pendente. Caminhos de arquivo são relativos à raiz do repositório (nos comandos
 > `make`, relativos a `Projeto/carga`); os termos seguem o glossário de `CONTEXT.md`.
 >
-> **Escopo dos números.** Todos os números desta seção são de **monólito + HikariCP** (pool e
-> `max_connections` informados no Setup). Eles **não** são o ponto 1 definitivo da série de 3 pontos (`CONTEXT.md`,
-> "Ponto da série"): o ponto 1 é refeito depois do pooler (Supavisor, Fase 4 do `BACKLOG.md`), e só essa
-> repetição vira a linha de base "monólito CRUD" do artigo.
+> **Escopo dos números.** Há dois conjuntos, que **não se misturam**:
+>
+> - **Ponto 1 (pós-pooler, "monólito CRUD + pooler").** As rodadas 1a e 1b repetidas em 2026-10-16 com o
+>   Supabase Postgres 17 e o Supavisor (issue #22). É a linha de base oficial da série de 3 pontos (`CONTEXT.md`,
+>   "Ponto da série"): subseção "Ponto 1 (pós-pooler)" dos Resultados. Só a matriz foi refeita.
+> - **Pré-pooler (referência, "monólito + HikariCP").** A matriz 1a/1b anterior e a escada de carga (limiar X),
+>   com o backend direto no PG 16 (pool e `max_connections` informados no Setup). Ficam como histórico e como
+>   comparação. O limiar X **não foi refeito** com o pooler.
 
 ## Hipótese
 
@@ -66,7 +71,7 @@ gerador, por `psql` remoto na `:5433`, porta aberta apenas para o IP do gerador 
 Configuração levantada em 2026-10-16, dia das escadas da #14. Fontes: `docs/carga/setup.md` (seção 5),
 `Projeto/carga/results/01-sem-pool/baseline-20261004-122632.txt` e `Projeto/carga/results/02-hikari/smoke-20261016/baseline-20261016-162438.txt`.
 
-**Versões e configuração do backend e do banco.**
+**Versões e configuração do backend e do banco (pré-pooler, referência).**
 
 | Componente | Valor |
 |---|---|
@@ -76,6 +81,22 @@ Configuração levantada em 2026-10-16, dia das escadas da #14. Fontes: `docs/ca
 | `max_connections` do Postgres | Escadas da #14: **100** até a `degraus-959190` (o `make setup-host` sobe o Postgres com o padrão) e **1000** nas `degraus-959765`, `-962591` e `-963487` (`make host-rpm MAX_CONN=1000`), valores lidos no host com `SHOW max_connections`. A coluna `max_connections` dos CSVs é só um rótulo passado ao gerador e diz 300 nas escadas com 100: vale o valor medido no host. `pool_hikari` = 1000 em todas. O `matriz.csv` não grava esses campos: nas rodadas 1a e 1b o host rodou com **300** (`make host-rpm MAX_CONN=300`, conferido com `SHOW max_connections`) e Tomcat com 200 threads (padrão). |
 | Braço e lag | `RESERVATION_READPATH` (`cas` \| `naive`) e `READMODEL_AVAILABILITY_REFRESH_MS`, lidos no startup do backend (`Projeto/carga/docker-compose.carga.yml`); log de SQL desligado no host de carga para não distorcer a latência |
 | Commit testado | coluna `commit` dos CSVs (checkout do gerador); host e gerador no mesmo commit: `5120412` em todas as escadas da #14 (a `degraus-963487` rodou com o `.js` editado localmente, ver "Limiar X"); `569d1be` nas 50 linhas da matriz (rodadas 1a e 1b), sem mudança de código em relação ao `5120412` |
+
+**Condições do ponto 1 (pós-pooler).** Mesmas máquinas e mesmo protocolo da matriz; mudaram o banco, o pooler
+e o estado do banco. Rodadas de 2026-10-16, por volta de 21:38 a 21:49 (horário do gerador).
+
+| Componente | Valor |
+|---|---|
+| Commit | `8ba01b4` (`Fase_4` com as issues #17, #18, #19 e #21; branch `Issue-22`), host e gerador |
+| PostgreSQL | 17.6 (imagem `supabase/postgres:17.6.1.136`, locale `en_US` ICU); antes, 16.15 (`postgres:16-alpine`, `pt_BR`) |
+| Pooler | Supavisor 2.9.13 em transaction mode; o backend conecta em `supabase-pooler:6543` com `prepareThreshold=0` |
+| Conexões | `max_connections` 300 (`subir-host-rpm.ps1 -MaxConnections 300`); pool do Supavisor no Postgres **245** (`max_connections − 55`); `POOLER_MAX_CLIENT_CONN` 1500; HikariCP `maximum-pool-size` 1000 e `minimum-idle` 5 (só enfileira no pooler) |
+| Role do app | `admin`, sem superuser |
+| Estado do banco | **limpo** (volume novo) no começo da rodada 1a |
+| Braço e lag | por lag, o host foi reiniciado em `naive` e conferido com `printenv RESERVATION_READPATH READMODEL_AVAILABILITY_REFRESH_MS` |
+| Ferramentas do gerador | k6 v2.2.0; `psql` 16.15 |
+
+Fonte: `Projeto/carga/results/03-supabase-pooler/README.md`. O CSV não grava essas colunas.
 
 **Latência base HTTP (não comparável; não subtraída).** O `setup-gerador.ps1` mediu, em 2026-10-04, 30
 requisições `GET /actuator/health` cronometradas com `Stopwatch` em torno de `Invoke-WebRequest` (PowerShell):
@@ -108,14 +129,15 @@ Cada chamada do runner (`Projeto/carga/rodar-matriz.ps1`) faz, nesta ordem:
    em `[0, lag)`, de modo que a rajada caia numa fase pseudoaleatória do job de refresh, sem se sincronizar
    com ele;
 4. dispara a rajada e, enquanto ela roda, amostra o lag no Postgres do host;
-5. lê `confirmed` e `pending` do evento no Postgres e grava uma linha em `Projeto/carga/results/matriz.csv`.
+5. lê `confirmed` e `pending` do evento no Postgres e grava uma linha em `Projeto/carga/results/matriz.csv` (a área de trabalho da rodada corrente; ao fechar a etapa o
+   CSV vai para `results/NN-etapa/`, ver Resultados).
 
 | Rodada | Braço | N | Lag (ms) | Repetições | Linhas |
 |---|---|---|---|---|---|
 | 1a (#12) | `cas` | {100, 200} | 5000 (só rotula a coluna: o CAS não lê o read model) | 5 | 10 |
 | 1b (#13) | `naive` | {100, 200} | {500, 2000, 5000, 10000} | 5 | 40 |
 
-O total é de 50 linhas no mesmo CSV. O lag e o braço são lidos no startup do backend e não mudam em
+O total é de 50 linhas no mesmo CSV, nas duas matrizes (pré-pooler e ponto 1). O lag e o braço são lidos no startup do backend e não mudam em
 runtime, então a rodada 1b reinicia a stack do host uma vez por lag (`make host-rpm`), e o valor passado ao
 gerador apenas rotula as colunas `braco` e `lag_ms`: ele precisa bater com o que o host roda, o que se confere
 com `docker exec gerenciador-backend printenv RESERVATION_READPATH READMODEL_AVAILABILITY_REFRESH_MS`.
@@ -176,21 +198,88 @@ Detalhes de coleta que afetam a leitura:
   das repetições em cada lag, eixo x linear em ms; o braço CAS, que não depende do lag, entra como linha de
   referência (média de todas as suas execuções).
 - **Ponto da série**: medição do experimento em um marco da arquitetura (monólito CRUD, monólito ES,
-  distribuído). Os números aqui são "monólito + HikariCP", não o ponto 1 definitivo.
+  distribuído). O ponto 1 é o "monólito CRUD + pooler" (subseção "Ponto 1 (pós-pooler)"); os números de
+  "monólito + HikariCP" são a referência pré-pooler, não o ponto 1.
 
 ## Resultados
 
-Mapa das fontes: a rodada 1a (#12) e a rodada 1b (#13) alimentam o mesmo `Projeto/carga/results/matriz.csv`
-(linhas `braco=cas` e `braco=naive`), e o gráfico sai de `make report-matriz`
-(`Projeto/carga/results/matriz.html`, regenerável, fora do git). A escada (#14) gera
-`Projeto/carga/results/degraus-<id>.csv` e `Projeto/carga/results/summary-degraus-<id>.json`; o gráfico sai de
+Mapa das fontes: a rodada 1a (#12) e a rodada 1b (#13) alimentam o mesmo `matriz.csv` (linhas `braco=cas` e
+`braco=naive`). O runner grava em `Projeto/carga/results/matriz.csv` e, ao fechar a etapa, o arquivo é movido para a
+pasta dela: o **ponto 1** está em `Projeto/carga/results/03-supabase-pooler/matriz.csv` (50 linhas, commit
+`12fc154`) e a matriz **pré-pooler** em `Projeto/carga/results/02-hikari/matriz-prepooler-20261016.csv` (50 linhas,
+versionado em `1fbe12b` como `matriz.csv`). O gráfico de cada etapa sai de `report-matriz.sh` sobre o CSV dela
+(HTML regenerável, fora do git; `Projeto/carga/README.md`, "Resultados"). A escada (#14) gera
+`Projeto/carga/results/02-hikari/degraus-<id>.csv` e `summary-degraus-<id>.json`; o gráfico sai de
 `make report-degraus`. Resultado como medido: lags e execuções não são descartados nem repetidos para
 melhorar a curva (só as repetições inválidas são refeitas, pelas regras do runner).
 
-### Overselling × lag (duas curvas: CAS e ingênuo)
+### Ponto 1 (pós-pooler): overselling × lag e latência
 
-Rodadas de 2026-10-16, capacidade 20, 100% de confirmação, `max_connections` 300, commit `569d1be`. Fonte:
-`Projeto/carga/results/matriz.csv` (50 linhas, commit `1fbe12b`); gráfico regenerável com `make report-matriz`.
+Rodadas de 2026-10-16 com o Supabase Postgres 17 e o Supavisor (condições no Setup), capacidade 20, 100% de
+confirmação, commit `8ba01b4`. Fonte: `Projeto/carga/results/03-supabase-pooler/matriz.csv` (50 linhas, commit
+`12fc154`); detalhe e tabelas completas em `docs/carga/resultados-matriz-pospooler-2026-10-16.md`. Nenhuma
+repetição foi descartada. Os agregados foram recalculados do CSV.
+
+**Braço CAS (rodada 1a, #12).** `oversell = 0` nas 10 linhas, com `confirmed = 20` e `pending = 0` em todas: **H1
+se sustenta** no ponto 1. Latência e vazão, com a comparação com o pré-pooler (média de 5 repetições; p95 com
+mín–máx):
+
+| N | p50 pré → pós (ms) | p95 pré → pós (ms) | p99 pré → pós (ms) | Vazão pré → pós (tentativas/s) |
+|---|---|---|---|---|
+| 100 | 44,3 → 84,0 | 53,7 (46,9–66,3) → 103,9 (84,6–117,6) | 55,4 → 107,2 | 1632,7 → 870,9 (−46,7%) |
+| 200 | 59,2 → 115,8 | 77,1 (64,5–86,2) → 155,3 (125,5–203,7) | 81,1 → 160,8 | 2075,5 → 1178,5 (−43,2%) |
+
+A latência do CAS **piorou** cerca de 2× e a vazão caiu 43% a 47%; os intervalos de p95 entre repetições não se
+sobrepõem. Esse resultado mistura **três mudanças simultâneas** (a fila do pooler em transaction mode; PG 16 → 17
+com outro locale; teto real de conexões de ~300 para 245) e também o estado do banco (limpo agora, inchado antes).
+**Não se atribui o aumento ao pooler.** Separar os efeitos exigiria rodadas extras (por exemplo, pooler com pool de
+~300, ou PG 17 sem pooler), que **não foram feitas** (ameaça 14).
+
+**Braço ingênuo (rodada 1b, #13).**
+
+| Lag (ms) | N | `oversell` média ± desvio | `oversell` mín–máx | Execuções no teto | `lag_obs_disparo` médio (ms) | p95 da reserva, média (mín–máx) (ms) | Vazão média (tentativas/s) |
+|---|---|---|---|---|---|---|---|
+| 500 | 100 | 77,6 ± 5,4 | 68–80 | 4 de 5 | 241 | 116,8 (87,0–146,0) | 746,5 |
+| 500 | 200 | 116,0 ± 87,7 | 15–180 | 3 de 5 | 309 | 137,5 (90,1–175,9) | 1219,0 |
+| 2000 | 100 | 80 ± 0 | 80–80 | 5 de 5 | 1084 | 116,4 (83,9–156,0) | 780,1 |
+| 2000 | 200 | 180 ± 0 | 180–180 | 5 de 5 | 1370 | 144,7 (118,0–170,3) | 1079,8 |
+| 5000 | 100 | 76,8 ± 7,2 | 64–80 | 4 de 5 | 2729 | 137,0 (90,8–197,6) | 673,4 |
+| 5000 | 200 | 180 ± 0 | 180–180 | 5 de 5 | 2762 | 159,0 (139,8–190,7) | 1027,7 |
+| 10000 | 100 | 80 ± 0 | 80–80 | 5 de 5 | 6211 | 117,8 (96,9–141,5) | 720,8 |
+| 10000 | 200 | 180 ± 0 | 180–180 | 5 de 5 | 4211 | 161,3 (148,8–179,2) | 981,5 |
+
+**O lag observado passou a respeitar o configurado.** Com o banco limpo, no lag de 500 ms o `lag_obs_disparo` ficou
+entre 151 e 428 ms (média de 275; `lag_obs_max` até 503), contra 851–2095 ms (média de 1592) na matriz
+pré-pooler. Nos demais lags, a média do `lag_obs_disparo` (1227, 2746 e 5211 ms) fica perto de metade do lag, como se
+espera de um disparo em fase aleatória do ciclo.
+
+**O overselling deixou de estar sempre no teto.** Em 36 das 40 repetições o overselling ficou no teto `N − capacidade`
+(80 e 180), como antes. Em 4 a rajada atravessou um refresh que "fechou" o evento no meio (`confirmed < N`, isto é,
+parte dos clientes recebeu "lotado"):
+
+| Lag (ms) | N | Rep | `confirmed` | `oversell` | `lag_obs_disparo` / `lag_obs_max` (ms) |
+|---|---|---|---|---|---|
+| 500 | 100 | 5 | 88 | 68 | 295 / 295 |
+| 500 | 200 | 2 | 35 | 15 | 193 / 503 |
+| 500 | 200 | 3 | 45 | 25 | 192 / 495 |
+| 5000 | 100 | 5 | 84 | 64 | 4677 / 5014 |
+
+O braço de controle continua com overselling em todos os lags, e a dependência da fase do refresh, que a hipótese
+previa, antes ficava escondida pelo lag inflado. A leitura é qualitativa: com 5 repetições por configuração e
+desvio de até 87,7 (lag 500, N = 200), a amostra não permite ajustar uma curva nem estimar a probabilidade de a
+rajada cruzar um refresh. Dentro desse limite, o resultado é compatível com H2 para N = 200 (116,0 no lag de 500
+ms e 180 a partir de 2000 ms), mas não mostra tendência monotônica para N = 100 (77,6, 80, 76,8 e 80), e uma
+repetição do lag de 5000 ms também ficou abaixo do teto.
+
+**Comparação do ingênuo com o pré-pooler.** O p95 da reserva subiu nas 8 configurações (de 14% a 48%) e a vazão caiu em 7
+de 8 (a exceção, lag 500 com N = 200, é puxada pelas duas repetições com rejeição, que respondem mais rápido). As
+mesmas três mudanças simultâneas e o banco limpo valem para essa comparação.
+
+### Overselling × lag, pré-pooler (referência: monólito + HikariCP)
+
+Rodadas de 2026-10-16 (anteriores ao pooler), capacidade 20, 100% de confirmação, `max_connections` 300, commit
+`569d1be`. Fonte: `Projeto/carga/results/02-hikari/matriz-prepooler-20261016.csv` (50 linhas; versionado em
+`1fbe12b` como `matriz.csv`); gráfico regenerável com `report-matriz.sh` sobre esse CSV.
 Nenhuma repetição foi descartada nos dois braços.
 
 **Braço CAS (rodada 1a, #12).** `oversell = 0` nas 10 linhas (N ∈ {100, 200} × 5 repetições), com
@@ -222,11 +311,12 @@ lags maiores, em ~metade do lag, como se espera de um disparo em fase aleatória
 lag mais a duração do refresh (`fixedDelay`), e o refresh recalcula a disponibilidade de **todos** os eventos.
 No dia das rodadas, o banco do host acumulava ~35 mil eventos e ~2 milhões de linhas em `walletevent` das
 escadas da #14, o que alonga cada refresh. O lag de 500 ms, portanto, não foi atingido de fato. O resultado
-não muda (o teto já é atingido), mas a coluna `lag_ms` deve ser lida junto com `lag_obs_disparo`.
+não muda (o teto já é atingido), mas a coluna `lag_ms` deve ser lida junto com `lag_obs_disparo`. No ponto 1, com o
+banco limpo, o lag observado voltou a acompanhar o configurado e o teto deixou de ser universal (acima).
 
-### Limiar X (escada de carga)
+### Limiar X (escada de carga, pré-pooler)
 
-Escadas de 2026-10-16, braço CAS, 200 usuários. Fonte: `Projeto/carga/results/02-hikari/degraus-<id>.csv` e
+Escadas de 2026-10-16, braço CAS, 200 usuários, **antes do pooler** (HikariCP direto no PG 16; não refeitas no ponto 1). Fonte: `Projeto/carga/results/02-hikari/degraus-<id>.csv` e
 `summary-degraus-<id>.json` (commit `5caac91`); veredito de `make report-degraus`. Em **todas** as escadas:
 `taxa_5xx = 0` e `erros_5xx_confirma = 0`. O host nunca respondeu 5xx: quando satura, ele fica lento e o critério
 que dispara é o p95 por janela de 30 s.
@@ -339,7 +429,7 @@ As sete primeiras são as ameaças obrigatórias do experimento; a sétima está
    `INSERT ... SELECT` que recalcula todas as linhas de `eventcap` e tende a crescer com os eventos acumulados
    no banco, de modo que a espera uniforme em `[0, lag)` cobre só parte do ciclo; e sob saturação o job pode
    atrasar (observado antes do pool, em `docs/carga/setup.md`). Em ambos os casos o lag efetivo difere do
-   configurado, e o `lag_obs_*` registra o efeito.
+   configurado, e o `lag_obs_*` registra o efeito. No ponto 1, o banco limpo reduziu esse efeito (ameaça 15).
 4. **bcrypt no seed.** O seed e o login usam bcrypt (custo alto): semear centenas de usuários leva dezenas de
    segundos e os logins do `setup()` custam cerca de 10 ms por cliente, o que domina o tempo de cada
    execução e deixa a rajada ocupar uma fração mínima dele. A consequência de validade é que esse custo leva a
@@ -352,7 +442,9 @@ As sete primeiras são as ameaças obrigatórias do experimento; a sétima está
 5. **Pool HikariCP de 1000.** O tamanho padrão do pool não foi explorado: nas rodadas preliminares, com 100 VUs
    e latências de poucos ms, o pool nunca chegou perto de 1000 (`ANALISE.md`, seção 6), e o padrão só é seguro
    com `max_connections` alto. Um pool menor mudaria onde as requisições esperam (fila no pool em vez de conexão no Postgres) e,
-   com isso, a latência e o X (não testado). Os resultados são de "monólito + HikariCP (1000)".
+   com isso, a latência e o X (não testado). Os resultados pré-pooler são de "monólito + HikariCP (1000)". No ponto
+   1 o HikariCP (1000) só enfileira no Supavisor, cujo pool real no Postgres é 245; o efeito disso sobre a latência
+   não foi isolado (ameaça 14).
 6. **Sem `pg_stat_statements`.** A extensão não é coletada nesta fase (a coleta está prevista para o harness
    definitivo da Fase 8, e a imagem do Supabase a traz: `docs/adr/Architecture-Decision-Supabase-Self-Host.md`).
    Sem ela não há tempo por instrução SQL (o `UPDATE` do CAS, o UPSERT em `walletevent`, o `INSERT ... SELECT`
@@ -372,7 +464,8 @@ Ameaças adicionais, sustentadas pelos documentos do kit:
    `max_connections`, o Postgres pode recusar conexões (`too many clients`) e o backend responde HTTP 500
    (`Projeto/carga/README.md`, "Por que `MAX_CONN` importa"). Os comandos do protocolo usam `MAX_CONN=300` com
    o pool padrão de 1000 (o valor efetivo é o registrado no Setup), então 5xx na escada podem ser artefato de
-   configuração, o que pode antecipar o X. Mitigação parcial: `max_connections` e `pool_hikari` vão para o
+   configuração, o que pode antecipar o X. (No ponto 1 isso não se aplica do mesmo modo: o HikariCP conecta ao
+   Supavisor, com `POOLER_MAX_CLIENT_CONN` 1500, que enfileira sobre as 245 conexões reais.) Mitigação parcial: `max_connections` e `pool_hikari` vão para o
    CSV, e a causa dos 5xx deve ser conferida no log. Na matriz, repetições com 5xx são descartadas, não
    gravadas. Nas escadas de 2026-10-16 isso não aconteceu: com `max_connections` 100 e pool de 1000, o Postgres
    chegou a recusar um `psql` externo (`too many clients`), mas o backend não registrou erro de conexão e a
@@ -404,17 +497,31 @@ Ameaças adicionais, sustentadas pelos documentos do kit:
     `commit` do CSV é o do checkout do gerador: o host precisa estar no mesmo commit e na mesma configuração,
     o que é conferido manualmente (`printenv`). O `lag_obs_*` permite detectar uma discrepância de lag, mas
     não de braço, de commit nem de pool.
+14. **Três mudanças simultâneas no ponto 1.** O ponto 1 difere da matriz pré-pooler em três fatores ao mesmo tempo:
+    (a) a fila do pooler em transaction mode (Supavisor, um salto a mais por transação), (b) PG 16 → 17 e o locale
+    (`postgres:16-alpine` com `pt_BR` → `supabase/postgres:17.6` com `en_US` ICU) e (c) o teto real de conexões, de
+    ~300 (HikariCP direto; a role `admin` era superuser e podia usar as 3 conexões reservadas) para 245 (`max_connections − 55`). O CAS ficou cerca de 2× mais
+    lento e com 43% a 47% menos vazão, e os dados **não separam** os três efeitos nem o do estado do banco
+    (ameaça 15). Não se atribui o aumento ao pooler. Uma leitura plausível, **não medida**, é que o teto de 245 não
+    limite estas rodadas, pois no máximo N = 200 clientes disputam ao mesmo tempo. Separar os efeitos exigiria
+    rodadas extras, por exemplo pooler com pool de ~300 (isola c) ou PG 17 sem pooler (isola a); **não foram feitas**.
+15. **Banco limpo × inchado.** O ponto 1 começou com o banco limpo (volume novo); a matriz pré-pooler rodou sobre ~35
+    mil eventos e ~2 milhões de `walletevent` acumulados pelas escadas do dia. O refresh do read model recalcula
+    todos os eventos, então o estado do banco muda o lag efetivo do braço ingênuo (lag 500: ~1,6 s antes, 151–428 ms
+    agora) e, com ele, a chance de a rajada cruzar um refresh. Também pode afetar a latência do CAS (hipótese, não
+    medida). A diferença do overselling do ingênuo entre as duas matrizes acompanha o lag observado, e portanto o estado do
+    banco; não foi isolada dos demais fatores (ameaça 14).
 
 ## Limitações
 
-- **Não é o ponto 1 definitivo da série.** Os números são de "monólito + HikariCP", sem o Supavisor. O ponto 1
-  é refeito na Fase 4 (rodadas 1a e 1b repetidas com o pooler, atualizando este documento), e os pontos 2
-  (monólito com CQRS + ES) e 3 (distribuído) vêm depois. Nenhuma comparação entre pontos é possível com estes
-  números.
+- **Só a matriz tem ponto 1.** O ponto 1 (monólito CRUD + pooler) cobre as rodadas 1a e 1b. O limiar X vem da
+  etapa pré-pooler (HikariCP direto, PG 16) e não foi refeito com o Supavisor. Os pontos 2 (monólito com CQRS +
+  ES) e 3 (distribuído) vêm depois e se comparam com o ponto 1, não com os números pré-pooler. A comparação
+  pré × pós-pooler dentro do ponto 1 mistura três mudanças e o estado do banco (ameaças 14 e 15).
 - **Lag sintético.** O read model é recalculado por timer (lag fixo e configurável); não é o atraso de uma
   projeção real, que varia com o consumidor. A transferência do resultado para a projeção ES é o objeto dos
   pontos 2 e 3.
-- **X preliminar e em RPM agregado.** O X desta fase vem de uma única execução da escada e é expresso em
+- **X preliminar e em RPM agregado.** O X desta fase (pré-pooler) vem de uma única execução da escada e é expresso em
   reservas por minuto do total, somando todos os eventos. Não se lê como RPM por evento: pela regra de pares,
   a carga por evento é fixa (até 200 tentativas, capacidade 100) e só a duração da rajada por evento encurta
   com o RPM (ameaça 10). O limiar da arquitetura de admissão é definido por evento (`RPM(evento) ≥ X` em
