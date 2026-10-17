@@ -478,15 +478,6 @@ Esses são "receitas automáticas" (scripts) para lidar com dados no banco.
 - **Exemplo**: Como adicionar convidados a uma festa: envia a lista e o servidor cuida do resto.
 - **Uso**: Rode no PowerShell. Certifique-se de que o servidor está ligado.
 
-### export-data.sh (Bash para Linux/Mac)
-- **O que faz**: Exporta dados do banco para um arquivo texto bonito (com tabelas e estatísticas).
-- **Como funciona**: Conecta ao banco via Docker, executa comandos SQL para listar usuários, eventos, inscrições, estatísticas (como total de usuários) e eventos populares. Salva em um arquivo como "database-export-20251123-120000.txt".
-- **Opções**:
-  - `-p`: Enche o banco com dados de teste antes.
-  - `-o arquivo.txt`: Muda o nome do arquivo.
-- **Exemplo**: Como imprimir um relatório de uma agenda: lista tudo formatado com caixas e emojis.
-- **Uso**: Rode o script com opções para encher e exportar.
-
 ## Scripts para Testes
 
 Esses scripts verificam se o sistema funciona direito, como um checklist de qualidade.
