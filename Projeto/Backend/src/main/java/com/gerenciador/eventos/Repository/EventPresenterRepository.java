@@ -5,8 +5,11 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,6 +40,25 @@ public class EventPresenterRepository {
             return out;
         } catch (SQLException ex) {
             throw new RuntimeException("Erro ao listar apresentadores: " + ex.getMessage(), ex);
+        }
+    }
+
+    /** Apresentadores de vários eventos numa só consulta (event_id -> nomes, ordenados). */
+    public Map<Long, List<String>> findByEventIds(Collection<Long> eventIds) {
+        Map<Long, List<String>> out = new HashMap<>();
+        if (eventIds == null || eventIds.isEmpty()) return out;
+        String sql = "SELECT event_id, presenter_name FROM eventpresenter WHERE event_id = ANY(?) "
+                + "ORDER BY event_id, presenter_name";
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setArray(1, conn.createArrayOf("bigint", eventIds.toArray()));
+            ResultSet rs = stmt.executeQuery();
+            while (rs.next()) {
+                out.computeIfAbsent(rs.getLong(1), k -> new ArrayList<>()).add(rs.getString(2));
+            }
+            return out;
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao listar apresentadores em lote: " + ex.getMessage(), ex);
         }
     }
 

@@ -172,6 +172,29 @@ public class EventRepository {
         }
     }
 
+    /**
+     * Busca por nome no banco (substring, case-insensitive), mesma ordem do {@link #findAll()}.
+     * {@code %}, {@code _} e {@code \} do termo são tratados literalmente. Termo nulo/em branco
+     * devolve todos os eventos.
+     */
+    public List<Event> searchByName(String term) {
+        if (term == null || term.isBlank()) return findAll();
+        String sql = "SELECT * FROM event WHERE lower(event_name) LIKE lower(?) ESCAPE '\\' ORDER BY event_id";
+        String pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+        List<Event> list = new ArrayList<>();
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, pattern);
+            ResultSet rs = stmt.executeQuery();
+            while (rs.next()) {
+                list.add(map(rs));
+            }
+            return list;
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao buscar eventos por nome: " + ex.getMessage(), ex);
+        }
+    }
+
     /** Atualizar apenas os metadados do evento (capacidade/janela de venda vão pelo EventCapRepository). */
     public Event update(Event e) {
         if (e.getEvent_id() == null) {

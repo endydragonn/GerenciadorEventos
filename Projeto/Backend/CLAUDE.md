@@ -115,6 +115,13 @@ config/                DatabaseConnection, CorsConfig, EmailTemplates
   de vendas). Constante `EventCap.UNLIMITED == -1`; use `EventCap.isUnlimited()`.
   `buy_time_limit` não informado (`null`) ⇒ `EventService.applyDefaults` iguala à data do
   evento — roda no `createEvent` **e** no `updateEvent`.
+- **Busca de eventos sem N+1 (issue #109).** `EventService.searchEvents` filtra no banco
+  (`EventRepository.searchByName`: `lower(event_name) LIKE lower(?) ESCAPE '\'`, `%`/`_`/`\` do
+  termo escapados; termo em branco = todos, ordem `event_id`) e hidrata em lote
+  (`EventService.hydrateAll` → `EventCapRepository.findByEventIds` /
+  `EventPresenterRepository.findByEventIds`, `event_id = ANY(?)`): 3 consultas no total,
+  independente do nº de eventos. `hydrate` (1 evento) segue igual; `findByCreatorId` ainda faz N+1
+  (#61). Coberto por `EventSearchTest`.
 - **Agregado `eventcap` isolado.** `EventCapRepository` faz a reserva de vaga por `UPDATE`
   condicional atômico (`tryReserve` → `false` = lotado) e a devolução (`release`). Os métodos
   que precisam ser atômicos com `walletevent` recebem a `Connection` da transação do service.

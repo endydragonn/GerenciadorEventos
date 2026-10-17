@@ -26,6 +26,6 @@
          qualquer outra linha desses arquivos deve travar o build normalmente. -->
     <suppress id="ProibirConsoleDireto" files="UserRepository\.java" lines="94"/>
     <suppress id="ProibirConsoleDireto" files="EmailVerificationService\.java" lines="197,214,216"/>
-    <suppress id="ProibirConsoleDireto" files="EventRepository\.java" lines="237"/>
+    <suppress id="ProibirConsoleDireto" files="EventRepository\.java" lines="260"/>
 
 </suppressions>

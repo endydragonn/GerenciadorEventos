@@ -6,6 +6,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
@@ -63,6 +66,25 @@ public class EventCapRepository {
             return null;
         } catch (SQLException ex) {
             throw new RuntimeException("Erro ao buscar eventcap: " + ex.getMessage(), ex);
+        }
+    }
+
+    /** Buscar os agregados de capacidade de vários eventos numa só consulta (event_id -> cap). */
+    public Map<Long, EventCap> findByEventIds(Collection<Long> eventIds) {
+        Map<Long, EventCap> out = new HashMap<>();
+        if (eventIds == null || eventIds.isEmpty()) return out;
+        String sql = "SELECT * FROM eventcap WHERE event_id = ANY(?)";
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setArray(1, conn.createArrayOf("bigint", eventIds.toArray()));
+            ResultSet rs = stmt.executeQuery();
+            while (rs.next()) {
+                EventCap cap = map(rs);
+                out.put(cap.getEventId(), cap);
+            }
+            return out;
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao buscar eventcap em lote: " + ex.getMessage(), ex);
         }
     }
 
