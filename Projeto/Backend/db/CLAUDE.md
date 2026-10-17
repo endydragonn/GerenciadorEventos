@@ -21,7 +21,7 @@ não há migração via ORM. Leia também o CLAUDE.md da raiz e o de `Backend/`.
   imagem criar o banco já com esse nome e rodar o init do Supabase nele (schemas `auth`,
   `storage`, `extensions`, `pgbouncer`). Assim o backend, o `run-tests.sh` e o gerador de carga
   (`PGDATABASE=meu_banco`) não mudam, e o tenant do Supavisor (#19) aponta para um banco só, que
-  já tem o `pgbouncer.get_auth` e as tabelas do app.
+  já tem o `pgbouncer.get_auth` e as tabelas do app (tenant criado em `supabase/volumes/pooler/pooler-upsert.exs`, #19).
 - Role do app: `admin` (de `APP_DB_USER`) é criada por `supabase-app-init.sql` como
   `LOGIN` **sem superuser** (menor privilégio) e vira **dona do banco** `meu_banco` — no PG15+
   o schema `public` pertence ao dono do banco, então isso lhe dá `CREATE` no `public` e no banco
@@ -58,6 +58,15 @@ como `supabase_admin` (um `psql` por arquivo, ordem lexical, no `POSTGRES_DB`). 
 - `supabase/volumes/db/roles.sql` → `init-scripts/99-roles.sql` (senhas das roles internas) e
   `supabase/volumes/db/functions-role.sql` → `init-scripts/98-functions-role.sql` (cria a role
   `supabase_functions_admin` que o `roles.sql` altera; ver `supabase/README.md`).
+- `supabase/volumes/db/_supabase.sql` → `migrations/97-_supabase.sql` e
+  `supabase/volumes/db/pooler.sql` → `migrations/99-pooler.sql` (issue #19): criam o banco
+  **`_supabase`** (dono `supabase_admin`) e o schema **`_supavisor`** dentro dele. É o estado interno do
+  Supavisor (tenants, métricas, `schema_migrations` do Ecto), **não** o schema do app: o app só usa o
+  `meu_banco`. O `99-pooler.sql` ordena depois do `99-app.sql` (lexical) e termina com `\c postgres`;
+  não depende dele. O Supavisor conecta no `_supabase` como `supabase_admin` e, no `meu_banco`, como o
+  usuário do cliente (`admin`, via `pgbouncer.get_auth`, role `pgbouncer` do init do Supabase).
+  O `db` **não** é mais o endpoint do backend em Docker: o backend usa `supabase-pooler:6543` (ver
+  `Backend/CLAUDE.md`, "Pooler"); `5433` do host e os testes seguem direto no `db`.
 
 ## Scripts de init — `db/init-scripts/` (ordem por prefixo numérico)
 
@@ -92,7 +101,7 @@ migração **2×** (idempotência) e checa colunas removidas/criadas, constraint
 conversão de `quant` (limitado / esgotado-piso-0 / ilimitado) e **preservação dos dados**
 (contagem + identidade das linhas). Não toca em `meu_banco`. Exit `!= 0` se algo falhar.
 
-**Os scripts de init só rodam na PRIMEIRA criação do volume `supabase-db-data`.** Depois disso são
+**Os scripts de init só rodam na PRIMEIRA criação do volume `supabase-db-data`** (inclusive o `_supabase`/`_supavisor` do pooler; num volume antigo, recrie-o). Depois disso são
 ignorados. Para reaplicar do zero:
 
 ```bash

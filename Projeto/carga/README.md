@@ -299,6 +299,24 @@ cresce só sob demanda a partir de `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, defa
 aceita → `too many clients` → HTTP 500; para esse caso reduza o pool por env (ex.: 50). Com
 `MAX_CONN` >= pool não há esse erro. Compare 100 × 300 para documentar o teto.
 
+**Desde a issue #19 o backend fala com o Postgres pelo Supavisor** (transaction mode), então quem
+chega ao Postgres não é mais o pool Hikari (1000) e sim o pool do Supavisor
+(`POOLER_DEFAULT_POOL_SIZE`, literal em `Projeto/supabase/docker-compose.pooler.yml`, 45 para o `max_connections=100`
+padrão). O Hikari só enfileira no pooler, e o `too many clients` do parágrafo acima só ocorre se
+esse pool passar do `max_connections`. O `make host-rpm MAX_CONN=<n>` acompanha: o
+override `rpm/docker-compose.rpm.yml` põe o pool do Supavisor em `PG_POOLER_POOL_SIZE` (o
+`subir-host-rpm.ps1` exporta `MAX_CONN - 55`; 245 para 300), e ao voltar ao compose padrão o pooler
+reaplica 45. Registre o pool do pooler junto de `MAX_CONN`/`POOL_HIKARI` nas rodadas.
+
+**Mudança de condição do experimento (atenção ao comparar rodadas).** Sem pooler (antes da #19), o
+Hikari ia direto ao Postgres e podia abrir até ~`MAX_CONN − 3` conexões reais (97 para 100, 297
+para 300). Com o pooler, o teto real passou a ser o pool do Supavisor, `MAX_CONN − 55` (45 para
+100, 245 para 300); a folga de 55 cobre o próprio Supavisor, as reservadas e a suíte de testes.
+Por isso rodadas pré-#19 e pós-#19 com o mesmo `MAX_CONN` **não são comparáveis 1:1**: parte da
+diferença vem do teto de conexões, não só do pooler. Os CSVs gravam só `MAX_CONN`/`POOL_HIKARI`;
+o pool do pooler é derivável (`MAX_CONN − 55`) apenas quando o host sobe pelo `subir-host-rpm.ps1`
+(`make host-rpm`); no `make setup-host` (sem override rpm) ele é 45.
+
 ## Limiar X preliminar (issue #14)
 
 Escada de carga que estende o teste 2: degraus de taxa fixa (12k, 16k, 20k, … RPM) numa **única** execução do k6

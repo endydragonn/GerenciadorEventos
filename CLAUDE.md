@@ -89,6 +89,8 @@ commitar ou registrar em log.
 - Stack completa: `docker compose -f Projeto/docker-compose.yml up -d --build`
   (frontend :8088, backend :8081, Postgres host :5433, Supabase Studio :8000 — login com
   `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`; sobe junto `meta` e `kong`).
+  O backend em Docker fala com o Postgres pelo `supabase-pooler` (Supavisor, sem porta no host);
+  os testes e a porta 5433 vão direto no `db`.
 - Antes de considerar uma tarefa de backend pronta: `Projeto/Backend/run-tests.sh`
   (precisa do container `db` no ar — os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`).
 - Relate o resultado real dos testes; se algo falhou ou foi pulado, diga.
