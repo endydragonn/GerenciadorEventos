@@ -1,22 +1,38 @@
 name: gerenciador-eventos
 
 services:
+  # Postgres do Supabase (issue #18). Pré-requisito: Projeto/supabase/.env existente (ver
+  # supabase/README.md). O POSTGRES_USER do container fica o default da imagem
+  # (supabase_admin): definir outro quebra o init. O usuário do app (Projeto/.env) entra por
+  # APP_DB_*, e Backend/db/supabase-app-init.sql cria a role e o schema.
   db:
-    build:
-      context: ./Backend/db
-      dockerfile: Dockerfile
+    image: supabase/postgres:17.6.1.136
     container_name: gerenciador-db
     env_file:
-      - ./.env
+      - ./supabase/.env
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      POSTGRES_PORT: 5432
+      PGPORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      APP_DB_USER: ${POSTGRES_USER}
+      APP_DB_PASSWORD: ${POSTGRES_PASSWORD}
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "log_min_messages=fatal"]
     ports:
       - "5433:5432"
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - supabase-db-data:/var/lib/postgresql/data
+      - db-config:/etc/postgresql-custom
+      - ./supabase/volumes/db/functions-role.sql:/docker-entrypoint-initdb.d/init-scripts/98-functions-role.sql:ro
+      - ./supabase/volumes/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
+      - ./Backend/db/supabase-app-init.sql:/docker-entrypoint-initdb.d/migrations/99-app.sql:ro
+      - ./Backend/db/init-scripts:/app-init:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
     restart: unless-stopped
 
   backend:
@@ -54,7 +70,10 @@ services:
     restart: unless-stopped
 
 volumes:
-  db-data:
+  # db-data era o PGDATA do Postgres 16 antigo; não sobe no PG17, fica órfão (não apagar).
+  supabase-db-data:
+    driver: local
+  db-config:
     driver: local
 
 networks:

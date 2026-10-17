@@ -1,6 +1,6 @@
 -- Migração: isolar capacidade/vagas no agregado eventcap + máquina de estados de reserva
 -- Idempotente. Aplicável a quente num banco já existente, SEM recriar o volume:
---   docker exec -i gerenciador-db psql -U admin -d meu_banco \
+--   docker exec -i gerenciador-db psql -h localhost -U admin -d meu_banco \
 --     < Projeto/Backend/db/migrations/20260901-eventcap-isolation.sql
 --
 -- Para bancos NOVOS o schema já vem correto pelos init-scripts; esta migração é só para

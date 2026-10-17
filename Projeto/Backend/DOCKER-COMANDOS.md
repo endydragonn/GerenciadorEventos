@@ -7,6 +7,9 @@ Este guia contém todos os comandos necessários para trabalhar com o projeto us
 ## 🚀 Início Rápido (4 passos)
 
 ```powershell
+# 0. Apontar para o compose principal (db = supabase/postgres; exige Projeto/supabase/.env)
+$env:COMPOSE_FILE = "../docker-compose.yml"   # bash: export COMPOSE_FILE=../docker-compose.yml
+
 # 1. Subir os containers (banco + backend)
 docker compose up -d --build
 
@@ -42,7 +45,7 @@ docker compose ps
 
 **Serviços disponíveis:**
 
-- `db` - PostgreSQL 16 (porta 5433)
+- `db` - PostgreSQL 17 (imagem supabase/postgres, porta 5433)
   
 - `backend` - API Spring Boot (porta 8081)
 
@@ -147,21 +150,21 @@ docker run --rm --network gerenciador-net --env-file .env \
 
 ```bash
 # Ver estrutura da tabela users
-docker compose exec db psql -U admin -d meu_banco -c "\d+ users"
+docker compose exec db psql -h localhost -U admin -d meu_banco -c "\d+ users"
 
 # Ver todas as tabelas
-docker compose exec db psql -U admin -d meu_banco -c "\dt"
+docker compose exec db psql -h localhost -U admin -d meu_banco -c "\dt"
 
 # Acessar console do PostgreSQL
-docker compose exec db psql -U admin -d meu_banco
+docker compose exec db psql -h localhost -U admin -d meu_banco
 ```
 
 ### Executar Testes do Banco
 
 ```bash
 # Rodar suite de testes SQL
-docker compose exec db psql -U admin -d meu_banco \
-  -f /docker-entrypoint-initdb.d/99-tests.sql
+docker compose exec db psql -h localhost -U admin -d meu_banco \
+  -f /app-init/99-tests.sql
 ```
 
 **Saída esperada:** `NOTICE: Testes mínimos concluídos com sucesso`
@@ -211,10 +214,10 @@ wsl ./export-data.sh --populate
 bash ./export-data.sh --populate
 
 # Opção 2: Apenas popular (sem exportar) - Unix style
-docker compose exec -T db psql -U admin -d meu_banco < db/seed-data.sql
+docker compose exec -T db psql -h localhost -U admin -d meu_banco < db/seed-data.sql
 
 # Opção 2 (PowerShell nativo): pipe do arquivo para o psql dentro do container
-Get-Content db/seed-data.sql -Raw | docker compose exec -T db psql -U admin -d meu_banco
+Get-Content db/seed-data.sql -Raw | docker compose exec -T db psql -h localhost -U admin -d meu_banco
 
 # (Opcional) Exportar depois (o script gera um arquivo com timestamp)
 ./export-data.sh
@@ -291,15 +294,15 @@ code (Get-ChildItem database-export-*.txt | Sort-Object LastWriteTime -Descendin
 
 ```bash
 # Contar registros em uma tabela
-docker compose exec db psql -U admin -d meu_banco \
+docker compose exec db psql -h localhost -U admin -d meu_banco \
   -c "SELECT COUNT(*) FROM users;"
 
 # Ver todos os usuários
-docker compose exec db psql -U admin -d meu_banco \
+docker compose exec db psql -h localhost -U admin -d meu_banco \
   -c "SELECT user_id, user_name, email FROM users;"
 
 # Limpar todas as tabelas (CUIDADO!)
-docker compose exec db psql -U admin -d meu_banco \
+docker compose exec db psql -h localhost -U admin -d meu_banco \
   -c "TRUNCATE users, event, mywallet, walletevent RESTART IDENTITY CASCADE;"
 ```
 
