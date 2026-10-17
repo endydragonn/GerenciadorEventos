@@ -6,8 +6,9 @@
 -- nasce criado (o antigo 00-create-db.sql foi removido).
 --
 -- 1) cria a role do app (APP_DB_USER/APP_DB_PASSWORD vêm do ambiente do container, que o
---    compose interpola do Projeto/.env) como LOGIN SUPERUSER, igual ao superuser de bootstrap
---    do Postgres antigo;
+--    compose interpola do Projeto/.env) como LOGIN, SEM superuser (menor privilégio), e a torna
+--    dona do banco: no PG15+ o schema public pertence ao dono do banco (pg_database_owner), então
+--    isso dá à role CREATE no public e no banco (o TestSchemasTest cria um schema temporário);
 -- 2) assume essa role para as tabelas/funções nascerem com dono dela;
 -- 3) inclui os init-scripts do app, montados fora de /docker-entrypoint-initdb.d em /app-init
 --    (para a imagem não rodar cada um deles sozinha, com o dono errado).
@@ -22,8 +23,11 @@ SELECT (:'app_user' = '' OR :'app_password' = '') AS sem_credenciais \gset
 
 SELECT NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'app_user') AS criar_role \gset
 \if :criar_role
-    CREATE ROLE :"app_user" LOGIN SUPERUSER PASSWORD :'app_password';
+    CREATE ROLE :"app_user" LOGIN PASSWORD :'app_password';
 \endif
+
+SELECT current_database() AS app_db \gset
+ALTER DATABASE :"app_db" OWNER TO :"app_user";
 
 SET ROLE :"app_user";
 
