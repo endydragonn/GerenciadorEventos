@@ -179,3 +179,44 @@ não a capacidade agregada do host (#113). Não há 5xx: ao saturar, o host fica
   `netsh` aplicado no gerador (range de portas 10000/55535) e tiveram 0 `outros`/erros de porta.
 - **Uma escada, um dia, um evento por vez.** Como no pré-pooler, cada X vem de uma execução (aqui, de três) e o estado do host
   naquele dia. O banco começou novo em cada escada.
+
+## Threads do Tomcat e virtual threads (2026-10-17, tarde)
+
+Mesma condição do ponto 1 (pooler com pool 245, `max_connections` 300, Hikari 1000, `cas`, banco limpo por
+bloco). Só muda o modelo de threads do backend, via override local não versionado:
+`SPRING_THREADS_VIRTUAL_ENABLED=true` (virtual threads) ou `SERVER_TOMCAT_THREADS_MAX=300|400` (threads de
+plataforma; o padrão do Spring Boot é 200). Arquivos em `Projeto/carga/results/03-supabase-pooler/`.
+
+**Matriz CAS** (média de 5 repetições, mín–máx; oversell 0 em todas):
+
+| Configuração | p95 N=100 (ms) | p95 N=200 (ms) | Vazão N=200 (res/s) |
+|---|---|---|---|
+| Tomcat 200 (ponto 1, `matriz.csv`) | 103,9 (84,6–117,6) | 155,3 (125,5–203,7) | 1178,5 |
+| **Tomcat 300** (`matriz-tomcat300.csv`) | **91,9** (74,8–118,3) | **114,4** (99,5–124,5) | 1514,7 |
+| Tomcat 400 (`matriz-tomcat400.csv`) | 98,2 (79,5–118,1) | 121,0 (105,1–139,2) | 1442,4 |
+| Virtual threads (`matriz-virtual-threads.csv`) | 98,0 (83,5–111,4) | 117,8 (108,1–131,3) | 1484,7 |
+
+**Escada 50k → 100k** (p95 de janela em ms · efetivo):
+
+| RPM alvo | Tomcat 200 (`32105`) | Tomcat 300 (`39710`) | Tomcat 400 (`40664`) | Virtual threads (`38530`) |
+|---|---|---|---|---|
+| 50.000 | 366,5 · 50.001 | 187,8 · 50.001 | 226,8 · 50.001 | 209,5 · 50.000 |
+| 60.000 | 191,6 · 60.000 | 180,4 · 60.001 | 203,3 · 60.001 | 516,0 · 60.000 |
+| 70.000 | 391,7 · 70.001 | 319,1 · 70.000 | 508,7 · 70.000 | 1011,9 · 70.001 |
+| 80.000 | 1865,5 · 75.336 | 1929,9 · 75.412 | 1985,4 · 73.288 | 1530,1 · 80.001 |
+| 90.000 | 1856,4 · 75.762 | 1981,7 · 74.232 | 1948,7 · 75.312 | 1645,4 · 90.001 |
+| 100.000 | 1810,5 · 77.266 | 1954,5 · 74.064 | 1972,8 · 74.281 | 2736,2 · 99.132 |
+
+0 erros 5xx em todas. Descartes de 80k a 100k: Tomcat 200/300/400 ~4,6–25,9 mil por degrau; virtual threads
+só 869 em 100k.
+
+**Leitura:**
+
+- **200, 300 e 400 threads dão o mesmo teto** (~74–77k efetivos, X = 80k): o número de threads de plataforma
+  não é o gargalo nessa faixa.
+- **Virtual threads passam do teto** (~99k efetivos, +28% de vazão, de volta ao teto pré-pooler de ~1650 res/s)
+  porque deixam mais requisições em voo, mas o p95 cresce antes (X por p95 > 1 s cai para 70k): trocam latência
+  por vazão.
+- **Tomcat 300 tem o menor p95**, tanto na matriz (N=200: 155 → 114 ms) quanto abaixo do joelho da escada.
+- **Decisão do usuário (2026-10-17):** priorizar a menor latência: virtual threads desligadas e teto de
+  threads do Tomcat em 300 (issue a criar). O ponto 1 da série foi medido com 200.

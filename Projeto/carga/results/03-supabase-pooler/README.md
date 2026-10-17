@@ -42,3 +42,8 @@ A partir de 2026-10-16.
 - [`docs/artigo/experimento-monolito.md`](../../../../docs/artigo/experimento-monolito.md): texto do artigo, subseção
   "Ponto 1 (pós-pooler)".
 - Pré-pooler (referência): [`docs/carga/resultados-matriz-2026-10-16.md`](../../../../docs/carga/resultados-matriz-2026-10-16.md).
+- Threads do backend (2026-10-17, mesma condição do ponto 1; detalhes em
+  [`resultados-isolamento-escada-pospooler-2026-10-17.md`](../../../../docs/carga/resultados-isolamento-escada-pospooler-2026-10-17.md)):
+  - `matriz-virtual-threads.csv`, `degraus-38530.*`: virtual threads ligadas.
+  - `matriz-tomcat300.csv`, `degraus-39710.*`: Tomcat com 300 threads.
+  - `matriz-tomcat400.csv`, `degraus-40664.*`: Tomcat com 400 threads.
