@@ -5,7 +5,7 @@
 
 .EXAMPLE
   .\subir-host-rpm.ps1                              # max_connections=300, caminho CAS
-  .\subir-host-rpm.ps1 -MaxConnections 100          # padrao do Postgres (para ver os 500)
+  .\subir-host-rpm.ps1 -MaxConnections 100          # padrao do Postgres (pool do pooler = 45)
   .\subir-host-rpm.ps1 -Verificar -Prefixo Rpm-123456
 #>
 [CmdletBinding()]
@@ -68,7 +68,11 @@ if (-not (Test-Path (Join-Path $Projeto '.env'))) { Fail 'Projeto\.env nao exist
 $env:RESERVATION_READPATH = $ReadPath
 $env:READMODEL_AVAILABILITY_REFRESH_MS = "$RefreshMs"
 $env:PG_MAX_CONNECTIONS = "$MaxConnections"
-Info "Subindo (readpath=$ReadPath, refresh=${RefreshMs}ms, max_connections=$MaxConnections)..."
+if ($MaxConnections -le 55) { Fail 'MaxConnections precisa ser > 55 (o pool do pooler e MaxConnections - 55).' }
+# Pool do Supavisor (conexoes reais ao Postgres) acompanha o max_connections, com a mesma folga do
+# padrao (100 -> 45): sem isso o pooler limitaria a 45 e a rodada mediria o pooler, nao o Postgres.
+$env:PG_POOLER_POOL_SIZE = "$($MaxConnections - 55)"
+Info "Subindo (readpath=$ReadPath, refresh=${RefreshMs}ms, max_connections=$MaxConnections, pool do pooler=$($MaxConnections - 55))..."
 $a = @('compose', '-f', $Compose, '-f', $OvCarga, '-f', $OvRpm, 'up', '-d')
 if (-not $SemBuild) { $a += '--build' }
 & docker @a
