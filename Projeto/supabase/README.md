@@ -19,6 +19,9 @@ Nesse commit o gateway padrão do upstream é o Envoy; o Kong vem do overlay
   `volumes/pooler/pooler-upsert.exs` (variante local, a que o compose monta; ver "Ligação no compose").
 - `docker-compose.pooler.yml` — serviço `supabase-pooler` (adaptado do `supavisor` do upstream).
 - `volumes/api/` — `kong.yml` e `kong-entrypoint.sh` (gateway Kong do Studio).
+- `docker-compose.studio.yml` — serviços `studio`, `meta` e `kong` (adaptação local do `studio`/`meta` do
+  `docker-compose.yml` e do `docker-compose.kong.yml` do upstream; não é cópia fiel). Incluído por
+  `Projeto/docker-compose.yml`. Ver "Studio" abaixo.
 - `utils/generate-keys.sh` — gera os segredos.
 - `.env.example` — versão reduzida do upstream, só com o que db, Supavisor, Studio, meta e kong usam.
 
@@ -63,13 +66,11 @@ O pooler (Supavisor, issue #19) está ligado:
   container `supabase-pooler`, rede `gerenciador-net`, **sem porta no host**) e é trazido pelo
   `include:` de `Projeto/docker-compose.yml`. Cada Supabase compose futuro entra como um item
   próprio desse `include:`.
-- **Segredos sem colisão:** a interpolação `${VAR}` do compose lê o `Projeto/.env` do backend, que
-  também tem `JWT_SECRET`/`POSTGRES_PASSWORD` com outro sentido, e ele **vence** o `env_file` do
-  `include` (verificado: o pooler subiu com a senha do app e falhou a autenticação do
-  `supabase_admin`). Por isso o arquivo incluído não usa `${VAR}`: o serviço lê `supabase/.env`
-  pelo próprio `env_file:` e o `command` exporta as variáveis derivadas (`DATABASE_URL`,
-  `API_JWT_SECRET`, `METRICS_JWT_SECRET`); os valores não secretos (`POOLER_*`, `DB_POOL_SIZE`)
-  são literais no `environment:`.
+- **Segredos:** o serviço lê `supabase/.env` pelo próprio `env_file:` e o `command` exporta as variáveis
+  derivadas (`DATABASE_URL`, `API_JWT_SECRET`, `METRICS_JWT_SECRET`); os valores não secretos (`POOLER_*`,
+  `DB_POOL_SIZE`) são literais no `environment:`. O motivo está em "Segredos nos compose incluídos",
+  abaixo (verificado aqui: com `${VAR}` o pooler subiu com a senha do app e falhou a autenticação do
+  `supabase_admin`).
 - O `db` monta `volumes/db/_supabase.sql` (cria o banco `_supabase`, estado interno do Supavisor)
   e `volumes/db/pooler.sql` (schema `_supavisor`) em `migrations/97-` e `99-pooler.sql`. Como todo
   init, só rodam na **primeira** criação do volume `supabase-db-data`; em um volume já existente
@@ -91,6 +92,53 @@ O pooler (Supavisor, issue #19) está ligado:
   carga (`:5433`) continuam **direto** no `db`.
 - Modo `transaction` (`POOLER_POOL_MODE`): a conexão real só é presa durante a transação. O backend
   é compatível (auditoria em `Projeto/Backend/CLAUDE.md`, "Pooler").
+
+
+## Studio (issue #20)
+
+`Projeto/docker-compose.yml` inclui `supabase/docker-compose.studio.yml`, que sobe **só** `studio`
+(`supabase/studio`), `meta` (`supabase/postgres-meta`) e `kong` (gateway do Studio), na rede
+`gerenciador-net`. GoTrue, PostgREST, Realtime, Storage, imgproxy e edge functions não sobem: as rotas
+`/auth`, `/rest`, `/realtime`, `/storage` e `/functions` do `kong.yml` vendorizado apontam para eles e
+respondem erro de gateway se chamadas; o Kong só resolve o DNS na requisição, então isso não impede o start.
+
+- URL: `http://localhost:8000` (porta do Kong; o Studio e o `meta` não publicam porta). A porta é publicada só
+  em `127.0.0.1` (atrás dela há um console SQL de superuser). Login (basic auth):
+  `DASHBOARD_USERNAME` e `DASHBOARD_PASSWORD` do `Projeto/supabase/.env`.
+- Inspeção das tabelas do app (`eventcap`, `walletevent`, ...): Table Editor, schema `public`. Studio e `meta`
+  conectam ao banco `meu_banco` como `supabase_admin` (superuser; senha = `POSTGRES_PASSWORD` do Supabase),
+  e não como `postgres` (default do upstream): as tabelas do app pertencem à role `admin` e o `postgres`
+  não tem grant nelas. Também não usam o próprio `admin`: a senha dele mora no `Projeto/.env` e não deve
+  chegar aos serviços do Supabase.
+- Não há variável nova no `.env`. `SUPABASE_PUBLIC_URL` (`http://localhost:8000`) e `SUPABASE_PUBLISHABLE_KEY`/
+  `SUPABASE_SECRET_KEY` (vazias, mas presentes) já estão no `.env.example`.
+- Os snippets SQL do Studio ficam em `volumes/snippets/` (ignorado pelo git).
+
+### Segredos nos compose incluídos (pooler e Studio)
+
+A interpolação `${...}` de um arquivo incluído lê o `.env` da pasta dele (`Projeto/supabase/.env`) e, depois,
+o ambiente do compose principal (`Projeto/.env`, do backend), que **vence** em nomes iguais (testado, nos dois
+casos; `include.env_file` não muda isso e por isso não é usado). Só `POSTGRES_PASSWORD` e `JWT_SECRET` colidem:
+o backend os define com outro sentido, então interpolá-los entregaria os segredos do backend ao Supabase.
+Por isso, em todo serviço que usa esses dois, o `./.env` desta pasta entra pelo `env_file:` do **serviço**,
+que é literal, e `${...}` só aparece em nomes que não colidem.
+
+- **Pooler:** nenhum `${...}`; o `command` monta as variáveis derivadas a partir do `env_file`.
+- **`meta` e `studio`:** carregam o `.env` pelo `env_file` do serviço e um shim no `entrypoint` mapeia só
+  esses dois para o nome que a imagem espera (`POSTGRES_PASSWORD` -> `PG_META_DB_PASSWORD` no `meta`;
+  `JWT_SECRET` -> `AUTH_JWT_SECRET` no `studio`). O resto (`ANON_KEY`, `SERVICE_ROLE_KEY`, `PG_META_CRYPTO_KEY`,
+  `STUDIO_DEFAULT_*`) não colide e interpola com `${...}`.
+- **`kong`:** só usa nomes sem colisão (`ANON_KEY`, `SERVICE_ROLE_KEY`, `DASHBOARD_*`) e interpola normalmente;
+  assim não recebe `POSTGRES_PASSWORD`/`JWT_SECRET`.
+
+Regras ao mexer nesses arquivos:
+
+- nunca ponha `POSTGRES_PASSWORD`/`JWT_SECRET` em `environment:` nem em `${...}` (sobrescreveria o `env_file`
+  com o do backend);
+- o shim do Studio/`meta` repete o `entrypoint`/`cmd` originais da imagem (`docker-entrypoint.sh` + `node ...`);
+  ao trocar a versão da imagem, confira com `docker image inspect`;
+- `studio`, `meta` e o pooler recebem o `.env` inteiro (inclui `SECRET_KEY_BASE`, `VAULT_ENC_KEY`,
+  `DASHBOARD_PASSWORD`), já que `env_file` não filtra.
 
 ### Dimensionamento
 

@@ -3,8 +3,9 @@
 # `supavisor` do docker-compose do upstream (ver README.md): sem portas no host (o backend fala
 # pela rede gerenciador-net).
 #
-# NÃO use `${VAR}` aqui: a interpolação do compose lê o Projeto/.env do backend (que também tem
-# JWT_SECRET/POSTGRES_PASSWORD, com outro sentido) e ele vence o `env_file` do `include`. Os
+# NÃO use `${VAR}` aqui para JWT_SECRET/POSTGRES_PASSWORD: a interpolação do compose lê o
+# Projeto/.env do backend (que também os tem, com outro sentido) e ele vence o .env desta pasta
+# (ver README.md, "Segredos nos compose incluídos"). Os
 # SEGREDOS entram pelo `env_file:` do próprio serviço (supabase/.env) e o `command` monta as
 # variáveis derivadas (DATABASE_URL, API_JWT_SECRET...). Os valores NÃO secretos do pooler
 # (tenant, tamanhos de pool, modo) são literais versionados no `environment:`, que vence o

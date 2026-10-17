@@ -37,6 +37,14 @@ não há migração via ORM. Leia também o CLAUDE.md da raiz e o de `Backend/`.
   (peer). Use `-h localhost` (127.0.0.1 é trust) ou TCP de fora com senha. O healthcheck usa
   `pg_isready -U postgres -h localhost`.
 
+## Inspeção visual (Supabase Studio)
+
+Com a stack no ar, o Studio fica em `http://localhost:8000` (via Kong; login com `DASHBOARD_USERNAME` e
+`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`). Table Editor → schema `public` mostra `eventcap`,
+`walletevent` etc.; o SQL Editor roda consultas em `meu_banco`. Studio e `meta` conectam como
+`supabase_admin`, não como `admin`: é leitura/edição manual de apoio, o backend continua usando só JDBC.
+Detalhes e limites (sem GoTrue/PostgREST/Realtime/Storage/functions) em `Projeto/supabase/README.md`.
+
 ## Como os init-scripts rodam (imagem `supabase/postgres`)
 
 O `migrate.sh` da imagem roda `init-scripts/*.sql` como `postgres` e depois `migrations/*.sql`

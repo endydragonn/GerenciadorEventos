@@ -1,11 +1,14 @@
 name: gerenciador-eventos
 
-# Cada item abaixo é um arquivo de compose do Supabase, com segredos próprios em
-# supabase/.env. O arquivo incluído NÃO pode usar `${VAR}`: a interpolação lê o Projeto/.env do
-# backend (que também tem JWT_SECRET/POSTGRES_PASSWORD, mas com outro sentido) e ele vence o
-# `env_file` do `include`; por isso o serviço incluído usa `env_file:` próprio.
+# Cada item abaixo é um arquivo de compose do Supabase (pooler #19, Studio/meta/kong #20), com
+# segredos próprios em supabase/.env. Sem `env_file` no item: a interpolação `${VAR}` do arquivo
+# incluído lê o .env da pasta dele, mas o Projeto/.env do backend (que também tem
+# JWT_SECRET/POSTGRES_PASSWORD, com outro sentido) VENCE em nomes iguais. Por isso o serviço que
+# precisa desses dois segredos os lê pelo `env_file:` do próprio serviço (literal) e só usa `${VAR}`
+# em nomes que não colidem (ver supabase/README.md, "Segredos nos compose incluídos").
 include:
   - path: ./supabase/docker-compose.pooler.yml
+  - path: ./supabase/docker-compose.studio.yml
 
 services:
   # Postgres do Supabase (issue #18). Pré-requisito: Projeto/supabase/.env existente (ver
