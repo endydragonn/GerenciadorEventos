@@ -10,7 +10,7 @@ CORS_ALLOWED_ORIGINS=http://localhost:8088,http://localhost:3000
 
 ## Endpoints Cobertos pelo CorsConfig
 
-Superfície HTTP única sob `/bff/**` (issue #78) — os controllers `bff/Bff*Controller`:
+Superfície HTTP única sob `/bff/**` (issue #78) — os controllers `gateway/Bff*Controller`:
 
 ### 1. BffUserController - `/bff/users`
 - `POST /bff/users/request-verification`, `/verify-email`, `/resend-verification-code`

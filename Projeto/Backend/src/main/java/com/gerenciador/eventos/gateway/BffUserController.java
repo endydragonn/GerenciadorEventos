@@ -1,4 +1,4 @@
-package com.gerenciador.eventos.bff;
+package com.gerenciador.eventos.gateway;
 
 import java.sql.SQLException;
 import java.util.HashMap;
@@ -31,7 +31,6 @@ import com.gerenciador.eventos.identity.api.EmailVerificationApi;
 import com.gerenciador.eventos.identity.api.TokenApi;
 import com.gerenciador.eventos.identity.api.User;
 import com.gerenciador.eventos.identity.api.UserApi;
-import com.gerenciador.eventos.notification.api.EmailNotificationApi;
 
 /**
  * Camada BFF única para tudo relacionado a usuário/autenticação: CRUD, login, sessão
@@ -57,18 +56,15 @@ public class BffUserController {
     private final UserApi userService;
     private final TokenApi jwtUtil;
     private final EmailVerificationApi emailVerificationService;
-    private final EmailNotificationApi emailNotification;
 
     @Value("${RECAPTCHA_SECRET_KEY:}")
     private String recaptchaSecretKey;
 
     public BffUserController(UserApi userService, TokenApi jwtUtil,
-                              EmailVerificationApi emailVerificationService,
-                              EmailNotificationApi emailNotification) {
+                              EmailVerificationApi emailVerificationService) {
         this.userService = userService;
         this.jwtUtil = jwtUtil;
         this.emailVerificationService = emailVerificationService;
-        this.emailNotification = emailNotification;
     }
 
     // ======================= CRUD =======================
@@ -306,11 +302,7 @@ public class BffUserController {
     @PostMapping("/{id}/request-password-reset-mfa")
     public ResponseEntity<?> requestPasswordResetMfa(@PathVariable Long id) {
         try {
-            User user = userService.findById(id);
-
-            String mfaCode = userService.generatePasswordResetMfa(id);
-
-            emailNotification.sendPasswordResetMfa(user.getEmail(), user.getName(), mfaCode);
+            User user = userService.requestPasswordResetMfa(id);
 
             Map<String, String> response = new HashMap<>();
             response.put("message", "Código MFA enviado para " + user.getEmail());

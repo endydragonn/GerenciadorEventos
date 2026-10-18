@@ -2,7 +2,7 @@ package com.gerenciador.eventos.identity.api;
 
 /**
  * Interface pública do módulo {@code identity} para usuários (issue #23). Outros módulos e o
- * {@code bff} só chamam usuários por aqui, nunca por {@code UserService}/{@code UserRepository}.
+ * {@code gateway} só chamam usuários por aqui, nunca por {@code UserService}/{@code UserRepository}.
  */
 public interface UserApi {
 
@@ -23,7 +23,12 @@ public interface UserApi {
 
     boolean changePassword(Long userId, String oldPassword, String newPassword);
 
-    String generatePasswordResetMfa(Long userId);
+    /**
+     * Gera o código MFA de reset de senha e o envia por e-mail ao usuário (módulo {@code notification}).
+     * Lança {@link RuntimeException} se o usuário não existe ou o envio falha. Devolve o usuário (o gateway
+     * usa o e-mail na resposta).
+     */
+    User requestPasswordResetMfa(Long userId);
 
     boolean verifyPasswordResetMfaCode(Long userId, String mfaCode);
 
