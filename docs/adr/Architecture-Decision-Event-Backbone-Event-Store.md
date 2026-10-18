@@ -4,14 +4,14 @@ subproject:
 type: note
 tags: [architecture, decision, adr, cqrs, event-sourcing, kafka, redpanda, postgres]
 created: 2026-10-18
-status: decided-not-implemented
+status: infra-implementada-27
 ---
 
 # Decisão de Arquitetura — Backbone de eventos, event store e contrato do evento de domínio
 
-> **Status: decidido, NÃO implementado.** Fase 6 do roadmap (issue #26). Implementação nas
-> issues #27 (broker + infra de event store), #28 (`catalog`), #29 (lado wallet de `reservation`)
-> e #30 (checkpoint); a Rodada 2 (#31) mede o resultado. Resolve as questões em aberto "Kafka vs.
+> **Status: infra implementada na #27; #28–#30 pendentes.** Fase 6 do roadmap (issue #26). A #27 entregou o
+> broker, o event store, o relay, a base do consumer idempotente, o replay e os snapshots (sem domínio). Faltam as
+> issues #28 (`catalog`), #29 (lado wallet de `reservation`) e #30 (checkpoint); a Rodada 2 (#31) mede o resultado. Resolve as questões em aberto "Kafka vs.
 > Redpanda", "event store", "formato do evento" e "admissão: RabbitMQ vs. tópico" do
 > [Architecture-Decision-Microservices-Split](Architecture-Decision-Microservices-Split.md).
 
@@ -124,8 +124,17 @@ teste anterior depois do `TRUNCATE ... RESTART IDENTITY`. Depois:
 - `version > última + 1` → buraco: aplica em ordem as versões que faltam daquele stream **que
   existem no `event_store`** (já comitadas, pela ordem acima). Pela ordem por stream, a mensagem da v n+2 só existe
   depois que a n+1 comitou, então isso não deve faltar. Se ainda assim faltar, o consumer **não
-  avança** o checkpoint nem o offset e lança erro para o retry com backoff do `spring-kafka`.
+  avança** o checkpoint nem o offset e lança erro (`EventGapException`) para o retry com backoff do `spring-kafka`.
   Esgotado o retry, a mensagem vai para um dead-letter topic e o caso é logado.
+
+**Política de erro do consumer (definida na implementação da #27).** O dead-letter topic é só para o que reentregar
+não conserta; mandar um erro passageiro ao DLT depois de poucos segundos perderia, por exemplo, o último evento de um
+stream (nenhum evento seguinte o preencheria como "buraco"):
+- **erro transitório** (`SQLException`, conexão caída, pool esgotado, qualquer outro): backoff exponencial (começa em
+  1 s, teto de 30 s) **sem limite e sem DLT**, sem avançar o offset;
+- **buraco irrecuperável** (a versão anterior não existe nem no `event_store`): número limitado de retries a intervalo
+  fixo (5 × 1 s por padrão) e depois DLT;
+- **payload inválido** (JSON quebrado, sem os campos obrigatórios): DLT direto, sem retry.
 
 **Catch-up** (o "poller ou `pg_cron`" do aceite da #27) = esse consumer: o que ficou para trás vem do broker, e o buraco é preenchido relendo o `event_store`. Para começar do zero, há o replay abaixo. Não há poller nem `pg_cron` à parte.
 
@@ -242,10 +251,14 @@ e dead-letter nativos); o Kafka fica só com eventos de domínio.
   - relay e consumer ligados por flag (`events.relay.enabled`, `events.consumer.enabled`) só nos
     contextos que precisam;
   - um único `group.id`: o checkpoint atômico torna seguro um rebalance entre contextos em cache, que
-    só custa latência;
+    só custa latência. O `@KafkaListener` tem de usar `idIsGroup = false`: por padrão o `id` do listener vira o
+    `group.id` e o `spring.kafka.consumer.group-id` (logo o `EVENTS_CONSUMER_GROUP` com que o `run-tests.sh` separa o
+    group dos testes do group do backend vivo) não valeria;
   - helper "drenar e aguardar" com timeout no lugar das chamadas diretas a `refresh()`. Ele espera
-    primeiro a atribuição de partição (com `auto.offset.reset=latest`, um evento appendado antes
-    disso seria pulado);
+    primeiro a atribuição de partição. O `auto.offset.reset` é `earliest` (decidido na #27): um group novo
+    lê o log inteiro e não pula nada, e o checkpoint atômico e a conferência do `eventId` descartam o que
+    já foi aplicado ou sobrou de outro estado do banco. Com `latest`, um evento appendado antes da atribuição
+    seria pulado;
   - as mensagens que sobram de testes anteriores morrem na conferência do `eventId` contra o
     `event_store`, feita em toda mensagem.
 - **Pooler:** a auditoria de estado de sessão no `Backend/CLAUDE.md` ("nenhum advisory lock") passa a

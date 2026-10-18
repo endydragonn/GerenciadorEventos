@@ -7,6 +7,7 @@
 -- - eventpresenter (lista de apresentadores, PK composta)
 -- - Máquina de estados de walletevent (status)
 -- - Read model desnormalizado event_availability (refresh inline + cascata no DELETE)
+-- - event_store/event_outbox/event_snapshot/projection_checkpoint (concorrência otimista, outbox, checkpoint atômico)
 -- - TRUNCATE e revalidação pós-TRUNCATE
 
 \echo Iniciando testes minimos do banco...
@@ -27,6 +28,7 @@ BEGIN
   BEGIN
     -- Baseline limpa
     TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event_availability, public.event,
+                   public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                    public.walletevent, public.mywallet, public.users
       RESTART IDENTITY CASCADE;
 
@@ -195,6 +197,61 @@ BEGIN
     IF v_count <> 2 THEN RAISE EXCEPTION 'Falha: idempotency_key nao escopou a chave por usuario'; END IF;
     DELETE FROM public.idempotency_key WHERE idempotency_key = 'chave-teste';
 
+    -- 8c) event_store / event_outbox / event_snapshot / projection_checkpoint (issue #27):
+    --     concorrência otimista por (stream_type, stream_id, version) com ON CONFLICT DO NOTHING (rowcount 0),
+    --     outbox com PK, upsert do snapshot e avanço atômico do checkpoint (UPDATE ... WHERE version = v-1)
+    INSERT INTO public.event_store (event_id, stream_type, stream_id, version, event_type, payload, partition_key)
+    VALUES (gen_random_uuid(), 'teste.stream', 's1', 1, 'Teste', '{"a":1}', '1');
+    INSERT INTO public.event_store (event_id, stream_type, stream_id, version, event_type, payload, partition_key)
+    VALUES (gen_random_uuid(), 'teste.stream', 's1', 1, 'Teste', '{"a":2}', '1')
+    ON CONFLICT (stream_type, stream_id, version) DO NOTHING;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    IF v_rows <> 0 THEN RAISE EXCEPTION 'Falha: event_store aceitou a mesma version duas vezes (rowcount %)', v_rows; END IF;
+    BEGIN
+      INSERT INTO public.event_store (event_id, stream_type, stream_id, version, event_type, payload, partition_key)
+      VALUES (gen_random_uuid(), 'teste.stream', 's1', 1, 'Teste', '{}', '1');
+      RAISE EXCEPTION 'Falha: UNIQUE (stream_type, stream_id, version) nao barrou version repetida';
+    EXCEPTION WHEN unique_violation THEN NULL; END;
+    BEGIN
+      INSERT INTO public.event_store (event_id, stream_type, stream_id, version, event_type, payload, partition_key)
+      VALUES (gen_random_uuid(), 'teste.stream', 's1', 0, 'Teste', '{}', '1');
+      RAISE EXCEPTION 'Falha: CHECK version >= 1 nao barrou version 0';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+    INSERT INTO public.event_store (event_id, stream_type, stream_id, version, event_type, payload, partition_key)
+    VALUES (gen_random_uuid(), 'teste.stream', 's1', 2, 'Teste', '{}', '1');
+    SELECT count(DISTINCT global_position) INTO v_count FROM public.event_store;
+    IF v_count <> 2 THEN RAISE EXCEPTION 'Falha: global_position nao e unico por evento (%)', v_count; END IF;
+
+    INSERT INTO public.event_outbox (global_position) SELECT global_position FROM public.event_store;
+    BEGIN
+      INSERT INTO public.event_outbox (global_position) SELECT min(global_position) FROM public.event_store;
+      RAISE EXCEPTION 'Falha: event_outbox aceitou global_position duplicada';
+    EXCEPTION WHEN unique_violation THEN NULL; END;
+
+    INSERT INTO public.event_snapshot (stream_type, stream_id, version, state) VALUES ('teste.stream', 's1', 2, '{"n":2}')
+    ON CONFLICT (stream_type, stream_id) DO UPDATE SET version = EXCLUDED.version, state = EXCLUDED.state;
+    INSERT INTO public.event_snapshot (stream_type, stream_id, version, state) VALUES ('teste.stream', 's1', 4, '{"n":4}')
+    ON CONFLICT (stream_type, stream_id) DO UPDATE SET version = EXCLUDED.version, state = EXCLUDED.state;
+    SELECT version INTO v_count FROM public.event_snapshot WHERE stream_type = 'teste.stream' AND stream_id = 's1';
+    IF v_count <> 4 THEN RAISE EXCEPTION 'Falha: event_snapshot deveria guardar so o ultimo snapshot (version %)', v_count; END IF;
+
+    INSERT INTO public.projection_checkpoint (projecao, stream_type, stream_id, version)
+    VALUES ('p', 'teste.stream', 's1', 1) ON CONFLICT DO NOTHING;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    IF v_rows <> 1 THEN RAISE EXCEPTION 'Falha: checkpoint da v1 deveria inserir (rowcount %)', v_rows; END IF;
+    INSERT INTO public.projection_checkpoint (projecao, stream_type, stream_id, version)
+    VALUES ('p', 'teste.stream', 's1', 1) ON CONFLICT DO NOTHING;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    IF v_rows <> 0 THEN RAISE EXCEPTION 'Falha: checkpoint da v1 reaplicada deveria dar rowcount 0 (%)', v_rows; END IF;
+    UPDATE public.projection_checkpoint SET version = 2
+     WHERE projecao = 'p' AND stream_type = 'teste.stream' AND stream_id = 's1' AND version = 1;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    IF v_rows <> 1 THEN RAISE EXCEPTION 'Falha: avanco v1 -> v2 do checkpoint deveria afetar 1 linha (%)', v_rows; END IF;
+    UPDATE public.projection_checkpoint SET version = 2
+     WHERE projecao = 'p' AND stream_type = 'teste.stream' AND stream_id = 's1' AND version = 1;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    IF v_rows <> 0 THEN RAISE EXCEPTION 'Falha: reavanco do checkpoint deveria afetar 0 linhas (%)', v_rows; END IF;
+
     -- 9) ON DELETE CASCADE de event -> eventcap / eventpresenter
     DELETE FROM public.walletevent WHERE event_id = v_event1;
     DELETE FROM public.event WHERE event_id = v_event1;
@@ -205,6 +262,7 @@ BEGIN
 
     -- 10) TRUNCATE e revalidacao do trigger
     TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event_availability, public.event,
+                   public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                    public.walletevent, public.mywallet, public.users
       RESTART IDENTITY CASCADE;
 
@@ -218,6 +276,7 @@ BEGIN
     IF v_count <> 1 THEN RAISE EXCEPTION 'trigger nao criou mywallet apos TRUNCATE'; END IF;
 
     TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event_availability, public.event,
+                   public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                    public.walletevent, public.mywallet, public.users
       RESTART IDENTITY CASCADE;
   EXCEPTION WHEN OTHERS THEN
@@ -226,6 +285,7 @@ BEGIN
 
   -- Cleanup incondicional
   TRUNCATE TABLE public.eventpresenter, public.eventcap, public.event_availability, public.event,
+                   public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                  public.walletevent, public.mywallet, public.users
     RESTART IDENTITY CASCADE;
 

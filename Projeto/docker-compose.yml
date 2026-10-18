@@ -48,6 +48,32 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  # Backbone Kafka-compatível (issue #27, ADR "Event-Backbone-Event-Store"). Um nó, modo dev, memória
+  # limitada (a máquina já roda Supabase). Só o listener interno redpanda:9092 (sem porta no host);
+  # para debug: docker exec gerenciador-redpanda rpk topic list. Tópicos nascem na primeira publicação
+  # (o modo dev-container liga auto_create_topics_enabled) com 1 partição. Dados em volume nomeado (descartável).
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.4
+    container_name: gerenciador-redpanda
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --kafka-addr=internal://0.0.0.0:9092
+      - --advertise-kafka-addr=internal://redpanda:9092
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
   backend:
     build:
       context: ./Backend
@@ -70,10 +96,15 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       JWT_SECRET: ${JWT_SECRET}
+      # Backbone de eventos (issue #27): o broker interno do compose. Os flags do relay/consumer
+      # (EVENTS_RELAY_ENABLED / EVENTS_CONSUMER_ENABLED) ficam desligados até #28/#29 appendarem eventos.
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
     ports:
       - "8081:8081"
     depends_on:
       supabase-pooler:
+        condition: service_healthy
+      redpanda:
         condition: service_healthy
     restart: unless-stopped
 
@@ -95,6 +126,8 @@ volumes:
   supabase-db-data:
     driver: local
   db-config:
+    driver: local
+  redpanda-data:
     driver: local
 
 networks:

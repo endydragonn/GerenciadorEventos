@@ -70,6 +70,12 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-mail</artifactId>
         </dependency>
+        <!-- Kafka-compatível (Redpanda): relay do outbox e base do consumer idempotente (issue #27).
+             Versão gerenciada pelo Spring Boot. -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
         <!-- ArchUnit: testes de fronteira de camada (issue #83) -->
         <dependency>
             <groupId>com.tngtech.archunit</groupId>

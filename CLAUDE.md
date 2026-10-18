@@ -90,9 +90,12 @@ commitar ou registrar em log.
   (frontend :8088, backend :8081, Postgres host :5433, Supabase Studio :8000 — login com
   `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`; sobe junto `meta` e `kong`).
   O backend em Docker fala com o Postgres pelo `supabase-pooler` (Supavisor, sem porta no host);
-  os testes e a porta 5433 vão direto no `db`.
+  os testes e a porta 5433 vão direto no `db`. Sobe junto o `redpanda` (broker Kafka-compatível da Fase 6, issue #27;
+  só `redpanda:9092` na rede `gerenciador-net`, sem porta no host) e o backend espera ele ficar `healthy`.
 - Antes de considerar uma tarefa de backend pronta: `Projeto/Backend/run-tests.sh`
-  (precisa do container `db` no ar — os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`).
+  (precisa dos containers `db` **e** `redpanda` no ar — `docker compose -f Projeto/docker-compose.yml up -d db redpanda`;
+  os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`, e Redpanda real; o script aborta com mensagem
+  clara se faltar um deles).
 - Relate o resultado real dos testes; se algo falhou ou foi pulado, diga.
 
 ## Documentação de arquitetura (vault Obsidian)
@@ -121,8 +124,13 @@ mesmo processo, deploy e schema `public`:
 
 Detalhes no `Projeto/Backend/CLAUDE.md`.
 
+**Implementado (Fase 6, issue #27, 2026-10-18):** só a infra do backbone de eventos, ainda sem domínio — broker
+Redpanda no compose e, em `shared/events`, `event_store` imutável + `event_outbox` + relay para o broker, base do
+consumer idempotente (checkpoint atômico), replay em schema-sombra e snapshots. `catalog` e `reservation` ainda não
+appendam eventos (#28/#29).
+
 **Decidido, não implementado:** extrair os módulos como microsserviços (Opção B — `gateway`, `identity`,
 `catalog`, `reservation`, `notification`, `admission`; a Fase 5 só os separou dentro do monólito); CQRS + Event Sourcing em `catalog` e
-no lado wallet de `reservation` (`eventcap` fica relacional/CAS); backbone Kafka-compatível;
+no lado wallet de `reservation` (`eventcap` fica relacional/CAS);
 camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
 `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.

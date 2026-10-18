@@ -84,7 +84,8 @@ como `supabase_admin` (um `psql` por arquivo, ordem lexical, no `POSTGRES_DB`). 
 | `08-pending-verifications.sql` | tabela + funções/trigger de limpeza de códigos expirados |
 | `09-event-availability.sql` | tabela `event_availability` — read model defasado de vagas (não é fonte de verdade) |
 | `10-idempotency-key.sql` | tabela `idempotency_key` — chaves de idempotência do `POST /bff/event-wallets` (sem FK) |
-| `99-tests.sql` | suíte de sanidade em `DO $$ ... $$` (trigger, CAS, CHECK, N:N, cascata, read model, TRUNCATE) |
+| `11-event-store.sql` | `event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint` — infra de event sourcing da Fase 6 (#27), sem FK |
+| `99-tests.sql` | suíte de sanidade em `DO $$ ... $$` (trigger, CAS, CHECK, N:N, cascata, read model, event store/outbox/checkpoint, TRUNCATE) |
 
 `db/migrations/` guarda scripts de migração idempotentes para bancos já existentes
 (ex.: `20260901-eventcap-isolation.sql`), aplicáveis a quente via `psql` sem recriar o volume.
@@ -96,7 +97,7 @@ e, ponta a ponta, pelo harness `migrations/verify-20260901-migration.sh`.
 
 `migrations/verify-20260901-migration.sh` (harness da issue #6, cross-platform como
 `run-tests.sh`): cria um banco **descartável** `eventcap_mig_check` no container, aplica os
-init-scripts `01`–`10`, roda `99-tests.sql`, depois roda o harness SQL
+init-scripts `01`–`11`, roda `99-tests.sql`, depois roda o harness SQL
 `verify-20260901-migration.sql` — que reconstrói o schema ANTIGO **com dados**, aplica a
 migração **2×** (idempotência) e checa colunas removidas/criadas, constraints, índice parcial,
 conversão de `quant` (limitado / esgotado-piso-0 / ilimitado) e **preservação dos dados**
@@ -170,6 +171,28 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   colunas da PK ainda forem as antigas) e `db/migrations/20261020-idempotency-key-created-at-index.sql` (índice
   de `created_at`, `CREATE INDEX IF NOT EXISTS`; independe da `20261019-...`; pré-requisito: a tabela existir). Coberta por `SchemaValidationTest`,
   `IdempotencyKeyTest`, `IdempotencyRetentionTest` e o passo 8b do `99-tests.sql`.
+
+- **Event sourcing (issue #27; ADR "Event-Backbone-Event-Store")** — infra genérica, sem domínio, sem FK (as #28/#29
+  só appendam eventos com o seu `stream_type`). Código em `Backend/.../shared/events` (ver `Backend/CLAUDE.md`,
+  "Event store e backbone de eventos"). Migração a quente: `db/migrations/20261021-event-store.sql` (idempotente; roda como
+  `supabase_admin`, por isso o `OWNER TO admin` explícito). Cobertas por `SchemaValidationTest`, pelos testes de
+  `shared/events` e pelo passo 8c do `99-tests.sql`.
+  - **`event_store`** — log **imutável** (nenhuma linha é atualizada depois do append) e fonte de verdade dos streams.
+    PK `global_position` (`bigint GENERATED ALWAYS AS IDENTITY`: ordem de **alocação**, não de commit, então não serve de
+    cursor), `UNIQUE (stream_type, stream_id, version)` (concorrência otimista: `INSERT ... ON CONFLICT DO NOTHING`,
+    rowcount 0 = outra transação gravou a versão), `CHECK (version >= 1)`. Colunas do envelope: `event_id` (uuid),
+    `stream_type`, `stream_id`, `version`, `event_type`, `schema_version`, `occurred_at` (`timestamptz`, default
+    `clock_timestamp()`: instante do append, não o início da transação), `payload`/`metadata` (`jsonb`; **sem dado
+    pessoal**: a tabela é imutável) e `partition_key` (chave da mensagem no tópico: o id do evento de domínio).
+  - **`event_outbox`** — só `global_position` (PK), sem FK de propósito. Inserida na mesma transação do append e **apagada**
+    pelo relay depois do ack do broker. `INSERT`+`DELETE` contínuo = tuplas mortas, por isso
+    `autovacuum_vacuum_scale_factor = 0.01` e `autovacuum_vacuum_threshold = 100`.
+  - **`event_snapshot`** — PK `(stream_type, stream_id)` (um snapshot por stream, o mais novo vence), `version`, `state
+    jsonb`. **Cache descartável**: mudou o formato do estado → apaga e reconstrói.
+  - **`projection_checkpoint`** — PK `(projecao, stream_type, stream_id)`, `version` = última aplicada por projeção; o avanço
+    atômico (`UPDATE ... WHERE version = v-1`, `INSERT ... ON CONFLICT DO NOTHING` na v1) é a idempotência do consumer.
+  - O replay usa um **schema-sombra** criado e derrubado pelo próprio código (nada de `TEMP TABLE`), numa transação
+    `REPEATABLE READ`; fica fora do `SchemaValidationTest` e do `GlobalDbTruncator`.
 
 ## Regras ao alterar o schema
 

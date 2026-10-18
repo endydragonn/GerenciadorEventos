@@ -6,8 +6,9 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
 ## Rodar
 
 - Via Docker (recomendado): `docker compose -f Projeto/docker-compose.yml up -d --build backend`
-  — porta `8081`, container `gerenciador-backend`. Sobe junto `db` e `supabase-pooler`; no Docker o
-  backend fala **pelo pooler** (Supavisor), ver "Pooler" em Persistência.
+  — porta `8081`, container `gerenciador-backend`. Sobe junto `db`, `supabase-pooler` e `redpanda` (o
+  backend espera o broker ficar `healthy`); no Docker o backend fala **pelo pooler** (Supavisor), ver
+  "Pooler" em Persistência, e com o broker em `redpanda:9092` (`SPRING_KAFKA_BOOTSTRAP_SERVERS`).
 - Local: `cd Projeto/Backend && mvn spring-boot:run` — precisa de um Postgres em
   `localhost:5433`. `application.properties` tem defaults de dev para as vars do `.env`.
 - Entrypoint do jar: `com.gerenciador.eventos.Main` (fixado no `pom.xml` e no `Dockerfile`).
@@ -19,7 +20,10 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
 (URL direta `db:5432`, **sem passar pelo pooler**),
 e roda `mvn clean test` (antes disso apaga `target/surefire-reports` sozinho, então o total do
 resumo reflete só os testes desta rodada — não precisa limpar na mão).
-**Exige o container `db` no ar**: os testes batem num Postgres real.
+**Exige os containers `db` e `redpanda` no ar** (`docker compose -f Projeto/docker-compose.yml up -d db redpanda`;
+o script aborta com mensagem clara se faltar um): os testes batem num Postgres e num Redpanda reais. O script
+passa `SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092` e `EVENTS_CONSUMER_GROUP=gerenciador-eventos-test` ao container
+de teste (group próprio: os testes nunca entram no group do backend vivo que consome do mesmo Redpanda).
 
 - `src/test/.../SchemaValidationTest` valida o schema real contra o esperado.
 - `TestSupport/GlobalDbTruncator` dá `TRUNCATE` (início/fim da suíte) em **todas** as tabelas dos
@@ -37,6 +41,21 @@ resumo reflete só os testes desta rodada — não precisa limpar na mão).
 - `IdempotencyKeyTest` (issue #24; escopo por usuário na #129): repetição com a mesma `Idempotency-Key` não decrementa `eventcap` de novo
   (sequencial, após `confirm`, e 8 threads concorrentes com a mesma chave), conflito do mesmo usuário com outro evento, mesma chave em usuários diferentes sem colisão,
   falha não deixa chave. O braço `naive` tem o seu em `EventWalletNaivePathTest`; o header/422 em `HttpContractTest`.
+- Backbone de eventos (issue #27, `src/test/.../shared/events`, Postgres e Redpanda reais; ver "Event store e backbone
+  de eventos"): `EventStoreTest` (append com conflito otimista, outbox na transação do chamador com rollback, leitura de
+  stream), `OutboxRelayTest` (publica no tópico na ordem por stream com chave e header `publishedAt`, apaga o outbox,
+  falha de envio = rollback, dois relays concorrentes: só um pega o lock), `IdempotentConsumerTest` (checkpoint atômico:
+  duplicata, `eventId` divergente, buraco preenchido do `event_store`, buraco que falta = lança, 8 aplicadores
+  concorrentes), `EventReplayTest` (**teste de replay**: N eventos, projeção reconstruída do zero na sombra == viva;
+  snapshot + cauda == replay completo; as páginas do replay leem o mesmo snapshot, `REPEATABLE READ`), `EventBackboneTest` (ponta a ponta com relay `@Scheduled` + `@KafkaListener` +
+  dead-letter topic; política de erro: SQLException transitória é reentregue sem limite e nunca vai ao DLT, buraco
+  irrecuperável e JSON inválido vão ao DLT; o listener de teste usa `idIsGroup = false` e um teste confere o `group.id`).
+  Os que precisam de relay/consumer ligam a flag por `@SpringBootTest(properties=...)`;
+  `EventBackboneTest` usa `@DirtiesContext` para o relay de 50 ms não sobrar no cache de contextos e roubar o outbox
+  dos outros testes. Projeção de teste: `TestSomatorio` (tabela `public.test_somatorio`, criada pelos testes e
+  derrubada no `@AfterAll` de cada classe: não é schema do app e não sobra no banco compartilhado; nenhum outro teste
+  depende dela). O `GlobalDbTruncator` trunca **todas** as tabelas de `public` descobertas por catálogo, `test_somatorio`
+  inclusive quando existir; ela só não existe nessa hora. O `SchemaValidationTest` não a menciona. Helpers em `TestSupport/EventsTestSupport` (espera com timeout, leitura de tópico).
 - `HttpContractTest` (`webEnvironment = RANDOM_PORT` + `TestRestTemplate`) fixa path + método
   + forma de request/response de cada endpoint `/bff/**` que o Flutter consome — bate no
   HTTP real (inclusive `SecurityConfig`), não MockMvc. `JavaMailSender` é mockado
@@ -112,6 +131,8 @@ reservation/     EventWalletService, MyWalletService, ReadModelRefreshService, R
 notification/    EmailNotificationService, EmailTemplates (envio de e-mail / JavaMailSender)
   api/           EmailNotificationApi
 shared/          DatabaseConnection, CorsConfig, SchedulingConfig (infra sem domínio)
+  events/        infra de event sourcing sem domínio (#27): EventEnvelope, NovoEvento, EventStore, OutboxRelay,
+                 IdempotentConsumer + Projection, EventReplay, EventSnapshots/Snapshot, EventsKafkaConfig
 gateway/         BffUserController, BffEventController, BffEventWalletController, BffMyWalletController,
                  BffSeedController (@RestController, paths /bff/**) + SeedData; roteia e agrega, sem domínio
 ```
@@ -187,7 +208,8 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
   Para evento ilimitado (`capacity = -1`) `tryReserve`/`release` são no-op e
   `EventWalletService` trata a reserva como sempre permitida.
 - Nomes de tabela em minúsculas: `users`, `event`, `eventcap`, `eventpresenter`, `mywallet`,
-  `walletevent`, `pending_verifications`, `event_availability`, `idempotency_key`.
+  `walletevent`, `pending_verifications`, `event_availability`, `idempotency_key`, `event_store`,
+  `event_outbox`, `event_snapshot`, `projection_checkpoint`.
 
 ### Pooler (Supavisor, transaction mode) — issue #19
 
@@ -203,10 +225,15 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
   prepared statement nomeado no servidor depois de 5 execuções, e em transaction pooling a próxima
   execução cairia em outra conexão do Postgres (erro típico "prepared statement ... does not exist").
   Com `0`, tudo vai pelo protocolo estendido não nomeado, que o Supavisor aceita.
-- **Compatível com transaction pooling porque** (auditoria de `src/main`, 2026-10-16): nenhum
-  `SET`/`SET LOCAL`/`SET ROLE`/`set_config`, `search_path`, advisory lock (`pg_advisory*`),
+- **Compatível com transaction pooling porque** (auditoria de `src/main`, 2026-10-16; atualizada na #27): nenhum
+  `SET`/`SET LOCAL`/`SET ROLE`/`set_config`, `search_path`, advisory lock **de sessão** (`pg_advisory_lock`...; a
+  única exceção é o `pg_try_advisory_xact_lock` do `OutboxRelay`, **permitido porque é de transação**: o Postgres o
+  solta sozinho no commit/rollback, na mesma conexão que o Supavisor segura até lá),
   `LISTEN`/`NOTIFY`, `TEMP TABLE`, `PREPARE`/`DECLARE CURSOR` nem `DISCARD`. Os 15 `SET` do código
-  são todos de `UPDATE ... SET` / `ON CONFLICT DO UPDATE SET`. Não há `connectionInitSql` no Hikari
+  são todos de `UPDATE ... SET` / `ON CONFLICT DO UPDATE SET`; a única outra exceção (#27) é o
+  `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ` do `EventReplay`, que vale **só para a transação** em que é o
+  primeiro statement (não é estado de sessão, some no commit/rollback). Fica proibido
+  `conn.setTransactionIsolation(...)`: no PgJDBC ele grava estado de sessão. Não há `connectionInitSql` no Hikari
   nem `setReadOnly`/`setCatalog`/`setSchema`/`setTransactionIsolation`. O único estado de conexão
   mexido é `setAutoCommit(false)` → `commit`/`rollback` → `setAutoCommit(true)` (em
   `EventWalletService`, `ReservationExpiryService`, `EventRepository`, `EventPresenterRepository`),
@@ -231,6 +258,65 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
 - Os logs do Supavisor trazem `User requested SSL connection but no downstream cert/key found`:
   o PgJDBC tenta SSL (`sslmode=prefer`), o pooler (sem cert) recusa e ele cai para texto puro, na
   rede interna do Docker. É inofensivo.
+
+## Event store e backbone de eventos — issue #27 (ADR "Event-Backbone-Event-Store")
+
+Infra genérica de CQRS + Event Sourcing em `shared/events` (sem domínio; a #28 converte `catalog` e a #29 o lado
+wallet de `reservation`, só appendando eventos com o seu `streamType`). Broker: **Redpanda** (container
+`gerenciador-redpanda`, `redpanda:9092` na rede `gerenciador-net`, sem porta no host; imagem com tag fixa no compose;
+`docker exec gerenciador-redpanda rpk topic list` para inspecionar). Cliente: `spring-kafka` (versão do Boot).
+Tudo em `public` por ora (schema por serviço é a Fase 7).
+
+- **`EventStore.append(Connection, NovoEvento)`**: um único statement (`INSERT ... ON CONFLICT (stream_type, stream_id,
+  version) DO NOTHING` + `INSERT` em `event_outbox` num CTE). Devolve `Optional<EventEnvelope>`: **vazio = a versão já
+  existe** (conflito otimista; sem `unique_violation`, então a transação do chamador segue viva e ele decide: rollback e a
+  resposta da corrida, ou repetir o command). Usa a `Connection` do chamador: evento e outbox só valem com o commit dele.
+  `readStream(conn, tipo, id, deVersao)` lê o stream em ordem de `version`. A `version` esperada vem do estado lido na
+  mesma transação (na reserva, do `UPDATE walletevent ... RETURNING version`). `partitionKey` (coluna `partition_key`) é
+  a chave da mensagem: o id do evento DE DOMÍNIO, passado pelo chamador. **Sem dado pessoal no `payload`.**
+- **`OutboxRelay`** (`events.relay.enabled`): `@Scheduled` a cada `events.relay.interval-ms` (50), drena até esvaziar; uma
+  transação por lote (`events.relay.batch-size`, 200): `pg_try_advisory_xact_lock` → lê `event_outbox ⋈ event_store ORDER
+  BY global_position LIMIT n` (sem `SKIP LOCKED`) → envia tudo e espera os acks → apaga o lote → commit. Falha de envio =
+  rollback, o lote volta no tick seguinte (at-least-once). Tópico = `streamType`; chave = `partition_key`; header
+  `publishedAt`; corpo = o envelope em JSON. Producer idempotente, `acks=all`, `max.block.ms`/`delivery.timeout.ms` curtos.
+  O relay roda no scheduler do Spring (`spring.task.scheduling.pool.size`, 3 desde a #130, ver "Config"): o loop
+  `drain()` ocupa uma das threads enquanto houver outbox; ao ligar o relay (#28/#29), conferir se 3 threads bastam
+  para `ReadModelRefreshService`, `ReservationExpiryService` e `IdempotencyKeyRetentionService` junto com a medição da #31.
+- **`IdempotentConsumer`** (`events.consumer.enabled`): o listener de cada projeção chama
+  `onMessage(Projection, json, ack)`. Por mensagem, numa transação (checkpoint + projeção) e com ack manual depois do
+  commit: confere o `eventId` no `event_store` (inexistente/diferente = descarta), descarta `version <= checkpoint`, relê
+  as versões que faltam (`checkpoint+1 .. version`) e avança o checkpoint por CAS (`UPDATE projection_checkpoint ... WHERE
+  version = v-1`; `INSERT ... ON CONFLICT DO NOTHING` na v1) aplicando só se o rowcount for 1. `Projection` = `name()`, `tables()`,
+  `apply(conn, evento, schema)`. **Política de erro** (`EventsKafkaConfig`; o DLT é só para o que reentregar não
+  conserta): (1) erro **transitório** (`SQLException`, conexão caída, pool esgotado — qualquer outro): backoff exponencial
+  (`events.consumer.retry.interval-ms`, dobra até 30 s) **sem limite e sem DLT**, sem avançar o offset (mandar ao DLT
+  perderia, por exemplo, o último evento de um stream); (2) **buraco irrecuperável** (`EventGapException`: a versão
+  anterior não existe nem no `event_store`; não avança nada): `events.consumer.retry.max-attempts` retries a cada
+  `interval-ms` e depois `<tópico>.DLT`; (3) **payload inválido** (`InvalidEventMessageException`: JSON quebrado/sem campos
+  obrigatórios): DLT direto, sem retry.
+- **`EventReplay`**: `rebuild(projecao, streamType, schema)` cria o schema-sombra (`CREATE TABLE ... (LIKE public.t
+  INCLUDING ALL)`), reaplica todos os eventos do tipo por `global_position` e `divergentTables` compara com a viva
+  (`EXCEPT ALL` nos dois sentidos); `drop(schema)` derruba. Roda em **`REPEATABLE READ`** (`SET TRANSACTION` como primeiro
+  statement): `global_position` é ordem de alocação e paginar por ela em READ COMMITTED (snapshot novo a cada página) pularia o
+  evento que comita no meio; assim todas as páginas leem o mesmo snapshot (a sombra = o log no início da leitura).
+  Notas para a #29: a comparação é `SELECT *` e a projeção de disponibilidade terá `applied_at = clock_timestamp()` (difere
+  entre a viva e a sombra) — será preciso informar, por projeção, as colunas comparáveis; `LIKE ... INCLUDING ALL` **não**
+  copia FK nem trigger, e coluna `serial` da cópia aponta para a sequence da tabela viva. Sem `TEMP TABLE`; o schema-sombra fica fora do
+  `SchemaValidationTest` e do `GlobalDbTruncator` (que só olham `test.db.schemas`, default `public`).
+- **`EventSnapshots`**: `due(version)` (a cada `events.snapshot.every`, 100), `save`/`load` (um snapshot por stream, o mais
+  novo vence). **Cache descartável**: mudou o formato do estado → apaga `event_snapshot` e reconstrói pelo log.
+- **`global_position` não é cursor**: é a ordem de alocação, não a de commit. Ninguém lê o `event_store` "a partir da
+  posição X" para acompanhar novidades (o acompanhamento é pelo broker; o replay é completo).
+- **Latência/medição (para a #31)**: cada evento custa +1 `INSERT` em `event_store` e +1 em `event_outbox` na transação
+  do request (um statement só) e +1 `DELETE` assíncrono no relay; o `INSERT`+`DELETE` contínuo gera tuplas mortas (por
+  isso o autovacuum agressivo em `event_outbox`). `occurred_at` (append) → `publishedAt` (relay) → `applied_at`
+  (consumer, #29) delimitam o lag. **Nota para a #31:** o Redpanda sobe com `--mode=dev-container`, que desliga o fsync
+  (`--unsafe-bypass-fsync`): a latência do relay medida aqui é **otimista** em relação a um broker com disco durável.
+- **Tópicos** nascem na primeira publicação (o modo dev-container do Redpanda liga `auto_create_topics_enabled`), com 1
+  partição. O listener de teste do `EventBackboneTest` mostra o padrão do `@KafkaListener` para a #28/#29:
+  **`idIsGroup = false`** (por padrão o `id` do listener vira o `group.id` e o `spring.kafka.consumer.group-id` — logo o
+  `EVENTS_CONSUMER_GROUP` do `run-tests.sh` — não valeria). Um único `group.id` por ambiente; `auto.offset.reset=earliest`
+  fixo (um group novo não pula nada; o checkpoint por stream e a conferência do `eventId` descartam o que já foi aplicado).
 
 ## Padrão dos Services
 
@@ -417,6 +503,12 @@ chamável direto (os testes o invocam sem esperar o timer).
   **1**, compartilhada por `ReadModelRefreshService`, `ReservationExpiryService` e
   `IdempotencyKeyRetentionService`: um purge em massa seguraria o refresh e falsearia o lag do braço `naive`).
   Valores reais vêm de `Projeto/.env` — não commitar, não imprimir.
+- Backbone de eventos (issue #27; ver "Event store e backbone de eventos"), todos com default de dev:
+  `SPRING_KAFKA_BOOTSTRAP_SERVERS` (default `localhost:9092`; `redpanda:9092` no compose e no `run-tests.sh`),
+  `EVENTS_RELAY_ENABLED` (default `false`), `EVENTS_RELAY_INTERVAL_MS` (`50`), `EVENTS_RELAY_BATCH_SIZE` (`200`),
+  `EVENTS_CONSUMER_ENABLED` (default `false`), `EVENTS_CONSUMER_GROUP` (`gerenciador-eventos`),
+  `EVENTS_CONSUMER_RETRY_INTERVAL_MS` (`1000`; base do backoff transitório e intervalo do retry do buraco),
+  `EVENTS_CONSUMER_RETRY_MAX_ATTEMPTS` (`5`; só para o buraco irrecuperável), `EVENTS_SNAPSHOT_EVERY` (`100`). Sem segredo novo. As flags ficam desligadas até a #28/#29 appendarem eventos.
 - Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto
   (`management.endpoints.web.exposure.include=health`); `GET /actuator/health` público devolve
   `{"status":"UP"}` (depende do Postgres). `management.health.mail.enabled=false` — o health do

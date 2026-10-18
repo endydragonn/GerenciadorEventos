@@ -10,7 +10,7 @@
 --       (ANTIGO: ingressos vendidos  ->  NOVO: vagas disponíveis = capacity - vendidos),
 --     inclusive esgotamento (piso 0, capacity preservada) e evento ilimitado (-1 / -1).
 --
--- Executar SEMPRE num banco DESCARTÁVEL já inicializado pelos init-scripts 01–10
+-- Executar SEMPRE num banco DESCARTÁVEL já inicializado pelos init-scripts 01–11
 -- (schema NOVO) — NUNCA em `meu_banco`. O reshape abaixo é destrutivo.
 --
 -- Uso (ver verify-20260901-migration.sh, que monta o banco descartável):
