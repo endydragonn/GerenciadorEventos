@@ -33,6 +33,7 @@ resumo reflete só os testes desta rodada — não precisa limpar na mão).
   container com env fixo (`--env-file ../.env`): para mudar `test.db.schemas` por ali, passe
   `-e TEST_DB_SCHEMAS=...` no `docker run` do script. Coberto por `TestSchemasTest`.
 - `EventTest`, `UserTest`, `EventWalletTest`, `MyWalletTest` exercitam services + repositories.
+- `IdempotencyRetentionTest` (issue #130): o job apaga chave com `created_at` além do prazo (envelhecida via `UPDATE`) e preserva a recente; repetição com chave ainda retida segue idempotente; apaga em lotes (2500 linhas; o lote de 1000 devolve exatamente 1000); o scheduler tem mais de 1 thread.
 - `IdempotencyKeyTest` (issue #24; escopo por usuário na #129): repetição com a mesma `Idempotency-Key` não decrementa `eventcap` de novo
   (sequencial, após `confirm`, e 8 threads concorrentes com a mesma chave), conflito do mesmo usuário com outro evento, mesma chave em usuários diferentes sem colisão,
   falha não deixa chave. O braço `naive` tem o seu em `EventWalletNaivePathTest`; o header/422 em `HttpContractTest`.
@@ -103,6 +104,7 @@ identity/        UserService, UserRepository, EmailVerificationService, PendingV
 catalog/         EventService, EventRepository, EventPresenterRepository
   api/           Event, EventApi
 reservation/     EventWalletService, MyWalletService, ReadModelRefreshService, ReservationExpiryService,
+                 IdempotencyKeyRetentionService (job de retenção, #130),
                  EventCapRepository, EventWalletRepository, MyWalletRepository, EventAvailabilityRepository,
                  IdempotencyKeyRepository, CapacityReserver + ReservationWriter (interfaces internas, #24)
   api/           EventCap, EventWallet, MyWallet, EventCapacityApi, EventWalletApi, MyWalletApi,
@@ -351,16 +353,23 @@ seguido de `confirm`).
 - **Braço `naive`**: a idempotência vale nos dois caminhos (a reivindicação da chave está na mesma
   transação curta; só o `tryReserve` é pulado). Na repetição sequencial a checagem do read model
   ("Evento lotado") falha como o "Vínculo já existente" e cai no mesmo desvio para o resultado salvo.
-- **Retenção**: **sem limpeza por ora** — uma linha por reserva bem-sucedida, nunca apagada (e sem FK:
-  não some com o evento). Sob carga a tabela cresce sem limite; follow-up: apagar por `created_at` num job.
+- **Retenção** (issue #130): `reservation/IdempotencyKeyRetentionService` — `@Scheduled` (a cada
+  `idempotency.retention.scan.ms`, default 10 min, env `IDEMPOTENCY_RETENTION_SCAN_MS`) apaga as linhas de
+  `idempotency_key` com `created_at` mais antigo que `idempotency.retention.hours` (default **24h**, a janela
+  em que um retry do cliente faz sentido; env `IDEMPOTENCY_RETENTION_HOURS`). Passado o prazo, repetir a
+  mesma chave deixa de ser reconhecida: vira reserva nova (ou "Vínculo já existente" se a anterior ainda
+  estiver ativa). O `DELETE` roda em **lotes de 1000** (CTE com `LIMIT ... FOR UPDATE` + junção por `ctid`),
+  um por instrução em autocommit, repetidos até um lote voltar incompleto — não varre nem trava a tabela de
+  uma vez. Filtra por `created_at` com o índice `idx_idempotency_key_created_at`. `purgeExpired()` é `public`
+  e chamável direto (os testes o invocam; `run-tests.sh` estica o timer para 1h via env, como o
+  `ReadModelRefreshService`). A tabela não tem FK, então nada mais a apaga (não some com o evento).
 - **Latência (ponto 2 da série, não medido)**: sob carga a rejeição ("Evento lotado") é o caminho quente,
   não só o sucesso. Custo por braço: no **sucesso**, `cas` e `naive` pagam 1 `INSERT` (+1 ida ao banco, mais
-  a escrita da linha e do índice da PK). Na **rejeição**, o `cas` paga `INSERT` + rollback (tupla morta na
-  `idempotency_key`, vacuum), pois o `tryReserve` roda depois do `claim`; o `naive` rejeita nas
+  a escrita da linha e dos 2 índices: PK + `created_at`, #130). Na **rejeição**, o `cas` paga `INSERT` + rollback (tupla morta na
+  `idempotency_key` **e entrada morta nos dois índices**, vacuum), pois o `tryReserve` roda depois do `claim`; o `naive` rejeita nas
   pré-checagens, antes da transação, e **não paga nada** (a consulta prévia da chave só roda com chave do
   cliente, nunca com a gerada). O ponto 2 da série compara os braços medidos **com este código**, não com
   as rodadas antigas.
-- **Follow-up (não feito na #24; issue #130)**: job de limpeza/retenção da `idempotency_key` por `created_at`.
 
 ### Feature flag `reservation.readpath` — caminho CAS (default) vs. ingênuo (experimento)
 
@@ -401,7 +410,12 @@ chamável direto (os testes o invocam sem esperar o timer).
   `RECAPTCHA_*`, `SERVER_TOMCAT_THREADS_MAX` (default `300`),
   `RESERVATION_READPATH` (default `cas`; `naive` = braço de controle do experimento da
   Fase 2), `READMODEL_AVAILABILITY_REFRESH_MS` (default `5000`; intervalo do job de refresh
-  do read model `event_availability` = o "lag" do experimento).
+  do read model `event_availability` = o "lag" do experimento),
+  `IDEMPOTENCY_RETENTION_HOURS` (default `24`; prazo de retenção das chaves de idempotência),
+  `IDEMPOTENCY_RETENTION_SCAN_MS` (default `600000` = 10 min; intervalo do job de limpeza, issue #130),
+  `SPRING_TASK_SCHEDULING_POOL_SIZE` (default `3`; threads do scheduler dos `@Scheduled`. O default do Boot é
+  **1**, compartilhada por `ReadModelRefreshService`, `ReservationExpiryService` e
+  `IdempotencyKeyRetentionService`: um purge em massa seguraria o refresh e falsearia o lag do braço `naive`).
   Valores reais vêm de `Projeto/.env` — não commitar, não imprimir.
 - Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto
   (`management.endpoints.web.exposure.include=health`); `GET /actuator/health` público devolve
