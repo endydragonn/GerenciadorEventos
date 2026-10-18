@@ -59,7 +59,7 @@ public class SchemaValidationTest {
     void eventTableShouldHaveKeyColumns() throws Exception {
         assertColumns("event",
             "event_id", "creator_id", "event_name", "ead", "address",
-            "event_date", "description", "created_at", "updated_at"
+            "event_date", "description", "created_at", "updated_at", "version"
         );
     }
 

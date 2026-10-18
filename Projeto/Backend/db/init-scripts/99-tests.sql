@@ -252,6 +252,14 @@ BEGIN
     GET DIAGNOSTICS v_rows = ROW_COUNT;
     IF v_rows <> 0 THEN RAISE EXCEPTION 'Falha: reavanco do checkpoint deveria afetar 0 linhas (%)', v_rows; END IF;
 
+    -- 8d) event.version (issue #28): nasce 0 (= pre-ES, sem stream) e e a versao esperada do proximo append
+    SELECT version INTO v_count FROM public.event WHERE event_id = v_event1;
+    IF v_count <> 0 THEN RAISE EXCEPTION 'Falha: event.version deveria nascer 0 (%)', v_count; END IF;
+    BEGIN
+      UPDATE public.event SET version = NULL WHERE event_id = v_event1;
+      RAISE EXCEPTION 'Falha: event.version aceitou NULL';
+    EXCEPTION WHEN not_null_violation THEN NULL; END;
+
     -- 9) ON DELETE CASCADE de event -> eventcap / eventpresenter
     DELETE FROM public.walletevent WHERE event_id = v_event1;
     DELETE FROM public.event WHERE event_id = v_event1;

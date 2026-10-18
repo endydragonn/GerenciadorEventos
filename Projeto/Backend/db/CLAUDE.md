@@ -76,7 +76,7 @@ como `supabase_admin` (um `psql` por arquivo, ordem lexical, no `POSTGRES_DB`). 
 |---|---|
 | `01-functions.sql` | `create_wallet_for_user()` (usada pelo trigger de `users`) |
 | `02-users.sql` | tabela `users` + trigger `trigger_create_wallet` |
-| `03-event.sql` | tabela `event` — só metadados (FK `creator_id → users`) |
+| `03-event.sql` | tabela `event` — só metadados + `version` (FK `creator_id → users`); projeção inline do stream `catalog.event` (#28) |
 | `04-eventcap.sql` | tabela `eventcap` — capacidade/vagas isoladas (CHECK `0<=quant<=capacity`) |
 | `05-eventpresenter.sql` | tabela `eventpresenter` — apresentadores (0..N por evento) |
 | `06-mywallet.sql` | tabela `mywallet` (FK `user_id → users`, `ON DELETE CASCADE`) |
@@ -127,6 +127,18 @@ docker compose -f Projeto/docker-compose.yml up -d --build
 - **`event`** — PK `event_id`. FK `creator_id → users(user_id)` (`ON DELETE NO ACTION`).
   `event_name` `UNIQUE`, `ead` (bool), `image_data bytea`. **Só metadados** — capacidade/venda
   saíram daqui para `eventcap`.
+  - **`version integer NOT NULL DEFAULT 0`** (issue #28): é a **projeção inline** do stream `catalog.event` (ver
+    `Backend/CLAUDE.md`, "Catalog em CQRS + Event Sourcing"); `version` = versão do último evento aplicado na linha e a
+    versão esperada do próximo append (lida com `FOR NO KEY UPDATE` na transação do command; a projeção a grava com o valor
+    do envelope). `0` = evento "pré-ES", sem stream. `image_data` **não** vem do log (blob fora do ES), e `created_at`/
+    `updated_at` são carimbos do banco: o replay compara `event_id, creator_id, event_name, ead, address, event_date,
+    description, version`. `event_id` é `GENERATED ALWAYS`: a projeção insere com `OVERRIDING SYSTEM VALUE` (o id sai da
+    sequence antes do append, é o `streamId`). Migração a quente: `db/migrations/20261022-catalog-event-version.sql`
+    (idempotente; roda como `supabase_admin`; `ADD COLUMN IF NOT EXISTS` + **backfill**: cada evento com `version = 0` ganha um
+    `EventCreated` v1 no `event_store` (estado atual, sem imagem) + a linha do `event_outbox`, e só essa linha passa a
+    `version = 1`). **O backend recusa alterar/cancelar evento com `version = 0`** (erro "é pré-ES"): depois de carregar o
+    `seed-data.sql`, que insere em `event` direto (aviso no topo do arquivo), reaplique a migração. Coberta por `SchemaValidationTest`,
+    `CatalogEventSourcingTest` e o passo 8d do `99-tests.sql`.
 - **`eventcap`** — agregado ISOLADO de capacidade. PK `event_id`, FK `→ event` `ON DELETE
   CASCADE`. `capacity` (`NOT NULL`), `quant` = vagas disponíveis (`NOT NULL`), `buy_time_limit`
   (nullable), `max_time_in_line` (segundos, default 120).
@@ -173,7 +185,7 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   `IdempotencyKeyTest`, `IdempotencyRetentionTest` e o passo 8b do `99-tests.sql`.
 
 - **Event sourcing (issue #27; ADR "Event-Backbone-Event-Store")** — infra genérica, sem domínio, sem FK (as #28/#29
-  só appendam eventos com o seu `stream_type`). Código em `Backend/.../shared/events` (ver `Backend/CLAUDE.md`,
+  só appendam eventos com o seu `stream_type`; a #28 usa `catalog.event`). Código em `Backend/.../shared/events` (ver `Backend/CLAUDE.md`,
   "Event store e backbone de eventos"). Migração a quente: `db/migrations/20261021-event-store.sql` (idempotente; roda como
   `supabase_admin`, por isso o `OWNER TO admin` explícito). Cobertas por `SchemaValidationTest`, pelos testes de
   `shared/events` e pelo passo 8c do `99-tests.sql`.

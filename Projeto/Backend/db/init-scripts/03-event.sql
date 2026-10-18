@@ -6,6 +6,10 @@
 -- (buy_time_limit) NÃO ficam aqui. Foram isoladas no agregado public.eventcap
 -- (ver 04-eventcap.sql), que tem sua própria fronteira de consistência forte e é
 -- protegido por UPDATE condicional atômico. Aqui ficam só os metadados do evento.
+--
+-- NOTA DE EVENT SOURCING (issue #28): esta tabela é a PROJEÇÃO INLINE do stream 'catalog.event' do
+-- event_store. 'version' = versão do último evento aplicado (0 = evento pré-ES, sem stream); é a versão
+-- esperada do próximo append (concorrência otimista). image_data NÃO vem do log (blob, fora do ES).
 
 SET client_encoding = 'UTF8';
 
@@ -23,6 +27,7 @@ CREATE TABLE IF NOT EXISTS public.event
     image_data bytea,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    version integer NOT NULL DEFAULT 0,
     CONSTRAINT "Event_pkey" PRIMARY KEY (event_id),
     CONSTRAINT "Event_event_name_key" UNIQUE (event_name),
     CONSTRAINT "Event_creator_id_fkey" FOREIGN KEY (creator_id)
