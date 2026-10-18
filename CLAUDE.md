@@ -111,8 +111,18 @@ TCC (ADRs). O roadmap de execução está em `BACKLOG.md` (raiz) e, navegável, 
 backend e o Postgres, e Studio com a cadeia mínima. O ponto 1 da série de 3 (monólito CRUD +
 pooler) foi medido com isso (`docs/artigo/experimento-monolito.md`).
 
-**Decidido, não implementado:** back-end em microsserviços (Opção B — `gateway`, `identity`,
-`catalog`, `reservation`, `notification`, `admission`); CQRS + Event Sourcing em `catalog` e
+**Implementado (Fase 5, 2026-10-18):** o monólito foi dividido em módulos por serviço, ainda no
+mesmo processo, deploy e schema `public`:
+- `identity`, `catalog`, `reservation`, `notification` e um `shared` mínimo, cada um com pacote `api`;
+- `gateway` com os controllers `bff/*`;
+- ArchUnit (`ModuleBoundaryArchTest`) trava as chamadas entre módulos fora de `api` e `@RestController`
+  fora do `gateway`;
+- `Idempotency-Key` no `POST /bff/event-wallets` (tabela `idempotency_key`).
+
+Detalhes no `Projeto/Backend/CLAUDE.md`.
+
+**Decidido, não implementado:** extrair os módulos como microsserviços (Opção B — `gateway`, `identity`,
+`catalog`, `reservation`, `notification`, `admission`; a Fase 5 só os separou dentro do monólito); CQRS + Event Sourcing em `catalog` e
 no lado wallet de `reservation` (`eventcap` fica relacional/CAS); backbone Kafka-compatível;
 camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
 `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.

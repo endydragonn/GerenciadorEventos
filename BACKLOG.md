@@ -34,7 +34,7 @@ Labels sugeridas: `fase/0`…`fase/11`, `area/backend`, `area/banco`, `area/infr
 
 ---
 
-## Estado (2026-10-16)
+## Estado (2026-10-18)
 
 Snapshot do GitHub (`gh issue list` / `gh pr list`). A definição de cada item continua sendo o
 texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
@@ -60,22 +60,28 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 19 | #20 | fechada | #120 |
 | 20 | #21 | fechada | #117 |
 | 21 | #22 | fechada — matriz refeita pelo pooler, o ponto 1 da série (`docs/carga/resultados-matriz-pospooler-2026-10-16.md`); a escada X e o isolamento do pooler foram refeitos em 2026-10-17 (X ≈ 78k RPM pelo pooler; `docs/carga/resultados-isolamento-escada-pospooler-2026-10-17.md`) | #121 |
-| 22–46 | #23–#47 | abertas | — |
+| 22 | #23 | fechada — módulos `identity`/`catalog`/`reservation`/`notification`/`shared` com pacote `api`; ArchUnit `ModuleBoundaryArchTest` | #127 |
+| 23 | #24 | fechada — `Idempotency-Key` no `POST /bff/event-wallets` (tabela `idempotency_key`, claim na transação do CAS, 422 em payload divergente) | #132 |
+| 24 | #25 | fechada — controllers `bff/*` no módulo `gateway`; ArchUnit trava `@RestController` fora dele | #128 |
+| 25–46 | #26–#47 | abertas | — |
 | 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
 
 Branch de integração da Fase 2: `Fase_2` (a #11 entrou pelo PR #104; as #12–#15 foram
 desenvolvidas direto nela; entrou em `main` pelos PRs #114 e #115). Branch de integração da Fase 4: `Fase_4`
-(cada `Issue-N` abre PR com base nela; o PR final `Fase_4` → `main` é o #122, cujo merge fica para o usuário). Vocabulário do
+(cada `Issue-N` abre PR com base nela; entrou em `main` pelo PR #122). Branch de integração da Fase 5: `Fase_5`
+(PRs #127, #128 e #132 com base nela; o PR final `Fase_5` → `main` fica para o merge do usuário). Vocabulário do
 experimento em `CONTEXT.md`.
 
 Fora do backlog (follow-ups): #56–#61 abertas (`updatePolicy`, IDOR em `/bff/event-wallets`,
 endurecer schema, cobertura, transações do `updateEvent`, N+1/pool); #78 (BFF única + JWT
 deny-by-default, PR #79), #83 (quality gates, PR #85), #86 (PR #88), #92 (`/actuator/health`,
-PR #93) e #67 fechadas; #81, #84, #89 abertas. PR #90 adicionou os scripts de teste de carga
+PR #93) e #67 fechadas; #81, #84, #89 abertas. Da Fase 5: #129 (PK da idempotência por usuário), #130 (retenção
+da `idempotency_key`), #131 (`run-tests.sh` limpa `surefire-reports`) e #133 (CORS `*` com credenciais) abertas. PR #90 adicionou os scripts de teste de carga
 (disputa de vagas e taxa fixa/RPM) em `Projeto/carga/`.
 
 Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feitas (marco de banca atingido); Fase 4: #17 → #18
-→ #19/#20/#21 → #22 feitas (ponto 1 da série; Fase 4 inteira na `Fase_4`, PR #122 para a `main`); próximo: a Fase 5 (#23).
+→ #19/#20/#21 → #22 feitas (ponto 1 da série; PR #122); Fase 5: #23 → #24/#25 feitas (na `Fase_5`); próximo: a Fase 6
+(ADR do backbone, #26).
 
 ## Fase 0 — Desbloqueio de ambiente
 
@@ -218,6 +224,13 @@ Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feit
 ---
 
 ## Fase 5 — Preparar a decomposição (dentro do monólito)
+
+> **Implementado na `Fase_5` (2026-10-18):** backend em módulos `identity`, `catalog`, `reservation`, `notification` e
+> `shared` mínimo, cada um com pacote `api` e fronteira travada por ArchUnit (item 22); `Idempotency-Key` no
+> `POST /bff/event-wallets`, com claim na mesma transação JDBC do CAS e a fronteira capacidade/reserva atrás de
+> interface (23); controllers `bff/*` no módulo `gateway` (24). Tudo no mesmo processo e deploy, schema `public`;
+> o `HttpContractTest` não mudou de expectativa. Sem rodada de carga: o custo da chave no caminho quente fica para
+> o ponto 2 da série.
 
 ### 22. Refatorar o backend em pacotes-por-serviço
 `fase/5` `area/backend`
