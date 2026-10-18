@@ -1,16 +1,24 @@
 # Mapeamento de Endpoints CORS
 
 ## Configuração Centralizada
-**Arquivo:** `Backend/src/main/java/com/gerenciador/eventos/config/CorsConfig.java`
+**Arquivo:** `Backend/src/main/java/com/gerenciador/eventos/shared/CorsConfig.java`
 
 **Variável de Ambiente:** `CORS_ALLOWED_ORIGINS`
 ```
 CORS_ALLOWED_ORIGINS=http://localhost:8088,http://localhost:3000
 ```
 
+## Headers expostos (`exposedHeaders`)
+
+`shared/CorsConfig` expõe ao browser os headers de resposta `Authorization`, `Content-Type` e, desde a
+issue #24, `Idempotency-Key`; o bean `corsConfigurationSource` do `SecurityConfig` (o filtro que responde
+primeiro) expõe só `Idempotency-Key` (o `POST /bff/event-wallets`
+devolve a chave usada, gerada pelo servidor ou recebida; sem expor, JS de outra origem não consegue lê-la).
+Para enviar o header na requisição, `allowedHeaders("*")` já cobre.
+
 ## Endpoints Cobertos pelo CorsConfig
 
-Superfície HTTP única sob `/bff/**` (issue #78) — os controllers `bff/Bff*Controller`:
+Superfície HTTP única sob `/bff/**` (issue #78) — os controllers `gateway/Bff*Controller`:
 
 ### 1. BffUserController - `/bff/users`
 - `POST /bff/users/request-verification`, `/verify-email`, `/resend-verification-code`
@@ -46,7 +54,7 @@ RECAPTCHA_SECRET_KEY=6Lc7frUsAAAAABxecI7MuI8NOqtPDKdUfs5CjXr6
 - **Origins Permitidas:** `http://localhost:8088`, `http://localhost:3000` (configurável via .env)
 - **Métodos:** GET, POST, PUT, DELETE, PATCH, OPTIONS
 - **Headers Permitidos:** Todos (*)
-- **Headers Expostos:** Authorization, Content-Type
+- **Headers Expostos:** Authorization, Content-Type, Idempotency-Key
 - **Credenciais:** Habilitadas
 - **Cache:** 3600 segundos
 

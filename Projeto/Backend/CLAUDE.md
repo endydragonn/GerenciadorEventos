@@ -31,6 +31,9 @@ e roda `mvn clean test`. **Exige o container `db` no ar**: os testes batem num P
   container com env fixo (`--env-file ../.env`): para mudar `test.db.schemas` por ali, passe
   `-e TEST_DB_SCHEMAS=...` no `docker run` do script. Coberto por `TestSchemasTest`.
 - `EventTest`, `UserTest`, `EventWalletTest`, `MyWalletTest` exercitam services + repositories.
+- `IdempotencyKeyTest` (issue #24): repetição com a mesma `Idempotency-Key` não decrementa `eventcap` de novo
+  (sequencial, após `confirm`, e 8 threads concorrentes com a mesma chave), conflito com outro usuário/evento,
+  falha não deixa chave. O braço `naive` tem o seu em `EventWalletNaivePathTest`; o header/422 em `HttpContractTest`.
 - `HttpContractTest` (`webEnvironment = RANDOM_PORT` + `TestRestTemplate`) fixa path + método
   + forma de request/response de cada endpoint `/bff/**` que o Flutter consome — bate no
   HTTP real (inclusive `SecurityConfig`), não MockMvc. `JavaMailSender` é mockado
@@ -38,7 +41,7 @@ e roda `mvn clean test`. **Exige o container `db` no ar**: os testes batem num P
   não depender de SMTP/Google reais.
 - Não há testes unitários isolados; tudo é de integração com banco (exceto os mocks pontuais
   do `HttpContractTest` para dependências externas).
-- `LayerBoundaryArchTest` (ArchUnit) é a exceção: não usa Spring/banco, só analisa bytecode.
+- `LayerBoundaryArchTest` e `ModuleBoundaryArchTest` (ArchUnit) são a exceção: não usam Spring/banco, só analisam bytecode.
   Roda em qualquer `mvn test`, com ou sem `db` no ar.
 
 ## Quality gates (Checkstyle + ArchUnit) — issue #83
@@ -59,37 +62,89 @@ e roda `mvn clean test`. **Exige o container `db` no ar**: os testes batem num P
     a maioria dos arquivos fica bem abaixo de 300; só `BffUserController.java` (465) e
     `UserRepository.java` (351) violavam, e estão na baseline) e `RegexpSinglelineJava`
     banindo `System.out/err.print*`/`println` (id `ProibirConsoleDireto` — baseline:
-    `UserRepository.java`, `EventRepository.java`, `EmailVerificationService.java`) e
+    `UserRepository.java`, `EventRepository.java`) e
     `printStackTrace()` (id `ProibirPrintStackTrace` — zero ocorrências, já trava sem
     baseline). Use um logger SLF4J (`org.slf4j.Logger`/`LoggerFactory`, ver
-    `Service/ReservationExpiryService`) em vez de escrever direto no console.
+    `reservation/ReservationExpiryService`) em vez de escrever direto no console.
   - Método "medir antes de travar": regra sem violação nasce em `error` sem entrada na
     baseline; regra com violação existente também fica em `error`, mas os arquivos que já
     violavam no dia em que a regra entrou ganham uma linha em `checkstyle-suppressions.xml`
     (não corrigidos por essa issue — é o próximo passo). Corrigiu um arquivo da baseline?
     Remova a linha dele do suppressions.
-- ArchUnit (`archunit-junit5`, teste `LayerBoundaryArchTest` em `src/test/java`) trava se o
-  pacote `bff` (controllers) depender direto de `Repository` (DAO) ou de JDBC cru
-  (`java.sql.Connection/PreparedStatement/Statement/ResultSet/DriverManager`) — acesso a dado
-  deve passar por `Service`. Zero violações hoje, regra já trava o build, sem baseline.
-  - Rodar isolado: `mvn -Dtest=LayerBoundaryArchTest -DfailIfNoTests=false test` (não precisa
-    do container `db`, mesmo comando funciona no container Maven efêmero do `run-tests.sh`).
+- ArchUnit (`archunit-junit5`, em `src/test/java`), dois testes, sem baseline (zero violações):
+  - `LayerBoundaryArchTest` trava se o pacote `gateway` (controllers) depender direto de uma classe
+    `@Repository` (DAO) ou de JDBC cru
+    (`java.sql.Connection/PreparedStatement/Statement/ResultSet/DriverManager`) — acesso a dado
+    deve passar por `Service`.
+  - `ModuleBoundaryArchTest` (issue #23) trava: (a) `identity`/`catalog`/`reservation`/
+    `notification`/`gateway` só dependem de outro módulo por `<modulo>.api` (nenhum módulo importa `gateway.*`);
+    (b) `shared` não depende de módulo de domínio; (c) todo código de produção mora num módulo (nada volta para
+    `POJO/Repository/Service`); (d) `<modulo>.api` não depende de classe interna de módulo nenhum
+    (só de outros `*.api`, `shared` e libs); (e) `@RestController`/`@Controller` só no `gateway`
+    (`controller_so_no_gateway`, issue #25: os demais módulos não expõem HTTP). Ver "Módulos".
+  - Rodar isolado: `mvn -Dtest='LayerBoundaryArchTest,ModuleBoundaryArchTest' -DfailIfNoTests=false test`
+    (não precisa do container `db`, mesmo comando funciona no container Maven efêmero do
+    `run-tests.sh`).
 
-## Camadas (pacote `com.gerenciador.eventos`)
+## Módulos (pacote `com.gerenciador.eventos`) — issues #23 e #25
+
+Pacotes-por-serviço, ainda no mesmo processo/deploy/banco (schema `public`): é a preparação da
+Fase 5 para a decomposição em microsserviços (CQRS/ES na Fase 6, extração na Fase 7). Dentro de
+cada módulo as classes ficam **planas** (sem `POJO/`/`Repository/`/`Service/`), mais o subpacote
+`api`: as **interfaces e DTOs públicos** que os outros módulos podem usar.
 
 ```
-Main.java              entrypoint @SpringBootApplication (único)
-POJO/                  objetos simples (getters/setters), SEM anotação JPA
-Repository/            acesso a dados — JDBC puro
-Service/               regras de negócio e validação
-bff/                   superfície HTTP única: /bff/** (arquivos @RestController próprios)
-security/              JWT + Spring Security + BCrypt + papel "host"
-config/                DatabaseConnection, CorsConfig, EmailTemplates
+Main.java        entrypoint @SpringBootApplication (único; o component scan cobre os subpacotes)
+identity/        UserService, UserRepository, EmailVerificationService, PendingVerification(+Repository),
+                 security/ (JwtUtil, JwtAuthenticationFilter, AuthorizationUtil, SecurityConfig)
+  api/           User, UserApi, EmailVerificationApi, TokenApi, HostAuthorizationApi
+catalog/         EventService, EventRepository, EventPresenterRepository
+  api/           Event, EventApi
+reservation/     EventWalletService, MyWalletService, ReadModelRefreshService, ReservationExpiryService,
+                 EventCapRepository, EventWalletRepository, MyWalletRepository, EventAvailabilityRepository,
+                 IdempotencyKeyRepository, CapacityReserver + ReservationWriter (interfaces internas, #24)
+  api/           EventCap, EventWallet, MyWallet, EventCapacityApi, EventWalletApi, MyWalletApi,
+                 IdempotencyConflictException
+notification/    EmailNotificationService, EmailTemplates (envio de e-mail / JavaMailSender)
+  api/           EmailNotificationApi
+shared/          DatabaseConnection, CorsConfig, SchedulingConfig (infra sem domínio)
+gateway/         BffUserController, BffEventController, BffEventWalletController, BffMyWalletController,
+                 BffSeedController (@RestController, paths /bff/**) + SeedData; roteia e agrega, sem domínio
 ```
+
+- **Regra de fronteira**: um módulo (e o `gateway`) só enxerga outro módulo pelo pacote `<modulo>.api`;
+  nunca importa `Repository`/`Service`/config interno de outro. `shared` não depende de módulo de
+  domínio (módulos dependem dele). Dado de outro módulo entra por id ou DTO da `api`. Travado por
+  `ModuleBoundaryArchTest` (ver "Quality gates"); as FKs do SQL ficam como estão (schema é Fase 7).
+- **Grafo de dependências** (sempre via `api`):
+  `gateway → identity, catalog, reservation`;
+  `identity → notification`;
+  `catalog → identity` (`UserApi.exists`, valida `creator_id`) e `catalog → reservation`
+  (`EventCapacityApi`: `EventRepository.save` cria o `eventcap` na **mesma transação JDBC** do
+  `event`, por isso a `Connection` aparece na interface; a hidratação lê a capacidade);
+  `reservation → catalog` (`EventApi.exists`, "Evento não encontrado").
+  Ciclo `catalog ↔ reservation` aceito por ora, e só pela `api` de cada lado; a interface fica no
+  módulo dono do dado (`eventcap` é de `reservation`, `event` é de `catalog`). Some quando a
+  `reservation` ganhar read model próprio de eventos (Fase 6/7).
+- **`gateway` é módulo, não container (issue #25)**: o antigo pacote `bff` virou `gateway` (roteamento +
+  agregação) **dentro do mesmo processo/deploy do monólito**; container próprio só na Fase 7. Os paths HTTP
+  continuam `/bff/**` (o contrato do Flutter não mudou; `HttpContractTest` é o juiz). Os controllers só
+  roteiam e agregam via `*.api`: a orquestração do reset de senha com MFA (gerar o código + enviar o
+  e-mail) mora em `UserApi.requestPasswordResetMfa` (`identity`), não no `BffUserController`. As regras de
+  rota/segurança de `/bff/**` **continuam em `identity/security/SecurityConfig`** (única cadeia
+  deny-by-default, auditável num arquivo só; movê-las pro `gateway` exigiria um contrato de
+  "contribuição de rotas" com bean/interface novos sem mudar comportamento).
+- **Decisões**: `SecurityConfig` fica em `identity/security` (conhece as rotas e o filtro JWT, não é
+  infra pura — em `shared` violaria a regra); `SeedData` fica em `gateway` (é o corpo do
+  `POST /bff/seed` e agrega `User`+`Event`+`EventWallet` de três módulos); o envio de e-mail saiu
+  de `EmailVerificationService` para `notification` (o cadastro em duas fases continua em
+  `identity`); as `*Api` são implementadas pelas classes que já existiam (`UserService implements
+  UserApi`, `EventCapRepository implements EventCapacityApi`...), sem classe nova de adaptação.
+- Módulo novo ou chamada entre módulos nova → exponha só o necessário em `<modulo>.api`.
 
 ## Persistência — JDBC puro, não JPA
 
-- `Repository/*` usam `config.DatabaseConnection.getConnection()` +
+- Os `*Repository` usam `shared.DatabaseConnection.getConnection()` +
   `PreparedStatement` com SQL escrito à mão. `try-with-resources` para fechar conexão.
 - `DatabaseConnection` delega ao `DataSource` do Spring (pool **HikariCP**, issue #96), não a
   `DriverManager`: `close()` devolve a conexão ao pool. Tamanho do pool:
@@ -128,7 +183,7 @@ config/                DatabaseConnection, CorsConfig, EmailTemplates
   Para evento ilimitado (`capacity = -1`) `tryReserve`/`release` são no-op e
   `EventWalletService` trata a reserva como sempre permitida.
 - Nomes de tabela em minúsculas: `users`, `event`, `eventcap`, `eventpresenter`, `mywallet`,
-  `walletevent`, `pending_verifications`.
+  `walletevent`, `pending_verifications`, `event_availability`, `idempotency_key`.
 
 ### Pooler (Supavisor, transaction mode) — issue #19
 
@@ -182,18 +237,18 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 
 ## Rotas e segurança
 
-- **Superfície HTTP única sob `/bff/**`** (issue #78): `bff/BffUserController` (users — CRUD,
+- **Superfície HTTP única sob `/bff/**`** (issue #78): `gateway/BffUserController` (users — CRUD,
   login, `/me`, cadastro em duas fases, reset de senha com MFA, reCAPTCHA),
-  `bff/BffEventController` (events — CRUD, validate, search, imagem),
-  `bff/BffEventWalletController` (event-wallets — addLink/confirm/validate/removeLink/
-  listByUser), `bff/BffMyWalletController` (my-wallets — validate/getByUser/ensure),
-  `bff/BffSeedController` (seed, dev). Não existe mais `/api/**` de negócio nem um 2º
-  `@SpringBootApplication`; `Main.java` é o único entrypoint e as classes `bff/*` são
+  `gateway/BffEventController` (events — CRUD, validate, search, imagem),
+  `gateway/BffEventWalletController` (event-wallets — addLink/confirm/validate/removeLink/
+  listByUser), `gateway/BffMyWalletController` (my-wallets — validate/getByUser/ensure),
+  `gateway/BffSeedController` (seed, dev). Não existe mais `/api/**` de negócio nem um 2º
+  `@SpringBootApplication`; `Main.java` é o único entrypoint e as classes `gateway/*` são
   `@RestController` de nível top-level, descobertas pelo component scan do próprio `Main`.
 - **Nginx do frontend faz proxy de `/bff/` → `backend:8081/bff/` sem rewrite/strip**
   (`nginx.conf`): o path chega igual no backend. Em acesso direto ao backend (dev sem
   Nginx), use o mesmo path `/bff/...`.
-- `security/SecurityConfig`: stateless, CSRF off. Desde o PR #79 (issue #78), deny-by-default também
+- `identity/security/SecurityConfig`: stateless, CSRF off. Desde o PR #79 (issue #78), deny-by-default também
   dentro de `/bff/**` — só a lista abaixo é pública, todo o resto exige
   `Authorization: Bearer <jwt>` (401 fixo via `HttpStatusEntryPoint`, sem token/token
   inválido numa rota protegida).
@@ -218,9 +273,9 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
     protege contra reordenar filtros ou remover `.cors(...)` no futuro.
 - `JwtAuthenticationFilter` valida o token e põe o e-mail como `subject`/username. Não há
   roles dinâmicas no token (authority fixa `USER`).
-- `security/AuthorizationUtil.isCurrentUserHost()` lê `users.host` (coluna criada sem aspas
+- `identity/security/AuthorizationUtil.isCurrentUserHost()` lê `users.host` (coluna criada sem aspas
   no DDL como `Host`, então o Postgres dobra pra minúsculas — `UserRepository` lê/grava com
-  `host` minúsculo, igual `isactive`). Desde o PR #79 (issue #78), `bff/BffEventController.createEvent`
+  `host` minúsculo, igual `isactive`). Desde o PR #79 (issue #78), `gateway/BffEventController.createEvent`
   /`updateEvent`/`deleteEvent` chamam `ensureUserIsHost()` (IllegalArgumentException → HTTP
   400, padrão do projeto); leitura (get/search/list/validate) e a imagem não ganham esse
   gate. **Nenhuma rota promove um usuário a host** (de propósito — `UserRepository.save`/
@@ -229,29 +284,80 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
   um fluxo de produto (ex.: endpoint de admin) é gap conhecido, não resolvido nesta issue.
 - Senhas: `BCryptPasswordEncoder` (bean em `SecurityConfig`). Nunca gravar senha em claro
   (o seed SQL grava em claro só para dados de teste — não replicar em código de produção).
-- CORS está definido **duas vezes** (`config.CorsConfig` e o bean em `SecurityConfig`, este
-  bem permissivo). Ao mexer em CORS, alinhe os dois e veja `CORS_CONFIG.md`.
+- CORS está definido **duas vezes** (`shared.CorsConfig` e o bean em `SecurityConfig`, este
+  bem permissivo). Ao mexer em CORS, alinhe os dois e veja `CORS_CONFIG.md`. Os dois expõem o header
+  de resposta `Idempotency-Key` (#24).
 
 ## Inscrição em evento — reserva em duas fases (CAS)
 
-`Service/EventWalletService`:
+`reservation/EventWalletService`:
 
 1. `addLink` (`POST .../event-wallets`): valida, checa janela de compra (`eventcap.buy_time_limit`)
-   e duplicidade (`existsActive` = pending/confirmed), então numa **transação**:
-   `EventCapRepository.tryReserve(conn, eventId)` (UPDATE condicional) → se `false`, rollback +
-   `IllegalArgumentException("Evento lotado")`; se `true`, grava `walletevent` como `pending`
-   com `expires_at = now + eventcap.max_time_in_line` (UPSERT, revive linhas `expired`/`cancelled`).
+   e duplicidade (`existsActive` = pending/confirmed), então numa **transação** (uma `Connection`,
+   `setAutoCommit(false)` manual, não `@Transactional`): (a) reivindica a `Idempotency-Key`
+   (`IdempotencyKeyRepository.claim`); (b) `CapacityReserver.tryReserve(conn, eventId)` (UPDATE
+   condicional) → se `false`, rollback + `IllegalArgumentException("Evento lotado")`; (c)
+   `ReservationWriter.reservePending(conn, ...)` grava `walletevent` como `pending` com
+   `expires_at = now + eventcap.max_time_in_line` (UPSERT, revive linhas `expired`/`cancelled`);
+   (d) commit.
 2. `confirm` (`POST .../event-wallets/confirm`): `pending → confirmed` (`expires_at` = NULL).
 3. `removeLink` (`DELETE .../event-wallets`): numa transação, um `UPDATE` condicional único
    (`cancelIfActive`: `pending`/`confirmed` → `cancelled`) e `release` **só se** esse UPDATE
    afetou 1 linha — evita devolução dupla de vaga em cancelamento concorrente / corrida com o
    job. Reserva já `cancelled`/`expired`/inexistente ⇒ no-op silencioso (idempotente).
-4. `Service/ReservationExpiryService` — `@Scheduled` (a cada `reservation.expiry.scan.ms`,
-   default 30s; `@EnableScheduling` em `config/SchedulingConfig`): varre `pending` vencidas e,
+4. `reservation/ReservationExpiryService` — `@Scheduled` (a cada `reservation.expiry.scan.ms`,
+   default 30s; `@EnableScheduling` em `shared/SchedulingConfig`): varre `pending` vencidas e,
    por transação, `expireIfStale` (condicional, não pisa em confirmação concorrente) + `release`.
 
-O `bff/BffSeedController` (`POST /bff/seed`) cria inscrições já confirmadas (`addLink`
+O `gateway/BffSeedController` (`POST /bff/seed`) cria inscrições já confirmadas (`addLink`
 seguido de `confirm`).
+
+### Idempotency-Key, invariante e compensação — issue #24
+
+- **Invariante**: (1) reservas ativas (`pending`/`confirmed`) ≤ capacidade — **só no braço `cas`** (o CAS em
+  `eventcap` e o `CHECK eventcap_quant_bounds` garantem; o `naive` oversella de propósito); (2) **uma `Idempotency-Key` produz no máximo uma reserva**
+  (PK de `idempotency_key`). Nenhuma outra requisição observa um estado em que a vaga foi debitada
+  sem a reserva gravada (ou o contrário): tudo é uma transação.
+- **Header** `Idempotency-Key` em `POST /bff/event-wallets`, **opcional e aditivo**: sem ele, o servidor
+  gera um UUID; a chave usada (gerada ou recebida) volta no header `Idempotency-Key` da resposta 201
+  (exposto no CORS). O corpo JSON e o contrato do Flutter não mudam (`EventWallet.idempotencyKey` é
+  `@JsonIgnore`, só em memória). Máx. 255 caracteres (senão 400).
+- **Repetição** (mesma chave, mesmo usuário e evento) devolve **201 com o resultado da primeira**
+  (`status = pending`, `expiresAt` salvo — mesmo depois de confirmar/cancelar a reserva) e **não** toca
+  `eventcap`. **Mesma chave com outro usuário/evento ⇒ 422** (`IdempotencyConflictException`; segue o rascunho
+  IETF do header, que reserva 422 a "mesma chave, payload diferente"). Como o `INSERT` da chave
+  *bloqueia* até a transação concorrente terminar, não há estado "em andamento" visível e portanto
+  nenhum 409. Para reservar de novo o mesmo par depois de cancelar, use outra chave.
+- **Só reserva bem-sucedida grava a chave**: lotado / vínculo já existente fazem rollback e a mesma
+  chave pode ser repetida depois.
+- **Concorrência**: duas requisições com a mesma chave serializam no `INSERT ... ON CONFLICT DO NOTHING`
+  (a PK segura a 2ª até a 1ª dar commit/rollback). 1ª commita → a 2ª lê a linha salva e devolve o
+  resultado (sem CAS). 1ª faz rollback → a 2ª segue como primeira. Antes da transação, se uma checagem
+  falha (ex.: "Vínculo já existente" numa repetição sequencial), `addLink` consulta a chave e devolve o
+  resultado salvo — a consulta extra só roda no caminho de erro.
+- **Fronteira interna**: `CapacityReserver` ("decrementar capacidade", `EventCapRepository`) e
+  `ReservationWriter` ("gravar reserva", `EventWalletRepository`) são interfaces de `reservation` (não
+  `api`); `EventWalletService.addLink` orquestra as duas na **mesma `Connection`**. É a costura do split
+  futuro `stock` + `wallet` (#47).
+- **Ponto de compensação**: se a gravação da reserva (ou qualquer passo) falha **depois** do CAS, faz-se
+  `rollback` da `Connection` — a vaga e a chave voltam juntas. No split futuro `stock` + `wallet`, o
+  `rollback` deixa de cobrir os dois lados e a compensação vira um `release` (hoje
+  `EventCapRepository.release`, o que `removeLink`/expiração usam, ainda fora da interface
+  `CapacityReserver`) que **terá de ser idempotente por chave no split**.
+- **Braço `naive`**: a idempotência vale nos dois caminhos (a reivindicação da chave está na mesma
+  transação curta; só o `tryReserve` é pulado). Na repetição sequencial a checagem do read model
+  ("Evento lotado") falha como o "Vínculo já existente" e cai no mesmo desvio para o resultado salvo.
+- **Retenção**: **sem limpeza por ora** — uma linha por reserva bem-sucedida, nunca apagada (e sem FK:
+  não some com o evento). Sob carga a tabela cresce sem limite; follow-up: apagar por `created_at` num job.
+- **Latência (ponto 2 da série, não medido)**: sob carga a rejeição ("Evento lotado") é o caminho quente,
+  não só o sucesso. Custo por braço: no **sucesso**, `cas` e `naive` pagam 1 `INSERT` (+1 ida ao banco, mais
+  a escrita da linha e do índice da PK). Na **rejeição**, o `cas` paga `INSERT` + rollback (tupla morta na
+  `idempotency_key`, vacuum), pois o `tryReserve` roda depois do `claim`; o `naive` rejeita nas
+  pré-checagens, antes da transação, e **não paga nada** (a consulta prévia da chave só roda com chave do
+  cliente, nunca com a gerada). O ponto 2 da série compara os braços medidos **com este código**, não com
+  as rodadas antigas.
+- **Follow-ups (não feitos na #24)**: (a) PK por `(user_id, idempotency_key)` em vez de só a chave
+  (hoje a chave é global); (b) job de limpeza/retenção da `idempotency_key` por `created_at`.
 
 ### Feature flag `reservation.readpath` — caminho CAS (default) vs. ingênuo (experimento)
 
@@ -267,7 +373,7 @@ seguido de `confirm`).
   lag do read model — é o **braço de controle** do experimento de concorrência da Fase 2
   (issues #12/#13), não um bug.
 
-`Service/ReadModelRefreshService` — `@Scheduled` (a cada `readmodel.availability.refresh.ms`,
+`reservation/ReadModelRefreshService` — `@Scheduled` (a cada `readmodel.availability.refresh.ms`,
 default 5000; env `READMODEL_AVAILABILITY_REFRESH_MS`): um único
 `INSERT ... SELECT ... ON CONFLICT DO UPDATE` que recalcula `event_availability`
 (`available = capacity - reservas ativas`, piso 0; `-1` = ilimitado). Intervalo maior ⇒
@@ -279,9 +385,9 @@ chamável direto (os testes o invocam sem esperar o timer).
 1. `POST /bff/users/request-verification` grava em `pending_verifications` (hash da senha +
    código de 6 dígitos, expira em 5 min — ver `application.properties`).
 2. `POST /bff/users/verify-email` confere o código e só então insere em `users`.
-3. `Service/EmailVerificationService` envia o código via SMTP Gmail (`spring-boot-starter-mail`),
-   templates em `config/EmailTemplates`.
-4. reCAPTCHA v3: `POST /bff/users/verify-recaptcha` (em `bff/BffUserController`) valida o
+3. `identity/EmailVerificationService` pede o envio ao módulo `notification` (`EmailNotificationApi`), que manda o código via SMTP Gmail (`spring-boot-starter-mail`),
+   templates em `notification/EmailTemplates`.
+4. reCAPTCHA v3: `POST /bff/users/verify-recaptcha` (em `gateway/BffUserController`) valida o
    token com a Google usando `RECAPTCHA_SECRET_KEY`.
 
 ## Config
@@ -302,7 +408,7 @@ chamável direto (os testes o invocam sem esperar o timer).
 
 ## Ao mexer aqui
 
-- Novo endpoint → entra em `bff/*` (superfície HTTP única, ver "Rotas e segurança"), no
+- Novo endpoint → entra em `gateway/*` (superfície HTTP única, ver "Rotas e segurança"), no
   controller do agregado correspondente. Desde o PR #79 (issue #78) o default dentro de `/bff/**` é
   **autenticado**: endpoint novo já nasce protegido; só adicione em `SecurityConfig` se ele
   precisar ser público (raro — normalmente já resolvido pelo padrão `GET /bff/events/**`).

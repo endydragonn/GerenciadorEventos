@@ -87,7 +87,7 @@ Ver o cabeçalho de `run.sh` para a lista completa comentada. As mais usadas:
 
 ## Braço `cas` (default) vs. `naive` (experimento)
 
-`RESERVATION_READPATH` é um `@Value` do Spring (`Service/EventWalletService`),
+`RESERVATION_READPATH` é um `@Value` do Spring (`reservation/EventWalletService`),
 lido **só no startup** do backend — o harness não troca isso em tempo de
 execução. Pra rodar o braço "ingênuo" neste harness (sanity local; o
 experimento oficial usa a matriz do kit `Projeto/carga`), suba o backend com a
