@@ -126,11 +126,17 @@ Detalhes no `Projeto/Backend/CLAUDE.md`.
 
 **Implementado (Fase 6, issue #27, 2026-10-18):** só a infra do backbone de eventos, ainda sem domínio — broker
 Redpanda no compose e, em `shared/events`, `event_store` imutável + `event_outbox` + relay para o broker, base do
-consumer idempotente (checkpoint atômico), replay em schema-sombra e snapshots. `catalog` e `reservation` ainda não
-appendam eventos (#28/#29).
+consumer idempotente (checkpoint atômico), replay em schema-sombra e snapshots. `reservation` ainda não appenda
+eventos (#29).
+
+**Implementado (Fase 6, issue #28):** `catalog` em CQRS + Event Sourcing — stream `catalog.event`
+(`EventCreated`/`EventUpdated`/`PresenterAdded`/`PresenterRemoved`/`EventCancelled`), append na mesma transação da
+projeção inline `event`/`eventpresenter` (coluna `event.version` como versão esperada; conflito = repete o command),
+`image_data` fora do ES, replay do agregado comparado com a viva, relay ligado no compose (`EVENTS_RELAY_ENABLED`).
+`/bff/events/**` inalterado. Detalhes no `Projeto/Backend/CLAUDE.md`, "Catalog em CQRS + Event Sourcing".
 
 **Decidido, não implementado:** extrair os módulos como microsserviços (Opção B — `gateway`, `identity`,
-`catalog`, `reservation`, `notification`, `admission`; a Fase 5 só os separou dentro do monólito); CQRS + Event Sourcing em `catalog` e
-no lado wallet de `reservation` (`eventcap` fica relacional/CAS);
+`catalog`, `reservation`, `notification`, `admission`; a Fase 5 só os separou dentro do monólito); CQRS + Event Sourcing
+no lado wallet de `reservation` (`eventcap` fica relacional/CAS; o `catalog` já foi, #28);
 camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
 `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.
