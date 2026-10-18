@@ -14,8 +14,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.gerenciador.eventos.POJO.EventWallet;
-import com.gerenciador.eventos.Service.EventWalletService;
+import com.gerenciador.eventos.reservation.api.EventWallet;
+import com.gerenciador.eventos.reservation.api.EventWalletApi;
 
 /**
  * Camada BFF única para inscrição em evento (event-wallet): addLink, confirm, validate,
@@ -30,9 +30,9 @@ import com.gerenciador.eventos.Service.EventWalletService;
 @RequestMapping("/bff/event-wallets")
 public class BffEventWalletController {
 
-    private final EventWalletService eventWalletService;
+    private final EventWalletApi eventWalletService;
 
-    public BffEventWalletController(EventWalletService eventWalletService) {
+    public BffEventWalletController(EventWalletApi eventWalletService) {
         this.eventWalletService = eventWalletService;
     }
 

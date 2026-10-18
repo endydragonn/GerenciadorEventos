@@ -27,10 +27,11 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
-import com.gerenciador.eventos.POJO.User;
-import com.gerenciador.eventos.Service.EmailVerificationService;
-import com.gerenciador.eventos.Service.UserService;
-import com.gerenciador.eventos.security.JwtUtil;
+import com.gerenciador.eventos.identity.api.EmailVerificationApi;
+import com.gerenciador.eventos.identity.api.TokenApi;
+import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.identity.api.UserApi;
+import com.gerenciador.eventos.notification.api.EmailNotificationApi;
 
 /**
  * Camada BFF única para tudo relacionado a usuário/autenticação: CRUD, login, sessão
@@ -53,18 +54,21 @@ public class BffUserController {
     private static final String RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify";
     private static final double RECAPTCHA_SCORE_THRESHOLD = 0.7;
 
-    private final UserService userService;
-    private final JwtUtil jwtUtil;
-    private final EmailVerificationService emailVerificationService;
+    private final UserApi userService;
+    private final TokenApi jwtUtil;
+    private final EmailVerificationApi emailVerificationService;
+    private final EmailNotificationApi emailNotification;
 
     @Value("${RECAPTCHA_SECRET_KEY:}")
     private String recaptchaSecretKey;
 
-    public BffUserController(UserService userService, JwtUtil jwtUtil,
-                              EmailVerificationService emailVerificationService) {
+    public BffUserController(UserApi userService, TokenApi jwtUtil,
+                              EmailVerificationApi emailVerificationService,
+                              EmailNotificationApi emailNotification) {
         this.userService = userService;
         this.jwtUtil = jwtUtil;
         this.emailVerificationService = emailVerificationService;
+        this.emailNotification = emailNotification;
     }
 
     // ======================= CRUD =======================
@@ -306,7 +310,7 @@ public class BffUserController {
 
             String mfaCode = userService.generatePasswordResetMfa(id);
 
-            emailVerificationService.sendPasswordResetMfaEmail(user.getEmail(), user.getName(), mfaCode);
+            emailNotification.sendPasswordResetMfa(user.getEmail(), user.getName(), mfaCode);
 
             Map<String, String> response = new HashMap<>();
             response.put("message", "Código MFA enviado para " + user.getEmail());

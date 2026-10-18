@@ -7,10 +7,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
-import com.gerenciador.eventos.POJO.MyWallet;
-import com.gerenciador.eventos.POJO.User;
-import com.gerenciador.eventos.Service.MyWalletService;
-import com.gerenciador.eventos.Service.UserService;
+import com.gerenciador.eventos.reservation.api.MyWallet;
+import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.reservation.MyWalletService;
+import com.gerenciador.eventos.identity.UserService;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 
 @SpringBootTest

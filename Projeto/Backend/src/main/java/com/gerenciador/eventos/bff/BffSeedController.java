@@ -12,29 +12,28 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.gerenciador.eventos.POJO.Event;
-import com.gerenciador.eventos.POJO.EventWallet;
-import com.gerenciador.eventos.POJO.SeedData;
-import com.gerenciador.eventos.POJO.User;
-import com.gerenciador.eventos.Service.EventService;
-import com.gerenciador.eventos.Service.EventWalletService;
-import com.gerenciador.eventos.Service.UserService;
+import com.gerenciador.eventos.catalog.api.Event;
+import com.gerenciador.eventos.catalog.api.EventApi;
+import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.identity.api.UserApi;
+import com.gerenciador.eventos.reservation.api.EventWallet;
+import com.gerenciador.eventos.reservation.api.EventWalletApi;
 
 /**
  * Popula o banco com dados de exemplo (uso em dev). Garante que senhas sejam
- * criptografadas ao passar pelo {@link UserService}. Antes desta issue (#78) vivia em
+ * criptografadas ao passar pelo {@link UserApi}. Antes desta issue (#78) vivia em
  * {@code Controller.SeedController} sob {@code /api/seed}; comportamento inalterado.
  */
 @RestController
 @RequestMapping("/bff/seed")
 public class BffSeedController {
 
-    private final UserService userService;
-    private final EventService eventService;
-    private final EventWalletService eventWalletService;
+    private final UserApi userService;
+    private final EventApi eventService;
+    private final EventWalletApi eventWalletService;
 
-    public BffSeedController(UserService userService, EventService eventService,
-                              EventWalletService eventWalletService) {
+    public BffSeedController(UserApi userService, EventApi eventService,
+                              EventWalletApi eventWalletService) {
         this.userService = userService;
         this.eventService = eventService;
         this.eventWalletService = eventWalletService;

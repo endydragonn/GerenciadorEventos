@@ -11,8 +11,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.gerenciador.eventos.POJO.MyWallet;
-import com.gerenciador.eventos.Service.MyWalletService;
+import com.gerenciador.eventos.reservation.api.MyWallet;
+import com.gerenciador.eventos.reservation.api.MyWalletApi;
 
 /**
  * Camada BFF única para a carteira do usuário (my-wallet): validate, getByUser, ensure.
@@ -24,9 +24,9 @@ import com.gerenciador.eventos.Service.MyWalletService;
 @RequestMapping("/bff/my-wallets")
 public class BffMyWalletController {
 
-    private final MyWalletService myWalletService;
+    private final MyWalletApi myWalletService;
 
-    public BffMyWalletController(MyWalletService myWalletService) {
+    public BffMyWalletController(MyWalletApi myWalletService) {
         this.myWalletService = myWalletService;
     }
 

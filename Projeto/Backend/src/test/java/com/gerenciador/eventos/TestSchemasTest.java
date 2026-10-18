@@ -16,7 +16,7 @@ import org.springframework.context.annotation.Import;
 
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.TestSupport.TestSchemas;
-import com.gerenciador.eventos.config.DatabaseConnection;
+import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /** Harness de teste preparado para N schemas (issue #21): parse da config + descoberta de tabelas. */
 @SpringBootTest

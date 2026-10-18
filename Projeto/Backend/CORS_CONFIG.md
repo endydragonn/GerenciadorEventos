@@ -1,7 +1,7 @@
 # Mapeamento de Endpoints CORS
 
 ## Configuração Centralizada
-**Arquivo:** `Backend/src/main/java/com/gerenciador/eventos/config/CorsConfig.java`
+**Arquivo:** `Backend/src/main/java/com/gerenciador/eventos/shared/CorsConfig.java`
 
 **Variável de Ambiente:** `CORS_ALLOWED_ORIGINS`
 ```

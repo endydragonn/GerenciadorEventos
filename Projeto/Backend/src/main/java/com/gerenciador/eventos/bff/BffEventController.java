@@ -17,9 +17,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.gerenciador.eventos.POJO.Event;
-import com.gerenciador.eventos.Service.EventService;
-import com.gerenciador.eventos.security.AuthorizationUtil;
+import com.gerenciador.eventos.catalog.api.Event;
+import com.gerenciador.eventos.catalog.api.EventApi;
+import com.gerenciador.eventos.identity.api.HostAuthorizationApi;
 
 /**
  * Camada BFF única para eventos: CRUD, validate, search e upload/serve de imagem.
@@ -28,7 +28,7 @@ import com.gerenciador.eventos.security.AuthorizationUtil;
  * sob {@code /api/events} (sem chamador no frontend). Comportamento inalterado.
  *
  * <p>PR #79 (issue #78): criar/editar/excluir evento agora exige que o usuário autenticado seja host
- * ({@link AuthorizationUtil#ensureUserIsHost()}) — antes qualquer usuário logado podia.
+ * ({@link HostAuthorizationApi#ensureUserIsHost()}) — antes qualquer usuário logado podia.
  * Leitura (get/search/list/validate) e a imagem (upload/get) não ganham esse gate.</p>
  */
 @RestController
@@ -37,10 +37,10 @@ public class BffEventController {
 
     private static final Logger log = LoggerFactory.getLogger(BffEventController.class);
 
-    private final EventService eventService;
-    private final AuthorizationUtil authorizationUtil;
+    private final EventApi eventService;
+    private final HostAuthorizationApi authorizationUtil;
 
-    public BffEventController(EventService eventService, AuthorizationUtil authorizationUtil) {
+    public BffEventController(EventApi eventService, HostAuthorizationApi authorizationUtil) {
         this.eventService = eventService;
         this.authorizationUtil = authorizationUtil;
     }

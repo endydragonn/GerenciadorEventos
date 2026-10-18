@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
-import com.gerenciador.eventos.config.DatabaseConnection;
+import com.gerenciador.eventos.shared.DatabaseConnection;
 import com.zaxxer.hikari.HikariDataSource;
 
 import javax.sql.DataSource;
