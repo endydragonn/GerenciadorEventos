@@ -31,6 +31,9 @@ e roda `mvn clean test`. **Exige o container `db` no ar**: os testes batem num P
   container com env fixo (`--env-file ../.env`): para mudar `test.db.schemas` por ali, passe
   `-e TEST_DB_SCHEMAS=...` no `docker run` do script. Coberto por `TestSchemasTest`.
 - `EventTest`, `UserTest`, `EventWalletTest`, `MyWalletTest` exercitam services + repositories.
+- `IdempotencyKeyTest` (issue #24): repetição com a mesma `Idempotency-Key` não decrementa `eventcap` de novo
+  (sequencial, após `confirm`, e 8 threads concorrentes com a mesma chave), conflito com outro usuário/evento,
+  falha não deixa chave. O braço `naive` tem o seu em `EventWalletNaivePathTest`; o header/422 em `HttpContractTest`.
 - `HttpContractTest` (`webEnvironment = RANDOM_PORT` + `TestRestTemplate`) fixa path + método
   + forma de request/response de cada endpoint `/bff/**` que o Flutter consome — bate no
   HTTP real (inclusive `SecurityConfig`), não MockMvc. `JavaMailSender` é mockado
@@ -97,8 +100,10 @@ identity/        UserService, UserRepository, EmailVerificationService, PendingV
 catalog/         EventService, EventRepository, EventPresenterRepository
   api/           Event, EventApi
 reservation/     EventWalletService, MyWalletService, ReadModelRefreshService, ReservationExpiryService,
-                 EventCapRepository, EventWalletRepository, MyWalletRepository, EventAvailabilityRepository
-  api/           EventCap, EventWallet, MyWallet, EventCapacityApi, EventWalletApi, MyWalletApi
+                 EventCapRepository, EventWalletRepository, MyWalletRepository, EventAvailabilityRepository,
+                 IdempotencyKeyRepository, CapacityReserver + ReservationWriter (interfaces internas, #24)
+  api/           EventCap, EventWallet, MyWallet, EventCapacityApi, EventWalletApi, MyWalletApi,
+                 IdempotencyConflictException
 notification/    EmailNotificationService, EmailTemplates (envio de e-mail / JavaMailSender)
   api/           EmailNotificationApi
 shared/          DatabaseConnection, CorsConfig, SchedulingConfig (infra sem domínio)
@@ -168,7 +173,7 @@ bff/             superfície HTTP única /bff/** (@RestController) + SeedData; v
   Para evento ilimitado (`capacity = -1`) `tryReserve`/`release` são no-op e
   `EventWalletService` trata a reserva como sempre permitida.
 - Nomes de tabela em minúsculas: `users`, `event`, `eventcap`, `eventpresenter`, `mywallet`,
-  `walletevent`, `pending_verifications`.
+  `walletevent`, `pending_verifications`, `event_availability`, `idempotency_key`.
 
 ### Pooler (Supavisor, transaction mode) — issue #19
 
@@ -270,17 +275,21 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 - Senhas: `BCryptPasswordEncoder` (bean em `SecurityConfig`). Nunca gravar senha em claro
   (o seed SQL grava em claro só para dados de teste — não replicar em código de produção).
 - CORS está definido **duas vezes** (`shared.CorsConfig` e o bean em `SecurityConfig`, este
-  bem permissivo). Ao mexer em CORS, alinhe os dois e veja `CORS_CONFIG.md`.
+  bem permissivo). Ao mexer em CORS, alinhe os dois e veja `CORS_CONFIG.md`. Os dois expõem o header
+  de resposta `Idempotency-Key` (#24).
 
 ## Inscrição em evento — reserva em duas fases (CAS)
 
 `reservation/EventWalletService`:
 
 1. `addLink` (`POST .../event-wallets`): valida, checa janela de compra (`eventcap.buy_time_limit`)
-   e duplicidade (`existsActive` = pending/confirmed), então numa **transação**:
-   `EventCapRepository.tryReserve(conn, eventId)` (UPDATE condicional) → se `false`, rollback +
-   `IllegalArgumentException("Evento lotado")`; se `true`, grava `walletevent` como `pending`
-   com `expires_at = now + eventcap.max_time_in_line` (UPSERT, revive linhas `expired`/`cancelled`).
+   e duplicidade (`existsActive` = pending/confirmed), então numa **transação** (uma `Connection`,
+   `setAutoCommit(false)` manual, não `@Transactional`): (a) reivindica a `Idempotency-Key`
+   (`IdempotencyKeyRepository.claim`); (b) `CapacityReserver.tryReserve(conn, eventId)` (UPDATE
+   condicional) → se `false`, rollback + `IllegalArgumentException("Evento lotado")`; (c)
+   `ReservationWriter.reservePending(conn, ...)` grava `walletevent` como `pending` com
+   `expires_at = now + eventcap.max_time_in_line` (UPSERT, revive linhas `expired`/`cancelled`);
+   (d) commit.
 2. `confirm` (`POST .../event-wallets/confirm`): `pending → confirmed` (`expires_at` = NULL).
 3. `removeLink` (`DELETE .../event-wallets`): numa transação, um `UPDATE` condicional único
    (`cancelIfActive`: `pending`/`confirmed` → `cancelled`) e `release` **só se** esse UPDATE
@@ -292,6 +301,46 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 
 O `bff/BffSeedController` (`POST /bff/seed`) cria inscrições já confirmadas (`addLink`
 seguido de `confirm`).
+
+### Idempotency-Key, invariante e compensação — issue #24
+
+- **Invariante**: (1) reservas ativas (`pending`/`confirmed`) ≤ capacidade — o CAS em `eventcap` e o
+  `CHECK eventcap_quant_bounds` garantem; (2) **uma `Idempotency-Key` produz no máximo uma reserva**
+  (PK de `idempotency_key`). Nenhuma outra requisição observa um estado em que a vaga foi debitada
+  sem a reserva gravada (ou o contrário): tudo é uma transação.
+- **Header** `Idempotency-Key` em `POST /bff/event-wallets`, **opcional e aditivo**: sem ele, o servidor
+  gera um UUID; a chave usada (gerada ou recebida) volta no header `Idempotency-Key` da resposta 201
+  (exposto no CORS). O corpo JSON e o contrato do Flutter não mudam (`EventWallet.idempotencyKey` é
+  `@JsonIgnore`, só em memória). Máx. 255 caracteres (senão 400).
+- **Repetição** (mesma chave, mesmo usuário e evento) devolve **201 com o resultado da primeira**
+  (`status = pending`, `expiresAt` salvo — mesmo depois de confirmar/cancelar a reserva) e **não** toca
+  `eventcap`. **Mesma chave com outro usuário/evento ⇒ 422** (`IdempotencyConflictException`; segue o rascunho
+  IETF do header, que reserva 422 a "mesma chave, payload diferente"). Como o `INSERT` da chave
+  *bloqueia* até a transação concorrente terminar, não há estado "em andamento" visível e portanto
+  nenhum 409. Para reservar de novo o mesmo par depois de cancelar, use outra chave.
+- **Só reserva bem-sucedida grava a chave**: lotado / vínculo já existente fazem rollback e a mesma
+  chave pode ser repetida depois.
+- **Concorrência**: duas requisições com a mesma chave serializam no `INSERT ... ON CONFLICT DO NOTHING`
+  (a PK segura a 2ª até a 1ª dar commit/rollback). 1ª commita → a 2ª lê a linha salva e devolve o
+  resultado (sem CAS). 1ª faz rollback → a 2ª segue como primeira. Antes da transação, se uma checagem
+  falha (ex.: "Vínculo já existente" numa repetição sequencial), `addLink` consulta a chave e devolve o
+  resultado salvo — a consulta extra só roda no caminho de erro.
+- **Fronteira interna**: `CapacityReserver` ("decrementar capacidade", `EventCapRepository`) e
+  `ReservationWriter` ("gravar reserva", `EventWalletRepository`) são interfaces de `reservation` (não
+  `api`); `EventWalletService.addLink` orquestra as duas na **mesma `Connection`**. É a costura do split
+  futuro `stock` + `wallet` (#47).
+- **Ponto de compensação**: se a gravação da reserva (ou qualquer passo) falha **depois** do CAS, faz-se
+  `rollback` da `Connection` — a vaga e a chave voltam juntas. No split futuro `stock` + `wallet`, o
+  `rollback` deixa de cobrir os dois lados e a compensação vira `CapacityReserver.release` (já existe;
+  é o que `removeLink`/expiração usam), idempotente por chave.
+- **Braço `naive`**: a idempotência vale nos dois caminhos (a reivindicação da chave está na mesma
+  transação curta; só o `tryReserve` é pulado). Na repetição sequencial a checagem do read model
+  ("Evento lotado") falha como o "Vínculo já existente" e cai no mesmo desvio para o resultado salvo.
+- **Retenção**: **sem limpeza por ora** — uma linha por reserva bem-sucedida, nunca apagada (e sem FK:
+  não some com o evento). Sob carga a tabela cresce sem limite; follow-up: apagar por `created_at` num job.
+- **Latência (ponto 2 da série, não medido)**: o caminho quente ganhou 1 `INSERT` (na transação, +1 ida ao
+  banco) e a tabela ganhou escrita por reserva e índice da PK. A consulta de repetição fica fora do caminho
+  quente (só em erro).
 
 ### Feature flag `reservation.readpath` — caminho CAS (default) vs. ingênuo (experimento)
 

@@ -40,6 +40,7 @@ SET ROLE :"app_user";
 \i /app-init/07-walletevent.sql
 \i /app-init/08-pending-verifications.sql
 \i /app-init/09-event-availability.sql
+\i /app-init/10-idempotency-key.sql
 \i /app-init/99-tests.sql
 
 RESET ROLE;

@@ -2,6 +2,8 @@ package com.gerenciador.eventos.reservation.api;
 
 import java.time.LocalDateTime;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 public class EventWallet {
     private Long user_id;
     private Long event_id;
@@ -9,6 +11,7 @@ public class EventWallet {
     private LocalDateTime expiresAt;    // preenchido só quando status = pending
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private String idempotencyKey;      // só em memória (vem/vai pelo header Idempotency-Key, nunca no JSON)
 
     // construtor vazio
     public EventWallet() {
@@ -43,6 +46,9 @@ public class EventWallet {
 
     public LocalDateTime getUpdatedAt() {return updatedAt;}
 
+    @JsonIgnore
+    public String getIdempotencyKey() {return idempotencyKey;}
+
     //setters
     public void setUserId(Long user_id) {this.user_id = user_id;}
 
@@ -55,6 +61,9 @@ public class EventWallet {
     public void setCreatedAt(LocalDateTime createdAt) {this.createdAt = createdAt;}
 
     public void setUpdatedAt(LocalDateTime updatedAt) {this.updatedAt = updatedAt;}
+
+    @JsonIgnore
+    public void setIdempotencyKey(String idempotencyKey) {this.idempotencyKey = idempotencyKey;}
 
     @Override
     public String toString() {

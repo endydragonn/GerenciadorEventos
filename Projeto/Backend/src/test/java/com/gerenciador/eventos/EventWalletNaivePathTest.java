@@ -129,6 +129,24 @@ public class EventWalletNaivePathTest {
         assertTrue(ex.getMessage().toLowerCase().contains("lotado"), "veio: " + ex.getMessage());
     }
 
+    /** Idempotência vale também no braço ingênuo: a repetição devolve a 1ª reserva, sem 2ª linha. */
+    @Test
+    public void repeticaoComAMesmaChaveNaoGravaDeNovoNoCaminhoIngenuo() throws Exception {
+        User creator = novoUsuario("naive-idem-creator@example.com", "naive-fone-11");
+        Event e = novoEvento(creator.getId(), "Naive Idempotente", 1);
+        User u = novoUsuario("naive-idem-u@example.com", "naive-fone-12");
+        readModelRefreshService.refresh(); // available = 1
+
+        EventWallet primeira = eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()), "naive-chave-1");
+        readModelRefreshService.refresh(); // available = 0: sem a chave a repetição seria "lotado"
+        EventWallet repetida = eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()), "naive-chave-1");
+
+        assertEquals("pending", repetida.getStatus());
+        assertEquals(primeira.getExpiresAt(), repetida.getExpiresAt());
+        assertEquals(1, contarWalletevent(e.getEvent_id(), "pending"));
+        assertEquals(1, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "naive não toca eventcap");
+    }
+
     // ===================== helpers =====================
 
     private User novoUsuario(String email, String fone) {

@@ -683,6 +683,48 @@ public class HttpContractTest {
         assertEquals(HttpStatus.OK, removed.getStatusCode());
     }
 
+    /**
+     * Issue #24: {@code Idempotency-Key} é aditiva. Sem o header o servidor gera uma e devolve no header
+     * da resposta (corpo igual ao de sempre); com o mesmo header a repetição devolve 201 e o mesmo corpo
+     * sem reservar de novo; a mesma chave com outro evento dá 422.
+     */
+    @Test
+    public void eventWalletAddLink_idempotencyKey() {
+        User creator = createHostUser("idem-http-creator");
+        String hostToken = loginAndGetToken(creator.getEmail(), "senha123");
+        User attendee = createUser("idem-http-attendee");
+        String token = loginAndGetToken(attendee.getEmail(), "senha123");
+        Event e1 = createEvent(creator.getId(), "Evento Idem 1 " + System.nanoTime(), 5, hostToken);
+        Event e2 = createEvent(creator.getId(), "Evento Idem 2 " + System.nanoTime(), 5, hostToken);
+
+        // sem header: o servidor gera e devolve
+        User outro = createUser("idem-http-outro");
+        ResponseEntity<EventWallet> semHeader = restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                new HttpEntity<>(new EventWallet(outro.getId(), e1.getEvent_id()),
+                        authHeaders(loginAndGetToken(outro.getEmail(), "senha123"))), EventWallet.class);
+        assertEquals(HttpStatus.CREATED, semHeader.getStatusCode());
+        assertNotNull(semHeader.getHeaders().getFirst("Idempotency-Key"), "chave gerada devolvida no header");
+        assertEquals("pending", semHeader.getBody().getStatus());
+
+        // com header: repetição devolve o mesmo resultado
+        HttpHeaders h = authHeaders(token);
+        h.set("Idempotency-Key", "http-chave-" + System.nanoTime());
+        HttpEntity<EventWallet> req = new HttpEntity<>(new EventWallet(attendee.getId(), e1.getEvent_id()), h);
+        ResponseEntity<EventWallet> primeira = restTemplate.exchange(
+                url("/bff/event-wallets"), HttpMethod.POST, req, EventWallet.class);
+        ResponseEntity<EventWallet> repetida = restTemplate.exchange(
+                url("/bff/event-wallets"), HttpMethod.POST, req, EventWallet.class);
+        assertEquals(HttpStatus.CREATED, primeira.getStatusCode());
+        assertEquals(HttpStatus.CREATED, repetida.getStatusCode());
+        assertEquals(h.getFirst("Idempotency-Key"), repetida.getHeaders().getFirst("Idempotency-Key"));
+        assertEquals(primeira.getBody().getExpiresAt(), repetida.getBody().getExpiresAt());
+
+        // mesma chave, outro evento: 422
+        ResponseEntity<String> conflito = restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                new HttpEntity<>(new EventWallet(attendee.getId(), e2.getEvent_id()), h), String.class);
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, conflito.getStatusCode());
+    }
+
     // ======================= /bff/my-wallets =======================
 
     @Test
