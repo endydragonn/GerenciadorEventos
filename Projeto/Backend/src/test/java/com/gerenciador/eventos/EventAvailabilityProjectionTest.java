@@ -11,6 +11,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -18,6 +19,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.util.AopTestUtils;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import com.gerenciador.eventos.TestSupport.EventsTestSupport;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
@@ -27,6 +30,7 @@ import com.gerenciador.eventos.identity.UserService;
 import com.gerenciador.eventos.identity.api.User;
 import com.gerenciador.eventos.reservation.EventAvailabilityProjection;
 import com.gerenciador.eventos.reservation.EventAvailabilityRepository;
+import com.gerenciador.eventos.reservation.EventCapRepository;
 import com.gerenciador.eventos.reservation.EventWalletService;
 import com.gerenciador.eventos.reservation.MyWalletService;
 import com.gerenciador.eventos.reservation.ReservationEvents;
@@ -60,6 +64,7 @@ public class EventAvailabilityProjectionTest {
     @Autowired private EventService eventService;
     @Autowired private EventWalletService eventWalletService;
     @Autowired private EventAvailabilityRepository eventAvailabilityRepository;
+    @Autowired private EventCapRepository eventCapRepository;
     @Autowired private IdempotentConsumer idempotentConsumer;
     @Autowired private EventStore eventStore;
     @Autowired private DatabaseConnection databaseConnection;
@@ -163,6 +168,39 @@ public class EventAvailabilityProjectionTest {
         EventAvailabilityProjection projecao = new EventAvailabilityProjection();
         assertFalse(idempotentConsumer.process(projecao, log.get(0)), "já aplicado: descartado");
         assertEquals(3, eventAvailabilityRepository.findAvailable(e.getEvent_id()));
+    }
+
+    /**
+     * Ponta a ponta do braço de controle (#31): {@code addLink} com {@code reservation.readpath=naive} -> append
+     * {@code SlotReserved} -> relay -> tópico -> consumer -> {@code ativos} -> {@code findAvailable}. O naive nunca
+     * toca {@code eventcap.quant} (continua na capacidade), então a disponibilidade que cai só pode vir da projeção
+     * real; e, com ela em 0, o próximo {@code addLink} é barrado ("Evento lotado") por essa leitura.
+     */
+    @Test
+    public void addLinkNaiveRefleteNaDisponibilidadePelaProjecaoReal() throws Exception {
+        User creator = novoUsuario("proj-naive-creator@example.com", "proj-fone-06");
+        Event e = novoEvento(creator.getId(), "Proj Naive", 2);
+        User u1 = novoUsuario("proj-naive-u1@example.com", "proj-fone-60");
+        User u2 = novoUsuario("proj-naive-u2@example.com", "proj-fone-61");
+        User u3 = novoUsuario("proj-naive-u3@example.com", "proj-fone-62");
+
+        Object servico = AopTestUtils.getUltimateTargetObject(eventWalletService);
+        Object original = ReflectionTestUtils.getField(servico, "readPath");
+        ReflectionTestUtils.setField(servico, "readPath", "naive");
+        try {
+            eventWalletService.addLink(new EventWallet(u1.getId(), e.getEvent_id()));
+            aguardarDisponivel(e.getEvent_id(), 1);
+            eventWalletService.addLink(new EventWallet(u2.getId(), e.getEvent_id()));
+            aguardarDisponivel(e.getEvent_id(), 0);
+
+            assertEquals(2, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+                    "o naive não toca o CAS: a queda veio só da projeção");
+            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                    () -> eventWalletService.addLink(new EventWallet(u3.getId(), e.getEvent_id())));
+            assertTrue(ex.getMessage().toLowerCase().contains("lotado"), "veio: " + ex.getMessage());
+        } finally {
+            ReflectionTestUtils.setField(servico, "readPath", original);
+        }
     }
 
     // ===================== helpers =====================

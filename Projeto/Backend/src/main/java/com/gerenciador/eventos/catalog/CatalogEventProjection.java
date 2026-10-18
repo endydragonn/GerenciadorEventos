@@ -60,7 +60,7 @@ public class CatalogEventProjection implements Projection {
                 avancarVersao(conn, schema, id, ev.version());
             }
             case "EventCancelled" -> {
-                // Na viva, eventcap e event_availability caem por ON DELETE CASCADE (a sombra não tem FK).
+                // Na viva, só eventcap cai por ON DELETE CASCADE (a sombra não tem FK). event_availability não tem FK desde a #29: a linha fica órfã, inofensiva.
                 executar(conn, "DELETE FROM " + schema + ".eventpresenter WHERE event_id = ?", id);
                 executar(conn, "DELETE FROM " + schema + ".event WHERE event_id = ?", id);
             }

@@ -55,7 +55,9 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   aleatório de 200 jogadas por 6 usuários em 3 eventos; `walletevent` e `ativos` reconstruídos na sombra só do `event_store`
   == vivos nas colunas comparáveis; `ativos` == reservas ativas do `walletevent`), `EventAvailabilityProjectionTest`
   (**ponta a ponta**: reserva → relay → tópico → consumer → `ativos` → `findAvailable`, com relay e consumer ligados e
-  `@DirtiesContext`; lag observável; reenvio não conta de novo), `EventWalletNaivePathTest` (o braço naive com o consumer
+  `@DirtiesContext`; lag observável; reenvio não conta de novo; e, na #30, o `addLink` do braço `naive`
+  (`readPath` trocado por reflexão, restaurado no `finally`) reflete na disponibilidade pela projeção real, com
+  `eventcap.quant` intocado, e o `addLink` seguinte é barrado como "Evento lotado"), `EventWalletNaivePathTest` (o braço naive com o consumer
   **desligado**: é o "consumer parado" determinístico que prova o overselling do braço de controle; também confere que o
   naive appenda `SlotReserved` e que a leitura nunca usa `eventcap.quant`), `EventsKafkaConfigTest` (o `RetryListener` loga
   em ERROR a partir da N-ésima tentativa). Os testes ponta a ponta esperam o EFEITO no banco, nunca a atribuição de
@@ -290,6 +292,8 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
 
 ## Event store e backbone de eventos — issue #27 (ADR "Event-Backbone-Event-Store")
 
+Diagrama command / evento / projeção / replay da Fase 6 (`catalog` e `reservation`): [`docs/arquitetura/fase6-cqrs-es.md`](../../docs/arquitetura/fase6-cqrs-es.md).
+
 Infra genérica de CQRS + Event Sourcing em `shared/events` (sem domínio; a #28 converteu `catalog`, ver a seção
 seguinte, e a #29 converte o lado wallet de `reservation`, só appendando eventos com o seu `streamType`). Broker: **Redpanda** (container
 `gerenciador-redpanda`, `redpanda:9092` na rede `gerenciador-net`, sem porta no host; imagem com tag fixa no compose;
@@ -390,7 +394,7 @@ sem mudança de expectativa).
     `eventcap`, e uma recusa do `CHECK`, HTTP 400, não deixa rastro no log; a não atomicidade com (1) é a de antes, #60); (3) `trocarApresentadores`: 1 `PresenterRemoved`/`PresenterAdded` por diferença
     (nomes aparados, sem vazios/repetidos; sem diferença não appenda). O append está sempre na transação da escrita que ele descreve.
   - `delete`: `EventCancelled` appendado e, **na mesma transação**, a projeção faz o `DELETE` de `event` que sempre existiu
-    (`eventcap`/`event_availability` caem por `CASCADE`). O stream fica no `event_store` como auditoria. `DELETE` que falha
+    (só `eventcap` cai por `CASCADE`; `event_availability` não tem FK desde a #29 e a linha fica órfã, inofensiva porque a leitura parte de `eventcap`). O stream fica no `event_store` como auditoria. `DELETE` que falha
     (ex.: `walletevent` com `RESTRICT`) desfaz o `EventCancelled`. Evento inexistente = no-op, sem evento (204 como antes).
 - **Read model** = `event`/`eventpresenter` (+ `event.version`), projeção **inline**: `HttpContractTest` lê o que acabou de
   escrever. A mesma `CatalogEventProjection` roda no command (schema `public`) e no replay (schema-sombra).

@@ -143,6 +143,11 @@ relacionais. A disponibilidade do braço `naive` virou projeção assíncrona (c
 `ativos`, disponibilidade calculada na leitura) e o `ReadModelRefreshService` saiu: o lag deixou de ser variável controlada e
 passou a ser medido (pré-requisito da Rodada 2, #31). O compose liga o relay (desde a #28) e o consumer (desde a #29) no backend.
 
+**Implementado (Fase 6, issue #30):** checkpoint — `catalog` e `reservation` event-sourced, contrato `/bff/**` inalterado
+(`HttpContractTest`), replay dos dois agregados coberto (`CatalogEventSourcingTest`, `ReservationReplayTest`) e teste
+ponta a ponta do braço `naive` lendo a projeção real (`EventAvailabilityProjectionTest`). Diagrama command / evento /
+projeção / replay em [`docs/arquitetura/fase6-cqrs-es.md`](docs/arquitetura/fase6-cqrs-es.md). A Rodada 2 (#31) mede o resultado.
+
 **Decidido, não implementado:** extrair os módulos como microsserviços (Opção B — `gateway`, `identity`,
 `catalog`, `reservation`, `notification`, `admission`; a Fase 5 só os separou dentro do monólito);
 camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
