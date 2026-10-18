@@ -4,14 +4,15 @@ subproject:
 type: note
 tags: [architecture, decision, adr, cqrs, event-sourcing, kafka, redpanda, postgres]
 created: 2026-10-18
-status: infra-implementada-27
+status: implementada-fase6-27-30
 ---
 
 # Decisão de Arquitetura — Backbone de eventos, event store e contrato do evento de domínio
 
-> **Status: infra implementada na #27; #28–#30 pendentes.** Fase 6 do roadmap (issue #26). A #27 entregou o
-> broker, o event store, o relay, a base do consumer idempotente, o replay e os snapshots (sem domínio). Faltam as
-> issues #28 (`catalog`), #29 (lado wallet de `reservation`) e #30 (checkpoint); a Rodada 2 (#31) mede o resultado. Resolve as questões em aberto "Kafka vs.
+> **Status: implementada (Fase 6: #27–#30).** Fase 6 do roadmap (issue #26). A #27 entregou o broker, o event
+> store, o relay, a base do consumer idempotente, o replay e os snapshots; a #28 converteu `catalog`; a #29, o lado
+> wallet de `reservation`; a #30 fechou o checkpoint (teste ponta a ponta do braço `naive` e o diagrama em
+> [fase6-cqrs-es](../arquitetura/fase6-cqrs-es.md)). A Rodada 2 (#31) mede o resultado. Resolve as questões em aberto "Kafka vs.
 > Redpanda", "event store", "formato do evento" e "admissão: RabbitMQ vs. tópico" do
 > [Architecture-Decision-Microservices-Split](Architecture-Decision-Microservices-Split.md).
 
