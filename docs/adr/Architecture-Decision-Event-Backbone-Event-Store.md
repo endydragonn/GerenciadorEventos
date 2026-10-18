@@ -122,7 +122,10 @@ teste anterior depois do `TRUNCATE ... RESTART IDENTITY`. Depois:
 - avanço com rowcount 1 → aplica;
 - `version ≤ última` → descarta (reenvio);
 - `version > última + 1` → buraco: aplica em ordem as versões que faltam daquele stream **que
-  existem no `event_store`** (já comitadas, pela ordem acima).
+  existem no `event_store`** (já comitadas, pela ordem acima). Pela ordem por stream, a mensagem da v n+2 só existe
+  depois que a n+1 comitou, então isso não deve faltar. Se ainda assim faltar, o consumer **não
+  avança** o checkpoint nem o offset e lança erro para o retry com backoff do `spring-kafka`.
+  Esgotado o retry, a mensagem vai para um dead-letter topic e o caso é logado.
 
 **Catch-up** (o "poller ou `pg_cron`" do aceite da #27) = esse consumer: o que ficou para trás vem do broker, e o buraco é preenchido relendo o `event_store`. Para começar do zero, há o replay abaixo. Não há poller nem `pg_cron` à parte.
 
