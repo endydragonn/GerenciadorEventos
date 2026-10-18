@@ -9,8 +9,9 @@ public interface EventWalletApi {
     EventWallet addLink(EventWallet ew);
 
     /**
-     * Reserva idempotente: a repetição com a mesma chave (e o mesmo usuário/evento) devolve o resultado
-     * da primeira sem tocar a capacidade; outro usuário/evento ⇒ {@link IdempotencyConflictException}.
+     * Reserva idempotente: a repetição com a mesma chave (do mesmo usuário, para o mesmo evento) devolve o
+     * resultado da primeira sem tocar a capacidade; o mesmo usuário com outro evento ⇒
+     * {@link IdempotencyConflictException}. A chave tem escopo por usuário (issue #129).
      * Chave {@code null}/em branco ⇒ o servidor gera uma.
      */
     EventWallet addLink(EventWallet ew, String idempotencyKey);

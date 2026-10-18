@@ -33,8 +33,8 @@ resumo reflete só os testes desta rodada — não precisa limpar na mão).
   container com env fixo (`--env-file ../.env`): para mudar `test.db.schemas` por ali, passe
   `-e TEST_DB_SCHEMAS=...` no `docker run` do script. Coberto por `TestSchemasTest`.
 - `EventTest`, `UserTest`, `EventWalletTest`, `MyWalletTest` exercitam services + repositories.
-- `IdempotencyKeyTest` (issue #24): repetição com a mesma `Idempotency-Key` não decrementa `eventcap` de novo
-  (sequencial, após `confirm`, e 8 threads concorrentes com a mesma chave), conflito com outro usuário/evento,
+- `IdempotencyKeyTest` (issue #24; escopo por usuário na #129): repetição com a mesma `Idempotency-Key` não decrementa `eventcap` de novo
+  (sequencial, após `confirm`, e 8 threads concorrentes com a mesma chave), conflito do mesmo usuário com outro evento, mesma chave em usuários diferentes sem colisão,
   falha não deixa chave. O braço `naive` tem o seu em `EventWalletNaivePathTest`; o header/422 em `HttpContractTest`.
 - `HttpContractTest` (`webEnvironment = RANDOM_PORT` + `TestRestTemplate`) fixa path + método
   + forma de request/response de cada endpoint `/bff/**` que o Flutter consome — bate no
@@ -317,17 +317,19 @@ seguido de `confirm`).
 ### Idempotency-Key, invariante e compensação — issue #24
 
 - **Invariante**: (1) reservas ativas (`pending`/`confirmed`) ≤ capacidade — **só no braço `cas`** (o CAS em
-  `eventcap` e o `CHECK eventcap_quant_bounds` garantem; o `naive` oversella de propósito); (2) **uma `Idempotency-Key` produz no máximo uma reserva**
-  (PK de `idempotency_key`). Nenhuma outra requisição observa um estado em que a vaga foi debitada
+  `eventcap` e o `CHECK eventcap_quant_bounds` garantem; o `naive` oversella de propósito); (2) **uma `Idempotency-Key`, por usuário, produz no máximo uma reserva**
+  (PK `(user_id, idempotency_key)`). Nenhuma outra requisição observa um estado em que a vaga foi debitada
   sem a reserva gravada (ou o contrário): tudo é uma transação.
 - **Header** `Idempotency-Key` em `POST /bff/event-wallets`, **opcional e aditivo**: sem ele, o servidor
   gera um UUID; a chave usada (gerada ou recebida) volta no header `Idempotency-Key` da resposta 201
   (exposto no CORS). O corpo JSON e o contrato do Flutter não mudam (`EventWallet.idempotencyKey` é
-  `@JsonIgnore`, só em memória). Máx. 255 caracteres (senão 400).
+  `@JsonIgnore`, só em memória). Máx. 255 caracteres (senão 400). **A chave tem escopo por usuário**
+  (issue #129): a PK é `(user_id, idempotency_key)`, então dois usuários podem usar a mesma chave sem
+  colidir — cada um tem a própria reserva (claim e lookup usam o par).
 - **Repetição** (mesma chave, mesmo usuário e evento) devolve **201 com o resultado da primeira**
   (`status = pending`, `expiresAt` salvo — mesmo depois de confirmar/cancelar a reserva) e **não** toca
-  `eventcap`. **Mesma chave com outro usuário/evento ⇒ 422** (`IdempotencyConflictException`; segue o rascunho
-  IETF do header, que reserva 422 a "mesma chave, payload diferente"). Como o `INSERT` da chave
+  `eventcap`. **Mesma chave, mesmo usuário e outro evento ⇒ 422** (`IdempotencyConflictException`; segue o
+  rascunho IETF do header, que reserva 422 a "mesma chave, payload diferente"). Como o `INSERT` da chave
   *bloqueia* até a transação concorrente terminar, não há estado "em andamento" visível e portanto
   nenhum 409. Para reservar de novo o mesmo par depois de cancelar, use outra chave.
 - **Só reserva bem-sucedida grava a chave**: lotado / vínculo já existente fazem rollback e a mesma
@@ -358,8 +360,7 @@ seguido de `confirm`).
   pré-checagens, antes da transação, e **não paga nada** (a consulta prévia da chave só roda com chave do
   cliente, nunca com a gerada). O ponto 2 da série compara os braços medidos **com este código**, não com
   as rodadas antigas.
-- **Follow-ups (não feitos na #24)**: (a) PK por `(user_id, idempotency_key)` em vez de só a chave
-  (hoje a chave é global); (b) job de limpeza/retenção da `idempotency_key` por `created_at`.
+- **Follow-up (não feito na #24; issue #130)**: job de limpeza/retenção da `idempotency_key` por `created_at`.
 
 ### Feature flag `reservation.readpath` — caminho CAS (default) vs. ingênuo (experimento)
 

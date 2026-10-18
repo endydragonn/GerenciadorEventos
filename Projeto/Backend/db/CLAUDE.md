@@ -155,14 +155,17 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   (feature flag `reservation.readpath=naive`), braço de controle do experimento da Fase 2.
   Usa `timestamptz` de propósito (código novo não propaga a dívida que a issue #58 corrige).
   Migração a quente: `db/migrations/20260903-event-availability.sql`.
-- **`idempotency_key`** (issue #24) — PK `idempotency_key` (text, até 255 caracteres validado no backend),
-  `user_id`, `event_id` (**sem FK** para `users`/`event`, de propósito: fronteira de módulo, schema por
+- **`idempotency_key`** (issue #24) — PK composta `(user_id, idempotency_key)` (a chave tem escopo por
+  usuário, issue #129; `idempotency_key` é text, até 255 caracteres validado no backend),
+  `event_id` (**sem FK** para `users`/`event`, de propósito: fronteira de módulo, schema por
   serviço é Fase 7), `expires_at` (o da reserva original, devolvido na repetição), `created_at`
   (`timestamptz`). Uma linha por reserva **bem-sucedida**: o `INSERT ... ON CONFLICT DO NOTHING` entra na
   MESMA transação JDBC do CAS em `eventcap` + `walletevent`, então falha faz rollback e não deixa chave;
-  a PK serializa duas requisições com a mesma chave. **Sem retenção/limpeza por ora** (cresce 1 linha por
+  a PK serializa duas requisições do mesmo usuário com a mesma chave. **Sem retenção/limpeza por ora** (cresce 1 linha por
   reserva). Migração a quente: `db/migrations/20261018-idempotency-key.sql` (idempotente; roda como
-  `supabase_admin`, por isso o `OWNER TO admin` explícito). Coberta por `SchemaValidationTest`,
+  `supabase_admin`, por isso o `OWNER TO admin` explícito) e, para trocar a PK antiga `(idempotency_key)`
+  pela composta, `db/migrations/20261019-idempotency-key-pk-por-usuario.sql` (idempotente: só troca se as
+  colunas da PK ainda forem as antigas). Coberta por `SchemaValidationTest`,
   `IdempotencyKeyTest` e o passo 8b do `99-tests.sql`.
 
 ## Regras ao alterar o schema
