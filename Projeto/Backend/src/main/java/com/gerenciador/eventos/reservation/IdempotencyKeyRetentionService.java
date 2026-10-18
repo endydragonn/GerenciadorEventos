@@ -15,7 +15,7 @@ import org.springframework.stereotype.Service;
  *
  * <p>Apaga em lotes de {@value #LOTE} linhas, cada um numa instrução própria (autocommit), até um lote
  * voltar incompleto — não varre nem trava a tabela inteira de uma vez. Mesmo padrão de
- * {@link ReservationExpiryService}/{@link ReadModelRefreshService}; {@code @EnableScheduling} está em
+ * {@link ReservationExpiryService}; {@code @EnableScheduling} está em
  * {@code shared/SchedulingConfig}. {@link #purgeExpired()} é {@code public} e chamável direto (os testes
  * o invocam sem esperar o timer).</p>
  */

@@ -27,6 +27,5 @@
          Suprimida por LINHA (atributo "lines"), não por arquivo inteiro: violação nova em
          qualquer outra linha desses arquivos deve travar o build normalmente. -->
     <suppress id="ProibirConsoleDireto" files="UserRepository\.java" lines="94"/>
-    <suppress id="ProibirConsoleDireto" files="EventRepository\.java" lines="261"/>
 
 </suppressions>

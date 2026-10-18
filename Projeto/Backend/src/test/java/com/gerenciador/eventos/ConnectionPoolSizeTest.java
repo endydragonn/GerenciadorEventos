@@ -16,7 +16,7 @@ import javax.sql.DataSource;
  * (pool de 7) para provar que é configurável sem fixar o default do properties.
  */
 @SpringBootTest(properties = {"spring.datasource.hikari.maximum-pool-size=7",
-        "readmodel.availability.refresh.ms=3600000", "reservation.expiry.scan.ms=3600000"})
+        "reservation.expiry.scan.ms=3600000"})
 class ConnectionPoolSizeTest {
 
     @Autowired

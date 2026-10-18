@@ -62,6 +62,16 @@ for CONTAINER in gerenciador-db gerenciador-redpanda; do
     fi
 done
 
+# O relay e o consumer do gerenciador-backend (ligados no compose desde a #28/#29) compartilham o meu_banco com os testes:
+# drenariam o event_outbox deles e moveriam a projecao de disponibilidade, quebrando o ReservationReplayTest e a prova de
+# overselling do braco naive (que depende do consumer parado). Falha cedo em vez de dar vermelho misterioso.
+if [ -n "$(docker ps -q -f name=^gerenciador-backend$)" ]; then
+    echo "❌ O container gerenciador-backend está rodando: o relay/consumer dele disputam o banco e o Redpanda dos testes."
+    echo "   Pare-o antes: docker stop gerenciador-backend"
+    echo ""
+    exit 1
+fi
+
 REPORTS_DIR="$SCRIPT_DIR/target/surefire-reports"
 
 # Apaga só os relatórios antigos (não o target/ inteiro): o container copia os XMLs novos por
@@ -79,12 +89,6 @@ fi
 mkdir -p "$SCRIPT_DIR/target"
 
 # Rodar tudo dentro do Docker, copiando fonte para /tmp dentro do container
-# Estica o intervalo do job ReadModelRefreshService (@Scheduled) para 1h durante a suíte.
-# Esse job roda em TODOS os contextos Spring em cache (só fechados no fim do JVM) contra o
-# mesmo Postgres, então um refresh disparado pelo contexto de um teste contaminaria o
-# read model event_availability que outro teste observa. Os testes chamam refresh() na mão.
-# (Mesma ideia do @TestPropertySource de ReservationExpiryTest, aqui para toda a suíte.)
-#
 # IDEMPOTENCY_RETENTION_SCAN_MS=3600000: mesma razão para o job IdempotencyKeyRetentionService (#130) —
 # um contexto em cache apagando chaves vencidas concorreria com os testes que envelhecem linhas na mão.
 #
@@ -98,7 +102,6 @@ mkdir -p "$SCRIPT_DIR/target"
 # rebalance) no group do backend vivo (gerenciador-eventos) que consome do mesmo Redpanda.
 docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
   "${PLATFORM_ARGS[@]}" \
-  -e READMODEL_AVAILABILITY_REFRESH_MS=3600000 \
   -e IDEMPOTENCY_RETENTION_SCAN_MS=3600000 \
   -e RESERVATION_READPATH=cas \
   -e SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092 \

@@ -59,7 +59,7 @@ public class SchemaValidationTest {
     void eventTableShouldHaveKeyColumns() throws Exception {
         assertColumns("event",
             "event_id", "creator_id", "event_name", "ead", "address",
-            "event_date", "description", "created_at", "updated_at"
+            "event_date", "description", "created_at", "updated_at", "version"
         );
     }
 
@@ -85,15 +85,36 @@ public class SchemaValidationTest {
     @Test
     void walletEventTableShouldHaveKeyColumns() throws Exception {
         assertColumns("walletevent",
-            "user_id", "event_id", "status", "expires_at", "created_at", "updated_at"
+            "user_id", "event_id", "status", "expires_at", "created_at", "updated_at", "version"
         );
     }
 
     @Test
     void eventAvailabilityTableShouldHaveKeyColumns() throws Exception {
         assertColumns("event_availability",
-            "event_id", "available", "refreshed_at", "created_at"
+            "event_id", "ativos", "last_occurred_at", "applied_at"
         );
+    }
+
+    /**
+     * Issue #29: event_availability é a projeção assíncrona (só {@code ativos}; a disponibilidade é calculada na
+     * leitura). Sai o schema do refresh por timer (available/refreshed_at) e a FK para event: uma violação no consumer
+     * seria SQLException, retentada sem limite, e travaria a partição.
+     */
+    @Test
+    void eventAvailabilityShouldBeTheAsyncProjectionWithoutFkNorOldColumns() throws Exception {
+        assertEquals(List.of("event_id"), constraintColumns("event_availability", 'p'), "PK de event_availability");
+        assertEquals(List.of(), constraintColumns("event_availability", 'f'), "event_availability não tem FK");
+        String sql = "select count(*) from information_schema.columns where table_schema = any(?) "
+            + "and table_name = 'event_availability' and column_name in ('available', 'refreshed_at')";
+        try (Connection c = databaseConnection.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                assertEquals(0, rs.getInt(1), "colunas do schema antigo (available/refreshed_at) sumiram");
+            }
+        }
     }
 
     @Test

@@ -3,17 +3,21 @@
 #   docker compose -f docker-compose.yml -f carga/docker-compose.carga.yml up -d --build
 #
 # - RESERVATION_READPATH: cas (default, nunca oversella) ou naive (braco de controle).
-# - READMODEL_AVAILABILITY_REFRESH_MS: lag do read model (so afeta o caminho naive).
+# - O lag do caminho naive deixou de ser um knob (issue #29): e o lag REAL do consumer da projecao
+#   (relay + consumer do Redpanda), medido, nao configurado. Ver carga/README.md.
 # - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE / _MINIMUM_IDLE: pool do backend (issue #96).
+# - Lag por evento (relay_ms / consumer_ms / total_ms) no logger events.lag: DESLIGADO por padrao (um log por evento
+#   no thread do unico consumer infla o consumer_ms medido). Para ligar SO na rodada que mede o lag, descomente
+#   a linha LOGGING_LEVEL_EVENTS_LAG abaixo (e confira tambem o offset lag: rpk group describe gerenciador-eventos).
 # - SQL/Hibernate em INFO: o application.properties liga log DEBUG de SQL, que distorce
 #   latencia sob carga. Aqui so no ambiente de teste.
 services:
   backend:
     environment:
       RESERVATION_READPATH: ${RESERVATION_READPATH:-cas}
-      READMODEL_AVAILABILITY_REFRESH_MS: ${READMODEL_AVAILABILITY_REFRESH_MS:-5000}
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-1000}
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-5}
       SPRING_JPA_SHOW_SQL: "false"
       LOGGING_LEVEL_ORG_HIBERNATE_SQL: "INFO"
       LOGGING_LEVEL_ORG_HIBERNATE_TYPE_DESCRIPTOR_SQL_BASICBINDER: "INFO"
+      # LOGGING_LEVEL_EVENTS_LAG: "DEBUG"

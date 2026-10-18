@@ -6,6 +6,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -112,6 +113,24 @@ public class EventReplayTest {
             st.execute("UPDATE public.test_somatorio SET soma = soma + 1");
         }
         assertEquals(List.of("test_somatorio"), replay.divergentTables(proj, SOMBRA));
+    }
+
+    /** A comparação pode ficar só nas colunas determinísticas (as com {@code clock_timestamp()} diferem entre viva e sombra). */
+    @Test
+    void comparacaoSoNasColunasInformadas() throws Exception {
+        consumer.process(proj, append("s0", 1, 10));
+        replay.rebuild(proj, TIPO, SOMBRA);
+        try (Connection c = db.getConnection(); Statement st = c.createStatement()) {
+            st.execute("UPDATE public.test_somatorio SET eventos = eventos + 1"); // só a coluna "eventos" diverge
+        }
+        assertEquals(List.of("test_somatorio"), replay.divergentTables(proj, SOMBRA));
+        assertEquals(List.of("test_somatorio"),
+                replay.divergentTables(proj, SOMBRA, Map.of("test_somatorio", List.of("stream_id", "eventos"))));
+        assertEquals(List.of(),
+                replay.divergentTables(proj, SOMBRA, Map.of("test_somatorio", List.of("stream_id", "soma"))),
+                "a coluna que diverge ficou de fora da comparação");
+        assertThrows(IllegalArgumentException.class,
+                () -> replay.divergentTables(proj, SOMBRA, Map.of("test_somatorio", List.of("soma; DROP TABLE x"))));
     }
 
     @Test

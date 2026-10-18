@@ -15,8 +15,7 @@ Este harness é **só sanity local**: roda tudo na própria máquina da stack
 conferir rapidamente que o cenário, a coleta de lag e o relatório funcionam.
 **O runner oficial do experimento da Fase 2 é o kit `Projeto/carga`** (ver o
 `README.md` de lá): o k6 roda numa máquina geradora separada, a matriz
-(`make test-matriz`) varre N e repetições com rajada em fase aleatória do job
-de refresh e consulta o Postgres do host por `psql` remoto, e `make
+(`make test-matriz`) varre N e repetições e mede o lag real do consumer, e consulta o Postgres do host por `psql` remoto, e `make
 report-matriz` gera o gráfico overselling × lag (`report-matriz.sh`, nesta
 pasta). Números para o artigo vêm dele, não deste harness (latência medida
 com o k6 no mesmo host não é válida).
@@ -30,7 +29,7 @@ O seed (`setup.sh`) é a fonte única dos dois.
 | `run.sh` | Orquestrador: probe → setup → collector (bg) → k6 → verify → report. É o que você roda. |
 | `setup.sh` | Cria a fixture: host + N attendees + evento com `capacity` fixa (via `POST /bff/seed`), loga cada attendee e escreve os tokens. Também é o seed único do kit `Projeto/carga` (variáveis opcionais `EVENTS`, `EVENT_NAME_PREFIX`, `SEM_TOKENS`, `USERS_FILE`, `EVENT_IDS_FILE`; ver o cabeçalho do script). |
 | `scenario.js` | Script k6: N VUs, 1 iteração cada, disparo simultâneo (`per-vu-iterations`). Cada VU faz `addLink` e, se aceito, `confirm`. |
-| `collector.sh` | Amostra `event_availability.refreshed_at` (lag do read model) via `psql`, em background, durante a rodada. |
+| `collector.sh` | Amostra `applied_at - last_occurred_at` de `event_availability` (lag real da projeção assíncrona, #29) via `psql`, em background, durante a rodada. |
 | `verify.sh` | Depois da carga, lê `eventcap`/`walletevent` **direto do banco** (fonte de verdade) e calcula o veredito de corretude. |
 | `report.sh` | Junta k6 + verify + lag num CSV final + gráfico HTML autocontido (SVG inline, sem lib externa). |
 | `report-selftest.sh` | Auto-teste de `report.sh` com fixture sintética (sem precisar de stack no ar) — ver seção própria abaixo. |
@@ -96,7 +95,6 @@ env var setada **antes** de chamar `run.sh`:
 ```bash
 # Projeto/.env (ou export antes do docker compose):
 RESERVATION_READPATH=naive
-READMODEL_AVAILABILITY_REFRESH_MS=5000   # default; aumente para mais lag/overselling
 
 docker compose -f Projeto/docker-compose.yml up -d --build backend
 READPATH=naive docs/carga/harness/run.sh
@@ -138,14 +136,13 @@ read model muda na casca de segundos (job padrão a cada 5000ms), então uma
 amostragem mais espaçada ainda captura a série real sem perder resolução
 relevante.
 
-## Lag do read model: por que pode aparecer `-1` nas primeiras amostras
+## Lag da projeção: por que pode aparecer `-1` nas primeiras amostras
 
 `collector.sh` grava `-1` quando `event_availability` ainda não tem linha
-para o evento (o job `ReadModelRefreshService` roda a cada
-`READMODEL_AVAILABILITY_REFRESH_MS`, default 5000ms, e só recalcula depois de
-haver reservas). Numa rodada pequena (poucos VUs), o k6 termina em bem menos
-de 1 segundo — mais rápido que 1 ciclo do job. Por isso `run.sh` espera
-`COLLECTOR_COOLDOWN_S` (default 6s, > 5000ms) **depois** do k6 terminar antes
+para o evento (a linha só nasce quando o consumer aplica o 1º evento do
+evento: append → relay → Redpanda → consumer). Numa rodada pequena (poucos
+VUs), o k6 termina em bem menos de 1 segundo. Por isso `run.sh` espera
+`COLLECTOR_COOLDOWN_S` (default 6s) **depois** do k6 terminar antes
 de parar o collector, garantindo pelo menos 1 leitura real na maioria das
 rodadas. `resultado.csv` distingue `lag_amostras` (total, inclui os `-1`) de
 `lag_leituras_validas` (só as reais) — `lag_max`/`lag_medio` são calculados só

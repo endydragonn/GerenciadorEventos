@@ -5,6 +5,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.slf4j.Logger;
@@ -55,13 +56,18 @@ public class IdempotentConsumer {
     /**
      * Ponto de entrada do {@code @KafkaListener}: processa a mensagem e só então dá o ack (offset).
      *
+     * @return o envelope da mensagem se ela foi aplicada, ou vazio se foi descartada (reenvio ou {@code eventId}
+     *         fora do {@code event_store}); o listener usa para registrar o lag
      * @throws InvalidEventMessageException payload que não é um envelope válido (vai direto para o DLT)
      * @throws EventGapException            buraco irrecuperável no stream (retry limitado e depois DLT)
      * @throws SQLException                 falha transitória de banco/conexão (retry sem limite, nunca DLT)
      */
-    public void onMessage(Projection projection, String value, Acknowledgment ack) throws SQLException {
-        process(projection, parse(value));
+    public Optional<EventEnvelope> onMessage(Projection projection, String value, Acknowledgment ack)
+            throws SQLException {
+        EventEnvelope msg = parse(value);
+        boolean aplicou = process(projection, msg);
         ack.acknowledge();
+        return aplicou ? Optional.of(msg) : Optional.empty();
     }
 
     private EventEnvelope parse(String value) {

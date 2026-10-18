@@ -17,14 +17,13 @@
 
 .EXAMPLE
   .\setup-host.ps1                       # caminho CAS (default)
-  .\setup-host.ps1 -ReadPath naive -RefreshMs 5000
-  .\setup-host.ps1 -ReadPath naive -RefreshMs 2000 -GeradorIp 192.168.0.20   # para a matriz (abre a 5433 so p/ o gerador)
+  .\setup-host.ps1 -ReadPath naive
+  .\setup-host.ps1 -ReadPath naive -GeradorIp 192.168.0.20   # para a matriz (abre a 5433 so p/ o gerador)
   .\setup-host.ps1 -Verificar -EventId 12
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('cas', 'naive')][string]$ReadPath = 'cas',
-    [int]$RefreshMs = 5000,
     [switch]$SemBuild,
     [switch]$Verificar,
     [int]$EventId = 0,
@@ -45,7 +44,7 @@ function Fail($m) { Write-Host "[erro] $m" -ForegroundColor Red; exit 1 }
 function Registrar($alvo, $saida) {
     $dir = Join-Path $PSScriptRoot 'results'
     New-Item -ItemType Directory -Force $dir | Out-Null
-    $cfg = (docker exec gerenciador-backend printenv RESERVATION_READPATH READMODEL_AVAILABILITY_REFRESH_MS 2>$null) -join ' / '
+    $cfg = (docker exec gerenciador-backend printenv RESERVATION_READPATH EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED 2>$null) -join ' / '
     $cab = "===== {0} | {1} | config: {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $alvo, $cfg
     Add-Content -Path (Join-Path $dir 'verificacoes.log') -Value (@($cab, $saida, '') -join "`n") -Encoding utf8
 }
@@ -126,8 +125,7 @@ Get-NetConnectionProfile | ForEach-Object {
 
 # ---------------------------------------------------------------- subir a stack
 $env:RESERVATION_READPATH = $ReadPath
-$env:READMODEL_AVAILABILITY_REFRESH_MS = "$RefreshMs"
-Info "Subindo a stack (readpath=$ReadPath, refresh=${RefreshMs}ms)..."
+Info "Subindo a stack (readpath=$ReadPath; relay e consumer de eventos ligados pelo compose)..."
 $composeArgs = @('compose', '-f', $Compose, '-f', $Override, 'up', '-d')
 if (-not $SemBuild) { $composeArgs += '--build' }
 & docker @composeArgs
@@ -153,6 +151,6 @@ Get-NetIPAddress -AddressFamily IPv4 |
     Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
     ForEach-Object { Write-Host ("  {0,-16} ({1})" -f $_.IPAddress, $_.InterfaceAlias) }
 Write-Host ''
-Write-Host "Config ativa: readpath=$ReadPath  refresh=${RefreshMs}ms  SQL log=desligado" -ForegroundColor Cyan
+Write-Host "Config ativa: readpath=$ReadPath  SQL log=desligado" -ForegroundColor Cyan
 Write-Host 'Registre CPU/RAM/disco desta maquina em docs\carga\setup.md.'
 Write-Host 'Depois de cada rodada: .\setup-host.ps1 -Verificar -EventId <id>'

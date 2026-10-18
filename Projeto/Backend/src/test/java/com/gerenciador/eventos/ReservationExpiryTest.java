@@ -147,7 +147,7 @@ public class ReservationExpiryTest {
         // só então o job age sobre a linha capturada
         reservationExpiryService.expireStaleReservations();
         try (Connection conn = databaseConnection.getConnection()) {
-            assertFalse(eventWalletRepository.expireIfStale(conn, userId, eventId),
+            assertEquals(0, eventWalletRepository.expireIfStale(conn, userId, eventId),
                     "expireIfStale não pode expirar uma reserva já confirmada");
         }
 
