@@ -17,7 +17,9 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
 
 `./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`
 (URL direta `db:5432`, **sem passar pelo pooler**),
-e roda `mvn clean test`. **Exige o container `db` no ar**: os testes batem num Postgres real.
+e roda `mvn clean test` (antes disso apaga `target/surefire-reports` sozinho, então o total do
+resumo reflete só os testes desta rodada — não precisa limpar na mão).
+**Exige o container `db` no ar**: os testes batem num Postgres real.
 
 - `src/test/.../SchemaValidationTest` valida o schema real contra o esperado.
 - `TestSupport/GlobalDbTruncator` dá `TRUNCATE` (início/fim da suíte) em **todas** as tabelas dos
