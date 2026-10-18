@@ -71,7 +71,8 @@ reserva concorrente com a expiração do mesmo par leia uma versão velha, e eco
 **Outbox = tabela `event_outbox`** (só `global_position` do evento), inserida na mesma transação do
 append e **apagada** depois de publicar. Mantém o `event_store` imutável e sem `UPDATE` não-HOT na
 tabela mais quente. Custo por reserva: +1 `INSERT` em `event_store`, +1 `INSERT` em `event_outbox` na
-transação do request, +1 `DELETE` assíncrono no relay. Entra na seção de latência do
+transação do request, +1 `DELETE` assíncrono no relay. O `INSERT`+`DELETE` contínuo gera tuplas mortas; a #27
+configura autovacuum mais agressivo na `event_outbox` (`autovacuum_vacuum_scale_factor` baixo). Entra na seção de latência do
 `Backend/CLAUDE.md` e na leitura da #31.
 
 **Relay outbox → Redpanda.** `@Scheduled` com intervalo curto (default **50 ms**), drena até esvaziar.
@@ -177,11 +178,15 @@ Envelope JSON, igual nas colunas do `event_store` e na mensagem do tópico:
   mudança incompatível incrementa e o leitor ganha um *upcaster*. Nada a construir até a primeira
   mudança incompatível. Evento gravado nunca é reescrito.
 - **Tópicos:** um por `streamType` (`catalog.event`, `reservation.wallet`). **Chave = `event_id` do
-  domínio**: as reservas de um mesmo evento caem na mesma partição, em ordem **dentro do tópico**
+  domínio** (o id do evento do catálogo, coluna `event.event_id`; **não** o `eventId` do envelope, que é
+  único por mensagem): as reservas de um mesmo evento caem na mesma partição, em ordem **dentro do tópico**
   (não há ordem entre tópicos — por isso a disponibilidade não depende de `catalog.event`). Efeito
   para a #31: o evento quente fica numa partição e num consumer; o lag dele é limitado a um consumer,
   e mais partições não ajudam.
 - O relay acrescenta o header `publishedAt` à mensagem.
+- **Sem dado pessoal no `payload`:** o `event_store` é imutável e não dá para apagar o que entra nele.
+  Eventos levam ids (`userId`, `event_id`) e dados do domínio do evento, nunca e-mail, telefone,
+  senha ou documento. Por isso `identity` não é event-sourced (ver a ADR de microsserviços).
 
 ### 4. Medição de lag (para a Rodada 2)
 
