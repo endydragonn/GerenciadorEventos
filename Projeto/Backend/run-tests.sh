@@ -74,12 +74,16 @@ mkdir -p "$SCRIPT_DIR/target"
 # read model event_availability que outro teste observa. Os testes chamam refresh() na mão.
 # (Mesma ideia do @TestPropertySource de ReservationExpiryTest, aqui para toda a suíte.)
 #
+# IDEMPOTENCY_RETENTION_SCAN_MS=3600000: mesma razão para o job IdempotencyKeyRetentionService (#130) —
+# um contexto em cache apagando chaves vencidas concorreria com os testes que envelhecem linhas na mão.
+#
 # RESERVATION_READPATH=cas: pina o caminho de reserva no default previsível para a suíte
 # inteira, mesmo que o Projeto/.env tenha sido setado para "naive" (experimento #11/#12) —
 # senão os testes CAS (ex.: EventWalletTest.testEventoLotado) quebrariam.
 docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
   "${PLATFORM_ARGS[@]}" \
   -e READMODEL_AVAILABILITY_REFRESH_MS=3600000 \
+  -e IDEMPOTENCY_RETENTION_SCAN_MS=3600000 \
   -e RESERVATION_READPATH=cas \
   -e "MVN_REPO=$CONTAINER_HOME/.m2/repository" \
   -v "$HOST_SRC":/workspace-src:ro \

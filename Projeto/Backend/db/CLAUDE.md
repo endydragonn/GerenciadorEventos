@@ -161,12 +161,15 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   serviço é Fase 7), `expires_at` (o da reserva original, devolvido na repetição), `created_at`
   (`timestamptz`). Uma linha por reserva **bem-sucedida**: o `INSERT ... ON CONFLICT DO NOTHING` entra na
   MESMA transação JDBC do CAS em `eventcap` + `walletevent`, então falha faz rollback e não deixa chave;
-  a PK serializa duas requisições do mesmo usuário com a mesma chave. **Sem retenção/limpeza por ora** (cresce 1 linha por
-  reserva). Migração a quente: `db/migrations/20261018-idempotency-key.sql` (idempotente; roda como
+  a PK serializa duas requisições do mesmo usuário com a mesma chave. **Retenção** (issue #130): o job
+  `IdempotencyKeyRetentionService` apaga, em lotes, as linhas com `created_at` mais antigo que
+  `idempotency.retention.hours` (default 24h); o índice `idx_idempotency_key_created_at` (btree em `created_at`)
+  serve esse filtro (a PK não serve; sem ele cada rodada faria seq scan da tabela inteira). Migração a quente: `db/migrations/20261018-idempotency-key.sql` (idempotente; roda como
   `supabase_admin`, por isso o `OWNER TO admin` explícito) e, para trocar a PK antiga `(idempotency_key)`
   pela composta, `db/migrations/20261019-idempotency-key-pk-por-usuario.sql` (idempotente: só troca se as
-  colunas da PK ainda forem as antigas). Coberta por `SchemaValidationTest`,
-  `IdempotencyKeyTest` e o passo 8b do `99-tests.sql`.
+  colunas da PK ainda forem as antigas) e `db/migrations/20261020-idempotency-key-created-at-index.sql` (índice
+  de `created_at`, `CREATE INDEX IF NOT EXISTS`; independe da `20261019-...`; pré-requisito: a tabela existir). Coberta por `SchemaValidationTest`,
+  `IdempotencyKeyTest`, `IdempotencyRetentionTest` e o passo 8b do `99-tests.sql`.
 
 ## Regras ao alterar o schema
 

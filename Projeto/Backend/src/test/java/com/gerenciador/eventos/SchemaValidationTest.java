@@ -119,6 +119,21 @@ public class SchemaValidationTest {
         assertEquals(List.of("user_id", "idempotency_key"), pk, "PK de idempotency_key");
     }
 
+    /** Issue #130: o job de retenção filtra por created_at; sem o índice cada rodada faz seq scan. */
+    @Test
+    void idempotencyKeyShouldHaveCreatedAtIndex() throws Exception {
+        String sql = "select count(*) from pg_indexes where schemaname = any(?) "
+            + "and tablename = 'idempotency_key' and indexname = 'idx_idempotency_key_created_at'";
+        try (Connection c = databaseConnection.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                assertEquals(1, rs.getInt(1), "índice idx_idempotency_key_created_at");
+            }
+        }
+    }
+
     private boolean tableExists(String table) throws Exception {
         String sql = "select count(*) from information_schema.tables where table_schema = any(?) and table_name = ?";
         try (Connection c = databaseConnection.getConnection();

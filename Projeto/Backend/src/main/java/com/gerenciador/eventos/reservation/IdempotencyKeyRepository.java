@@ -67,4 +67,27 @@ public class IdempotencyKeyRepository {
             throw new RuntimeException("Erro ao consultar Idempotency-Key: " + ex.getMessage(), ex);
         }
     }
+
+    /**
+     * Apaga até {@code lote} chaves com {@code created_at} mais antigo que {@code retencaoHoras}. Um
+     * único {@code DELETE} limitado (CTE + junção por {@code ctid}, o idioma do manual do PostgreSQL para
+     * "DELETE com LIMIT"): o chamador repete até devolver menos que {@code lote}, assim nenhuma instrução
+     * segura locks em tudo de uma vez. O {@code FOR UPDATE} trava só as linhas do lote. A junção por
+     * {@code ctid} é estável porque nada faz {@code UPDATE} nessa tabela (o {@code ctid} não muda entre o
+     * {@code SELECT} e o {@code DELETE}).
+     * @return quantas linhas foram apagadas nesta chamada.
+     */
+    public int deleteOlderThan(int retencaoHoras, int lote) {
+        String sql = "WITH lote AS (SELECT ctid FROM idempotency_key "
+                + "WHERE created_at < now() - make_interval(hours => ?) LIMIT ? FOR UPDATE) "
+                + "DELETE FROM idempotency_key d USING lote WHERE d.ctid = lote.ctid";
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setInt(1, retencaoHoras);
+            stmt.setInt(2, lote);
+            return stmt.executeUpdate();
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao apagar Idempotency-Keys vencidas: " + ex.getMessage(), ex);
+        }
+    }
 }
