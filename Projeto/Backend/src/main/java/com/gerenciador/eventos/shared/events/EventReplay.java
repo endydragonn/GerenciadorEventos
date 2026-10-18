@@ -106,10 +106,10 @@ public class EventReplay {
         List<String> divergentes = new ArrayList<>();
         try (Connection conn = db.getConnection(); Statement st = conn.createStatement()) {
             for (String tabela : projection.tables()) {
-                String cols = colunasComparaveis.containsKey(tabela)
-                        ? colunasComparaveis.get(tabela).stream().map(EventReplay::identificador)
-                                .collect(Collectors.joining(", "))
-                        : "*";
+                List<String> lista = colunasComparaveis.get(tabela);
+                // tabela ausente do mapa, ou lista nula/vazia, compara SELECT * (lista vazia geraria "SELECT  FROM")
+                String cols = lista == null || lista.isEmpty() ? "*"
+                        : lista.stream().map(EventReplay::identificador).collect(Collectors.joining(", "));
                 String viva = "SELECT " + cols + " FROM public." + identificador(tabela);
                 String copia = "SELECT " + cols + " FROM " + sombra + "." + identificador(tabela);
                 String sql = "SELECT (SELECT count(*) FROM (" + viva + " EXCEPT ALL " + copia

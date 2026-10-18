@@ -5,7 +5,6 @@ import java.sql.PreparedStatement;
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -136,9 +135,9 @@ public class WalletEventStateMachineTest {
         // guard do próprio UPSERT (WHERE status IN ('expired','cancelled')): chamada direta
         // ao repository sobre uma linha confirmed não pode revivê-la.
         try (Connection conn = databaseConnection.getConnection()) {
-            boolean reviveu = eventWalletRepository.reservePending(
+            int versao = eventWalletRepository.reservePending(
                     conn, u.getId(), e.getEvent_id(), LocalDateTime.now().plusSeconds(120));
-            assertFalse(reviveu, "reservePending não pode reviver uma reserva confirmed");
+            assertEquals(0, versao, "reservePending não pode reviver uma reserva confirmed");
         }
         assertEquals("confirmed", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
         assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),

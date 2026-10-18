@@ -36,10 +36,10 @@
 #                      (default cas)
 #    COLLECTOR_INTERVAL_S  intervalo de amostragem do lag, em segundos (default 1)
 #    COLLECTOR_COOLDOWN_S  quanto esperar após o k6 terminar antes de parar o
-#                      collector -- cobre 1 ciclo do job de refresh do read
-#                      model (default 6, > READMODEL_AVAILABILITY_REFRESH_MS
-#                      padrão de 5000ms) para não ficar só com o sentinela -1
-#                      numa rodada curta
+#                      collector -- dá tempo ao consumer da projeção de
+#                      disponibilidade (relay + Redpanda) de aplicar ao menos
+#                      1 evento (default 6) para não ficar só com o sentinela
+#                      -1 numa rodada curta
 #    OUT_DIR          diretório de saída da rodada
 #                      (default docs/carga/harness/resultados/<sufixo>)
 #    MANTER_DADOS     se "1", não limpa host/attendees/evento ao final
@@ -207,13 +207,12 @@ if [ "$K6_EXIT" -ne 0 ]; then
 fi
 
 # Um cenário pequeno (N/CAPACITY baixos, como um smoke run) termina em bem
-# menos de 1s -- rápido demais pro job ReadModelRefreshService (default
-# READMODEL_AVAILABILITY_REFRESH_MS=5000ms) ter rodado sequer 1x pro evento
-# desta rodada. Sem esperar, o collector só registraria o sentinela -1 ("sem
-# leitura ainda") e o gráfico de lag ficaria vazio. Dá margem pra pelo menos
-# 1 ciclo de refresh acontecer antes de parar de amostrar.
+# menos de 1s -- pode ser rápido demais pro consumer da projeção (relay +
+# Redpanda) ter aplicado algum evento desta rodada. Sem esperar, o collector só
+# registraria o sentinela -1 ("sem leitura ainda") e o gráfico de lag ficaria
+# vazio. Dá margem pra pelo menos 1 evento ser aplicado antes de parar de amostrar.
 echo ""
-echo "==> 3.1 aguardando ${COLLECTOR_COOLDOWN_S:-6}s (cobre 1 ciclo do job de refresh do read model, default 5000ms) antes de parar o collector"
+echo "==> 3.1 aguardando ${COLLECTOR_COOLDOWN_S:-6}s (o consumer da projeção aplicar ao menos 1 evento) antes de parar o collector"
 sleep "${COLLECTOR_COOLDOWN_S:-6}"
 
 # ---------------------------------------------------------------------------

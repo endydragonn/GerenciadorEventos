@@ -38,7 +38,7 @@
     <module name="TreeWalker">
         <!-- Banir saída direta de console em código de produção. O projeto já usa SLF4J em
              alguns pontos (ver reservation/ReservationExpiryService,
-             reservation/ReadModelRefreshService) — é a referência do "caminho certo" citada na
+             reservation/EventAvailabilityConsumer) — é a referência do "caminho certo" citada na
              mensagem, já que não existe uma classe própria de log adapter. -->
         <module name="RegexpSinglelineJava">
             <property name="id" value="ProibirConsoleDireto"/>

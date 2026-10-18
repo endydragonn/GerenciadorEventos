@@ -96,10 +96,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       JWT_SECRET: ${JWT_SECRET}
-      # Backbone de eventos (issue #27): o broker interno do compose. O relay liga desde a #28 (catalog appenda
-      # eventos); o consumer (EVENTS_CONSUMER_ENABLED) fica desligado até haver projeção assíncrona (#29).
+      # Backbone de eventos (issue #27): o broker interno do compose. Relay (outbox -> broker) ligado desde a #28
+      # (catalog appenda eventos) e consumer (projeção de disponibilidade do braço naive) desde a #29.
       SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       EVENTS_RELAY_ENABLED: "true"
+      EVENTS_CONSUMER_ENABLED: "true"
+
     ports:
       - "8081:8081"
     depends_on:

@@ -9,6 +9,13 @@
 --   expired    -> reserva não confirmada a tempo; a vaga foi devolvida a eventcap.
 --   cancelled  -> inscrição cancelada pelo usuário; a vaga foi devolvida a eventcap.
 -- A linha só é criada/atualizada DEPOIS que o UPDATE condicional em eventcap teve sucesso.
+--
+-- Projeção INLINE do stream 'reservation.wallet' (issue #29; ADR Event-Backbone-Event-Store): cada transição
+-- (reservePending/confirm/cancelIfActive/expireIfStale) é um UPDATE condicional com
+-- "SET version = version + 1 ... RETURNING version" e o evento (SlotReserved/ReservationConfirmed/
+-- ReservationCancelled/ReservationExpired) é appendado em event_store SÓ quando ele afeta 1 linha, na mesma
+-- transação, com essa version. Reserva nova depois de cancelada/expirada continua o mesmo stream (version segue).
+-- version = 0: linha anterior ao event sourcing (sem eventos no log).
 
 SET client_encoding = 'UTF8';
 
@@ -22,6 +29,7 @@ CREATE TABLE IF NOT EXISTS public.walletevent
     expires_at timestamp without time zone,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    version integer NOT NULL DEFAULT 0,
     CONSTRAINT "WalletEvent_pkey" PRIMARY KEY (user_id, event_id),
     CONSTRAINT walletevent_status_check
         CHECK (status IN ('confirmed', 'pending', 'expired', 'cancelled')),

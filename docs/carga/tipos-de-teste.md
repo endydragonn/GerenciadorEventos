@@ -36,9 +36,9 @@ tudo). O passo a passo completo, com colunas de CSV e códigos de saída, está 
 - **Caminho de reserva.** O host roda em um de dois modos (`RESERVATION_READPATH`):
   - **`cas`** (padrão): `UPDATE` condicional atômico em `eventcap`. Nunca vende além da
     capacidade.
-  - **`naive`**: lê a vaga em `event_availability`, um read model recalculado a cada
-    `REFRESH_MS` (o "lag"), e grava sem tocar em `eventcap`. Vende além da capacidade quando as
-    tentativas caem na mesma janela de lag. É o braço de controle do experimento, não um bug.
+  - **`naive`**: lê a vaga calculada sobre `event_availability`, uma projeção assíncrona alimentada pelo
+    consumer do tópico `reservation.wallet` (o "lag" é o do relay + consumer, medido, não configurado), e grava
+    sem tocar em `eventcap`. Vende além da capacidade quando as tentativas caem na mesma janela de lag. É o braço de controle do experimento, não um bug.
 
 ## 1. Disputa de vagas
 
@@ -97,15 +97,15 @@ lag do read model, contra o CAS como referência.
 
 | Braço | N (clientes) | Repetições | Lags (ms) | Linhas no CSV |
 |---|---|---|---|---|
-| `cas` | 100, 200 | 5 | 5000 (só rótulo; o CAS não lê o read model) | 10 |
-| `naive` | 100, 200 | 5 | 500, 2000, 5000, 10000 | 40 |
+| `cas` | 100, 200 | 5 | 0 (o lag não é mais configurado, #29; o CAS nem lê a projeção) | 10 |
+| `naive` | 100, 200 | 5 | 0 (idem; o lag real sai em `lag_obs_*`) | 10 |
 
 ```powershell
 # braço CAS (host com READPATH=cas)
 make test-matriz-cas HOST_IP=<ip>
-# braço ingênuo: um lag por vez; o host reinicia com o MESMO lag
-make host-rpm READPATH=naive REFRESH_MS=<lag> MAX_CONN=300   # no host
-make test-matriz-naive HOST_IP=<ip> REFRESH_MS=<lag>         # no gerador
+# braço ingênuo (o lag é o do consumer real, medido)
+make host-rpm READPATH=naive MAX_CONN=300                    # no host
+make test-matriz-naive HOST_IP=<ip>                          # no gerador
 # gráfico
 make report-matriz
 ```

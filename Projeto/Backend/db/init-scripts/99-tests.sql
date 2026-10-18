@@ -6,7 +6,7 @@
 -- - CHECK da invariante 0 <= quant <= capacity
 -- - eventpresenter (lista de apresentadores, PK composta)
 -- - Máquina de estados de walletevent (status)
--- - Read model desnormalizado event_availability (refresh inline + cascata no DELETE)
+-- - Projecao assincrona event_availability (so ativos; disponibilidade calculada na leitura) e walletevent.version da guarda
 -- - event_store/event_outbox/event_snapshot/projection_checkpoint (concorrência otimista, outbox, checkpoint atômico)
 -- - TRUNCATE e revalidação pós-TRUNCATE
 
@@ -126,40 +126,83 @@ BEGIN
     SELECT quant INTO v_count FROM public.eventcap WHERE event_id = v_event2;
     IF v_count <> 1 THEN RAISE EXCEPTION 'Falha: cancelamento nao devolveu a vaga (quant=%)', v_count; END IF;
 
-    -- 6b) Read model event_availability: UPSERT do refresh inline + cascata no DELETE do evento
+    -- 6b) Projecao assincrona event_availability (issue #29): so guarda "ativos"; a disponibilidade e calculada na
+    --     leitura (eventcap LEFT JOIN projecao), nunca grava nem le eventcap.quant
     INSERT INTO public.event (creator_id, event_name, event_date, description)
     VALUES (v_user1, 'Evento Read Model', now() + interval '40 days', 'rm')
     RETURNING event_id INTO v_event_rm;
     INSERT INTO public.eventcap (event_id, capacity, quant) VALUES (v_event_rm, 4, 4);
-    -- 1 reserva ativa (pending) -> available deve ser capacity - ativos = 3
-    INSERT INTO public.walletevent (user_id, event_id, status, expires_at)
-    VALUES (v_user2, v_event_rm, 'pending', now() + interval '120 seconds');
 
-    INSERT INTO public.event_availability (event_id, available, refreshed_at)
-    SELECT ec.event_id,
-           CASE WHEN ec.capacity = -1 THEN -1
-                ELSE GREATEST(ec.capacity - COALESCE(a.ativos, 0), 0) END,
-           now()
-    FROM public.eventcap ec
-    LEFT JOIN (
-        SELECT event_id, count(*) AS ativos
-        FROM public.walletevent
-        WHERE status IN ('pending', 'confirmed')
-        GROUP BY event_id
-    ) a ON a.event_id = ec.event_id
+    -- evento sem nenhuma linha na projecao ja tem disponibilidade = capacity
+    SELECT CASE WHEN ec.capacity = -1 THEN -1 ELSE GREATEST(ec.capacity - GREATEST(COALESCE(ea.ativos, 0), 0), 0) END
+      INTO v_count
+      FROM public.eventcap ec LEFT JOIN public.event_availability ea ON ea.event_id = ec.event_id
+     WHERE ec.event_id = v_event_rm;
+    IF v_count <> 4 THEN RAISE EXCEPTION 'Falha: evento sem linha na projecao deveria ter disponibilidade 4, e %', v_count; END IF;
+
+    -- SlotReserved (+1), depois ReservationConfirmed (0, so avanca applied_at/last_occurred_at)
+    INSERT INTO public.event_availability (event_id, ativos, last_occurred_at, applied_at)
+    VALUES (v_event_rm, 1, clock_timestamp(), clock_timestamp())
     ON CONFLICT (event_id) DO UPDATE
-      SET available = EXCLUDED.available, refreshed_at = EXCLUDED.refreshed_at;
-
-    SELECT available INTO v_count FROM public.event_availability WHERE event_id = v_event_rm;
+      SET ativos = event_availability.ativos + EXCLUDED.ativos,
+          last_occurred_at = GREATEST(event_availability.last_occurred_at, EXCLUDED.last_occurred_at),
+          applied_at = clock_timestamp();
+    SELECT GREATEST(ec.capacity - GREATEST(COALESCE(ea.ativos, 0), 0), 0) INTO v_count
+      FROM public.eventcap ec LEFT JOIN public.event_availability ea ON ea.event_id = ec.event_id
+     WHERE ec.event_id = v_event_rm;
     IF v_count <> 3 THEN
-      RAISE EXCEPTION 'Falha: available do read model deveria ser 3 (capacity 4 - 1 ativa), e %', v_count;
+      RAISE EXCEPTION 'Falha: disponibilidade deveria ser 3 (capacity 4 - 1 ativo), e %', v_count;
     END IF;
 
-    -- cascata: DELETE do evento remove a linha de event_availability (FK ON DELETE CASCADE)
-    DELETE FROM public.walletevent WHERE event_id = v_event_rm;
+    -- ReservationCancelled (-1) devolve; um -1 a mais (linha anterior ao ES) nao quebra a leitura: piso 0 / sem CHECK
+    INSERT INTO public.event_availability (event_id, ativos, last_occurred_at, applied_at)
+    VALUES (v_event_rm, -2, clock_timestamp(), clock_timestamp())
+    ON CONFLICT (event_id) DO UPDATE SET ativos = event_availability.ativos + EXCLUDED.ativos;
+    SELECT ativos INTO v_count FROM public.event_availability WHERE event_id = v_event_rm;
+    IF v_count <> -1 THEN RAISE EXCEPTION 'Falha: ativos deveria aceitar saldo negativo (sem CHECK), e %', v_count; END IF;
+    -- com ativos = -1 a disponibilidade calculada NAO passa da capacidade (ativos negativo conta como 0)
+    SELECT GREATEST(ec.capacity - GREATEST(COALESCE(ea.ativos, 0), 0), 0) INTO v_count
+      FROM public.eventcap ec LEFT JOIN public.event_availability ea ON ea.event_id = ec.event_id
+     WHERE ec.event_id = v_event_rm;
+    IF v_count <> 4 THEN
+      RAISE EXCEPTION 'Falha: com ativos = -1 a disponibilidade deveria ser a capacidade (4), e %', v_count;
+    END IF;
+
+    -- sem FK para event: apagar o evento nao mexe na projecao (e a projecao nao trava o DELETE)
     DELETE FROM public.event WHERE event_id = v_event_rm;
     SELECT count(*) INTO v_count FROM public.event_availability WHERE event_id = v_event_rm;
-    IF v_count <> 0 THEN RAISE EXCEPTION 'Falha: event_availability nao foi removido em cascata'; END IF;
+    IF v_count <> 1 THEN RAISE EXCEPTION 'Falha: event_availability nao deveria ter FK para event'; END IF;
+    DELETE FROM public.event_availability WHERE event_id = v_event_rm;
+
+    -- 6c) walletevent.version sai da propria guarda (UPDATE ... RETURNING version): a 1a reserva e a v1 e reviver
+    --     uma cancelada continua o mesmo stream
+    INSERT INTO public.event (creator_id, event_name, event_date, description)
+    VALUES (v_user1, 'Evento Version', now() + interval '41 days', 'ver')
+    RETURNING event_id INTO v_event_rm;
+    INSERT INTO public.walletevent (user_id, event_id, status, expires_at, version)
+    VALUES (v_user2, v_event_rm, 'pending', now() + interval '120 seconds', 1) RETURNING version INTO v_count;
+    IF v_count <> 1 THEN RAISE EXCEPTION 'Falha: 1a reserva deveria ser a version 1, e %', v_count; END IF;
+    UPDATE public.walletevent SET status = 'cancelled', expires_at = NULL, version = version + 1
+     WHERE user_id = v_user2 AND event_id = v_event_rm AND status IN ('pending', 'confirmed') RETURNING version INTO v_count;
+    IF v_count <> 2 THEN RAISE EXCEPTION 'Falha: cancelamento deveria dar a version 2, e %', v_count; END IF;
+    INSERT INTO public.walletevent (user_id, event_id, status, expires_at, version)
+    VALUES (v_user2, v_event_rm, 'pending', now() + interval '120 seconds', 1)
+    ON CONFLICT (user_id, event_id) DO UPDATE
+      SET status = 'pending', expires_at = EXCLUDED.expires_at, version = walletevent.version + 1
+      WHERE walletevent.status IN ('expired', 'cancelled')
+    RETURNING version INTO v_count;
+    IF v_count <> 3 THEN RAISE EXCEPTION 'Falha: reviver reserva cancelada deveria dar a version 3, e %', v_count; END IF;
+    -- a guarda que nao afeta linha (reserva ativa) nao devolve versao nenhuma
+    v_count := NULL;
+    INSERT INTO public.walletevent (user_id, event_id, status, expires_at, version)
+    VALUES (v_user2, v_event_rm, 'pending', now() + interval '120 seconds', 1)
+    ON CONFLICT (user_id, event_id) DO UPDATE
+      SET status = 'pending', version = walletevent.version + 1
+      WHERE walletevent.status IN ('expired', 'cancelled')
+    RETURNING version INTO v_count;
+    IF v_count IS NOT NULL THEN RAISE EXCEPTION 'Falha: guarda sobre reserva ativa nao deveria afetar linha (version %)', v_count; END IF;
+    DELETE FROM public.walletevent WHERE event_id = v_event_rm;
+    DELETE FROM public.event WHERE event_id = v_event_rm;
 
     -- 7) status invalido rejeitado pelo CHECK
     BEGIN

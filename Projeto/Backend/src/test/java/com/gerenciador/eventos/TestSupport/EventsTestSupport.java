@@ -24,11 +24,14 @@ public final class EventsTestSupport {
     private EventsTestSupport() {
     }
 
-    /** Esvazia as tabelas de event sourcing e a projeção de teste (RESTART IDENTITY: global_position previsível). */
+    /**
+     * Esvazia as tabelas de event sourcing, a projeção de disponibilidade (#29) e a projeção de teste (RESTART
+     * IDENTITY: global_position previsível).
+     */
     public static void limpar(DatabaseConnection db) throws Exception {
         try (Connection c = db.getConnection(); Statement st = c.createStatement()) {
             st.execute("TRUNCATE TABLE public.event_store, public.event_outbox, public.event_snapshot, "
-                    + "public.projection_checkpoint RESTART IDENTITY");
+                    + "public.projection_checkpoint, public.event_availability RESTART IDENTITY");
             st.execute("DO $$ BEGIN IF to_regclass('public.test_somatorio') IS NOT NULL THEN "
                     + "TRUNCATE TABLE public.test_somatorio; END IF; END $$");
         }

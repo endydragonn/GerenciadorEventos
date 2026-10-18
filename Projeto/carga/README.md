@@ -22,7 +22,7 @@ Atalhos via `make` (GNU make; `winget install ezwinports.make`). Rode em `Projet
 **No host** (PowerShell como Administrador, para criar a regra de firewall da 8081; rede como Privada). A 5433 (Postgres) **não** é aberta aqui: só a matriz usa, e só com `GERADOR_IP` (ver "Matriz do experimento"):
 
 ```powershell
-make setup-host            # ou: .\setup-host.ps1 [-ReadPath cas|naive] [-RefreshMs 5000]
+make setup-host            # ou: .\setup-host.ps1 [-ReadPath cas|naive]
 ```
 
 Anote o IP impresso (`HOST_IP`).
@@ -38,37 +38,43 @@ Instala o k6, testa a conexão e salva a latência base de rede em `results\base
 
 ## Matriz do experimento (runner oficial)
 
-Para **um** lag e **um** braço por vez, roda a disputa de vagas (teste 1, `PCT_CONFIRMA=100`) para
+Para **um** braço por vez, roda a disputa de vagas (teste 1, `PCT_CONFIRMA=100`) para
 uma lista de N e um número de repetições, e acumula **uma linha por execução** em
-`results\matriz.csv`. O lag (`READMODEL_AVAILABILITY_REFRESH_MS`) e o braço (`RESERVATION_READPATH`)
-são lidos no startup do backend e não mudam em runtime: o valor passado ao gerador
-(`READPATH` / `REFRESH_MS`) só **rotula** as colunas `braco` e `lag_ms` e precisa bater com o que o
-host está rodando. Para varrer lags e braços, troque a config no host e rode a matriz de novo; as
-linhas se acumulam no mesmo CSV.
+`results\matriz.csv`. O braço (`RESERVATION_READPATH`) é lido no startup do backend e não muda em
+runtime: o valor passado ao gerador (`READPATH`) só **rotula** a coluna `braco` e precisa bater com o que o
+host está rodando. Para varrer os braços, troque a config no host e rode a matriz de novo; as linhas se
+acumulam no mesmo CSV.
+
+> **O lag deixou de ser variável controlada (issue #29).** O refresh por timer (`READMODEL_AVAILABILITY_REFRESH_MS`,
+> `REFRESH_MS`) saiu: a disponibilidade do braço `naive` é uma projeção **assíncrona** (append → relay →
+> Redpanda → consumer), e o lag é o desse pipeline real, **medido sob a carga** (variável independente = a carga:
+> N concorrentes / RPM). `-RefreshMs` e `REFRESH_MS` não existem mais nos alvos do `make` (o `rodar-matriz.ps1`
+> ainda aceita `-RefreshMs` e o ignora), e a coluna `lag_ms` do CSV vale **sempre 0** ("não controlado"; foi mantida
+> só para não mudar o formato). O `report-matriz.sh` ainda agrupa/plota por `lag_ms`: para o eixo "overselling × lag
+> medido" ele precisa passar a usar `lag_obs_*` (trabalho da #31).
 
 Host e gerador devem estar **no mesmo commit** (a coluna `commit` é o do checkout do gerador).
 
 ```powershell
 # 1) host (PowerShell como Administrador). GERADOR_IP é obrigatório para a matriz: cria a regra de
 #    firewall da 5433 (Privada) SEMPRE restrita a esse IP; sem ele a 5433 fica fechada.
-make setup-host READPATH=naive REFRESH_MS=2000 GERADOR_IP=<ip do gerador>
+make setup-host READPATH=naive GERADOR_IP=<ip do gerador>
 #    Ao fim do experimento, feche a 5433:  Remove-NetFirewallRule -DisplayName 'TCC postgres 5433'
 
 # 2) gerador, uma vez por sessão: senha do Postgres do host SÓ no ambiente (não ecoa, não vai pro histórico)
 $s = Read-Host 'Senha do Postgres do host' -AsSecureString
 $env:PGPASSWORD = [System.Net.NetworkCredential]::new('', $s).Password
 
-# 3) gerador: a matriz (READPATH/REFRESH_MS = os mesmos do passo 1)
-make test-matriz HOST_IP=<ip do host> VUS=50,100,200 REPETICOES=10 CAPACIDADE=20 READPATH=naive REFRESH_MS=2000
+# 3) gerador: a matriz (READPATH = o mesmo do passo 1)
+make test-matriz HOST_IP=<ip do host> VUS=50,100,200 REPETICOES=10 CAPACIDADE=20 READPATH=naive
 
-# 4) outro lag/braço: volte ao passo 1 com os novos valores e repita o passo 3
-#    (ex.: REFRESH_MS=500, 1000, 5000 e READPATH=cas)
+# 4) outro braço: volte ao passo 1 com o novo valor e repita o passo 3 (ex.: READPATH=cas)
 
 # 5) gerador: gráfico (results\matriz.csv -> results\matriz.html; Git Bash + awk, sem dependência nova)
 make report-matriz
 ```
 
-Sem `make`: `.\rodar-matriz.ps1 -HostIp <ip> -Vus 50,100,200 -Repeticoes 10 -Capacidade 20 -Rotulo naive -RefreshMs 2000`
+Sem `make`: `.\rodar-matriz.ps1 -HostIp <ip> -Vus 50,100,200 -Repeticoes 10 -Capacidade 20 -Rotulo naive`
 e `bash ../../docs/carga/harness/report-matriz.sh results/matriz.csv results/matriz.html`.
 `PGUSER`/`PGDATABASE` (ou `-PgUsuario`/`-PgBanco`) assumem `admin`/`meu_banco` (os do projeto; se o
 `Projeto/.env` do host usar outros, informe). A **senha** vem só de
@@ -78,7 +84,7 @@ impressa, nunca gravada. Instalar o `psql` no gerador: `make setup-gerador` most
 
 Com N alto (≥ ~100) e `max_connections=100` (padrão do Postgres) o pool do backend pode estourar o
 limite (ver "Por que `MAX_CONN` importa"; o `VUS` padrão chega a 200): rode o passo 1 uma vez (firewall) e
-suba a stack com `make host-rpm MAX_CONN=300 READPATH=... REFRESH_MS=...` no lugar do `setup-host` (as
+suba a stack com `make host-rpm MAX_CONN=300 READPATH=...` no lugar do `setup-host` (as
 regras de firewall persistem). Repetições afetadas por `too many clients` (5xx) são **descartadas**, não
 gravadas (ver abaixo).
 
@@ -87,12 +93,19 @@ gravadas (ver abaixo).
 1. **Seed único por N**: `N` usuários + `REPETICOES` eventos novos, todos com a mesma `capacity`
    (um evento novo por repetição). Antes da 1ª repetição de todas, um **aquecimento descartado**
    (rajada pequena, `-VusAquecimento`, evento próprio, sem linha no CSV).
-2. Espera o read model ter a linha do evento e depois um tempo **aleatório em `[0, lag_ms)`**: a
-   rajada cai numa fase pseudo-aleatória do job de refresh, sem sincronizar com ele.
+2. Espera o pipeline de eventos ficar **quieto** (`event_outbox` vazio e o `max(applied_at)` da projeção parado entre duas
+   leituras), para o backlog de uma repetição não vazar para a seguinte (a disponibilidade do `naive` é `eventcap LEFT
+   JOIN` a projeção: não há mais "linha do read model" a esperar nem fase de timer a sortear). Limite: um consumer
+   travado também parece quieto, confira o offset lag.
 3. Dispara o k6 (`carga.js`, confirmação 100% embutida) e, enquanto ele roda, consulta o Postgres
    do host por `psql` remoto (`:5433`) a cada ~`-PollMs` (padrão 250 ms):
-   `now() - refreshed_at` do evento (relógio do Postgres; o instante da amostra é o do gerador, o
-   mesmo do k6).
+   `applied_at - last_occurred_at` de `event_availability` do evento: a idade, no relógio do Postgres, do último
+   evento aplicado pelo consumer (do append ao commit do consumer, relay incluído); o instante da amostra é o do
+   gerador, o mesmo do k6. **Limite:** é um **limite inferior** do atraso: a amostra só anda quando o consumer aplica um evento (consumer
+   atrasado ou parado não a atualiza). A **métrica principal da #31** é o log `events.lag` (ligue na rodada com
+   `LOGGING_LEVEL_EVENTS_LAG=DEBUG` no host; vem desligado) **mais** o offset lag. Confira também o **offset lag** do consumer group, no host:
+   `docker exec gerenciador-redpanda rpk group describe gerenciador-eventos`. O lag por evento, com relay e consumer
+   separados (`relay_ms` / `consumer_ms` / `total_ms`), sai no log `events.lag` do backend.
 4. Depois da rajada lê `confirmed` e `pending` do evento no Postgres (fonte de verdade) e grava a linha
    — **só se a repetição for válida**: k6 com código 0, resumo com `disparo_ms`, nenhum usuário sem
    login, nenhuma resposta inesperada/5xx (reserva ou confirma) e toda reserva aceita confirmada
@@ -110,17 +123,17 @@ gravadas (ver abaixo).
 | Coluna | Significado |
 |---|---|
 | `braco` | `cas` ou `naive` (o `READPATH` rotulado) |
-| `lag_ms` | `REFRESH_MS` rotulado (lag configurado no host) |
+| `lag_ms` | sempre `0`: o lag não é mais configurado (issue #29), é medido em `lag_obs_*` |
 | `N`, `capacity`, `rep` | clientes concorrentes, vagas do evento, repetição (1..REPETICOES) |
 | `confirmed`, `pending` | reservas do evento no Postgres do host após a rajada |
 | `oversell` | `max(0, confirmed − capacity)`: **métrica primária**; `pending + confirmed` é derivável (secundária) |
 | `p50`, `p95`, `p99` | latência da reserva (`POST /bff/event-wallets`) em ms, vista pelo gerador (descontar a base de rede) |
 | `throughput` | tentativas/s (iterações reserva + confirma) **na janela da rajada** (1ª iteração iniciada até a última terminada); exclui os logins do `setup()`, então **não** é o `reservas_por_s` do teste 1 |
-| `lag_obs_disparo` | lag observado (ms) na última amostra **antes** do disparo da rajada |
+| `lag_obs_disparo` | lag real da projeção (`applied_at - last_occurred_at`, ms) na última amostra **antes** do disparo da rajada |
 | `lag_obs_max` | maior lag observado (ms) entre essa amostra e as da rajada |
 | `commit` | `git rev-parse --short HEAD` do checkout do gerador |
 
-`lag_obs_*` = **-1** significa "sem leitura" (linha do read model inexistente ou nenhuma amostra
+`lag_obs_*` = **-1** significa "sem leitura" (a projeção ainda não tem linha do evento ou nenhuma amostra
 válida na janela); o report ignora o -1. A resolução é o intervalo do polling: o instante exato do
 disparo vem do k6 (`disparo_ms`/`fim_ms` no resumo, relógio do gerador, depois do `setup()` com os
 logins), mas a amostra pode ser até ~`PollMs` anterior ao disparo. A rajada em si é curta (a latência
@@ -158,15 +171,14 @@ sinalizado do mesmo jeito. No braço `naive` não há tolerância: o overselling
 ### Rodada 1a — braço CAS (issue #12)
 
 Preset `make test-matriz-cas`: `READPATH=cas`, N ∈ {100, 200}, `capacity` 20, 5 repetições, `PCT_CONFIRMA=100`
-(fixo no runner) e `lag_ms` = default do backend (`5000`, o mesmo do `setup-host`; só rotula a coluna, pois o
-CAS não lê o read model). Sem varredura de lag (isso é do braço `naive`, issue #13). Gera **10 linhas**.
+(fixo no runner) e `lag_ms` = 0 (o lag não é mais configurado, issue #29; o CAS nem lê a projeção). Gera **10 linhas**.
 
 ```powershell
 # 1) host (PowerShell como Administrador). Uma vez, para a regra de firewall da 5433 restrita ao gerador:
 make setup-host READPATH=cas GERADOR_IP=<ip do gerador>
 #    N=100/200 pode estourar o max_connections=100 do Postgres (repetições com 5xx seriam descartadas e o CSV
 #    ficaria com menos de 10 linhas): suba de novo com max_connections maior (as regras de firewall persistem)
-make host-rpm MAX_CONN=300 READPATH=cas REFRESH_MS=5000
+make host-rpm MAX_CONN=300 READPATH=cas
 
 # 2) gerador: senha do Postgres do host SÓ no ambiente
 $s = Read-Host 'Senha do Postgres do host' -AsSecureString
@@ -185,65 +197,40 @@ em todas as linhas** e o `make` terminando sem erro. Qualquer valor diferente (o
 exit `3` do script) é um bug do CAS, não ruído de medição: investigue antes de seguir. `Error 2` na linha
 `make[1]` = repetição inválida: a rodada ficou com menos de 10 linhas; corrija o host e repita.
 
-### Rodada 1b — braço ingênuo (issue #13)
+### Rodada 1b — braço ingênuo (issue #13; refeita na Rodada 2, issue #31)
 
 Preset `make test-matriz-naive`: `READPATH=naive`, N ∈ {100, 200}, `capacity` 20, 5 repetições, `PCT_CONFIRMA=100`
-(fixo no runner) e **um lag por chamada**: `REFRESH_MS` ∈ {500, 2000, 5000, 10000} é **obrigatório** e você o
-informa na linha de comando a cada chamada (sem ele, ou com outro valor, o `make` para com erro; ele só rotula a coluna `lag_ms`, e
-tem de ser o lag que o host está rodando). Cada lag gera **10 linhas**; os 4 lags, **40 linhas**, que se acumulam
-no **mesmo** `results\matriz.csv` das 10 linhas CAS da rodada 1a (**não apague o CSV**; se a 1a ainda não foi
-rodada, o gráfico sai só com o ingênuo). Como o lag é lido só no startup do backend, a sequência é **por lag** e se
-repete 4 vezes (500, 2000, 5000, 10000):
+(fixo no runner). Desde a issue #29 **não há mais um lag por chamada** (nem `REFRESH_MS`, nem os 4 lags 500/2000/5000/10000
+da Fase 2): o lag é o do consumer real e sai medido em `lag_obs_*`. Gera **10 linhas**, que se acumulam no **mesmo**
+`results\matriz.csv` das 10 do CAS (**não apague o CSV**). As linhas da Fase 2 (com `lag_ms` > 0) são de outro
+experimento: não misture no mesmo CSV; guarde o antigo em `results/` com outro nome.
 
 ```powershell
-# 0) host, uma vez (PowerShell como Administrador): firewall da 8081 e da 5433 restrita ao gerador (já feito na 1a: pule)
-make setup-host READPATH=naive REFRESH_MS=500 GERADOR_IP=<ip do gerador>
+# host (PowerShell como Administrador): reinicia a stack com o braço ingênuo e max_connections=300 (N=200 estoura o
+# padrão 100). O compose já liga o relay e o consumer de eventos (EVENTS_RELAY_ENABLED / EVENTS_CONSUMER_ENABLED).
+make host-rpm MAX_CONN=300 READPATH=naive
+#    conferência: docker exec gerenciador-backend printenv RESERVATION_READPATH EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED
 
-# 1) gerador, uma vez por sessão: PGPASSWORD só no ambiente (igual à 1a)
-$s = Read-Host 'Senha do Postgres do host' -AsSecureString
-$env:PGPASSWORD = [System.Net.NetworkCredential]::new('', $s).Password
-
-# 2) POR LAG, nesta ordem: host (reinicia a stack com o braço ingênuo, o lag e max_connections=300, como na 1a:
-#    N=200 estoura o padrão 100) -> conferência no host -> gerador (o MESMO lag do host).
-#    A conferência vale depois de CADA host-rpm: deve imprimir "naive" e o lag que você acabou de subir:
-#      docker exec gerenciador-backend printenv RESERVATION_READPATH READMODEL_AVAILABILITY_REFRESH_MS
-
-# lag 500
-make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=500                  # host
-make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=500                # gerador
-
-# lag 2000
-make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=2000                 # host
-make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=2000               # gerador
-
-# lag 5000
-make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=5000                 # host
-make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=5000               # gerador
-
-# lag 10000
-make host-rpm MAX_CONN=300 READPATH=naive REFRESH_MS=10000                # host
-make test-matriz-naive HOST_IP=<ip do host> REFRESH_MS=10000              # gerador
-
-# 3) depois dos 4 lags, no gerador: gráfico sobre o mesmo CSV (50 linhas: 10 CAS + 40 ingênuo)
+# gerador (PGPASSWORD só no ambiente, como na 1a)
+make test-matriz-naive HOST_IP=<ip do host>
 make report-matriz
 ```
 
-Não use `make setup-host` para trocar o lag entre as chamadas: ele recria a stack sem o override do `host-rpm` e o
+Não use `make setup-host` para trocar de braço entre as chamadas: ele recria a stack sem o override do `host-rpm` e o
 `max_connections` pode voltar ao padrão (100), o que derruba repetições do N=200 (`too many clients`).
 
-- **Esperado:** cada (ingênuo, lag, N) com 5 linhas no CSV e o `make` sem erro. No ingênuo não há tolerância: o
+- **Esperado:** cada (ingênuo, N) com 5 linhas no CSV e o `make` sem erro. No ingênuo não há tolerância: o
   overselling é o que se mede, então `oversell > 0` **não** é falha. `Error 2` na linha `make[1]` = repetição
-  inválida (5xx etc.): o lag ficou com menos de 10 linhas. Se a chamada de um lag for interrompida no meio por
-  qualquer motivo (`Error 1`, `Error 2`, Ctrl+C), **apague do `matriz.csv` as linhas desse lag** (`naive` + esse
-  `lag_ms`) antes de repetir; senão as repetições já gravadas se duplicam e distorcem média e desvio.
-- **Versione** o `Projeto/carga/results/matriz.csv` final (50 linhas: 10 CAS + 40 ingênuo); o gráfico se gera a
+  inválida (5xx etc.): a rodada ficou com menos de 10 linhas. Se a chamada for interrompida no meio por qualquer motivo
+  (`Error 1`, `Error 2`, Ctrl+C), **apague do `matriz.csv` as linhas dessa rodada** (`naive`) antes de repetir; senão as
+  repetições já gravadas se duplicam e distorcem média e desvio.
+- **Versione** o `Projeto/carga/results/matriz.csv` final (20 linhas: 10 CAS + 10 ingênuo); o gráfico se gera a
   partir dele.
-- **Resultado como medido.** Se o overselling não crescer com o lag (platô, queda, ruído), isso é o achado: registre
-  como saiu, sem repetir rodadas para "achar" a tendência esperada nem descartar lags.
-- **Gráfico:** eixo x **linear** em ms (a hipótese é "overselling proporcional ao lag"); o ingênuo é a curva (média,
-  ±1 desvio e mín–máx por lag) e o `cas`, que não depende do lag, uma **linha de referência tracejada** (média de
-  todas as suas execuções) com marcador onde foi medido. O lag observado no disparo (`lag_obs_disparo`) vai em cada
-  linha do CSV e, em média, na tabela do report.
+- **Resultado como medido.** Se o overselling não acompanhar o lag medido (platô, queda, ruído), isso é o achado:
+  registre como saiu, sem repetir rodadas para "achar" a tendência esperada.
+- **Gráfico:** o `report-matriz.sh` ainda monta o eixo x por `lag_ms` (agora sempre 0): para plotar overselling ×
+  lag **medido** ele precisa passar a usar `lag_obs_*` (ajuste da #31). O lag observado no disparo (`lag_obs_disparo`)
+  já vai em cada linha do CSV e, em média, na tabela do report.
 
 ## Teste 1 — disputa de vagas (corretude)
 
@@ -260,7 +247,7 @@ make verificar-disputa EVENT_ID=<id impresso>
 ```
 
 Resultado: `results\resultados.csv`. Para o braço `naive`, suba o host com
-`make setup-host READPATH=naive REFRESH_MS=5000` e use o mesmo `READPATH`/`REFRESH_MS` no gerador
+`make setup-host READPATH=naive` e use o mesmo `READPATH` no gerador
 (o gerador não descobre isso sozinho).
 
 Scripts: `carga.js`, `rodar-teste.ps1`.
@@ -504,11 +491,10 @@ eventos: `Carga-<run>-N<n>-E1` (teste 1) e `Rpm-<run>-E<k>` (teste 2).
   overselling é `(pending + confirmed) - capacidade` (deve ser <= 0).
 - **`descartadas` > 0** (teste 2): o k6 não manteve a taxa; gerador ou backend saturou.
 - **Overselling** vale só no `-Verificar` (banco). O número do cliente é indicativo.
-- Cada `-Verificar` (`verificar-disputa` / `verificar-rpm`) anexa a saída em `Projeto/carga/results/verificacoes.log`, com data/hora, alvo (evento ou prefixo) e config ativa (read path / refresh). Rode logo após a rodada e cite esse arquivo na documentação.
+- Cada `-Verificar` (`verificar-disputa` / `verificar-rpm`) anexa a saída em `Projeto/carga/results/verificacoes.log`, com data/hora, alvo (evento ou prefixo) e config ativa (read path / relay / consumer). Rode logo após a rodada e cite esse arquivo na documentação.
 - **Latência:** desconte a base de rede medida no `setup-gerador`.
-- No `naive`, o overselling varia com o ponto do ciclo do read model em que a rajada cai:
-  repita a rodada e reporte média e dispersão (a matriz faz isso: repetições, rajada em fase
-  aleatória do job e `report-matriz`).
+- No `naive`, o overselling varia com o lag real do consumer sob a carga: repita a rodada e reporte média e
+  dispersão (a matriz faz isso: repetições e `report-matriz`), junto do `lag_obs_*`.
 
 ## Limites e cuidados
 
@@ -551,7 +537,7 @@ naquela etapa; a raiz de `results/` é a área de trabalho da rodada corrente.**
 |---|---|---|
 | `setup-host.ps1` | host | sobe a stack com o override; firewall 8081 (e a 5433, só com `-GeradorIp`, restrita a esse IP); `-Verificar -EventId N` confere o banco |
 | `setup-gerador.ps1` | gerador | instala o k6, confere `psql` e a 5433, mede a latência base |
-| `docker-compose.carga.yml` | host | override: read path, lag do read model, log de SQL desligado |
+| `docker-compose.carga.yml` | host | override: read path, log de SQL desligado |
 | `rodar-teste.ps1` / `carga.js` | gerador | teste 1 (confirma `PCT_CONFIRMA` % das aceitas, padrão 100) |
 | `rodar-matriz.ps1` / `lib-matriz.ps1` | gerador | matriz do experimento: usa o `carga.js` do teste 1; `lib-matriz.ps1` = linha do CSV, lag da rajada e tolerância 0 do braço CAS (`lib-matriz.selftest.ps1` testa) |
 | `../../docs/carga/harness/report-matriz.sh` | gerador | `make report-matriz`: `results\matriz.csv` → `results\matriz.html` (SVG, bash+awk) |

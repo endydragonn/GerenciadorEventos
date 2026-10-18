@@ -32,11 +32,16 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
  * <ul>
  *   <li><b>{@code cas}</b> (default) — UPDATE condicional atômico em {@code eventcap};
  *       nunca oversella. Comportamento inalterado.</li>
- *   <li><b>{@code naive}</b> — lê o read model defasado {@code event_availability}
- *       (atualizado só pelo job {@link ReadModelRefreshService}) e insere em
+ *   <li><b>{@code naive}</b> — lê a disponibilidade calculada sobre a projeção ASSÍNCRONA
+ *       {@code event_availability} (consumer do tópico {@code reservation.wallet}) e insere em
  *       {@code walletevent} SEM tocar {@code eventcap}; OVERSELLA proporcional ao lag do
- *       read model. Braço de controle do experimento de concorrência da Fase 2.</li>
+ *       consumer. Braço de controle do experimento de concorrência.</li>
  * </ul>
+ *
+ * <p><b>Event sourcing (issue #29).</b> {@code walletevent} é a projeção inline do stream
+ * {@code reservation.wallet}: cada transição é um UPDATE condicional com {@code RETURNING version} e o evento
+ * ({@link ReservationEvents}) é appendado SÓ quando ele afetou 1 linha, na mesma transação. {@code eventcap} + CAS
+ * continuam relacionais e síncronos.</p>
  */
 @Service
 public class EventWalletService implements EventWalletApi {
@@ -57,6 +62,8 @@ public class EventWalletService implements EventWalletApi {
     private ReservationWriter reservationWriter;
     @Autowired
     private IdempotencyKeyRepository idempotencyKeyRepository;
+    @Autowired
+    private ReservationEvents reservationEvents;
     @Autowired
     private DatabaseConnection databaseConnection;
 
@@ -149,8 +156,9 @@ public class EventWalletService implements EventWalletApi {
 
     private void validarDisponibilidadeNaive(Long eventId) {
         Integer disp = eventAvailabilityRepository.findAvailable(eventId);
+        // eventcap LEFT JOIN projeção: só é null sem eventcap (validarPreRequisitos já barra); guarda contra NPE
         if (disp == null)
-            throw new IllegalArgumentException("Disponibilidade do evento ainda não calculada");
+            throw new IllegalArgumentException("Capacidade do evento não configurada");
         if (disp == 0)
             throw new IllegalArgumentException("Evento lotado");
         // disp > 0, ou disp == -1 (ilimitado): segue
@@ -169,8 +177,10 @@ public class EventWalletService implements EventWalletApi {
     /**
      * Transação única da reserva, numa {@link Connection}: reivindica a chave → decrementa a
      * capacidade ({@link CapacityReserver}, pulado se {@code semCas}) → grava a reserva
-     * ({@link ReservationWriter}) → commit. Qualquer falha após o decremento faz rollback da
-     * conexão inteira: é o ponto de compensação (a vaga e a chave voltam juntas).
+     * ({@link ReservationWriter}; a versão sai da guarda) → appenda {@code SlotReserved} → commit. Qualquer falha
+     * após o decremento faz rollback da conexão inteira: é o ponto de compensação (a vaga, a chave, a reserva e o
+     * evento voltam juntos). O braço {@code naive} também appenda (só não toca {@code eventcap}), então a projeção
+     * vê as reservas dos dois braços.
      *
      * @return {@code null} se reservou; o {@link IdempotencyKeyRepository.Salvo} existente se a
      *         chave já estava gravada (repetição, ou perdeu a corrida para outra com a mesma chave).
@@ -189,8 +199,11 @@ public class EventWalletService implements EventWalletApi {
                 }
                 if (!semCas && !capacityReserver.tryReserve(conn, ew.getEventId()))
                     throw new IllegalArgumentException("Evento lotado");
-                if (!reservationWriter.reservePending(conn, ew.getUserId(), ew.getEventId(), expiresAt))
-                    // corrida: já havia reserva ativa — o rollback desfaz decremento e chave
+                int versao = reservationWriter.reservePending(conn, ew.getUserId(), ew.getEventId(), expiresAt);
+                // versao 0 = corrida: já havia reserva ativa. Conflito no append não deveria ocorrer (a versão sai
+                // da guarda), mas tem a mesma resposta. Nos dois casos o rollback desfaz decremento e chave.
+                if (versao == 0 || !reservationEvents.slotReserved(
+                        conn, ew.getUserId(), ew.getEventId(), versao, expiresAt, chave))
                     throw new IllegalArgumentException("Vínculo já existente");
                 conn.commit();
                 return null;
@@ -210,8 +223,7 @@ public class EventWalletService implements EventWalletApi {
     public EventWallet confirm(Long userId, Long eventId) {
         if (userId == null || userId <= 0) throw new IllegalArgumentException("userId inválido");
         if (eventId == null || eventId <= 0) throw new IllegalArgumentException("eventId inválido");
-        int rows = eventWalletRepository.confirm(userId, eventId);
-        if (rows == 0) {
+        if (!confirmarNaTransacao(userId, eventId)) {
             String status = eventWalletRepository.currentStatus(userId, eventId);
             if ("confirmed".equals(status)) throw new IllegalArgumentException("Reserva já confirmada");
             if ("expired".equals(status)) throw new IllegalArgumentException("Reserva expirada — refaça a inscrição");
@@ -220,6 +232,26 @@ public class EventWalletService implements EventWalletApi {
         EventWallet ew = new EventWallet(userId, eventId);
         ew.setStatus("confirmed");
         return ew;
+    }
+
+    /** Guarda {@code pending -> confirmed} + append de {@code ReservationConfirmed}, numa transação. */
+    private boolean confirmarNaTransacao(Long userId, Long eventId) {
+        try (Connection conn = databaseConnection.getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                int versao = eventWalletRepository.confirm(conn, userId, eventId);
+                if (versao > 0) reservationEvents.confirmed(conn, userId, eventId, versao);
+                conn.commit();
+                return versao > 0;
+            } catch (SQLException | RuntimeException ex) {
+                conn.rollback();
+                throw ex;
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao confirmar reserva: " + ex.getMessage(), ex);
+        }
     }
 
     /**
@@ -240,12 +272,13 @@ public class EventWalletService implements EventWalletApi {
         try (Connection conn = databaseConnection.getConnection()) {
             conn.setAutoCommit(false);
             try {
-                int cancelada = eventWalletRepository.cancelIfActive(conn, userId, eventId);
-                if (cancelada == 1) {
+                int versao = eventWalletRepository.cancelIfActive(conn, userId, eventId);
+                if (versao > 0) {
                     eventCapRepository.release(conn, eventId);
+                    reservationEvents.cancelled(conn, userId, eventId, versao);
                 }
                 conn.commit();
-            } catch (SQLException ex) {
+            } catch (SQLException | RuntimeException ex) {
                 conn.rollback();
                 throw ex;
             } finally {

@@ -21,7 +21,10 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
 e roda `mvn clean test` (antes disso apaga `target/surefire-reports` sozinho, então o total do
 resumo reflete só os testes desta rodada — não precisa limpar na mão).
 **Exige os containers `db` e `redpanda` no ar** (`docker compose -f Projeto/docker-compose.yml up -d db redpanda`;
-o script aborta com mensagem clara se faltar um): os testes batem num Postgres e num Redpanda reais. O script
+o script aborta com mensagem clara se faltar um): os testes batem num Postgres e num Redpanda reais.
+**Pare o `gerenciador-backend` antes** (`docker stop gerenciador-backend`): o relay e o consumer dele (ligados no compose desde a #28/#29)
+compartilham o `meu_banco` e drenariam o `event_outbox` dos testes (quebrando `ReservationReplayTest` e a prova de overselling do
+naive); o script aborta com mensagem clara se o container estiver rodando. O script
 passa `SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092` e `EVENTS_CONSUMER_GROUP=gerenciador-eventos-test` ao container
 de teste (group próprio: os testes nunca entram no group do backend vivo que consome do mesmo Redpanda).
 
@@ -45,6 +48,19 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   `20261022` aplicado 2× (um `EventCreated` v1, replay == viva), conflito de versão (transitório: o command repete; permanente: esgota as tentativas e não grava nada),
   8 updates concorrentes no mesmo evento (log contíguo, sem versão perdida) e `DELETE` que falha por FK desfazendo o
   `EventCancelled`.
+- Reservation em event sourcing (issue #29; ver "Reservation em event sourcing"): `ReservationEventSourcingTest` (o ciclo
+  reserva / confirma / cancela / reserva de novo / expira gera os 4 eventos no mesmo stream com versões contíguas vindas da
+  guarda; payload sem dado pessoal; transição que a guarda não aceita não gera evento; conflito de versão no append faz
+  rollback de reserva, confirm, cancelamento e expiração), `ReservationReplayTest` (**teste de replay do wallet**: roteiro
+  aleatório de 200 jogadas por 6 usuários em 3 eventos; `walletevent` e `ativos` reconstruídos na sombra só do `event_store`
+  == vivos nas colunas comparáveis; `ativos` == reservas ativas do `walletevent`), `EventAvailabilityProjectionTest`
+  (**ponta a ponta**: reserva → relay → tópico → consumer → `ativos` → `findAvailable`, com relay e consumer ligados e
+  `@DirtiesContext`; lag observável; reenvio não conta de novo), `EventWalletNaivePathTest` (o braço naive com o consumer
+  **desligado**: é o "consumer parado" determinístico que prova o overselling do braço de controle; também confere que o
+  naive appenda `SlotReserved` e que a leitura nunca usa `eventcap.quant`), `EventsKafkaConfigTest` (o `RetryListener` loga
+  em ERROR a partir da N-ésima tentativa). Os testes ponta a ponta esperam o EFEITO no banco, nunca a atribuição de
+  partição do próprio contexto: o tópico tem 1 partição e o mesmo group, e outros contextos Spring em cache também têm o
+  listener (todos escrevem no mesmo banco, o checkpoint atômico evita contar duas vezes).
 - `IdempotencyRetentionTest` (issue #130): o job apaga chave com `created_at` além do prazo (envelhecida via `UPDATE`) e preserva a recente; repetição com chave ainda retida segue idempotente; apaga em lotes (2500 linhas; o lote de 1000 devolve exatamente 1000); o scheduler tem mais de 1 thread.
 - `IdempotencyKeyTest` (issue #24; escopo por usuário na #129): repetição com a mesma `Idempotency-Key` não decrementa `eventcap` de novo
   (sequencial, após `confirm`, e 8 threads concorrentes com a mesma chave), conflito do mesmo usuário com outro evento, mesma chave em usuários diferentes sem colisão,
@@ -58,7 +74,9 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   snapshot + cauda == replay completo; as páginas do replay leem o mesmo snapshot, `REPEATABLE READ`), `EventBackboneTest` (ponta a ponta com relay `@Scheduled` + `@KafkaListener` +
   dead-letter topic; política de erro: SQLException transitória é reentregue sem limite e nunca vai ao DLT, buraco
   irrecuperável e JSON inválido vão ao DLT; o listener de teste usa `idIsGroup = false` e um teste confere o `group.id`).
-  Os que precisam de relay/consumer ligam a flag por `@SpringBootTest(properties=...)`;
+  Os que precisam de relay/consumer ligam a flag por `@SpringBootTest(properties=...)`; `EventReplay.divergentTables`
+  ganhou o overload com `Map<tabela, colunas>` (compara só as colunas informadas: as com `clock_timestamp()` diferem entre viva
+  e sombra);
   `EventBackboneTest` usa `@DirtiesContext` para o relay de 50 ms não sobrar no cache de contextos e roubar o outbox
   dos outros testes. Projeção de teste: `TestSomatorio` (tabela `public.test_somatorio`, criada pelos testes e
   derrubada no `@AfterAll` de cada classe: não é schema do app e não sobra no banco compartilhado; nenhum outro teste
@@ -131,10 +149,12 @@ identity/        UserService, UserRepository, EmailVerificationService, PendingV
 catalog/         EventService, EventRepository, EventPresenterRepository (leitura),
                  CatalogEventWriter (command side ES, #28), CatalogEventProjection (projeção inline), EventPayloads
   api/           Event, EventApi
-reservation/     EventWalletService, MyWalletService, ReadModelRefreshService, ReservationExpiryService,
+reservation/     EventWalletService, MyWalletService, ReservationExpiryService,
                  IdempotencyKeyRetentionService (job de retenção, #130),
                  EventCapRepository, EventWalletRepository, MyWalletRepository, EventAvailabilityRepository,
-                 IdempotencyKeyRepository, CapacityReserver + ReservationWriter (interfaces internas, #24)
+                 IdempotencyKeyRepository, CapacityReserver + ReservationWriter (interfaces internas, #24),
+                 ReservationEvents (eventos do stream reservation.wallet, #29),
+                 EventAvailabilityProjection + EventAvailabilityConsumer (projeção assíncrona de disponibilidade, #29)
   api/           EventCap, EventWallet, MyWallet, EventCapacityApi, EventWalletApi, MyWalletApi,
                  IdempotencyConflictException
 notification/    EmailNotificationService, EmailTemplates (envio de e-mail / JavaMailSender)
@@ -289,8 +309,8 @@ Tudo em `public` por ora (schema por serviço é a Fase 7).
   rollback, o lote volta no tick seguinte (at-least-once). Tópico = `streamType`; chave = `partition_key`; header
   `publishedAt`; corpo = o envelope em JSON. Producer idempotente, `acks=all`, `max.block.ms`/`delivery.timeout.ms` curtos.
   O relay roda no scheduler do Spring (`spring.task.scheduling.pool.size`, 3 desde a #130, ver "Config"): o loop
-  `drain()` ocupa uma das threads enquanto houver outbox; ao ligar o relay (#28/#29), conferir se 3 threads bastam
-  para `ReadModelRefreshService`, `ReservationExpiryService` e `IdempotencyKeyRetentionService` junto com a medição da #31.
+  `drain()` ocupa uma das threads enquanto houver outbox; o relay está ligado no compose desde a #28: conferir se 3 threads bastam
+  para o relay, `ReservationExpiryService` e `IdempotencyKeyRetentionService` junto com a medição da #31.
 - **`IdempotentConsumer`** (`events.consumer.enabled`): o listener de cada projeção chama
   `onMessage(Projection, json, ack)`. Por mensagem, numa transação (checkpoint + projeção) e com ack manual depois do
   commit: confere o `eventId` no `event_store` (inexistente/diferente = descarta), descarta `version <= checkpoint`, relê
@@ -309,9 +329,9 @@ Tudo em `public` por ora (schema por serviço é a Fase 7).
   statement): `global_position` é ordem de alocação e paginar por ela em READ COMMITTED (snapshot novo a cada página) pularia o
   evento que comita no meio; assim todas as páginas leem o mesmo snapshot (a sombra = o log no início da leitura).
   `divergentTables(projecao, schema)` compara `SELECT *`; `divergentTables(projecao, schema, colunasComparaveis)` (#28)
-  recebe um mapa tabela -> colunas e compara só elas (tabela fora do mapa = `SELECT *`), para o que o log não determina
-  (carimbo `now()`, blob fora do ES). Notas para a #29: a projeção de disponibilidade terá `applied_at = clock_timestamp()`
-  (difere entre a viva e a sombra) — informe as colunas comparáveis por esse overload; `LIKE ... INCLUDING ALL` **não**
+  recebe um mapa tabela -> colunas e compara só elas (tabela fora do mapa, ou com lista vazia = `SELECT *`), para o que o
+  log não determina (carimbo `now()`, `applied_at = clock_timestamp()`, `created_at`/`updated_at`, blob fora do ES);
+  `LIKE ... INCLUDING ALL` **não**
   copia FK nem trigger, e coluna `serial` da cópia aponta para a sequence da tabela viva. Sem `TEMP TABLE`; o schema-sombra fica fora do
   `SchemaValidationTest` e do `GlobalDbTruncator` (que só olham `test.db.schemas`, default `public`).
 - **`EventSnapshots`**: `due(version)` (a cada `events.snapshot.every`, 100), `save`/`load` (um snapshot por stream, o mais
@@ -321,7 +341,7 @@ Tudo em `public` por ora (schema por serviço é a Fase 7).
 - **Latência/medição (para a #31)**: cada evento custa +1 `INSERT` em `event_store` e +1 em `event_outbox` na transação
   do request (um statement só) e +1 `DELETE` assíncrono no relay; o `INSERT`+`DELETE` contínuo gera tuplas mortas (por
   isso o autovacuum agressivo em `event_outbox`). `occurred_at` (append) → `publishedAt` (relay) → `applied_at`
-  (consumer, #29) delimitam o lag. **Nota para a #31:** o Redpanda sobe com `--mode=dev-container`, que desliga o fsync
+  (consumer, #29) delimitam o lag. O custo na reserva, desde a #29, está em "Latência (ponto 2 da série)". **Nota para a #31:** o Redpanda sobe com `--mode=dev-container`, que desliga o fsync
   (`--unsafe-bypass-fsync`): a latência do relay medida aqui é **otimista** em relação a um broker com disco durável.
 - **Tópicos** nascem na primeira publicação (o modo dev-container do Redpanda liga `auto_create_topics_enabled`), com 1
   partição. O listener de teste do `EventBackboneTest` mostra o padrão do `@KafkaListener` para a #28/#29:
@@ -332,7 +352,7 @@ Tudo em `public` por ora (schema por serviço é a Fase 7).
 ## Catalog em CQRS + Event Sourcing — issue #28
 
 Agregado `Event`: stream **`catalog.event`**, `streamId` = `partitionKey` = `event_id` (tópico `catalog.event`, relay
-ligado no compose; sem consumer, o `catalog` não tem projeção assíncrona). `/bff/events/**` não mudou (`HttpContractTest`
+ligado no compose desde a #28; o `catalog` não tem projeção assíncrona, o consumer é o da #29 para `reservation.wallet`). `/bff/events/**` não mudou (`HttpContractTest`
 sem mudança de expectativa).
 
 - **Eventos** (`schemaVersion` 1; payloads em `catalog/EventPayloads`, com os valores **já calculados**, ex.:
@@ -463,16 +483,73 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
    (`IdempotencyKeyRepository.claim`); (b) `CapacityReserver.tryReserve(conn, eventId)` (UPDATE
    condicional) → se `false`, rollback + `IllegalArgumentException("Evento lotado")`; (c)
    `ReservationWriter.reservePending(conn, ...)` grava `walletevent` como `pending` com
-   `expires_at = now + eventcap.max_time_in_line` (UPSERT, revive linhas `expired`/`cancelled`);
-   (d) commit.
-2. `confirm` (`POST .../event-wallets/confirm`): `pending → confirmed` (`expires_at` = NULL).
+   `expires_at = now + eventcap.max_time_in_line` (UPSERT, revive linhas `expired`/`cancelled`; devolve a `version`);
+   (d) appenda `SlotReserved` (#29); (e) commit.
+2. `confirm` (`POST .../event-wallets/confirm`): numa transação, `pending → confirmed` (`expires_at` = NULL) e append de
+   `ReservationConfirmed`.
 3. `removeLink` (`DELETE .../event-wallets`): numa transação, um `UPDATE` condicional único
-   (`cancelIfActive`: `pending`/`confirmed` → `cancelled`) e `release` **só se** esse UPDATE
-   afetou 1 linha — evita devolução dupla de vaga em cancelamento concorrente / corrida com o
-   job. Reserva já `cancelled`/`expired`/inexistente ⇒ no-op silencioso (idempotente).
+   (`cancelIfActive`: `pending`/`confirmed` → `cancelled`) e `release` + append de `ReservationCancelled` **só se** esse
+   UPDATE afetou 1 linha — evita devolução dupla de vaga em cancelamento concorrente / corrida com o
+   job. Reserva já `cancelled`/`expired`/inexistente ⇒ no-op silencioso (idempotente, sem evento).
 4. `reservation/ReservationExpiryService` — `@Scheduled` (a cada `reservation.expiry.scan.ms`,
    default 30s; `@EnableScheduling` em `shared/SchedulingConfig`): varre `pending` vencidas e,
-   por transação, `expireIfStale` (condicional, não pisa em confirmação concorrente) + `release`.
+   por transação, `expireIfStale` (condicional, não pisa em confirmação concorrente) + `release` + append de
+   `ReservationExpired` (um por linha expirada, na transação dela; erro numa linha não para as outras).
+
+### Reservation em event sourcing (híbrido) — issue #29 (ADR "Event-Backbone-Event-Store")
+
+`eventcap` + CAS ficam **relacionais e síncronos**, sem mudança. O lado wallet/order passa a ser event-sourced: o
+stream `reservation.wallet` (`streamId = "userId:eventId"`, **chave de partição = `event_id`**, tópico = `streamType`)
+tem os eventos `SlotReserved` (`{userId, eventId, expiresAt}`, metadata `{idempotencyKey}`), `ReservationConfirmed`,
+`ReservationExpired` e `ReservationCancelled` (`{userId, eventId}`): ids e valores já calculados, **nunca dado pessoal**
+(o replay não chama `now()`). Código: `reservation/ReservationEvents`.
+
+- **A versão sai da própria guarda.** `reservePending`, `confirm`, `cancelIfActive` e `expireIfStale` fazem
+  `UPDATE/UPSERT walletevent ... SET version = version + 1 ... RETURNING version` (coluna `walletevent.version`, 0 =
+  linha anterior ao ES; a 1ª reserva do par é a v1). Sem `SELECT` separado: uma reserva concorrente com a expiração do
+  mesmo par não lê versão velha (a linha fica travada até o commit, e o `UPDATE` reavalia a guarda depois do lock).
+  Reservar de novo uma cancelada/expirada **continua o mesmo stream** (`version` segue).
+- **Append só com rowcount 1, na mesma transação.** Sem linha afetada (`RETURNING` vazio) não há evento. O append é o
+  último comando antes do commit (`EventStore.append`, 1 statement com o `INSERT` do outbox). Conflito de versão no append
+  (não deveria acontecer: a versão vem da guarda) = rollback: na reserva a resposta é "Vínculo já existente", como na
+  corrida atual; em confirm/cancelamento/expiração é `IllegalStateException` (a guarda, a vaga e o evento voltam juntos).
+  Os `catch` dessas transações pegam `SQLException | RuntimeException` (senão o `finally setAutoCommit(true)` comitaria a
+  guarda sem o evento).
+- **O braço `naive` também appenda `SlotReserved`** (só não toca em `eventcap`): a projeção vê as reservas dos dois braços.
+- **`walletevent` = projeção inline** ("minhas reservas"): continua sendo gravado pelas guardas, na transação; o
+  read-your-writes do `HttpContractTest` não mudou (a `version` não aparece no JSON de `EventWallet`).
+- **Projeção assíncrona de disponibilidade** (`event_availability`, lida só pelo braço `naive`): o
+  `EventAvailabilityConsumer` (`@KafkaListener(id = "reservation-availability", idIsGroup = false, topics =
+  "reservation.wallet")`, `events.consumer.enabled`) usa o `IdempotentConsumer` da #27 e a `EventAvailabilityProjection`.
+  A tabela guarda **só `ativos`** por evento (`SlotReserved` +1; `ReservationExpired`/`ReservationCancelled` −1;
+  `ReservationConfirmed` 0) + `applied_at` (`clock_timestamp()` do commit do consumer) + `last_occurred_at` (maior
+  `occurredAt` visto, igual ao `occurred_at` do `event_store`). **Sem FK e sem CHECK** em `ativos`: toda violação no consumer
+  é `SQLException`, retentada sem limite, e travaria a partição; um `Cancelled` sem `SlotReserved` (linha anterior ao ES)
+  deixa o saldo negativo, e a leitura trata `ativos` negativo como 0 (senão a disponibilidade passaria da capacidade). A **disponibilidade é calculada na leitura**
+  (`EventAvailabilityRepository.findAvailable`: `eventcap LEFT JOIN event_availability`, `CASE WHEN capacity = -1 THEN -1
+  ELSE GREATEST(capacity - GREATEST(COALESCE(ativos, 0), 0), 0) END`; **nunca** lê `eventcap.quant`). Um evento sem nenhuma reserva já
+  tem disponibilidade (= capacity) e a mudança de capacidade por `updatePolicy` vale na hora: só `ativos` é defasado.
+  `null` só significa "sem `eventcap`" (já barrado antes por `validarPreRequisitos`); o antigo erro "disponibilidade ainda
+  não calculada" não existe mais.
+- **Lag observável (ADR, seção 4).** Na linha da projeção: `applied_at − last_occurred_at` (idade do último evento
+  aplicado; o `Get-AmostraLag` do harness de carga mede isso). Por evento, o consumer loga no logger `events.lag`:
+  `relay_ms` (`publishedAt − occurredAt`), `consumer_ms` (aplicação − `publishedAt`) e `total_ms`
+  (**DEBUG, desligado por padrão**: um log por evento no thread do único consumer infla o `consumer_ms` medido; ligue com `LOGGING_LEVEL_EVENTS_LAG=DEBUG` só na rodada que mede o lag, e veja o offset lag). Complemento: offset lag
+  do group (`docker exec gerenciador-redpanda rpk group describe gerenciador-eventos`). A amostra de `applied_at` só anda
+  quando o consumer aplica evento: consumer parado não a atualiza, olhe também o offset lag. Falha transitória do consumer:
+  retry sem limite, e a partir da 10ª tentativa (`events.consumer.retry.error-after-attempts`) cada tentativa loga em
+  ERROR (`RetryListener` em `EventsKafkaConfig`).
+- **`ReadModelRefreshService` e `READMODEL_AVAILABILITY_REFRESH_MS` saíram.** O **lag do braço naive deixou de ser
+  variável controlada** (`lag_ms` da matriz): é o lag real do relay + consumer, medido sob a carga (variável independente =
+  a carga: N concorrentes / RPM). Ver `Projeto/carga/README.md`.
+- **Overselling (#9).** Os testes concorrentes do CAS seguem verdes (`eventcap` nunca negativo, reservas ≤ capacidade). O
+  braço naive com o consumer atrasado continua oversellando (é o braço de controle):
+  `EventWalletNaivePathTest.doisAddLinkNaMesmaJanelaOversellamSemTocarOCas` prova, de forma determinística, com o consumer
+  desligado.
+- **Replay** (`ReservationReplayTest`): reconstrói na sombra o `walletevent` (colunas `user_id, event_id, status,
+  expires_at, version`) e a projeção (`event_id, ativos, last_occurred_at`; `applied_at` fica de fora) só do `event_store`.
+  Só vale para streams nascidos depois da migração `20261023` (linhas anteriores têm `version = 0` e nenhum evento; o
+  baseline de `ativos` vem das reservas ativas que já existiam).
 
 O `gateway/BffSeedController` (`POST /bff/seed`) cria inscrições já confirmadas (`addLink`
 seguido de `confirm`).
@@ -522,10 +599,16 @@ seguido de `confirm`).
   estiver ativa). O `DELETE` roda em **lotes de 1000** (CTE com `LIMIT ... FOR UPDATE` + junção por `ctid`),
   um por instrução em autocommit, repetidos até um lote voltar incompleto — não varre nem trava a tabela de
   uma vez. Filtra por `created_at` com o índice `idx_idempotency_key_created_at`. `purgeExpired()` é `public`
-  e chamável direto (os testes o invocam; `run-tests.sh` estica o timer para 1h via env, como o
-  `ReadModelRefreshService`). A tabela não tem FK, então nada mais a apaga (não some com o evento).
+  e chamável direto (os testes o invocam; `run-tests.sh` estica o timer para 1h via env). A tabela não tem FK, então nada mais a apaga (não some com o evento).
 - **Latência (ponto 2 da série, não medido)**: sob carga a rejeição ("Evento lotado") é o caminho quente,
-  não só o sucesso. Custo por braço: no **sucesso**, `cas` e `naive` pagam 1 `INSERT` (+1 ida ao banco, mais
+  não só o sucesso. **Custo novo por reserva bem-sucedida desde a #29, nos DOIS braços:** +1 `INSERT` em `event_store`
+  e +1 `INSERT` em `event_outbox` (num único statement, o último antes do commit, +1 ida ao banco) na transação do request,
+  mais a escrita da linha e dos índices do `event_store` (PK + `UNIQUE (stream_type, stream_id, version)`) e do outbox, e +1
+  `DELETE` assíncrono do outbox no relay (tuplas mortas, autovacuum agressivo). Além disso, o `confirm` deixou de ser 1
+  `UPDATE` em autocommit e virou `UPDATE ... RETURNING` + append + `COMMIT` (a mesma ida de rede a mais por transição:
+  cancelamento e expiração também appendam); a pré-checagem do naive virou `eventcap LEFT JOIN event_availability` (join por
+  PK) no lugar da leitura de uma tabela. A rejeição ("lotado") **não** paga o append (rollback antes dele no `cas`; pré-checagem
+  no `naive`). Custo por braço: no **sucesso**, `cas` e `naive` pagam 1 `INSERT` de chave (+1 ida ao banco, mais
   a escrita da linha e dos 2 índices: PK + `created_at`, #130). Na **rejeição**, o `cas` paga `INSERT` + rollback (tupla morta na
   `idempotency_key` **e entrada morta nos dois índices**, vacuum), pois o `tryReserve` roda depois do `claim`; o `naive` rejeita nas
   pré-checagens, antes da transação, e **não paga nada** (a consulta prévia da chave só roda com chave do
@@ -539,19 +622,15 @@ seguido de `confirm`).
 
 - **`cas`** (default) — o que está descrito acima: `EventCapRepository.tryReserve` (UPDATE
   condicional atômico). Nunca oversella. **Zero mudança** de comportamento.
-- **`naive`** — lê o read model **defasado** `event_availability` via
-  `EventAvailabilityRepository.findAvailable` e insere em `walletevent` **sem CAS** (só
-  `reservePending`, **nunca** toca `eventcap`). `available == null` ⇒ erro "ainda não
-  calculada"; `== 0` ⇒ "Evento lotado"; `> 0` ou `-1` ⇒ segue. Oversella proporcional ao
-  lag do read model — é o **braço de controle** do experimento de concorrência da Fase 2
-  (issues #12/#13), não um bug.
+- **`naive`** — lê a disponibilidade **defasada** via `EventAvailabilityRepository.findAvailable`
+  (`eventcap.capacity` menos `ativos` da projeção assíncrona `event_availability`, ver "Reservation em event sourcing") e
+  insere em `walletevent` **sem CAS** (só `reservePending`, **nunca** toca `eventcap`, mas appenda `SlotReserved`).
+  `== 0` ⇒ "Evento lotado"; `> 0` ou `-1` ⇒ segue. Oversella proporcional ao lag do consumer — é o **braço de
+  controle** do experimento de concorrência (issues #12/#13), não um bug.
 
-`reservation/ReadModelRefreshService` — `@Scheduled` (a cada `readmodel.availability.refresh.ms`,
-default 5000; env `READMODEL_AVAILABILITY_REFRESH_MS`): um único
-`INSERT ... SELECT ... ON CONFLICT DO UPDATE` que recalcula `event_availability`
-(`available = capacity - reservas ativas`, piso 0; `-1` = ilimitado). Intervalo maior ⇒
-read model mais defasado ⇒ mais overselling no caminho ingênuo. `refresh()` é `public` e
-chamável direto (os testes o invocam sem esperar o timer).
+O refresh por timer da Fase 2 (`ReadModelRefreshService`, `READMODEL_AVAILABILITY_REFRESH_MS`) **saiu** na #29: o lag deixou
+de ser variável controlada e passou a ser o lag real do consumer, medido (ver "Reservation em event sourcing"). Os dados da
+Rodada 1 (`docs/carga/resultados-*`) foram medidos com o refresh e ficam como histórico.
 
 ## Cadastro em duas fases + e-mail
 
@@ -569,23 +648,25 @@ chamável direto (os testes o invocam sem esperar o timer).
   `SPRING_DATASOURCE_*` (inclui `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` e
   `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`), `JWT_SECRET`, `JWT_EXPIRATION_SECONDS`, `MAIL_*`,
   `RECAPTCHA_*`, `SERVER_TOMCAT_THREADS_MAX` (default `300`),
-  `RESERVATION_READPATH` (default `cas`; `naive` = braço de controle do experimento da
-  Fase 2), `READMODEL_AVAILABILITY_REFRESH_MS` (default `5000`; intervalo do job de refresh
-  do read model `event_availability` = o "lag" do experimento),
+  `RESERVATION_READPATH` (default `cas`; `naive` = braço de controle do experimento),
   `IDEMPOTENCY_RETENTION_HOURS` (default `24`; prazo de retenção das chaves de idempotência),
   `IDEMPOTENCY_RETENTION_SCAN_MS` (default `600000` = 10 min; intervalo do job de limpeza, issue #130),
   `SPRING_TASK_SCHEDULING_POOL_SIZE` (default `3`; threads do scheduler dos `@Scheduled`. O default do Boot é
-  **1**, compartilhada por `ReadModelRefreshService`, `ReservationExpiryService` e
-  `IdempotencyKeyRetentionService`: um purge em massa seguraria o refresh e falsearia o lag do braço `naive`).
+  **1**, compartilhada pelo `OutboxRelay`, `ReservationExpiryService` e
+  `IdempotencyKeyRetentionService`: um purge em massa seguraria o relay e falsearia o lag medido do braço `naive`).
   Valores reais vêm de `Projeto/.env` — não commitar, não imprimir.
 - Backbone de eventos (issue #27; ver "Event store e backbone de eventos"), todos com default de dev:
   `SPRING_KAFKA_BOOTSTRAP_SERVERS` (default `localhost:9092`; `redpanda:9092` no compose e no `run-tests.sh`),
   `EVENTS_RELAY_ENABLED` (default `false`), `EVENTS_RELAY_INTERVAL_MS` (`50`), `EVENTS_RELAY_BATCH_SIZE` (`200`),
   `EVENTS_CONSUMER_ENABLED` (default `false`), `EVENTS_CONSUMER_GROUP` (`gerenciador-eventos`),
   `EVENTS_CONSUMER_RETRY_INTERVAL_MS` (`1000`; base do backoff transitório e intervalo do retry do buraco),
-  `EVENTS_CONSUMER_RETRY_MAX_ATTEMPTS` (`5`; só para o buraco irrecuperável), `EVENTS_SNAPSHOT_EVERY` (`100`). Sem segredo novo. Default das flags = desligadas (os testes não ligam o relay); no
-  `docker-compose.yml` o backend passa `EVENTS_RELAY_ENABLED=true` desde a #28 (o `catalog` já appenda eventos).
-  `EVENTS_CONSUMER_ENABLED` segue desligado: o `catalog` não tem projeção assíncrona (a primeira vem na #29).
+  `EVENTS_CONSUMER_RETRY_MAX_ATTEMPTS` (`5`; só para o buraco irrecuperável), `EVENTS_CONSUMER_RETRY_ERROR_AFTER_ATTEMPTS` (`10`; a
+  partir daí cada tentativa do retry transitório ilimitado loga em ERROR), `EVENTS_SNAPSHOT_EVERY` (`100`). Sem segredo novo. As flags
+  `EVENTS_RELAY_ENABLED`/`EVENTS_CONSUMER_ENABLED` têm default `false` (os testes ligam por `@SpringBootTest(properties=...)`); o
+  `docker-compose.yml` passa `EVENTS_RELAY_ENABLED=true` desde a #28 (o `catalog` appenda eventos) e `EVENTS_CONSUMER_ENABLED=true` desde a #29
+  (projeção assíncrona de disponibilidade). **Aviso:** com o `gerenciador-backend` no ar, o relay dele drena o `event_outbox` do
+  mesmo banco que o `run-tests.sh` usa e o consumer dele move `ativos`: o `run-tests.sh` **aborta** se o container estiver
+  rodando (`docker stop gerenciador-backend` antes).
 - Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto
   (`management.endpoints.web.exposure.include=health`); `GET /actuator/health` público devolve
   `{"status":"UP"}` (depende do Postgres). `management.health.mail.enabled=false` — o health do

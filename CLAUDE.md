@@ -95,7 +95,9 @@ commitar ou registrar em log.
 - Antes de considerar uma tarefa de backend pronta: `Projeto/Backend/run-tests.sh`
   (precisa dos containers `db` **e** `redpanda` no ar — `docker compose -f Projeto/docker-compose.yml up -d db redpanda`;
   os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`, e Redpanda real; o script aborta com mensagem
-  clara se faltar um deles).
+  clara se faltar um deles). **Pare o `gerenciador-backend` antes** (`docker stop gerenciador-backend`): desde a #28/#29 o
+  relay e o consumer dele compartilham o `meu_banco` e drenam o `event_outbox` dos testes; o script aborta com
+  mensagem clara se o container estiver rodando.
 - Relate o resultado real dos testes; se algo falhou ou foi pulado, diga.
 
 ## Documentação de arquitetura (vault Obsidian)
@@ -126,8 +128,7 @@ Detalhes no `Projeto/Backend/CLAUDE.md`.
 
 **Implementado (Fase 6, issue #27, 2026-10-18):** só a infra do backbone de eventos, ainda sem domínio — broker
 Redpanda no compose e, em `shared/events`, `event_store` imutável + `event_outbox` + relay para o broker, base do
-consumer idempotente (checkpoint atômico), replay em schema-sombra e snapshots. `reservation` ainda não appenda
-eventos (#29).
+consumer idempotente (checkpoint atômico), replay em schema-sombra e snapshots.
 
 **Implementado (Fase 6, issue #28):** `catalog` em CQRS + Event Sourcing — stream `catalog.event`
 (`EventCreated`/`EventUpdated`/`PresenterAdded`/`PresenterRemoved`/`EventCancelled`), append na mesma transação da
@@ -135,8 +136,14 @@ projeção inline `event`/`eventpresenter` (coluna `event.version` como versão 
 `image_data` fora do ES, replay do agregado comparado com a viva, relay ligado no compose (`EVENTS_RELAY_ENABLED`).
 `/bff/events/**` inalterado. Detalhes no `Projeto/Backend/CLAUDE.md`, "Catalog em CQRS + Event Sourcing".
 
+**Implementado (Fase 6, issue #29):** o lado wallet de `reservation` em event sourcing (híbrido) — stream
+`reservation.wallet` (`SlotReserved`, `ReservationConfirmed`, `ReservationExpired`, `ReservationCancelled`) com a versão
+vinda da guarda (`UPDATE walletevent ... RETURNING version`) e o append na mesma transação; `eventcap` + CAS continuam
+relacionais. A disponibilidade do braço `naive` virou projeção assíncrona (consumer do tópico; `event_availability` só com
+`ativos`, disponibilidade calculada na leitura) e o `ReadModelRefreshService` saiu: o lag deixou de ser variável controlada e
+passou a ser medido (pré-requisito da Rodada 2, #31). O compose liga o relay (desde a #28) e o consumer (desde a #29) no backend.
+
 **Decidido, não implementado:** extrair os módulos como microsserviços (Opção B — `gateway`, `identity`,
-`catalog`, `reservation`, `notification`, `admission`; a Fase 5 só os separou dentro do monólito); CQRS + Event Sourcing
-no lado wallet de `reservation` (`eventcap` fica relacional/CAS; o `catalog` já foi, #28);
+`catalog`, `reservation`, `notification`, `admission`; a Fase 5 só os separou dentro do monólito);
 camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
 `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.

@@ -33,53 +33,62 @@ public class EventWalletRepository implements ReservationWriter {
      * Cria (ou revive, se estava expired/cancelled) a reserva como {@code pending}.
      * Deve ser chamada DEPOIS de um {@code tryReserve} bem-sucedido, na mesma transação.
      * Se já existir uma reserva {@code pending}/{@code confirmed}, o UPSERT não altera nada
-     * e o método devolve {@code false} (o chamador deve então liberar a vaga / dar rollback).
+     * e o método devolve {@code 0} (o chamador deve então liberar a vaga / dar rollback).
+     *
+     * <p>A guarda é o próprio UPSERT, e a versão do evento sai dela ({@code RETURNING version}, sem SELECT
+     * separado): a 1ª reserva do par é a versão 1; reviver uma cancelada/expirada continua o mesmo stream
+     * ({@code version + 1}). A linha fica travada até o commit do chamador.</p>
+     * @return a {@code version} do stream após a transição, ou {@code 0} se a guarda não afetou linha.
      */
-    public boolean reservePending(Connection conn, Long userId, Long eventId, LocalDateTime expiresAt)
+    @Override
+    public int reservePending(Connection conn, Long userId, Long eventId, LocalDateTime expiresAt)
             throws SQLException {
-        String sql = "INSERT INTO walletevent (user_id, event_id, status, expires_at) "
-                + "VALUES (?, ?, 'pending', ?) "
+        String sql = "INSERT INTO walletevent (user_id, event_id, status, expires_at, version) "
+                + "VALUES (?, ?, 'pending', ?, 1) "
                 + "ON CONFLICT (user_id, event_id) DO UPDATE "
                 + "  SET status = 'pending', expires_at = EXCLUDED.expires_at, "
-                + "      updated_at = CURRENT_TIMESTAMP "
-                + "  WHERE walletevent.status IN ('expired', 'cancelled')";
+                + "      version = walletevent.version + 1, updated_at = CURRENT_TIMESTAMP "
+                + "  WHERE walletevent.status IN ('expired', 'cancelled') "
+                + "RETURNING version";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setLong(1, userId);
             stmt.setLong(2, eventId);
             stmt.setTimestamp(3, Timestamp.valueOf(expiresAt));
-            return stmt.executeUpdate() == 1;
+            return versaoDaGuarda(stmt);
         }
     }
 
-    /** {@code pending -> confirmed}. @return linhas afetadas (0 se não havia reserva pending). */
-    public int confirm(Long userId, Long eventId) {
+    /**
+     * {@code pending -> confirmed}, na transação do chamador (que appenda o evento na mesma transação).
+     * @return a {@code version} após a transição, ou {@code 0} se não havia reserva pending.
+     */
+    public int confirm(Connection conn, Long userId, Long eventId) throws SQLException {
         String sql = "UPDATE walletevent "
-                + "SET status = 'confirmed', expires_at = NULL, updated_at = CURRENT_TIMESTAMP "
-                + "WHERE user_id = ? AND event_id = ? AND status = 'pending'";
-        try (Connection conn = databaseConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
+                + "SET status = 'confirmed', expires_at = NULL, version = version + 1, updated_at = CURRENT_TIMESTAMP "
+                + "WHERE user_id = ? AND event_id = ? AND status = 'pending' "
+                + "RETURNING version";
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setLong(1, userId);
             stmt.setLong(2, eventId);
-            return stmt.executeUpdate();
-        } catch (SQLException ex) {
-            throw new RuntimeException("Erro ao confirmar reserva: " + ex.getMessage(), ex);
+            return versaoDaGuarda(stmt);
         }
     }
 
     /**
      * Marca a reserva como {@code expired} SOMENTE se ela ainda estiver {@code pending} e
      * vencida — evita expirar uma reserva que o usuário confirmou entre a varredura do job
-     * e este UPDATE. @return {@code true} se expirou de fato.
+     * e este UPDATE. @return a {@code version} após a transição, ou {@code 0} se não expirou.
      */
-    public boolean expireIfStale(Connection conn, Long userId, Long eventId) throws SQLException {
+    public int expireIfStale(Connection conn, Long userId, Long eventId) throws SQLException {
         String sql = "UPDATE walletevent "
-                + "SET status = 'expired', expires_at = NULL, updated_at = CURRENT_TIMESTAMP "
+                + "SET status = 'expired', expires_at = NULL, version = version + 1, updated_at = CURRENT_TIMESTAMP "
                 + "WHERE user_id = ? AND event_id = ? AND status = 'pending' "
-                + "  AND expires_at < CURRENT_TIMESTAMP";
+                + "  AND expires_at < CURRENT_TIMESTAMP "
+                + "RETURNING version";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setLong(1, userId);
             stmt.setLong(2, eventId);
-            return stmt.executeUpdate() == 1;
+            return versaoDaGuarda(stmt);
         }
     }
 
@@ -89,17 +98,25 @@ public class EventWalletRepository implements ReservationWriter {
      * devolução dupla da vaga quando duas remoções concorrem (dois cliques, retry de rede, ou
      * corrida com o {@link com.gerenciador.eventos.reservation.ReservationExpiryService}).
      * Usa a transação do chamador.
-     * @return linhas afetadas: {@code 1} se cancelou de fato (a vaga deve ser devolvida);
+     * @return a {@code version} após a transição ({@code > 0}: cancelou de fato, a vaga deve ser devolvida);
      *         {@code 0} se já estava cancelled/expired ou não existe (nada a devolver).
      */
     public int cancelIfActive(Connection conn, Long userId, Long eventId) throws SQLException {
         String sql = "UPDATE walletevent "
-                + "SET status = 'cancelled', expires_at = NULL, updated_at = CURRENT_TIMESTAMP "
-                + "WHERE user_id = ? AND event_id = ? AND status IN ('pending', 'confirmed')";
+                + "SET status = 'cancelled', expires_at = NULL, version = version + 1, updated_at = CURRENT_TIMESTAMP "
+                + "WHERE user_id = ? AND event_id = ? AND status IN ('pending', 'confirmed') "
+                + "RETURNING version";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setLong(1, userId);
             stmt.setLong(2, eventId);
-            return stmt.executeUpdate();
+            return versaoDaGuarda(stmt);
+        }
+    }
+
+    /** Executa a guarda com {@code RETURNING version}: a versão se afetou 1 linha, {@code 0} se não afetou. */
+    private static int versaoDaGuarda(PreparedStatement stmt) throws SQLException {
+        try (ResultSet rs = stmt.executeQuery()) {
+            return rs.next() ? rs.getInt(1) : 0;
         }
     }
 
@@ -153,19 +170,6 @@ public class EventWalletRepository implements ReservationWriter {
             return out;
         } catch (SQLException ex) {
             throw new RuntimeException("Erro ao listar vínculos da carteira: " + ex.getMessage(), ex);
-        }
-    }
-
-    /** Remoção física do vínculo (uso administrativo; cancelamento normal usa cancelIfActive). */
-    public void delete(Long userId, Long eventId) {
-        String sql = "DELETE FROM walletevent WHERE user_id = ? AND event_id = ?";
-        try (Connection conn = databaseConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setLong(1, userId);
-            stmt.setLong(2, eventId);
-            stmt.executeUpdate();
-        } catch (SQLException ex) {
-            throw new RuntimeException("Erro ao apagar vínculo carteira-evento: " + ex.getMessage(), ex);
         }
     }
 

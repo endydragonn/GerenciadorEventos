@@ -1,3 +1,6 @@
+-- SUPERADA pela 20261023-wallet-es-projecao.sql (issue #29): a event_availability deixou de ser o read model com
+-- available/refreshed_at recalculado por timer e virou a projeção assíncrona (ativos). Fica como histórico: aplicada
+-- DEPOIS da 20261023 ela falha (a tabela já não tem a coluna available).
 -- Migração: read model desnormalizado e defasado public.event_availability (issue #10 / #09 do BACKLOG).
 -- Idempotente. Aplicável a quente num banco já existente, SEM recriar o volume:
 --   docker exec -i gerenciador-db psql -h localhost -U admin -d meu_banco \

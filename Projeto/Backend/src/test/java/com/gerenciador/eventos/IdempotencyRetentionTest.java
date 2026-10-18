@@ -52,8 +52,8 @@ public class IdempotencyRetentionTest {
     @Autowired private ThreadPoolTaskScheduler taskScheduler;
 
     /**
-     * O scheduler do Boot tem 1 thread por padrão, compartilhada com ReadModelRefreshService (o lag do braço
-     * naive) e ReservationExpiryService: um purge longo seguraria o refresh. O pool precisa ter mais de 1.
+     * O scheduler do Boot tem 1 thread por padrão, compartilhada com o OutboxRelay (o lag do braço naive),
+     * ReservationExpiryService e este job: um purge longo seguraria o relay. O pool precisa ter mais de 1.
      */
     @Test
     public void schedulerTemMaisDeUmaThread() {

@@ -11,13 +11,12 @@ import org.springframework.stereotype.Repository;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**
- * Repository JDBC do read model desnormalizado public.event_availability.
+ * Leitura da disponibilidade para o caminho "ingênuo" de reserva ({@code reservation.readpath=naive}).
  *
- * <p>Esta tabela NÃO é fonte de verdade — {@code eventcap} + CAS continuam sendo. Ela é
- * recalculada só pelo job {@link com.gerenciador.eventos.reservation.ReadModelRefreshService}
- * num timer (lag configurável) e serve o "caminho ingênuo" de reserva
- * ({@code EventWalletService}, feature flag {@code reservation.readpath=naive}), braço de
- * controle do experimento de concorrência da Fase 2.</p>
+ * <p>{@code event_availability} é a projeção ASSÍNCRONA (consumer do tópico {@code reservation.wallet},
+ * {@link EventAvailabilityProjection}) e guarda só {@code ativos}; a disponibilidade é calculada AQUI, na leitura:
+ * {@code eventcap LEFT JOIN} a projeção. A projeção não é fonte de verdade ({@code eventcap} + CAS são), e esta
+ * leitura NUNCA usa {@code eventcap.quant} (viraria o CAS): só {@code capacity}.</p>
  */
 @Repository
 public class EventAvailabilityRepository {
@@ -26,48 +25,23 @@ public class EventAvailabilityRepository {
     private DatabaseConnection databaseConnection;
 
     /**
-     * Recalcula TODAS as linhas do read model a partir do estado atual de
-     * {@code eventcap}/{@code walletevent}, num único UPSERT.
-     * {@code available = capacity - reservas ativas} (piso 0); {@code -1} = evento ilimitado.
-     * @return nº de linhas inseridas/atualizadas.
-     */
-    public int refreshAll() {
-        String sql = "INSERT INTO event_availability (event_id, available, refreshed_at) "
-                + "SELECT ec.event_id, "
-                + "       CASE WHEN ec.capacity = -1 THEN -1 "
-                + "            ELSE GREATEST(ec.capacity - COALESCE(a.ativos, 0), 0) END, "
-                + "       now() "
-                + "FROM eventcap ec "
-                + "LEFT JOIN ( "
-                + "    SELECT event_id, count(*) AS ativos "
-                + "    FROM walletevent "
-                + "    WHERE status IN ('pending', 'confirmed') "
-                + "    GROUP BY event_id "
-                + ") a ON a.event_id = ec.event_id "
-                + "ON CONFLICT (event_id) DO UPDATE "
-                + "  SET available = EXCLUDED.available, refreshed_at = EXCLUDED.refreshed_at";
-        try (Connection conn = databaseConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-            return stmt.executeUpdate();
-        } catch (SQLException ex) {
-            throw new RuntimeException("Erro ao atualizar event_availability: " + ex.getMessage(), ex);
-        }
-    }
-
-    /**
-     * Disponibilidade defasada do evento no read model.
-     * @return {@code available} (piso 0; {@code -1} = ilimitado), ou {@code null} se o job
-     *         ainda não calculou a linha para este evento.
+     * Disponibilidade defasada do evento: {@code capacity - max(ativos, 0)} (piso 0; {@code -1} = ilimitado; {@code ativos} negativo conta como 0, senão a
+     * disponibilidade passaria da capacidade). Um evento
+     * sem nenhuma reserva projetada ainda tem valor ({@code capacity}); a mudança de capacidade vale na hora.
+     * @return a disponibilidade, ou {@code null} se o evento não tem {@code eventcap}.
      */
     public Integer findAvailable(Long eventId) {
-        String sql = "SELECT available FROM event_availability WHERE event_id = ?";
+        String sql = "SELECT CASE WHEN ec.capacity = -1 THEN -1 "
+                + "            ELSE GREATEST(ec.capacity - GREATEST(COALESCE(ea.ativos, 0), 0), 0) END "
+                + "FROM eventcap ec LEFT JOIN event_availability ea ON ea.event_id = ec.event_id "
+                + "WHERE ec.event_id = ?";
         try (Connection conn = databaseConnection.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setLong(1, eventId);
             ResultSet rs = stmt.executeQuery();
             return rs.next() ? rs.getInt(1) : null;
         } catch (SQLException ex) {
-            throw new RuntimeException("Erro ao consultar event_availability: " + ex.getMessage(), ex);
+            throw new RuntimeException("Erro ao consultar a disponibilidade: " + ex.getMessage(), ex);
         }
     }
 }
