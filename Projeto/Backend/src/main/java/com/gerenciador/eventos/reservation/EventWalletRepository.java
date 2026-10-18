@@ -24,7 +24,7 @@ import com.gerenciador.eventos.reservation.api.EventWallet;
  * {@link Connection} da transação do serviço chamador.</p>
  */
 @Repository
-public class EventWalletRepository {
+public class EventWalletRepository implements ReservationWriter {
 
     @Autowired
     private DatabaseConnection databaseConnection;

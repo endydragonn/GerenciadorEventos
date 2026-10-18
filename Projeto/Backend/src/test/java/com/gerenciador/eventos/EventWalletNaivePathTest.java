@@ -8,17 +8,24 @@ import java.time.LocalDateTime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import com.gerenciador.eventos.catalog.api.Event;
 import com.gerenciador.eventos.reservation.api.EventWallet;
 import com.gerenciador.eventos.identity.api.User;
 import com.gerenciador.eventos.reservation.EventCapRepository;
 import com.gerenciador.eventos.reservation.EventWalletRepository;
+import com.gerenciador.eventos.reservation.IdempotencyKeyRepository;
 import com.gerenciador.eventos.catalog.EventService;
 import com.gerenciador.eventos.reservation.EventWalletService;
 import com.gerenciador.eventos.reservation.MyWalletService;
@@ -53,6 +60,7 @@ public class EventWalletNaivePathTest {
     @Autowired private EventWalletRepository eventWalletRepository;
     @Autowired private ReadModelRefreshService readModelRefreshService;
     @Autowired private DatabaseConnection databaseConnection;
+    @MockitoSpyBean private IdempotencyKeyRepository idempotencyKeyRepository;
 
     /**
      * Overselling demonstrado: duas requisições que leem o mesmo {@code available > 0}
@@ -127,6 +135,49 @@ public class EventWalletNaivePathTest {
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> eventWalletService.addLink(new EventWallet(u2.getId(), e.getEvent_id())));
         assertTrue(ex.getMessage().toLowerCase().contains("lotado"), "veio: " + ex.getMessage());
+    }
+
+    /** Idempotência vale também no braço ingênuo: a repetição devolve a 1ª reserva, sem 2ª linha. */
+    @Test
+    public void repeticaoComAMesmaChaveNaoGravaDeNovoNoCaminhoIngenuo() throws Exception {
+        User creator = novoUsuario("naive-idem-creator@example.com", "naive-fone-11");
+        Event e = novoEvento(creator.getId(), "Naive Idempotente", 1);
+        User u = novoUsuario("naive-idem-u@example.com", "naive-fone-12");
+        readModelRefreshService.refresh(); // available = 1
+
+        EventWallet primeira = eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()), "naive-chave-1");
+        readModelRefreshService.refresh(); // available = 0: sem a chave a repetição seria "lotado"
+        EventWallet repetida = eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()), "naive-chave-1");
+
+        assertEquals("pending", repetida.getStatus());
+        assertEquals(primeira.getExpiresAt(), repetida.getExpiresAt());
+        assertEquals(1, contarWalletevent(e.getEvent_id(), "pending"));
+        assertEquals(1, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "naive não toca eventcap");
+    }
+
+    /**
+     * Rejeição do naive com chave GERADA pelo servidor não consulta {@code idempotency_key} (ela nunca
+     * existe): senão o naive pagaria um SELECT a mais que o cas por rejeição. Com chave do CLIENTE a
+     * consulta acontece (pode ser a repetição de uma reserva que já vale).
+     */
+    @Test
+    public void rejeicaoComChaveGeradaNaoConsultaAChave() {
+        User creator = novoUsuario("naive-nolookup-creator@example.com", "naive-fone-13");
+        Event e = novoEvento(creator.getId(), "Naive Sem Lookup", 1);
+        User u1 = novoUsuario("naive-nolookup-u1@example.com", "naive-fone-14");
+        User u2 = novoUsuario("naive-nolookup-u2@example.com", "naive-fone-15");
+        readModelRefreshService.refresh();
+        eventWalletService.addLink(new EventWallet(u1.getId(), e.getEvent_id()));
+        readModelRefreshService.refresh(); // available = 0
+        clearInvocations(idempotencyKeyRepository);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> eventWalletService.addLink(new EventWallet(u2.getId(), e.getEvent_id())));
+        verify(idempotencyKeyRepository, never()).find(anyString());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> eventWalletService.addLink(new EventWallet(u2.getId(), e.getEvent_id()), "naive-chave-cliente"));
+        verify(idempotencyKeyRepository, times(1)).find(anyString());
     }
 
     // ===================== helpers =====================

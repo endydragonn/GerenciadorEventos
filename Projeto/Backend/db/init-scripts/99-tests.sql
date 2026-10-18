@@ -176,6 +176,20 @@ BEGIN
       RAISE EXCEPTION 'Falha: insercao duplicada em walletevent nao falhou';
     EXCEPTION WHEN unique_violation THEN NULL; END;
 
+    -- 8b) idempotency_key: a PK serializa a mesma chave (ON CONFLICT DO NOTHING = 0 linhas na 2a vez)
+    INSERT INTO public.idempotency_key (idempotency_key, user_id, event_id, expires_at)
+    VALUES ('chave-teste', v_user1, v_event1, now());
+    INSERT INTO public.idempotency_key (idempotency_key, user_id, event_id, expires_at)
+    VALUES ('chave-teste', v_user1, v_event1, now()) ON CONFLICT (idempotency_key) DO NOTHING;
+    SELECT count(*) INTO v_count FROM public.idempotency_key WHERE idempotency_key = 'chave-teste';
+    IF v_count <> 1 THEN RAISE EXCEPTION 'Falha: idempotency_key aceitou chave duplicada'; END IF;
+    BEGIN
+      INSERT INTO public.idempotency_key (idempotency_key, user_id, event_id, expires_at)
+      VALUES ('chave-teste', v_user1, v_event1, now());
+      RAISE EXCEPTION 'Falha: insercao duplicada em idempotency_key nao falhou';
+    EXCEPTION WHEN unique_violation THEN NULL; END;
+    DELETE FROM public.idempotency_key WHERE idempotency_key = 'chave-teste';
+
     -- 9) ON DELETE CASCADE de event -> eventcap / eventpresenter
     DELETE FROM public.walletevent WHERE event_id = v_event1;
     DELETE FROM public.event WHERE event_id = v_event1;

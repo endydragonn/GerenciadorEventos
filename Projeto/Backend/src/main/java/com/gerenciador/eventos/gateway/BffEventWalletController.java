@@ -10,12 +10,14 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.gerenciador.eventos.reservation.api.EventWallet;
 import com.gerenciador.eventos.reservation.api.EventWalletApi;
+import com.gerenciador.eventos.reservation.api.IdempotencyConflictException;
 
 /**
  * Camada BFF única para inscrição em evento (event-wallet): addLink, confirm, validate,
@@ -37,16 +39,21 @@ public class BffEventWalletController {
     }
 
     @PostMapping
-    public ResponseEntity<?> addLink(@RequestBody EventWallet ew) {
+    public ResponseEntity<?> addLink(@RequestBody EventWallet ew,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         List<String> errors = validateEventWalletBasic(ew);
         if (!errors.isEmpty()) {
             return ResponseEntity.badRequest().body(String.join("; ", errors));
         }
         try {
-            EventWallet saved = eventWalletService.addLink(ew);
-            return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+            EventWallet saved = eventWalletService.addLink(ew, idempotencyKey);
+            // header aditivo: sem a chave na requisição, é a gerada pelo servidor (corpo JSON não muda)
+            return ResponseEntity.status(HttpStatus.CREATED)
+                    .header("Idempotency-Key", saved.getIdempotencyKey()).body(saved);
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
+        } catch (IdempotencyConflictException ex) {
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(ex.getMessage());
         } catch (RuntimeException ex) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
         }

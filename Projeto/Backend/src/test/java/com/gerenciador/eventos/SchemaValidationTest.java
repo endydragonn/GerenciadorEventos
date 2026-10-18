@@ -37,6 +37,7 @@ public class SchemaValidationTest {
         assertTrue(tableExists("mywallet"), "Tabela 'mywallet' não existe");
         assertTrue(tableExists("walletevent"), "Tabela 'walletevent' não existe");
         assertTrue(tableExists("event_availability"), "Tabela 'event_availability' não existe");
+        assertTrue(tableExists("idempotency_key"), "Tabela 'idempotency_key' não existe");
     }
 
     @Test
@@ -85,6 +86,13 @@ public class SchemaValidationTest {
     void eventAvailabilityTableShouldHaveKeyColumns() throws Exception {
         assertColumns("event_availability",
             "event_id", "available", "refreshed_at", "created_at"
+        );
+    }
+
+    @Test
+    void idempotencyKeyTableShouldHaveKeyColumns() throws Exception {
+        assertColumns("idempotency_key",
+            "idempotency_key", "user_id", "event_id", "expires_at", "created_at"
         );
     }
 

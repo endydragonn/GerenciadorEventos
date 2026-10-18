@@ -3,7 +3,9 @@ package com.gerenciador.eventos.reservation;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,6 +14,7 @@ import org.springframework.stereotype.Service;
 import com.gerenciador.eventos.reservation.api.EventCap;
 import com.gerenciador.eventos.reservation.api.EventWallet;
 import com.gerenciador.eventos.reservation.api.EventWalletApi;
+import com.gerenciador.eventos.reservation.api.IdempotencyConflictException;
 import com.gerenciador.eventos.reservation.api.MyWallet;
 import com.gerenciador.eventos.catalog.api.EventApi;
 import com.gerenciador.eventos.shared.DatabaseConnection;
@@ -49,19 +52,85 @@ public class EventWalletService implements EventWalletApi {
     @Autowired
     private EventAvailabilityRepository eventAvailabilityRepository;
     @Autowired
+    private CapacityReserver capacityReserver;
+    @Autowired
+    private ReservationWriter reservationWriter;
+    @Autowired
+    private IdempotencyKeyRepository idempotencyKeyRepository;
+    @Autowired
     private DatabaseConnection databaseConnection;
 
     /** Caminho de leitura da reserva: {@code cas} (default) ou {@code naive}. */
     @Value("${reservation.readpath:cas}")
     private String readPath;
 
+    /** Reserva com {@code Idempotency-Key} gerada no servidor (fica em {@code getIdempotencyKey()}). */
+    public EventWallet addLink(EventWallet ew) {
+        return addLink(ew, null);
+    }
+
     /**
      * Cria uma reserva {@code pending}: debita a vaga em {@code eventcap} e grava a linha em
      * {@code walletevent}, tudo numa transação. Se o evento estiver lotado, nada é gravado.
+     *
+     * <p><b>Idempotência (issue #24).</b> A chave é gravada em {@code idempotency_key} na MESMA
+     * transação do CAS e da reserva. Repetição com a mesma chave e o mesmo usuário/evento devolve o
+     * resultado da primeira ({@code pending} + {@code expiresAt} salvo) sem tocar {@code eventcap};
+     * outro usuário/evento ⇒ {@link IdempotencyConflictException}. Reserva que falha faz rollback
+     * e não deixa chave (a mesma chave pode ser repetida). Vale para os caminhos {@code cas} e
+     * {@code naive}. Sem chave (null/em branco), o servidor gera uma.</p>
      */
-    public EventWallet addLink(EventWallet ew) {
+    public EventWallet addLink(EventWallet ew, String idempotencyKey) {
         validateBasic(ew);
+        boolean chaveDoCliente = idempotencyKey != null && !idempotencyKey.isBlank();
+        String chave = normalizarChave(idempotencyKey);
+        ew.setIdempotencyKey(chave);
 
+        EventCap cap;
+        try {
+            cap = validarPreRequisitos(ew);
+            // Caminho de leitura ingênuo (feature flag reservation.readpath=naive): lê o read
+            // model defasado event_availability e reserva SEM CAS. Oversella proporcional ao lag
+            // do read model — é o braço de controle do experimento da Fase 2, não um bug.
+            if (naive()) validarDisponibilidadeNaive(ew.getEventId());
+        } catch (IllegalArgumentException ex) {
+            // Se é a repetição de uma reserva que já vale, as checagens acima ("Vínculo já
+            // existente", "Evento lotado" no naive...) falham; a resposta certa é a salva.
+            // Chave gerada pelo servidor nunca existe: não consulta (rejeição é o caminho quente
+            // sob carga, e o naive não pode pagar um SELECT a mais que o cas).
+            if (chaveDoCliente) {
+                IdempotencyKeyRepository.Salvo salvo = idempotencyKeyRepository.find(chave);
+                if (salvo != null) return resultadoSalvo(salvo, ew);
+            }
+            throw ex;
+        }
+
+        int maxTimeInLine = cap.getMaxTimeInLine() != null ? cap.getMaxTimeInLine() : 120;
+        // micros: o Postgres guarda microssegundos; a repetição devolve o mesmo expiresAt da primeira
+        LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(maxTimeInLine).truncatedTo(ChronoUnit.MICROS);
+
+        // evento ilimitado (capacity = -1) e caminho ingênuo: reserva sem CAS
+        IdempotencyKeyRepository.Salvo salvo =
+                reservarNaTransacao(ew, chave, cap.isUnlimited() || naive(), expiresAt);
+        if (salvo != null) return resultadoSalvo(salvo, ew);
+
+        ew.setStatus("pending");
+        ew.setExpiresAt(expiresAt);
+        return ew;
+    }
+
+    private boolean naive() {
+        return "naive".equalsIgnoreCase(readPath);
+    }
+
+    private static String normalizarChave(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) return UUID.randomUUID().toString();
+        if (idempotencyKey.length() > 255)
+            throw new IllegalArgumentException("Idempotency-Key deve ter no máximo 255 caracteres");
+        return idempotencyKey;
+    }
+
+    private EventCap validarPreRequisitos(EventWallet ew) {
         MyWallet wallet = myWalletRepository.findByUserId(ew.getUserId());
         if (wallet == null) throw new IllegalArgumentException("Carteira do usuário não encontrada");
         if (!eventApi.exists(ew.getEventId()))
@@ -74,80 +143,56 @@ public class EventWalletService implements EventWalletApi {
 
         if (eventWalletRepository.existsActive(ew.getUserId(), ew.getEventId()))
             throw new IllegalArgumentException("Vínculo já existente");
+        return cap;
+    }
 
-        int maxTimeInLine = cap.getMaxTimeInLine() != null ? cap.getMaxTimeInLine() : 120;
-        LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(maxTimeInLine);
+    private void validarDisponibilidadeNaive(Long eventId) {
+        Integer disp = eventAvailabilityRepository.findAvailable(eventId);
+        if (disp == null)
+            throw new IllegalArgumentException("Disponibilidade do evento ainda não calculada");
+        if (disp == 0)
+            throw new IllegalArgumentException("Evento lotado");
+        // disp > 0, ou disp == -1 (ilimitado): segue
+    }
 
-        // Caminho de leitura ingênuo (feature flag reservation.readpath=naive): lê o read
-        // model defasado event_availability e insere SEM CAS. Oversella proporcional ao lag
-        // do read model — é o braço de controle do experimento da Fase 2, não um bug.
-        if ("naive".equalsIgnoreCase(readPath)) {
-            Integer disp = eventAvailabilityRepository.findAvailable(ew.getEventId());
-            if (disp == null)
-                throw new IllegalArgumentException("Disponibilidade do evento ainda não calculada");
-            if (disp == 0)
-                throw new IllegalArgumentException("Evento lotado");
-            // disp > 0, ou disp == -1 (ilimitado): segue — NUNCA chama eventCapRepository
-            gravarReservaPendingSemCas(ew, expiresAt);
-            ew.setStatus("pending");
-            ew.setExpiresAt(expiresAt);
-            return ew;
-        }
-
-        try (Connection conn = databaseConnection.getConnection()) {
-            conn.setAutoCommit(false);
-            try {
-                // evento ilimitado (capacity = -1): reserva sempre permitida, sem CAS
-                boolean reserved = cap.isUnlimited()
-                        || eventCapRepository.tryReserve(conn, ew.getEventId());
-                if (!reserved) {
-                    conn.rollback();
-                    throw new IllegalArgumentException("Evento lotado");
-                }
-                boolean created = eventWalletRepository.reservePending(
-                        conn, ew.getUserId(), ew.getEventId(), expiresAt);
-                if (!created) {
-                    // corrida: já havia reserva ativa — desfaz o decremento
-                    conn.rollback();
-                    throw new IllegalArgumentException("Vínculo já existente");
-                }
-                conn.commit();
-            } catch (SQLException | RuntimeException ex) {
-                conn.rollback();
-                throw ex instanceof RuntimeException ? (RuntimeException) ex
-                        : new RuntimeException("Erro ao reservar: " + ex.getMessage(), ex);
-            } finally {
-                conn.setAutoCommit(true);
-            }
-        } catch (SQLException ex) {
-            throw new RuntimeException("Erro ao reservar: " + ex.getMessage(), ex);
-        }
-
+    /** Resultado da primeira reserva feita com a chave; outro usuário/evento ⇒ conflito (HTTP 422). */
+    private EventWallet resultadoSalvo(IdempotencyKeyRepository.Salvo salvo, EventWallet ew) {
+        if (!salvo.userId().equals(ew.getUserId()) || !salvo.eventId().equals(ew.getEventId()))
+            throw new IdempotencyConflictException(
+                    "Idempotency-Key já usada em outra requisição (usuário/evento diferentes)");
         ew.setStatus("pending");
-        ew.setExpiresAt(expiresAt);
+        ew.setExpiresAt(salvo.expiresAt());
         return ew;
     }
 
     /**
-     * Grava a reserva {@code pending} numa transação curta, SEM tocar o agregado
-     * {@code eventcap} (sem CAS). Usado só pelo caminho de leitura ingênuo
-     * ({@code reservation.readpath=naive}).
+     * Transação única da reserva, numa {@link Connection}: reivindica a chave → decrementa a
+     * capacidade ({@link CapacityReserver}, pulado se {@code semCas}) → grava a reserva
+     * ({@link ReservationWriter}) → commit. Qualquer falha após o decremento faz rollback da
+     * conexão inteira: é o ponto de compensação (a vaga e a chave voltam juntas).
+     *
+     * @return {@code null} se reservou; o {@link IdempotencyKeyRepository.Salvo} existente se a
+     *         chave já estava gravada (repetição, ou perdeu a corrida para outra com a mesma chave).
      */
-    private void gravarReservaPendingSemCas(EventWallet ew, LocalDateTime expiresAt) {
+    private IdempotencyKeyRepository.Salvo reservarNaTransacao(
+            EventWallet ew, String chave, boolean semCas, LocalDateTime expiresAt) {
         try (Connection conn = databaseConnection.getConnection()) {
             conn.setAutoCommit(false);
             try {
-                boolean created = eventWalletRepository.reservePending(
-                        conn, ew.getUserId(), ew.getEventId(), expiresAt);
-                if (!created) {
-                    // Guarda defensiva intencional (espelha o caminho CAS): o existsActive
-                    // acima já barra a duplicidade no fluxo normal; este ramo só é atingido
-                    // numa corrida com outra inserção concorrente do mesmo par. Sem teste
-                    // dedicado — não há como forçá-lo de forma determinística.
+                if (!idempotencyKeyRepository.claim(conn, chave, ew.getUserId(), ew.getEventId(), expiresAt)) {
+                    // já existe (o INSERT esperou a transação concorrente terminar): nada foi tocado
+                    IdempotencyKeyRepository.Salvo salvo = idempotencyKeyRepository.find(conn, chave);
                     conn.rollback();
-                    throw new IllegalArgumentException("Vínculo já existente");
+                    if (salvo == null) throw new IllegalStateException("Idempotency-Key sumiu durante a reserva");
+                    return salvo;
                 }
+                if (!semCas && !capacityReserver.tryReserve(conn, ew.getEventId()))
+                    throw new IllegalArgumentException("Evento lotado");
+                if (!reservationWriter.reservePending(conn, ew.getUserId(), ew.getEventId(), expiresAt))
+                    // corrida: já havia reserva ativa — o rollback desfaz decremento e chave
+                    throw new IllegalArgumentException("Vínculo já existente");
                 conn.commit();
+                return null;
             } catch (SQLException | RuntimeException ex) {
                 conn.rollback();
                 throw ex instanceof RuntimeException ? (RuntimeException) ex

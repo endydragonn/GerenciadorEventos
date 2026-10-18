@@ -27,7 +27,7 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
  * expiração) sejam atômicos.</p>
  */
 @Repository
-public class EventCapRepository implements EventCapacityApi {
+public class EventCapRepository implements EventCapacityApi, CapacityReserver {
 
     @Autowired
     private DatabaseConnection databaseConnection;
