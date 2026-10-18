@@ -37,6 +37,14 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   container com env fixo (`--env-file ../.env`): para mudar `test.db.schemas` por ali, passe
   `-e TEST_DB_SCHEMAS=...` no `docker run` do script. Coberto por `TestSchemasTest`.
 - `EventTest`, `UserTest`, `EventWalletTest`, `MyWalletTest` exercitam services + repositories.
+- `CatalogEventSourcingTest` (issue #28; ver "Catalog em CQRS + Event Sourcing"): **teste de replay do agregado `Event`**
+  (cria/edita/adiciona e remove apresentador/troca imagem/cancela vários eventos, reconstrói `event`/`eventpresenter` na
+  sombra a partir do `event_store` e compara com a viva nas colunas comparáveis, sem `image_data` e sem carimbos; uma
+  divergência provocada é detectada), tipos e versões contíguas de cada stream, payload sem PII/imagem e com valores
+  calculados (o `EventUpdated` não carrega capacidade), evento pré-ES (`version = 0`) recusado, backfill da migração
+  `20261022` aplicado 2× (um `EventCreated` v1, replay == viva), conflito de versão (transitório: o command repete; permanente: esgota as tentativas e não grava nada),
+  8 updates concorrentes no mesmo evento (log contíguo, sem versão perdida) e `DELETE` que falha por FK desfazendo o
+  `EventCancelled`.
 - `IdempotencyRetentionTest` (issue #130): o job apaga chave com `created_at` além do prazo (envelhecida via `UPDATE`) e preserva a recente; repetição com chave ainda retida segue idempotente; apaga em lotes (2500 linhas; o lote de 1000 devolve exatamente 1000); o scheduler tem mais de 1 thread.
 - `IdempotencyKeyTest` (issue #24; escopo por usuário na #129): repetição com a mesma `Idempotency-Key` não decrementa `eventcap` de novo
   (sequencial, após `confirm`, e 8 threads concorrentes com a mesma chave), conflito do mesmo usuário com outro evento, mesma chave em usuários diferentes sem colisão,
@@ -84,7 +92,7 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
     a maioria dos arquivos fica bem abaixo de 300; só `BffUserController.java` (465) e
     `UserRepository.java` (351) violavam, e estão na baseline) e `RegexpSinglelineJava`
     banindo `System.out/err.print*`/`println` (id `ProibirConsoleDireto` — baseline:
-    `UserRepository.java`, `EventRepository.java`) e
+    `UserRepository.java`; o do `EventRepository.java` saiu na #28) e
     `printStackTrace()` (id `ProibirPrintStackTrace` — zero ocorrências, já trava sem
     baseline). Use um logger SLF4J (`org.slf4j.Logger`/`LoggerFactory`, ver
     `reservation/ReservationExpiryService`) em vez de escrever direto no console.
@@ -120,7 +128,8 @@ Main.java        entrypoint @SpringBootApplication (único; o component scan cob
 identity/        UserService, UserRepository, EmailVerificationService, PendingVerification(+Repository),
                  security/ (JwtUtil, JwtAuthenticationFilter, AuthorizationUtil, SecurityConfig)
   api/           User, UserApi, EmailVerificationApi, TokenApi, HostAuthorizationApi
-catalog/         EventService, EventRepository, EventPresenterRepository
+catalog/         EventService, EventRepository, EventPresenterRepository (leitura),
+                 CatalogEventWriter (command side ES, #28), CatalogEventProjection (projeção inline), EventPayloads
   api/           Event, EventApi
 reservation/     EventWalletService, MyWalletService, ReadModelRefreshService, ReservationExpiryService,
                  IdempotencyKeyRetentionService (job de retenção, #130),
@@ -190,7 +199,7 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
 - **`Event` é um POJO de transporte.** Ele ainda carrega `lot_quantity` (= `eventcap.capacity`),
   `quantity` (= `eventcap.quant`), `buy_time_limit` e `presenters`, mas esses campos **não
   são colunas de `event`**: `EventRepository.save` os grava nos agregados `eventcap` /
-  `eventpresenter` (numa transação), e `EventService.hydrate(...)` os relê de volta ao sair
+  `eventpresenter` (numa transação; o `eventpresenter` pela projeção do `EventCreated`, ver "Catalog em CQRS + Event Sourcing"), e `EventService.hydrate(...)` os relê de volta ao sair
   do service. `lot_quantity` na criação: **`>= 1`** (capacidade fixa) ou **`-1`** (sem limite
   de vendas). Constante `EventCap.UNLIMITED == -1`; use `EventCap.isUnlimited()`.
   `buy_time_limit` não informado (`null`) ⇒ `EventService.applyDefaults` iguala à data do
@@ -236,7 +245,7 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
   `conn.setTransactionIsolation(...)`: no PgJDBC ele grava estado de sessão. Não há `connectionInitSql` no Hikari
   nem `setReadOnly`/`setCatalog`/`setSchema`/`setTransactionIsolation`. O único estado de conexão
   mexido é `setAutoCommit(false)` → `commit`/`rollback` → `setAutoCommit(true)` (em
-  `EventWalletService`, `ReservationExpiryService`, `EventRepository`, `EventPresenterRepository`),
+  `EventWalletService`, `ReservationExpiryService`, `CatalogEventWriter`, e, em `shared/events`, `EventReplay`, `IdempotentConsumer`, `OutboxRelay`),
   que o PgJDBC traduz em `BEGIN`/`COMMIT`: a transação inteira (incl. o CAS de `eventcap` e o
   `walletevent`) roda numa conexão real só, que o Supavisor segura até o `COMMIT`/`ROLLBACK`.
   `DatabaseConnection` só devolve conexões do `DataSource`. **Código novo não pode** depender de
@@ -261,8 +270,8 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
 
 ## Event store e backbone de eventos — issue #27 (ADR "Event-Backbone-Event-Store")
 
-Infra genérica de CQRS + Event Sourcing em `shared/events` (sem domínio; a #28 converte `catalog` e a #29 o lado
-wallet de `reservation`, só appendando eventos com o seu `streamType`). Broker: **Redpanda** (container
+Infra genérica de CQRS + Event Sourcing em `shared/events` (sem domínio; a #28 converteu `catalog`, ver a seção
+seguinte, e a #29 converte o lado wallet de `reservation`, só appendando eventos com o seu `streamType`). Broker: **Redpanda** (container
 `gerenciador-redpanda`, `redpanda:9092` na rede `gerenciador-net`, sem porta no host; imagem com tag fixa no compose;
 `docker exec gerenciador-redpanda rpk topic list` para inspecionar). Cliente: `spring-kafka` (versão do Boot).
 Tudo em `public` por ora (schema por serviço é a Fase 7).
@@ -299,8 +308,10 @@ Tudo em `public` por ora (schema por serviço é a Fase 7).
   (`EXCEPT ALL` nos dois sentidos); `drop(schema)` derruba. Roda em **`REPEATABLE READ`** (`SET TRANSACTION` como primeiro
   statement): `global_position` é ordem de alocação e paginar por ela em READ COMMITTED (snapshot novo a cada página) pularia o
   evento que comita no meio; assim todas as páginas leem o mesmo snapshot (a sombra = o log no início da leitura).
-  Notas para a #29: a comparação é `SELECT *` e a projeção de disponibilidade terá `applied_at = clock_timestamp()` (difere
-  entre a viva e a sombra) — será preciso informar, por projeção, as colunas comparáveis; `LIKE ... INCLUDING ALL` **não**
+  `divergentTables(projecao, schema)` compara `SELECT *`; `divergentTables(projecao, schema, colunasComparaveis)` (#28)
+  recebe um mapa tabela -> colunas e compara só elas (tabela fora do mapa = `SELECT *`), para o que o log não determina
+  (carimbo `now()`, blob fora do ES). Notas para a #29: a projeção de disponibilidade terá `applied_at = clock_timestamp()`
+  (difere entre a viva e a sombra) — informe as colunas comparáveis por esse overload; `LIKE ... INCLUDING ALL` **não**
   copia FK nem trigger, e coluna `serial` da cópia aponta para a sequence da tabela viva. Sem `TEMP TABLE`; o schema-sombra fica fora do
   `SchemaValidationTest` e do `GlobalDbTruncator` (que só olham `test.db.schemas`, default `public`).
 - **`EventSnapshots`**: `due(version)` (a cada `events.snapshot.every`, 100), `save`/`load` (um snapshot por stream, o mais
@@ -317,6 +328,70 @@ Tudo em `public` por ora (schema por serviço é a Fase 7).
   **`idIsGroup = false`** (por padrão o `id` do listener vira o `group.id` e o `spring.kafka.consumer.group-id` — logo o
   `EVENTS_CONSUMER_GROUP` do `run-tests.sh` — não valeria). Um único `group.id` por ambiente; `auto.offset.reset=earliest`
   fixo (um group novo não pula nada; o checkpoint por stream e a conferência do `eventId` descartam o que já foi aplicado).
+
+## Catalog em CQRS + Event Sourcing — issue #28
+
+Agregado `Event`: stream **`catalog.event`**, `streamId` = `partitionKey` = `event_id` (tópico `catalog.event`, relay
+ligado no compose; sem consumer, o `catalog` não tem projeção assíncrona). `/bff/events/**` não mudou (`HttpContractTest`
+sem mudança de expectativa).
+
+- **Eventos** (`schemaVersion` 1; payloads em `catalog/EventPayloads`, com os valores **já calculados**, ex.:
+  `buyTimeLimit` defaultado para a data do evento; datas em ISO-8601): `EventCreated` (`eventId`, `creatorId`, `eventName`,
+  `isEad`, `address`, `eventDate`, `description`, `capacity`, `buyTimeLimit`, `presenters[]`), `EventUpdated` (só os
+  metadados: `eventId`, `creatorId`, `eventName`, `isEad`, `address`, `eventDate`, `description`; **sem** `capacity`/
+  `buyTimeLimit`), `PresenterAdded`/`PresenterRemoved` (`eventId`, `presenterName`), `EventCancelled` (`eventId`).
+  **Sem PII**: só ids (`creatorId`) e dados do evento; nome de apresentador é dado público do evento, e-mail/telefone/senha
+  nunca entram. **Capacidade é estado de `reservation`, não do stream `catalog`**: `eventcap` é o agregado relacional/CAS
+  e não é projetado aqui. Só o `EventCreated` leva `capacity`/`buyTimeLimit` (valores iniciais), porque o `eventcap` nasce
+  na MESMA transação do append. Mudanças de capacidade (`updatePolicy`, outra transação, com `CHECK` que pode recusá-la
+  depois do append) **não** entram no `EventUpdated`: o log imutável e o tópico nunca registram uma capacidade que o
+  `eventcap` não aceitou (nem divergem em PUTs concorrentes). O histórico de capacidade, se for preciso, é do módulo `reservation`.
+- **`image_data` fica FORA do ES.** É blob (até 5 MB, base64 no JSON inflaria o `event_store` imutável), servido por
+  `/bff/events/{id}/image`. Não entra em payload nenhum; o command grava a coluna direto na linha viva
+  (`EventRepository.gravarImagem`, mesma transação), a projeção/replay nunca a tocam, e a comparação do replay a ignora. Trocar
+  só a imagem (`POST .../image` faz `findById` + `updateEvent`) gera um `EventUpdated` sem mudança de metadado.
+  `created_at`/`updated_at` também ficam fora da comparação: são carimbos do banco (`CURRENT_TIMESTAMP`), não vêm do log.
+- **Command side** (`CatalogEventWriter.executar`): uma transação JDBC manual por command, na ordem: (1) trava a linha de
+  `event` (`SELECT version ... FOR NO KEY UPDATE`) e lê a `version` = versão do último evento aplicado. Esse lock não
+  conflita com o `KEY SHARE` que as FKs de `eventcap`/`walletevent` tomam em `event` (reservas comuns seguem), mas
+  operações que sobem a `FOR UPDATE` (renomear `event_name`, que é `UNIQUE`, e o `DELETE`) conflitam com o `KEY SHARE` e
+  esperam as reservas em curso, como já era antes da #28; (2) `EventStore.append` na versão + 1;
+  (3) aplica a `CatalogEventProjection` na MESMA `Connection` (atualiza `event`/`eventpresenter` e `event.version`); (4) commit.
+  `append` vazio = conflito: rollback e o command **repete inteiro** (relê a versão), até 5 tentativas
+  (`IllegalStateException`/HTTP 500, nada gravado). Com a linha travada o conflito só acontece se alguém appenda no stream
+  por fora da projeção; commands concorrentes no mesmo evento se serializam pelo lock. Escolhido o `SELECT ... FOR NO KEY
+  UPDATE` em vez de `UPDATE ... SET version = version + 1 RETURNING` porque a projeção já grava `version` com o valor do
+  envelope (a mesma função serve ao replay) e um command pode appendar vários eventos.
+  - `createEvent`: o `event_id` sai da sequence da identity (`nextval`) antes do append, vira o `streamId`, e a projeção
+    insere a linha com `OVERRIDING SYSTEM VALUE`. Numa transação: `EventCreated` v1 (+ apresentadores no payload) +
+    `event`/`eventpresenter` + `image_data` (se vier) + `eventcap`.
+  - `updateEvent` **continua em 3 transações** (issue #60, não consertada aqui): (1) `EventUpdated` + `event` (+ `image_data`);
+    (2) `updatePolicy` de `reservation.api` (conexão própria; **não** gera evento de `catalog`: a capacidade é do
+    `eventcap`, e uma recusa do `CHECK`, HTTP 400, não deixa rastro no log; a não atomicidade com (1) é a de antes, #60); (3) `trocarApresentadores`: 1 `PresenterRemoved`/`PresenterAdded` por diferença
+    (nomes aparados, sem vazios/repetidos; sem diferença não appenda). O append está sempre na transação da escrita que ele descreve.
+  - `delete`: `EventCancelled` appendado e, **na mesma transação**, a projeção faz o `DELETE` de `event` que sempre existiu
+    (`eventcap`/`event_availability` caem por `CASCADE`). O stream fica no `event_store` como auditoria. `DELETE` que falha
+    (ex.: `walletevent` com `RESTRICT`) desfaz o `EventCancelled`. Evento inexistente = no-op, sem evento (204 como antes).
+- **Read model** = `event`/`eventpresenter` (+ `event.version`), projeção **inline**: `HttpContractTest` lê o que acabou de
+  escrever. A mesma `CatalogEventProjection` roda no command (schema `public`) e no replay (schema-sombra).
+- **Replay**: `EventReplay.rebuild(CatalogEventProjection, "catalog.event", sombra)` +
+  `divergentTables(..., colunasComparaveis)` com `event`: `event_id, creator_id, event_name, ead, address, event_date,
+  description, version` (e `eventpresenter` inteira). Ver `CatalogEventSourcingTest`.
+- **Snapshot não é usado em `catalog`**: nenhum command reconstrói estado lendo o stream (a projeção inline já guarda o
+  estado e a versão), então não há load do agregado onde um snapshot ajudaria. `EventSnapshots` continua disponível.
+- **Eventos que já existiam** (antes da #28) têm `version = 0` e nenhum stream. A migração
+  `20261022-catalog-event-version.sql` faz o backfill: um `EventCreated` v1 (estado atual, sem imagem) + a linha do outbox e
+  `version = 1` (só nas linhas cujo `EventCreated` foi de fato inserido), então o replay também os reconstrói. **O command
+  RECUSA evento com `version = 0`** (`IllegalStateException` "é pré-ES", em `Tx.bloquear`; HTTP 500 no update/delete):
+  appendar aí deixaria um stream órfão começando na v1 sem `EventCreated`. Reaplique a migração depois de carregar o
+  `db/seed-data.sql`, que insere em `event` direto (aviso no topo do seed).
+- **Limitações conhecidas (para o artigo, sem código):** (a) o replay recria `event` com o `UNIQUE (event_name)` copiado
+  (`LIKE ... INCLUDING ALL`); como o replay aplica por `global_position` (ordem de alocação, não de commit), um rename
+  concorrente com um create do mesmo nome pode inverter a ordem na sombra e violar o `UNIQUE`, mesmo a viva estando
+  consistente. Caso raro, não tratado. (b) Com o relay ligado ele faz ~80 statements/s pelo pooler mesmo com o outbox
+  vazio (o tick de 50 ms); é uma variável a acompanhar na #31, não foi medida aqui.
+- **Relay**: com `EVENTS_RELAY_ENABLED=true` no compose, o `catalog` publica no tópico `catalog.event`. O relay ocupa uma das
+  3 threads do scheduler só enquanto houver outbox (o volume do catálogo é baixo); o efeito sobre a medição fica para a #31.
 
 ## Padrão dos Services
 
@@ -508,7 +583,9 @@ chamável direto (os testes o invocam sem esperar o timer).
   `EVENTS_RELAY_ENABLED` (default `false`), `EVENTS_RELAY_INTERVAL_MS` (`50`), `EVENTS_RELAY_BATCH_SIZE` (`200`),
   `EVENTS_CONSUMER_ENABLED` (default `false`), `EVENTS_CONSUMER_GROUP` (`gerenciador-eventos`),
   `EVENTS_CONSUMER_RETRY_INTERVAL_MS` (`1000`; base do backoff transitório e intervalo do retry do buraco),
-  `EVENTS_CONSUMER_RETRY_MAX_ATTEMPTS` (`5`; só para o buraco irrecuperável), `EVENTS_SNAPSHOT_EVERY` (`100`). Sem segredo novo. As flags ficam desligadas até a #28/#29 appendarem eventos.
+  `EVENTS_CONSUMER_RETRY_MAX_ATTEMPTS` (`5`; só para o buraco irrecuperável), `EVENTS_SNAPSHOT_EVERY` (`100`). Sem segredo novo. Default das flags = desligadas (os testes não ligam o relay); no
+  `docker-compose.yml` o backend passa `EVENTS_RELAY_ENABLED=true` desde a #28 (o `catalog` já appenda eventos).
+  `EVENTS_CONSUMER_ENABLED` segue desligado: o `catalog` não tem projeção assíncrona (a primeira vem na #29).
 - Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto
   (`management.endpoints.web.exposure.include=health`); `GET /actuator/health` público devolve
   `{"status":"UP"}` (depende do Postgres). `management.health.mail.enabled=false` — o health do

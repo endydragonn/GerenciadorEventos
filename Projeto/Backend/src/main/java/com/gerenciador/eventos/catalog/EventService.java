@@ -36,12 +36,15 @@ public class EventService implements EventApi {
     @Autowired
     private EventPresenterRepository eventPresenterRepository;
 
+    @Autowired
+    private CatalogEventWriter eventWriter;
+
     public Event createEvent(Event e) {
         applyDefaults(e);
         validateRequired(e);
         validateRules(e);
         validateDuplicatesOnCreate(e);
-        Event saved = eventRepository.save(e); // grava event + eventcap + eventpresenter
+        Event saved = eventRepository.save(e); // EventCreated + event + eventpresenter + eventcap, numa transação
         return hydrate(saved);
     }
 
@@ -57,13 +60,15 @@ public class EventService implements EventApi {
         validateRules(e);
         validateDuplicatesOnUpdate(e);
 
-        Event updated = eventRepository.update(e); // só metadados
+        Event updated = eventRepository.update(e); // transação 1: EventUpdated + event (só metadados)
 
+        // Transação 2: updatePolicy (reservation.api, conexão própria; o EventUpdated já levou capacity/buyTimeLimit).
+        // Transação 3: PresenterAdded/PresenterRemoved + eventpresenter. As 3 seguem separadas como antes (issue #60).
         if (e.getLot_quantity() != null) {
             eventCapacityApi.updatePolicy(e.getEvent_id(), e.getLot_quantity(), e.getBuy_time_limit());
         }
         if (e.getPresenters() != null) {
-            eventPresenterRepository.replaceAll(e.getEvent_id(), e.getPresenters());
+            eventWriter.trocarApresentadores(e.getEvent_id(), e.getPresenters());
         }
         return hydrate(updated);
     }
@@ -86,7 +91,7 @@ public class EventService implements EventApi {
     }
 
     public void delete(Long id) {
-        eventRepository.delete(id); // eventcap/eventpresenter caem por ON DELETE CASCADE
+        eventRepository.delete(id); // EventCancelled + remoção; eventcap/eventpresenter caem por ON DELETE CASCADE
     }
 
     public boolean canBeCreated(Event e) {

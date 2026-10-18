@@ -7,7 +7,9 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -90,15 +92,28 @@ public class EventReplay {
 
     /** Tabelas da projeção cujo conteúdo na viva (public) difere da sombra em {@code schema}. Vazio = idênticas. */
     public List<String> divergentTables(Projection projection, String schema) throws SQLException {
+        return divergentTables(projection, schema, Map.of());
+    }
+
+    /**
+     * Como {@link #divergentTables(Projection, String)}, mas compara só as colunas listadas em
+     * {@code colunasComparaveis} (tabela -> colunas); tabela ausente do mapa compara {@code SELECT *}. Serve a colunas
+     * que a projeção não deriva do log (carimbo {@code now()}, blob fora do event store).
+     */
+    public List<String> divergentTables(Projection projection, String schema,
+            Map<String, List<String>> colunasComparaveis) throws SQLException {
         String sombra = identificador(schema);
         List<String> divergentes = new ArrayList<>();
         try (Connection conn = db.getConnection(); Statement st = conn.createStatement()) {
             for (String tabela : projection.tables()) {
-                String viva = "public." + identificador(tabela);
-                String copia = sombra + "." + identificador(tabela);
-                String sql = "SELECT (SELECT count(*) FROM (SELECT * FROM " + viva + " EXCEPT ALL SELECT * FROM " + copia
-                        + ") a) + (SELECT count(*) FROM (SELECT * FROM " + copia + " EXCEPT ALL SELECT * FROM " + viva
-                        + ") b)";
+                String cols = colunasComparaveis.containsKey(tabela)
+                        ? colunasComparaveis.get(tabela).stream().map(EventReplay::identificador)
+                                .collect(Collectors.joining(", "))
+                        : "*";
+                String viva = "SELECT " + cols + " FROM public." + identificador(tabela);
+                String copia = "SELECT " + cols + " FROM " + sombra + "." + identificador(tabela);
+                String sql = "SELECT (SELECT count(*) FROM (" + viva + " EXCEPT ALL " + copia
+                        + ") a) + (SELECT count(*) FROM (" + copia + " EXCEPT ALL " + viva + ") b)";
                 try (ResultSet rs = st.executeQuery(sql)) {
                     rs.next();
                     if (rs.getLong(1) > 0) {
