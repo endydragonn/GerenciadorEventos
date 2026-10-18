@@ -314,8 +314,8 @@ seguido de `confirm`).
 
 ### Idempotency-Key, invariante e compensação — issue #24
 
-- **Invariante**: (1) reservas ativas (`pending`/`confirmed`) ≤ capacidade — o CAS em `eventcap` e o
-  `CHECK eventcap_quant_bounds` garantem; (2) **uma `Idempotency-Key` produz no máximo uma reserva**
+- **Invariante**: (1) reservas ativas (`pending`/`confirmed`) ≤ capacidade — **só no braço `cas`** (o CAS em
+  `eventcap` e o `CHECK eventcap_quant_bounds` garantem; o `naive` oversella de propósito); (2) **uma `Idempotency-Key` produz no máximo uma reserva**
   (PK de `idempotency_key`). Nenhuma outra requisição observa um estado em que a vaga foi debitada
   sem a reserva gravada (ou o contrário): tudo é uma transação.
 - **Header** `Idempotency-Key` em `POST /bff/event-wallets`, **opcional e aditivo**: sem ele, o servidor
@@ -341,16 +341,23 @@ seguido de `confirm`).
   futuro `stock` + `wallet` (#47).
 - **Ponto de compensação**: se a gravação da reserva (ou qualquer passo) falha **depois** do CAS, faz-se
   `rollback` da `Connection` — a vaga e a chave voltam juntas. No split futuro `stock` + `wallet`, o
-  `rollback` deixa de cobrir os dois lados e a compensação vira `CapacityReserver.release` (já existe;
-  é o que `removeLink`/expiração usam), idempotente por chave.
+  `rollback` deixa de cobrir os dois lados e a compensação vira um `release` (hoje
+  `EventCapRepository.release`, o que `removeLink`/expiração usam, ainda fora da interface
+  `CapacityReserver`) que **terá de ser idempotente por chave no split**.
 - **Braço `naive`**: a idempotência vale nos dois caminhos (a reivindicação da chave está na mesma
   transação curta; só o `tryReserve` é pulado). Na repetição sequencial a checagem do read model
   ("Evento lotado") falha como o "Vínculo já existente" e cai no mesmo desvio para o resultado salvo.
 - **Retenção**: **sem limpeza por ora** — uma linha por reserva bem-sucedida, nunca apagada (e sem FK:
   não some com o evento). Sob carga a tabela cresce sem limite; follow-up: apagar por `created_at` num job.
-- **Latência (ponto 2 da série, não medido)**: o caminho quente ganhou 1 `INSERT` (na transação, +1 ida ao
-  banco) e a tabela ganhou escrita por reserva e índice da PK. A consulta de repetição fica fora do caminho
-  quente (só em erro).
+- **Latência (ponto 2 da série, não medido)**: sob carga a rejeição ("Evento lotado") é o caminho quente,
+  não só o sucesso. Custo por braço: no **sucesso**, `cas` e `naive` pagam 1 `INSERT` (+1 ida ao banco, mais
+  a escrita da linha e do índice da PK). Na **rejeição**, o `cas` paga `INSERT` + rollback (tupla morta na
+  `idempotency_key`, vacuum), pois o `tryReserve` roda depois do `claim`; o `naive` rejeita nas
+  pré-checagens, antes da transação, e **não paga nada** (a consulta prévia da chave só roda com chave do
+  cliente, nunca com a gerada). O ponto 2 da série compara os braços medidos **com este código**, não com
+  as rodadas antigas.
+- **Follow-ups (não feitos na #24)**: (a) PK por `(user_id, idempotency_key)` em vez de só a chave
+  (hoje a chave é global); (b) job de limpeza/retenção da `idempotency_key` por `created_at`.
 
 ### Feature flag `reservation.readpath` — caminho CAS (default) vs. ingênuo (experimento)
 

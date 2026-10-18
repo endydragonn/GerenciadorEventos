@@ -12,7 +12,4 @@ interface CapacityReserver {
 
     /** @return {@code true} se havia vaga e foi debitada; {@code false} se lotado. */
     boolean tryReserve(Connection conn, Long eventId) throws SQLException;
-
-    /** Devolve a vaga — a compensação de {@link #tryReserve} quando a gravação da reserva falha. */
-    void release(Connection conn, Long eventId) throws SQLException;
 }

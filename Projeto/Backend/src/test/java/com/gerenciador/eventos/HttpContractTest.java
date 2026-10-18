@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -714,6 +715,13 @@ public class HttpContractTest {
                 url("/bff/event-wallets"), HttpMethod.POST, req, EventWallet.class);
         ResponseEntity<EventWallet> repetida = restTemplate.exchange(
                 url("/bff/event-wallets"), HttpMethod.POST, req, EventWallet.class);
+        // o desserializador de EventWallet ignora campo desconhecido e mascararia um vazamento no JSON:
+        // confere o corpo cru (a chave só vai no header)
+        ResponseEntity<String> repetidaCrua = restTemplate.exchange(
+                url("/bff/event-wallets"), HttpMethod.POST, req, String.class);
+        assertEquals(HttpStatus.CREATED, repetidaCrua.getStatusCode());
+        assertFalse(repetidaCrua.getBody().toLowerCase().contains("idempotency"),
+                "corpo não deve conter a chave, veio: " + repetidaCrua.getBody());
         assertEquals(HttpStatus.CREATED, primeira.getStatusCode());
         assertEquals(HttpStatus.CREATED, repetida.getStatusCode());
         assertEquals(h.getFirst("Idempotency-Key"), repetida.getHeaders().getFirst("Idempotency-Key"));

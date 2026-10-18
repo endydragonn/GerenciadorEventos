@@ -82,6 +82,7 @@ public class EventWalletService implements EventWalletApi {
      */
     public EventWallet addLink(EventWallet ew, String idempotencyKey) {
         validateBasic(ew);
+        boolean chaveDoCliente = idempotencyKey != null && !idempotencyKey.isBlank();
         String chave = normalizarChave(idempotencyKey);
         ew.setIdempotencyKey(chave);
 
@@ -95,8 +96,12 @@ public class EventWalletService implements EventWalletApi {
         } catch (IllegalArgumentException ex) {
             // Se é a repetição de uma reserva que já vale, as checagens acima ("Vínculo já
             // existente", "Evento lotado" no naive...) falham; a resposta certa é a salva.
-            IdempotencyKeyRepository.Salvo salvo = idempotencyKeyRepository.find(chave);
-            if (salvo != null) return resultadoSalvo(salvo, ew);
+            // Chave gerada pelo servidor nunca existe: não consulta (rejeição é o caminho quente
+            // sob carga, e o naive não pode pagar um SELECT a mais que o cas).
+            if (chaveDoCliente) {
+                IdempotencyKeyRepository.Salvo salvo = idempotencyKeyRepository.find(chave);
+                if (salvo != null) return resultadoSalvo(salvo, ew);
+            }
             throw ex;
         }
 
