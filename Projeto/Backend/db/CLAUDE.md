@@ -96,7 +96,7 @@ e, ponta a ponta, pelo harness `migrations/verify-20260901-migration.sh`.
 
 `migrations/verify-20260901-migration.sh` (harness da issue #6, cross-platform como
 `run-tests.sh`): cria um banco **descartável** `eventcap_mig_check` no container, aplica os
-init-scripts `01`–`09`, roda `99-tests.sql`, depois roda o harness SQL
+init-scripts `01`–`10`, roda `99-tests.sql`, depois roda o harness SQL
 `verify-20260901-migration.sql` — que reconstrói o schema ANTIGO **com dados**, aplica a
 migração **2×** (idempotência) e checa colunas removidas/criadas, constraints, índice parcial,
 conversão de `quant` (limitado / esgotado-piso-0 / ilimitado) e **preservação dos dados**
