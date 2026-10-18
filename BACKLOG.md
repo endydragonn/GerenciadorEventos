@@ -63,25 +63,32 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 22 | #23 | fechada — módulos `identity`/`catalog`/`reservation`/`notification`/`shared` com pacote `api`; ArchUnit `ModuleBoundaryArchTest` | #127 |
 | 23 | #24 | fechada — `Idempotency-Key` no `POST /bff/event-wallets` (tabela `idempotency_key`, claim na transação do CAS, 422 em payload divergente) | #132 |
 | 24 | #25 | fechada — controllers `bff/*` no módulo `gateway`; ArchUnit trava `@RestController` fora dele | #128 |
-| 25–46 | #26–#47 | abertas | — |
+| 25 | #26 | fechada — ADR `docs/adr/Architecture-Decision-Event-Backbone-Event-Store.md`: Redpanda; event store em tabela Postgres + outbox → Redpanda; envelope JSON | #138 |
+| 26 | #27 | fechada — Redpanda no compose + `shared/events` (append com concorrência otimista, relay, consumer idempotente, replay em sombra, snapshots) | #141 |
+| 27 | #28 | fechada — `catalog` em CQRS + ES (5 eventos, projeção inline `event`/`eventpresenter`, replay) | #142 |
+| 28 | #29 | fechada — lado wallet de `reservation` em ES (híbrido com o CAS); disponibilidade do braço naive como projeção assíncrona com lag real | #143 |
+| 29 | #30 | fechada — checkpoint ES-native ponta a ponta; diagrama `docs/arquitetura/fase6-cqrs-es.md` | #144 |
+| 30–46 | #31–#47 | abertas (próxima: #31, Rodada 2, precisa do gerador) | — |
 | 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
 
 Branch de integração da Fase 2: `Fase_2` (a #11 entrou pelo PR #104; as #12–#15 foram
 desenvolvidas direto nela; entrou em `main` pelos PRs #114 e #115). Branch de integração da Fase 4: `Fase_4`
 (cada `Issue-N` abre PR com base nela; entrou em `main` pelo PR #122). Branch de integração da Fase 5: `Fase_5`
-(PRs #127, #128 e #132 com base nela; o PR final `Fase_5` → `main` fica para o merge do usuário). Vocabulário do
+(PRs #127, #128 e #132 com base nela; PR final #134 `Fase_5` → `main`, merge do usuário). Branch de integração da Fase 6:
+`Fase_6`, criada a partir da `Fase_5` (PRs #135, #137–#144 com base nela; PR final `Fase_6` → `main`, merge do usuário). Vocabulário do
 experimento em `CONTEXT.md`.
 
 Fora do backlog (follow-ups): #56–#61 abertas (`updatePolicy`, IDOR em `/bff/event-wallets`,
 endurecer schema, cobertura, transações do `updateEvent`, N+1/pool); #78 (BFF única + JWT
 deny-by-default, PR #79), #83 (quality gates, PR #85), #86 (PR #88), #92 (`/actuator/health`,
-PR #93) e #67 fechadas; #81, #84, #89 abertas. Da Fase 5: #129 (PK da idempotência por usuário), #130 (retenção
-da `idempotency_key`), #131 (`run-tests.sh` limpa `surefire-reports`) e #133 (CORS `*` com credenciais) abertas. PR #90 adicionou os scripts de teste de carga
+PR #93) e #67 fechadas; #81, #84, #89 abertas. Da Fase 5: #129 (PK da idempotência por usuário, PR #137), #130 (retenção
+da `idempotency_key`, PR #139), #131 (`run-tests.sh` limpa `surefire-reports`, PR #135) e #136 (`verify-20260901` com o init-script 10, PR #140)
+fechadas na `Fase_6`; #133 (CORS `*` com credenciais) aberta. PR #90 adicionou os scripts de teste de carga
 (disputa de vagas e taxa fixa/RPM) em `Projeto/carga/`.
 
 Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feitas (marco de banca atingido); Fase 4: #17 → #18
-→ #19/#20/#21 → #22 feitas (ponto 1 da série; PR #122); Fase 5: #23 → #24/#25 feitas (na `Fase_5`); próximo: a Fase 6
-(ADR do backbone, #26).
+→ #19/#20/#21 → #22 feitas (ponto 1 da série; PR #122); Fase 5: #23 → #24/#25 feitas (PR #134); Fase 6: #26 → #27 → #28/#29 → #30 feitas (na `Fase_6`);
+próximo: a Rodada 2 (#31, ponto 2 da série, com o gerador).
 
 ## Fase 0 — Desbloqueio de ambiente
 
@@ -250,6 +257,14 @@ Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feit
 ---
 
 ## Fase 6 — CQRS + Event Sourcing (nos módulos do monólito)
+
+> **Implementado na `Fase_6` (2026-10-18):** ADR do backbone (item 25). Redpanda e infra de event store em `shared/events`
+> (26): append com concorrência otimista + outbox na mesma transação, relay com `pg_try_advisory_xact_lock`, consumer
+> idempotente com checkpoint por CAS, replay em schema-sombra. `catalog` em CQRS + ES (27). Lado wallet de `reservation` em
+> ES, híbrido com o CAS (28): a disponibilidade do braço `naive` virou projeção assíncrona alimentada pelo consumer, com lag
+> real (`applied_at`/`last_occurred_at`, log `events.lag`, offset lag), e o refresh por timer da Fase 2 saiu. Checkpoint
+> ponta a ponta e diagrama `docs/arquitetura/fase6-cqrs-es.md` (29). O contrato `/bff/**` não mudou. Falta o item 30
+> (Rodada 2), que precisa do gerador.
 
 ### 25. ADR — backbone de eventos + event store + contrato do evento de domínio
 `fase/6` `area/eventos` `area/backend`
