@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
@@ -173,11 +174,11 @@ public class EventWalletNaivePathTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> eventWalletService.addLink(new EventWallet(u2.getId(), e.getEvent_id())));
-        verify(idempotencyKeyRepository, never()).find(anyString());
+        verify(idempotencyKeyRepository, never()).find(anyString(), anyLong());
 
         assertThrows(IllegalArgumentException.class,
                 () -> eventWalletService.addLink(new EventWallet(u2.getId(), e.getEvent_id()), "naive-chave-cliente"));
-        verify(idempotencyKeyRepository, times(1)).find(anyString());
+        verify(idempotencyKeyRepository, times(1)).find(anyString(), anyLong());
     }
 
     // ===================== helpers =====================

@@ -53,6 +53,17 @@ esac
 
 REPORTS_DIR="$SCRIPT_DIR/target/surefire-reports"
 
+# Apaga só os relatórios antigos (não o target/ inteiro): o container copia os XMLs novos por
+# cima, então o de uma classe renomeada/movida/removida sobraria e inflaria o total do resumo.
+# Se não conseguir apagar (ex.: pasta criada como root numa execução antiga em Linux), aborta
+# com mensagem clara — seguir com XML velho faria o resumo mentir sem ninguém perceber.
+if ! rm -rf "$REPORTS_DIR"; then
+    echo "❌ Não consegui apagar $REPORTS_DIR (provável dono root de uma execução antiga)."
+    echo "   Rode: sudo rm -rf \"$REPORTS_DIR\" e execute de novo."
+    echo ""
+    exit 1
+fi
+
 # Cria o diretório de saída ANTES do bind-mount (senão o Docker o cria como root).
 mkdir -p "$SCRIPT_DIR/target"
 

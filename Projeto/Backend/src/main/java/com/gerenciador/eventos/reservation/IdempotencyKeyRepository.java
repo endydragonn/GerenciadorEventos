@@ -14,13 +14,14 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**
  * Repository JDBC de {@code public.idempotency_key} (issue #24). A chave é reivindicada na
- * transação da reserva ({@link #claim}); a PK serializa requisições simultâneas com a mesma chave.
+ * transação da reserva ({@link #claim}); a PK {@code (user_id, idempotency_key)} serializa requisições
+ * simultâneas do mesmo usuário com a mesma chave (a chave tem escopo por usuário, issue #129).
  */
 @Repository
 public class IdempotencyKeyRepository {
 
     /** Resultado salvo da primeira reserva feita com a chave. */
-    public record Salvo(Long userId, Long eventId, LocalDateTime expiresAt) { }
+    public record Salvo(Long eventId, LocalDateTime expiresAt) { }
 
     @Autowired
     private DatabaseConnection databaseConnection;
@@ -28,12 +29,12 @@ public class IdempotencyKeyRepository {
     /**
      * {@code INSERT ... ON CONFLICT DO NOTHING} na transação do chamador. Se outra transação já
      * inseriu a mesma chave mas ainda não terminou, bloqueia até ela dar commit/rollback.
-     * @return {@code true} se a chave era nova (esta requisição é a primeira); {@code false} se já existe.
+     * @return {@code true} se o par (usuário, chave) era novo (esta requisição é a primeira); {@code false} se já existe.
      */
     public boolean claim(Connection conn, String key, Long userId, Long eventId, LocalDateTime expiresAt)
             throws SQLException {
         String sql = "INSERT INTO idempotency_key (idempotency_key, user_id, event_id, expires_at) "
-                + "VALUES (?, ?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING";
+                + "VALUES (?, ?, ?, ?) ON CONFLICT (user_id, idempotency_key) DO NOTHING";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, key);
             stmt.setLong(2, userId);
@@ -43,23 +44,25 @@ public class IdempotencyKeyRepository {
         }
     }
 
-    /** Lê a chave na transação do chamador (READ COMMITTED: enxerga o commit da vencedora). */
-    public Salvo find(Connection conn, String key) throws SQLException {
-        String sql = "SELECT user_id, event_id, expires_at FROM idempotency_key WHERE idempotency_key = ?";
+    /** Lê o par (usuário, chave) na transação do chamador (READ COMMITTED: enxerga o commit da vencedora). */
+    public Salvo find(Connection conn, String key, Long userId) throws SQLException {
+        String sql = "SELECT event_id, expires_at FROM idempotency_key "
+                + "WHERE user_id = ? AND idempotency_key = ?";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setString(1, key);
+            stmt.setLong(1, userId);
+            stmt.setString(2, key);
             try (ResultSet rs = stmt.executeQuery()) {
                 return rs.next()
-                        ? new Salvo(rs.getLong(1), rs.getLong(2), rs.getTimestamp(3).toLocalDateTime())
+                        ? new Salvo(rs.getLong(1), rs.getTimestamp(2).toLocalDateTime())
                         : null;
             }
         }
     }
 
-    /** Lê a chave numa conexão própria; {@code null} se não existe. */
-    public Salvo find(String key) {
+    /** Lê o par (usuário, chave) numa conexão própria; {@code null} se não existe. */
+    public Salvo find(String key, Long userId) {
         try (Connection conn = databaseConnection.getConnection()) {
-            return find(conn, key);
+            return find(conn, key, userId);
         } catch (SQLException ex) {
             throw new RuntimeException("Erro ao consultar Idempotency-Key: " + ex.getMessage(), ex);
         }

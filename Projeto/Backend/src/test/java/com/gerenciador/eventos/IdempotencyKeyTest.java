@@ -99,9 +99,8 @@ public class IdempotencyKeyTest {
     }
 
     @Test
-    public void mesmaChaveComOutroEventoOuUsuarioEhConflito() {
+    public void mesmaChaveDoMesmoUsuarioComOutroEventoEhConflito() {
         User u = novoUsuario("idem-conf-u1@example.com");
-        User outro = novoUsuario("idem-conf-u2@example.com");
         Event e1 = novoEvento(u.getId(), "Idem Conflito 1", 5);
         Event e2 = novoEvento(u.getId(), "Idem Conflito 2", 5);
         String chave = UUID.randomUUID().toString();
@@ -109,10 +108,33 @@ public class IdempotencyKeyTest {
 
         assertThrows(IdempotencyConflictException.class,
                 () -> eventWalletService.addLink(new EventWallet(u.getId(), e2.getEvent_id()), chave));
-        assertThrows(IdempotencyConflictException.class,
-                () -> eventWalletService.addLink(new EventWallet(outro.getId(), e1.getEvent_id()), chave));
         assertEquals(4, eventCapRepository.findByEventId(e1.getEvent_id()).getQuant());
         assertEquals(5, eventCapRepository.findByEventId(e2.getEvent_id()).getQuant(), "conflito não reserva nada");
+    }
+
+    /** Issue #129: a chave é escopada por usuário — a mesma chave em dois usuários não colide. */
+    @Test
+    public void mesmaChaveEmUsuariosDiferentesNoMesmoEventoNaoColide() throws Exception {
+        User u1 = novoUsuario("idem-escopo-u1@example.com");
+        User u2 = novoUsuario("idem-escopo-u2@example.com");
+        Event e = novoEvento(u1.getId(), "Idem Escopo", 5);
+        String chave = UUID.randomUUID().toString();
+
+        EventWallet r1 = eventWalletService.addLink(new EventWallet(u1.getId(), e.getEvent_id()), chave);
+        EventWallet r2 = eventWalletService.addLink(new EventWallet(u2.getId(), e.getEvent_id()), chave);
+
+        assertEquals("pending", r1.getStatus());
+        assertEquals("pending", r2.getStatus());
+        assertEquals(3, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "um decremento por usuário");
+        assertEquals(2, contar("walletevent", e.getEvent_id()));
+        assertEquals(2, contar("idempotency_key", e.getEvent_id()));
+
+        // a repetição de cada um continua devolvendo a própria reserva, sem decrementar de novo
+        EventWallet rep1 = eventWalletService.addLink(new EventWallet(u1.getId(), e.getEvent_id()), chave);
+        EventWallet rep2 = eventWalletService.addLink(new EventWallet(u2.getId(), e.getEvent_id()), chave);
+        assertEquals(r1.getExpiresAt(), rep1.getExpiresAt(), "o lookup devolve a reserva do próprio usuário");
+        assertEquals(r2.getExpiresAt(), rep2.getExpiresAt(), "o lookup devolve a reserva do próprio usuário");
+        assertEquals(3, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
     }
 
     @Test
