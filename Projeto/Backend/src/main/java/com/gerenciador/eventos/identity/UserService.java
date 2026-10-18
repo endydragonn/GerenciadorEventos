@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 
 import com.gerenciador.eventos.identity.api.User;
 import com.gerenciador.eventos.identity.api.UserApi;
+import com.gerenciador.eventos.notification.api.EmailNotificationApi;
 
 /**
  * Service - lógica de negócio e validações
@@ -19,6 +20,9 @@ public class UserService implements UserApi {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private EmailNotificationApi emailNotification;
 
     /**
      * Criar novo usuário com validações
@@ -204,6 +208,16 @@ public class UserService implements UserApi {
         String mfaCode = generateAlphanumericCode(8);
         userRepository.setPasswordResetMfaCode(userId, mfaCode);
         return mfaCode;
+    }
+
+    /**
+     * Gerar o código MFA de reset de senha e enviá-lo por e-mail
+     */
+    public User requestPasswordResetMfa(Long userId) {
+        User user = findById(userId);
+        String mfaCode = generatePasswordResetMfa(userId);
+        emailNotification.sendPasswordResetMfa(user.getEmail(), user.getName(), mfaCode);
+        return user;
     }
 
     /**
