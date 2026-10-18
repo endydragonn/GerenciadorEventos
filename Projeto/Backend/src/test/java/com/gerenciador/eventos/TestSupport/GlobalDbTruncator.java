@@ -9,7 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.TestConfiguration;
 
-import com.gerenciador.eventos.config.DatabaseConnection;
+import com.gerenciador.eventos.shared.DatabaseConnection;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;

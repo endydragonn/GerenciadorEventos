@@ -15,10 +15,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
-import com.gerenciador.eventos.POJO.User;
-import com.gerenciador.eventos.Service.UserService;
+import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.identity.UserService;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.config.DatabaseConnection;
+import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**
  * Exercita a migração a quente {@code db/migrations/20260901-eventcap-isolation.sql} contra

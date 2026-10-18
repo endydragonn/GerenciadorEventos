@@ -11,6 +11,7 @@ import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
+import org.springframework.stereotype.Repository;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
@@ -31,7 +32,7 @@ public class LayerBoundaryArchTest {
     static final ArchRule bff_nao_acessa_repository_diretamente =
         noClasses()
             .that().resideInAPackage("..bff..")
-            .should().dependOnClassesThat().resideInAPackage("..Repository..")
+            .should().dependOnClassesThat().areAnnotatedWith(Repository.class)
             .because("controllers de bff/ devem falar com o banco através de Service/ — "
                 + "acessar Repository/ direto pula a camada de regra de negócio (issue #83)");
 

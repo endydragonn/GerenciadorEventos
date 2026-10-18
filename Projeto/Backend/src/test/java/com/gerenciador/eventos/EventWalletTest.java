@@ -12,16 +12,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
-import com.gerenciador.eventos.POJO.Event;
-import com.gerenciador.eventos.POJO.EventCap;
-import com.gerenciador.eventos.POJO.EventWallet;
-import com.gerenciador.eventos.POJO.User;
-import com.gerenciador.eventos.Repository.EventCapRepository;
-import com.gerenciador.eventos.Repository.EventWalletRepository;
-import com.gerenciador.eventos.Service.EventService;
-import com.gerenciador.eventos.Service.EventWalletService;
-import com.gerenciador.eventos.Service.MyWalletService;
-import com.gerenciador.eventos.Service.UserService;
+import com.gerenciador.eventos.catalog.api.Event;
+import com.gerenciador.eventos.reservation.api.EventCap;
+import com.gerenciador.eventos.reservation.api.EventWallet;
+import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.reservation.EventCapRepository;
+import com.gerenciador.eventos.reservation.EventWalletRepository;
+import com.gerenciador.eventos.catalog.EventService;
+import com.gerenciador.eventos.reservation.EventWalletService;
+import com.gerenciador.eventos.reservation.MyWalletService;
+import com.gerenciador.eventos.identity.UserService;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 
 @SpringBootTest

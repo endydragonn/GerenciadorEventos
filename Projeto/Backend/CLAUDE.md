@@ -38,7 +38,7 @@ e roda `mvn clean test`. **Exige o container `db` no ar**: os testes batem num P
   não depender de SMTP/Google reais.
 - Não há testes unitários isolados; tudo é de integração com banco (exceto os mocks pontuais
   do `HttpContractTest` para dependências externas).
-- `LayerBoundaryArchTest` (ArchUnit) é a exceção: não usa Spring/banco, só analisa bytecode.
+- `LayerBoundaryArchTest` e `ModuleBoundaryArchTest` (ArchUnit) são a exceção: não usam Spring/banco, só analisam bytecode.
   Roda em qualquer `mvn test`, com ou sem `db` no ar.
 
 ## Quality gates (Checkstyle + ArchUnit) — issue #83
@@ -59,37 +59,77 @@ e roda `mvn clean test`. **Exige o container `db` no ar**: os testes batem num P
     a maioria dos arquivos fica bem abaixo de 300; só `BffUserController.java` (465) e
     `UserRepository.java` (351) violavam, e estão na baseline) e `RegexpSinglelineJava`
     banindo `System.out/err.print*`/`println` (id `ProibirConsoleDireto` — baseline:
-    `UserRepository.java`, `EventRepository.java`, `EmailVerificationService.java`) e
+    `UserRepository.java`, `EventRepository.java`) e
     `printStackTrace()` (id `ProibirPrintStackTrace` — zero ocorrências, já trava sem
     baseline). Use um logger SLF4J (`org.slf4j.Logger`/`LoggerFactory`, ver
-    `Service/ReservationExpiryService`) em vez de escrever direto no console.
+    `reservation/ReservationExpiryService`) em vez de escrever direto no console.
   - Método "medir antes de travar": regra sem violação nasce em `error` sem entrada na
     baseline; regra com violação existente também fica em `error`, mas os arquivos que já
     violavam no dia em que a regra entrou ganham uma linha em `checkstyle-suppressions.xml`
     (não corrigidos por essa issue — é o próximo passo). Corrigiu um arquivo da baseline?
     Remova a linha dele do suppressions.
-- ArchUnit (`archunit-junit5`, teste `LayerBoundaryArchTest` em `src/test/java`) trava se o
-  pacote `bff` (controllers) depender direto de `Repository` (DAO) ou de JDBC cru
-  (`java.sql.Connection/PreparedStatement/Statement/ResultSet/DriverManager`) — acesso a dado
-  deve passar por `Service`. Zero violações hoje, regra já trava o build, sem baseline.
-  - Rodar isolado: `mvn -Dtest=LayerBoundaryArchTest -DfailIfNoTests=false test` (não precisa
-    do container `db`, mesmo comando funciona no container Maven efêmero do `run-tests.sh`).
+- ArchUnit (`archunit-junit5`, em `src/test/java`), dois testes, sem baseline (zero violações):
+  - `LayerBoundaryArchTest` trava se o pacote `bff` (controllers) depender direto de uma classe
+    `@Repository` (DAO) ou de JDBC cru
+    (`java.sql.Connection/PreparedStatement/Statement/ResultSet/DriverManager`) — acesso a dado
+    deve passar por `Service`.
+  - `ModuleBoundaryArchTest` (issue #23) trava: (a) `identity`/`catalog`/`reservation`/
+    `notification`/`bff` só dependem de outro módulo por `<modulo>.api` (nenhum módulo importa `bff.*`);
+    (b) `shared` não depende de módulo de domínio; (c) todo código de produção mora num módulo (nada volta para
+    `POJO/Repository/Service`); (d) `<modulo>.api` não depende de classe interna de módulo nenhum
+    (só de outros `*.api`, `shared` e libs). Ver "Módulos".
+  - Rodar isolado: `mvn -Dtest='LayerBoundaryArchTest,ModuleBoundaryArchTest' -DfailIfNoTests=false test`
+    (não precisa do container `db`, mesmo comando funciona no container Maven efêmero do
+    `run-tests.sh`).
 
-## Camadas (pacote `com.gerenciador.eventos`)
+## Módulos (pacote `com.gerenciador.eventos`) — issue #23
+
+Pacotes-por-serviço, ainda no mesmo processo/deploy/banco (schema `public`): é a preparação da
+Fase 5 para a decomposição em microsserviços (CQRS/ES na Fase 6, extração na Fase 7). Dentro de
+cada módulo as classes ficam **planas** (sem `POJO/`/`Repository/`/`Service/`), mais o subpacote
+`api`: as **interfaces e DTOs públicos** que os outros módulos podem usar.
 
 ```
-Main.java              entrypoint @SpringBootApplication (único)
-POJO/                  objetos simples (getters/setters), SEM anotação JPA
-Repository/            acesso a dados — JDBC puro
-Service/               regras de negócio e validação
-bff/                   superfície HTTP única: /bff/** (arquivos @RestController próprios)
-security/              JWT + Spring Security + BCrypt + papel "host"
-config/                DatabaseConnection, CorsConfig, EmailTemplates
+Main.java        entrypoint @SpringBootApplication (único; o component scan cobre os subpacotes)
+identity/        UserService, UserRepository, EmailVerificationService, PendingVerification(+Repository),
+                 security/ (JwtUtil, JwtAuthenticationFilter, AuthorizationUtil, SecurityConfig)
+  api/           User, UserApi, EmailVerificationApi, TokenApi, HostAuthorizationApi
+catalog/         EventService, EventRepository, EventPresenterRepository
+  api/           Event, EventApi
+reservation/     EventWalletService, MyWalletService, ReadModelRefreshService, ReservationExpiryService,
+                 EventCapRepository, EventWalletRepository, MyWalletRepository, EventAvailabilityRepository
+  api/           EventCap, EventWallet, MyWallet, EventCapacityApi, EventWalletApi, MyWalletApi
+notification/    EmailNotificationService, EmailTemplates (envio de e-mail / JavaMailSender)
+  api/           EmailNotificationApi
+shared/          DatabaseConnection, CorsConfig, SchedulingConfig (infra sem domínio)
+bff/             superfície HTTP única /bff/** (@RestController) + SeedData; vira `gateway` na #25
 ```
+
+- **Regra de fronteira**: um módulo (e o `bff`) só enxerga outro módulo pelo pacote `<modulo>.api`;
+  nunca importa `Repository`/`Service`/config interno de outro. `shared` não depende de módulo de
+  domínio (módulos dependem dele). Dado de outro módulo entra por id ou DTO da `api`. Travado por
+  `ModuleBoundaryArchTest` (ver "Quality gates"); as FKs do SQL ficam como estão (schema é Fase 7).
+- **Grafo de dependências** (sempre via `api`):
+  `bff → identity, catalog, reservation, notification`;
+  `identity → notification`;
+  `catalog → identity` (`UserApi.exists`, valida `creator_id`) e `catalog → reservation`
+  (`EventCapacityApi`: `EventRepository.save` cria o `eventcap` na **mesma transação JDBC** do
+  `event`, por isso a `Connection` aparece na interface; a hidratação lê a capacidade);
+  `reservation → catalog` (`EventApi.exists`, "Evento não encontrado").
+  Ciclo `catalog ↔ reservation` aceito por ora, e só pela `api` de cada lado; a interface fica no
+  módulo dono do dado (`eventcap` é de `reservation`, `event` é de `catalog`). Some quando a
+  `reservation` ganhar read model próprio de eventos (Fase 6/7).
+- **Decisões**: `SecurityConfig` fica em `identity/security` (conhece as rotas e o filtro JWT, não é
+  infra pura — em `shared` violaria a regra); `SeedData` fica em `bff` (é o corpo do
+  `POST /bff/seed` e agrega `User`+`Event`+`EventWallet` de três módulos); o envio de e-mail saiu
+  de `EmailVerificationService` para `notification` (o cadastro em duas fases continua em
+  `identity`); as `*Api` são implementadas pelas classes que já existiam (`UserService implements
+  UserApi`, `EventCapRepository implements EventCapacityApi`...), sem classe nova de adaptação.
+- Módulo novo ou chamada entre módulos nova → exponha só o necessário em `<modulo>.api`.
 
 ## Persistência — JDBC puro, não JPA
 
-- `Repository/*` usam `config.DatabaseConnection.getConnection()` +
+- Os `*Repository` usam `shared.DatabaseConnection.getConnection()` +
   `PreparedStatement` com SQL escrito à mão. `try-with-resources` para fechar conexão.
 - `DatabaseConnection` delega ao `DataSource` do Spring (pool **HikariCP**, issue #96), não a
   `DriverManager`: `close()` devolve a conexão ao pool. Tamanho do pool:
@@ -193,7 +233,7 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 - **Nginx do frontend faz proxy de `/bff/` → `backend:8081/bff/` sem rewrite/strip**
   (`nginx.conf`): o path chega igual no backend. Em acesso direto ao backend (dev sem
   Nginx), use o mesmo path `/bff/...`.
-- `security/SecurityConfig`: stateless, CSRF off. Desde o PR #79 (issue #78), deny-by-default também
+- `identity/security/SecurityConfig`: stateless, CSRF off. Desde o PR #79 (issue #78), deny-by-default também
   dentro de `/bff/**` — só a lista abaixo é pública, todo o resto exige
   `Authorization: Bearer <jwt>` (401 fixo via `HttpStatusEntryPoint`, sem token/token
   inválido numa rota protegida).
@@ -218,7 +258,7 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
     protege contra reordenar filtros ou remover `.cors(...)` no futuro.
 - `JwtAuthenticationFilter` valida o token e põe o e-mail como `subject`/username. Não há
   roles dinâmicas no token (authority fixa `USER`).
-- `security/AuthorizationUtil.isCurrentUserHost()` lê `users.host` (coluna criada sem aspas
+- `identity/security/AuthorizationUtil.isCurrentUserHost()` lê `users.host` (coluna criada sem aspas
   no DDL como `Host`, então o Postgres dobra pra minúsculas — `UserRepository` lê/grava com
   `host` minúsculo, igual `isactive`). Desde o PR #79 (issue #78), `bff/BffEventController.createEvent`
   /`updateEvent`/`deleteEvent` chamam `ensureUserIsHost()` (IllegalArgumentException → HTTP
@@ -229,12 +269,12 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
   um fluxo de produto (ex.: endpoint de admin) é gap conhecido, não resolvido nesta issue.
 - Senhas: `BCryptPasswordEncoder` (bean em `SecurityConfig`). Nunca gravar senha em claro
   (o seed SQL grava em claro só para dados de teste — não replicar em código de produção).
-- CORS está definido **duas vezes** (`config.CorsConfig` e o bean em `SecurityConfig`, este
+- CORS está definido **duas vezes** (`shared.CorsConfig` e o bean em `SecurityConfig`, este
   bem permissivo). Ao mexer em CORS, alinhe os dois e veja `CORS_CONFIG.md`.
 
 ## Inscrição em evento — reserva em duas fases (CAS)
 
-`Service/EventWalletService`:
+`reservation/EventWalletService`:
 
 1. `addLink` (`POST .../event-wallets`): valida, checa janela de compra (`eventcap.buy_time_limit`)
    e duplicidade (`existsActive` = pending/confirmed), então numa **transação**:
@@ -246,8 +286,8 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
    (`cancelIfActive`: `pending`/`confirmed` → `cancelled`) e `release` **só se** esse UPDATE
    afetou 1 linha — evita devolução dupla de vaga em cancelamento concorrente / corrida com o
    job. Reserva já `cancelled`/`expired`/inexistente ⇒ no-op silencioso (idempotente).
-4. `Service/ReservationExpiryService` — `@Scheduled` (a cada `reservation.expiry.scan.ms`,
-   default 30s; `@EnableScheduling` em `config/SchedulingConfig`): varre `pending` vencidas e,
+4. `reservation/ReservationExpiryService` — `@Scheduled` (a cada `reservation.expiry.scan.ms`,
+   default 30s; `@EnableScheduling` em `shared/SchedulingConfig`): varre `pending` vencidas e,
    por transação, `expireIfStale` (condicional, não pisa em confirmação concorrente) + `release`.
 
 O `bff/BffSeedController` (`POST /bff/seed`) cria inscrições já confirmadas (`addLink`
@@ -267,7 +307,7 @@ seguido de `confirm`).
   lag do read model — é o **braço de controle** do experimento de concorrência da Fase 2
   (issues #12/#13), não um bug.
 
-`Service/ReadModelRefreshService` — `@Scheduled` (a cada `readmodel.availability.refresh.ms`,
+`reservation/ReadModelRefreshService` — `@Scheduled` (a cada `readmodel.availability.refresh.ms`,
 default 5000; env `READMODEL_AVAILABILITY_REFRESH_MS`): um único
 `INSERT ... SELECT ... ON CONFLICT DO UPDATE` que recalcula `event_availability`
 (`available = capacity - reservas ativas`, piso 0; `-1` = ilimitado). Intervalo maior ⇒
@@ -279,8 +319,8 @@ chamável direto (os testes o invocam sem esperar o timer).
 1. `POST /bff/users/request-verification` grava em `pending_verifications` (hash da senha +
    código de 6 dígitos, expira em 5 min — ver `application.properties`).
 2. `POST /bff/users/verify-email` confere o código e só então insere em `users`.
-3. `Service/EmailVerificationService` envia o código via SMTP Gmail (`spring-boot-starter-mail`),
-   templates em `config/EmailTemplates`.
+3. `identity/EmailVerificationService` pede o envio ao módulo `notification` (`EmailNotificationApi`), que manda o código via SMTP Gmail (`spring-boot-starter-mail`),
+   templates em `notification/EmailTemplates`.
 4. reCAPTCHA v3: `POST /bff/users/verify-recaptcha` (em `bff/BffUserController`) valida o
    token com a Google usando `RECAPTCHA_SECRET_KEY`.
 

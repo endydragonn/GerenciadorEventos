@@ -10,10 +10,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
-import com.gerenciador.eventos.POJO.Event;
-import com.gerenciador.eventos.POJO.User;
-import com.gerenciador.eventos.Service.EventService;
-import com.gerenciador.eventos.Service.UserService;
+import com.gerenciador.eventos.catalog.api.Event;
+import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.catalog.EventService;
+import com.gerenciador.eventos.identity.UserService;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 
 @SpringBootTest

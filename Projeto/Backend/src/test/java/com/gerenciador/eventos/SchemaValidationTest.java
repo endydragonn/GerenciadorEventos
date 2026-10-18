@@ -16,7 +16,7 @@ import org.springframework.context.annotation.Import;
 
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.TestSupport.TestSchemas;
-import com.gerenciador.eventos.config.DatabaseConnection;
+import com.gerenciador.eventos.shared.DatabaseConnection;
 
 @SpringBootTest
 @Import(GlobalDbTruncator.class)

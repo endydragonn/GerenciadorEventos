@@ -32,15 +32,15 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
-import com.gerenciador.eventos.POJO.Event;
-import com.gerenciador.eventos.POJO.EventWallet;
-import com.gerenciador.eventos.POJO.MyWallet;
-import com.gerenciador.eventos.POJO.PendingVerification;
-import com.gerenciador.eventos.POJO.User;
-import com.gerenciador.eventos.Repository.PendingVerificationRepository;
-import com.gerenciador.eventos.Service.UserService;
+import com.gerenciador.eventos.catalog.api.Event;
+import com.gerenciador.eventos.reservation.api.EventWallet;
+import com.gerenciador.eventos.reservation.api.MyWallet;
+import com.gerenciador.eventos.identity.PendingVerification;
+import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.identity.PendingVerificationRepository;
+import com.gerenciador.eventos.identity.UserService;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.config.DatabaseConnection;
+import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**
  * Teste de contrato da superfície HTTP única {@code /bff/**} (issue #78).
