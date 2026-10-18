@@ -76,7 +76,8 @@ public class EventWalletService implements EventWalletApi {
      * <p><b>Idempotência (issue #24).</b> A chave é gravada em {@code idempotency_key} na MESMA
      * transação do CAS e da reserva. Repetição com a mesma chave e o mesmo usuário/evento devolve o
      * resultado da primeira ({@code pending} + {@code expiresAt} salvo) sem tocar {@code eventcap};
-     * outro usuário/evento ⇒ {@link IdempotencyConflictException}. Reserva que falha faz rollback
+     * o mesmo usuário com outro evento ⇒ {@link IdempotencyConflictException}. A chave tem escopo por
+     * usuário (issue #129): outro usuário com a mesma chave é uma reserva independente. Reserva que falha faz rollback
      * e não deixa chave (a mesma chave pode ser repetida). Vale para os caminhos {@code cas} e
      * {@code naive}. Sem chave (null/em branco), o servidor gera uma.</p>
      */
@@ -99,7 +100,7 @@ public class EventWalletService implements EventWalletApi {
             // Chave gerada pelo servidor nunca existe: não consulta (rejeição é o caminho quente
             // sob carga, e o naive não pode pagar um SELECT a mais que o cas).
             if (chaveDoCliente) {
-                IdempotencyKeyRepository.Salvo salvo = idempotencyKeyRepository.find(chave);
+                IdempotencyKeyRepository.Salvo salvo = idempotencyKeyRepository.find(chave, ew.getUserId());
                 if (salvo != null) return resultadoSalvo(salvo, ew);
             }
             throw ex;
@@ -155,11 +156,11 @@ public class EventWalletService implements EventWalletApi {
         // disp > 0, ou disp == -1 (ilimitado): segue
     }
 
-    /** Resultado da primeira reserva feita com a chave; outro usuário/evento ⇒ conflito (HTTP 422). */
+    /** Resultado da primeira reserva do usuário com a chave; outro evento ⇒ conflito (HTTP 422). */
     private EventWallet resultadoSalvo(IdempotencyKeyRepository.Salvo salvo, EventWallet ew) {
-        if (!salvo.userId().equals(ew.getUserId()) || !salvo.eventId().equals(ew.getEventId()))
+        if (!salvo.eventId().equals(ew.getEventId()))
             throw new IdempotencyConflictException(
-                    "Idempotency-Key já usada em outra requisição (usuário/evento diferentes)");
+                    "Idempotency-Key já usada em outra requisição (evento diferente)");
         ew.setStatus("pending");
         ew.setExpiresAt(salvo.expiresAt());
         return ew;
@@ -181,7 +182,7 @@ public class EventWalletService implements EventWalletApi {
             try {
                 if (!idempotencyKeyRepository.claim(conn, chave, ew.getUserId(), ew.getEventId(), expiresAt)) {
                     // já existe (o INSERT esperou a transação concorrente terminar): nada foi tocado
-                    IdempotencyKeyRepository.Salvo salvo = idempotencyKeyRepository.find(conn, chave);
+                    IdempotencyKeyRepository.Salvo salvo = idempotencyKeyRepository.find(conn, chave, ew.getUserId());
                     conn.rollback();
                     if (salvo == null) throw new IllegalStateException("Idempotency-Key sumiu durante a reserva");
                     return salvo;

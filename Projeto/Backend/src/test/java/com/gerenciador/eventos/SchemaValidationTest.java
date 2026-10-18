@@ -3,10 +3,13 @@ package com.gerenciador.eventos;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -94,6 +97,26 @@ public class SchemaValidationTest {
         assertColumns("idempotency_key",
             "idempotency_key", "user_id", "event_id", "expires_at", "created_at"
         );
+    }
+
+    /** Issue #129: a chave de idempotência é escopada por usuário: PK = (user_id, idempotency_key), nessa ordem. */
+    @Test
+    void idempotencyKeyPrimaryKeyShouldBeUserIdAndKey() throws Exception {
+        String sql = "select a.attname from pg_constraint c "
+            + "join pg_class t on t.oid = c.conrelid "
+            + "join pg_namespace n on n.oid = t.relnamespace "
+            + "join unnest(c.conkey) with ordinality as k(attnum, ord) on true "
+            + "join pg_attribute a on a.attrelid = t.oid and a.attnum = k.attnum "
+            + "where c.contype = 'p' and t.relname = 'idempotency_key' and n.nspname = any(?) order by k.ord";
+        List<String> pk = new ArrayList<>();
+        try (Connection c = databaseConnection.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) pk.add(rs.getString(1));
+            }
+        }
+        assertEquals(List.of("user_id", "idempotency_key"), pk, "PK de idempotency_key");
     }
 
     private boolean tableExists(String table) throws Exception {
