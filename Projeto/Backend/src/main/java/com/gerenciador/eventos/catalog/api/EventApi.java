@@ -3,7 +3,7 @@ package com.gerenciador.eventos.catalog.api;
 import java.util.List;
 
 /**
- * Interface pública do módulo {@code catalog} (issue #23). Outros módulos e o {@code bff} só
+ * Interface pública do módulo {@code catalog} (issue #23). Outros módulos e o {@code gateway} só
  * chamam eventos por aqui, nunca por {@code EventService}/{@code EventRepository}.
  */
 public interface EventApi {

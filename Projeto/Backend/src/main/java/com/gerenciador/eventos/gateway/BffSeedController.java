@@ -1,4 +1,4 @@
-package com.gerenciador.eventos.bff;
+package com.gerenciador.eventos.gateway;
 
 import java.util.ArrayList;
 import java.util.HashMap;
