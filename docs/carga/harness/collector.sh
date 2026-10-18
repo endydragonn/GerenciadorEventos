@@ -9,9 +9,12 @@
 #  amostras (timestamp_epoch,lag_ms), não um valor único -- é isso que o
 #  Aceite da issue pede ("lag observado do read model").
 #
-#  lag_ms = now() - event_availability.refreshed_at, em milissegundos. O
-#  comentário em db/init-scripts/09-event-availability.sql já documenta esse
-#  uso: "o harness da #11 mede o lag observado por now() - refreshed_at".
+#  lag_ms = event_availability.applied_at - last_occurred_at, em milissegundos
+#  (issue #29): a idade do último evento aplicado pelo consumer da projeção
+#  assíncrona, do append ao commit do consumer, relay incluído (ADR
+#  Event-Backbone-Event-Store, seção 4). Só anda quando o consumer aplica um
+#  evento: consumer parado não atualiza a amostra (confira o offset lag com
+#  `rpk group describe`). O antigo now() - refreshed_at saiu junto com o refresh.
 #
 #  Pensado para rodar em BACKGROUND (run.sh faz `collector.sh & PID=$!` e
 #  depois `kill $PID`); mas funciona standalone (Ctrl+C também encerra e
@@ -74,9 +77,9 @@ trap parar TERM INT
 amostrar() {
     local agora lag
     agora="$(date +%s)"
-    lag="$(psql_db "SELECT COALESCE(EXTRACT(EPOCH FROM (now() - refreshed_at)) * 1000, -1) FROM event_availability WHERE event_id = ${EVENT_ID};" 2>/dev/null | tr -d '[:space:]')"
+    lag="$(psql_db "SELECT COALESCE(EXTRACT(EPOCH FROM (applied_at - last_occurred_at)) * 1000, -1) FROM event_availability WHERE event_id = ${EVENT_ID};" 2>/dev/null | tr -d '[:space:]')"
     if [ -z "$lag" ]; then
-        # linha ainda não existe (job de refresh não rodou pra este evento) --
+        # linha ainda não existe (o consumer não aplicou nenhum evento deste evento) --
         # registra -1 (sentinela "sem leitura ainda"), não quebra a série.
         lag="-1"
     fi

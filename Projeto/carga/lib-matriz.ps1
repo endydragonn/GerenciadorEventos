@@ -2,9 +2,10 @@
 # lib-matriz.selftest.ps1. Uso: . .\lib-matriz.ps1
 #
 # Colunas do CSV (uma linha por execucao): oversell = max(0, confirmed - capacity) e a metrica
-# primaria; pending + confirmed e derivavel (secundaria). lag_obs_* = now() - refreshed_at do
-# evento no Postgres do host, em ms; -1 = sem leitura (a linha do read model ainda nao existia
-# ou nenhuma amostra caiu na janela).
+# primaria; pending + confirmed e derivavel (secundaria). lag_obs_* = applied_at - last_occurred_at da
+# projecao de disponibilidade do evento (lag real do consumer, issue #29) no Postgres do host, em ms; -1 = sem
+# leitura (a linha da projecao ainda nao existia ou nenhuma amostra caiu na janela). lag_ms vale 0: o lag nao e mais
+# configurado, e medido.
 
 $MatrizCabecalho = 'braco,lag_ms,N,capacity,rep,confirmed,pending,oversell,p50,p95,p99,throughput,lag_obs_disparo,lag_obs_max,commit'
 

@@ -76,15 +76,16 @@ como `supabase_admin` (um `psql` por arquivo, ordem lexical, no `POSTGRES_DB`). 
 |---|---|
 | `01-functions.sql` | `create_wallet_for_user()` (usada pelo trigger de `users`) |
 | `02-users.sql` | tabela `users` + trigger `trigger_create_wallet` |
-| `03-event.sql` | tabela `event` — só metadados (FK `creator_id → users`) |
+| `03-event.sql` | tabela `event` — só metadados + `version` (FK `creator_id → users`); projeção inline do stream `catalog.event` (#28) |
 | `04-eventcap.sql` | tabela `eventcap` — capacidade/vagas isoladas (CHECK `0<=quant<=capacity`) |
 | `05-eventpresenter.sql` | tabela `eventpresenter` — apresentadores (0..N por evento) |
 | `06-mywallet.sql` | tabela `mywallet` (FK `user_id → users`, `ON DELETE CASCADE`) |
-| `07-walletevent.sql` | tabela `walletevent` (PK composta, `status`, `expires_at`) |
+| `07-walletevent.sql` | tabela `walletevent` (PK composta, `status`, `expires_at`, `version` do stream `reservation.wallet`) |
 | `08-pending-verifications.sql` | tabela + funções/trigger de limpeza de códigos expirados |
-| `09-event-availability.sql` | tabela `event_availability` — read model defasado de vagas (não é fonte de verdade) |
+| `09-event-availability.sql` | tabela `event_availability` — projeção assíncrona (`ativos` por evento) lida pelo braço `naive` (não é fonte de verdade) |
 | `10-idempotency-key.sql` | tabela `idempotency_key` — chaves de idempotência do `POST /bff/event-wallets` (sem FK) |
-| `99-tests.sql` | suíte de sanidade em `DO $$ ... $$` (trigger, CAS, CHECK, N:N, cascata, read model, TRUNCATE) |
+| `11-event-store.sql` | `event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint` — infra de event sourcing da Fase 6 (#27), sem FK |
+| `99-tests.sql` | suíte de sanidade em `DO $$ ... $$` (trigger, CAS, CHECK, N:N, cascata, projeção de disponibilidade, `walletevent.version`, event store/outbox/checkpoint, TRUNCATE) |
 
 `db/migrations/` guarda scripts de migração idempotentes para bancos já existentes
 (ex.: `20260901-eventcap-isolation.sql`), aplicáveis a quente via `psql` sem recriar o volume.
@@ -96,7 +97,7 @@ e, ponta a ponta, pelo harness `migrations/verify-20260901-migration.sh`.
 
 `migrations/verify-20260901-migration.sh` (harness da issue #6, cross-platform como
 `run-tests.sh`): cria um banco **descartável** `eventcap_mig_check` no container, aplica os
-init-scripts `01`–`09`, roda `99-tests.sql`, depois roda o harness SQL
+init-scripts `01`–`11`, roda `99-tests.sql`, depois roda o harness SQL
 `verify-20260901-migration.sql` — que reconstrói o schema ANTIGO **com dados**, aplica a
 migração **2×** (idempotência) e checa colunas removidas/criadas, constraints, índice parcial,
 conversão de `quant` (limitado / esgotado-piso-0 / ilimitado) e **preservação dos dados**
@@ -126,6 +127,18 @@ docker compose -f Projeto/docker-compose.yml up -d --build
 - **`event`** — PK `event_id`. FK `creator_id → users(user_id)` (`ON DELETE NO ACTION`).
   `event_name` `UNIQUE`, `ead` (bool), `image_data bytea`. **Só metadados** — capacidade/venda
   saíram daqui para `eventcap`.
+  - **`version integer NOT NULL DEFAULT 0`** (issue #28): é a **projeção inline** do stream `catalog.event` (ver
+    `Backend/CLAUDE.md`, "Catalog em CQRS + Event Sourcing"); `version` = versão do último evento aplicado na linha e a
+    versão esperada do próximo append (lida com `FOR NO KEY UPDATE` na transação do command; a projeção a grava com o valor
+    do envelope). `0` = evento "pré-ES", sem stream. `image_data` **não** vem do log (blob fora do ES), e `created_at`/
+    `updated_at` são carimbos do banco: o replay compara `event_id, creator_id, event_name, ead, address, event_date,
+    description, version`. `event_id` é `GENERATED ALWAYS`: a projeção insere com `OVERRIDING SYSTEM VALUE` (o id sai da
+    sequence antes do append, é o `streamId`). Migração a quente: `db/migrations/20261022-catalog-event-version.sql`
+    (idempotente; roda como `supabase_admin`; `ADD COLUMN IF NOT EXISTS` + **backfill**: cada evento com `version = 0` ganha um
+    `EventCreated` v1 no `event_store` (estado atual, sem imagem) + a linha do `event_outbox`, e só essa linha passa a
+    `version = 1`). **O backend recusa alterar/cancelar evento com `version = 0`** (erro "é pré-ES"): depois de carregar o
+    `seed-data.sql`, que insere em `event` direto (aviso no topo do arquivo), reaplique a migração. Coberta por `SchemaValidationTest`,
+    `CatalogEventSourcingTest` e o passo 8d do `99-tests.sql`.
 - **`eventcap`** — agregado ISOLADO de capacidade. PK `event_id`, FK `→ event` `ON DELETE
   CASCADE`. `capacity` (`NOT NULL`), `quant` = vagas disponíveis (`NOT NULL`), `buy_time_limit`
   (nullable), `max_time_in_line` (segundos, default 120).
@@ -141,29 +154,71 @@ docker compose -f Projeto/docker-compose.yml up -d --build
 - **`walletevent`** — inscrição/reserva N:N. PK composta `(user_id, event_id)`. FKs para
   `users`/`event` são `ON DELETE RESTRICT`. `status` (`confirmed`|`pending`|`expired`|
   `cancelled`, default `confirmed`, CHECK) + `expires_at` (só quando `pending`). Índice parcial
-  `idx_walletevent_pending_expires` para o job de expiração.
+  `idx_walletevent_pending_expires` para o job de expiração. **`version`** (issue #29; `integer NOT NULL DEFAULT 0`):
+  projeção inline do stream `reservation.wallet`; a versão do evento sai da própria guarda
+  (`UPDATE ... SET version = version + 1 ... RETURNING version`; a 1ª reserva do par é a v1, `INSERT ... VALUES (..., 1)`) e o
+  evento só é appendado quando a guarda afeta 1 linha, na mesma transação. Reservar de novo uma cancelada/expirada continua o
+  mesmo stream. `0` = linha anterior ao ES (sem eventos no log). Não aparece no JSON de `EventWallet`. Migração a quente:
+  `db/migrations/20261023-wallet-es-projecao.sql`.
 - **`pending_verifications`** — cadastro pré-confirmação (`email` `UNIQUE`, `password_hash`,
   `verification_code`, `expires_at`, `attempts`/`max_attempts`). Trigger
   `trigger_cleanup_on_create_verification` + função `cleanup_expired_verifications()`
   removem expirados a cada INSERT e no startup.
-- **`event_availability`** — read model **desnormalizado e DEFASADO** da disponibilidade de
-  vagas. PK `event_id`, FK `→ event` `ON DELETE CASCADE`. `available` = `capacity` − reservas
-  ativas (`pending`/`confirmed`) em `walletevent`, piso 0; `-1` = evento ilimitado.
-  `refreshed_at` = quando o job recalculou a linha. **NÃO é fonte de verdade** (`eventcap` +
-  CAS continuam sendo): é atualizado só pelo job `ReadModelRefreshService` num timer
-  (`readmodel.availability.refresh.ms`) e serve o "caminho ingênuo" de reserva
-  (feature flag `reservation.readpath=naive`), braço de controle do experimento da Fase 2.
+- **`event_availability`** — **projeção assíncrona** (issue #29; ADR "Event-Backbone-Event-Store") alimentada pelo consumer
+  do tópico `reservation.wallet`; lida só pelo "caminho ingênuo" de reserva (`reservation.readpath=naive`), braço de
+  controle do experimento. **NÃO é fonte de verdade** (`eventcap` + CAS continuam sendo). Colunas: PK `event_id`,
+  `ativos` (nº de reservas ativas: `SlotReserved` +1; `ReservationExpired`/`ReservationCancelled` −1; `ReservationConfirmed` 0),
+  `last_occurred_at` (`occurredAt` do último evento aplicado: o maior visto) e `applied_at` (`clock_timestamp()` do commit do
+  consumer; não `now()`, que seria o início da transação). A disponibilidade **não é gravada**: é calculada na leitura
+  (`eventcap LEFT JOIN` esta tabela; `CASE WHEN capacity = -1 THEN -1 ELSE GREATEST(capacity - GREATEST(COALESCE(ativos, 0), 0), 0) END`;
+  nunca lê `eventcap.quant`), então um evento sem reserva já tem disponibilidade e a mudança de capacidade vale na hora. O
+  lag do último evento aplicado é `applied_at − last_occurred_at`. **Sem FK para `event` e sem CHECK em `ativos`, de
+  propósito**: qualquer violação no consumer é `SQLException`, retentada sem limite pela política de erro, e travaria a
+  partição; `ativos` pode ficar negativo (um `Cancelled` sem `SlotReserved`, de uma linha anterior ao ES) e a leitura trata
+  `ativos` negativo como 0 (`GREATEST(ativos, 0)`; sem isso a disponibilidade passaria da capacidade). O schema antigo (`available`, `refreshed_at`, `created_at`, FK com `CASCADE`, refresh por timer) saiu.
   Usa `timestamptz` de propósito (código novo não propaga a dívida que a issue #58 corrige).
-  Migração a quente: `db/migrations/20260903-event-availability.sql`.
-- **`idempotency_key`** (issue #24) — PK `idempotency_key` (text, até 255 caracteres validado no backend),
-  `user_id`, `event_id` (**sem FK** para `users`/`event`, de propósito: fronteira de módulo, schema por
+  Migração a quente: `db/migrations/20261023-wallet-es-projecao.sql` (idempotente: cria `walletevent.version` e, **só se a
+  tabela ainda tem o schema antigo**, derruba e recria `event_availability` com o baseline de `ativos` = reservas ativas que
+  já existem em `walletevent`; roda como `supabase_admin`; pare o `gerenciador-backend` antes de migrar (a imagem antiga ainda faz `INSERT` nas colunas que a migração derruba; o `ALTER TABLE walletevent` tem `lock_timeout` de 5 s); a antiga `20260903-event-availability.sql` fica como histórico (superada: aplicada depois desta, falha, pois a tabela já não tem `available`). Coberta por
+  `SchemaValidationTest`, `EventWalletNaivePathTest`, `EventAvailabilityProjectionTest`, `ReservationReplayTest` e os passos
+  6b/6c do `99-tests.sql`. **Replay:** vale para streams nascidos depois da migração.
+- **`idempotency_key`** (issue #24) — PK composta `(user_id, idempotency_key)` (a chave tem escopo por
+  usuário, issue #129; `idempotency_key` é text, até 255 caracteres validado no backend),
+  `event_id` (**sem FK** para `users`/`event`, de propósito: fronteira de módulo, schema por
   serviço é Fase 7), `expires_at` (o da reserva original, devolvido na repetição), `created_at`
   (`timestamptz`). Uma linha por reserva **bem-sucedida**: o `INSERT ... ON CONFLICT DO NOTHING` entra na
   MESMA transação JDBC do CAS em `eventcap` + `walletevent`, então falha faz rollback e não deixa chave;
-  a PK serializa duas requisições com a mesma chave. **Sem retenção/limpeza por ora** (cresce 1 linha por
-  reserva). Migração a quente: `db/migrations/20261018-idempotency-key.sql` (idempotente; roda como
-  `supabase_admin`, por isso o `OWNER TO admin` explícito). Coberta por `SchemaValidationTest`,
-  `IdempotencyKeyTest` e o passo 8b do `99-tests.sql`.
+  a PK serializa duas requisições do mesmo usuário com a mesma chave. **Retenção** (issue #130): o job
+  `IdempotencyKeyRetentionService` apaga, em lotes, as linhas com `created_at` mais antigo que
+  `idempotency.retention.hours` (default 24h); o índice `idx_idempotency_key_created_at` (btree em `created_at`)
+  serve esse filtro (a PK não serve; sem ele cada rodada faria seq scan da tabela inteira). Migração a quente: `db/migrations/20261018-idempotency-key.sql` (idempotente; roda como
+  `supabase_admin`, por isso o `OWNER TO admin` explícito) e, para trocar a PK antiga `(idempotency_key)`
+  pela composta, `db/migrations/20261019-idempotency-key-pk-por-usuario.sql` (idempotente: só troca se as
+  colunas da PK ainda forem as antigas) e `db/migrations/20261020-idempotency-key-created-at-index.sql` (índice
+  de `created_at`, `CREATE INDEX IF NOT EXISTS`; independe da `20261019-...`; pré-requisito: a tabela existir). Coberta por `SchemaValidationTest`,
+  `IdempotencyKeyTest`, `IdempotencyRetentionTest` e o passo 8b do `99-tests.sql`.
+
+- **Event sourcing (issue #27; ADR "Event-Backbone-Event-Store")** — infra genérica, sem domínio, sem FK (as #28/#29
+  só appendam eventos com o seu `stream_type`; a #28 usa `catalog.event`). Código em `Backend/.../shared/events` (ver `Backend/CLAUDE.md`,
+  "Event store e backbone de eventos"). Migração a quente: `db/migrations/20261021-event-store.sql` (idempotente; roda como
+  `supabase_admin`, por isso o `OWNER TO admin` explícito). Cobertas por `SchemaValidationTest`, pelos testes de
+  `shared/events` e pelo passo 8c do `99-tests.sql`.
+  - **`event_store`** — log **imutável** (nenhuma linha é atualizada depois do append) e fonte de verdade dos streams.
+    PK `global_position` (`bigint GENERATED ALWAYS AS IDENTITY`: ordem de **alocação**, não de commit, então não serve de
+    cursor), `UNIQUE (stream_type, stream_id, version)` (concorrência otimista: `INSERT ... ON CONFLICT DO NOTHING`,
+    rowcount 0 = outra transação gravou a versão), `CHECK (version >= 1)`. Colunas do envelope: `event_id` (uuid),
+    `stream_type`, `stream_id`, `version`, `event_type`, `schema_version`, `occurred_at` (`timestamptz`, default
+    `clock_timestamp()`: instante do append, não o início da transação), `payload`/`metadata` (`jsonb`; **sem dado
+    pessoal**: a tabela é imutável) e `partition_key` (chave da mensagem no tópico: o id do evento de domínio).
+  - **`event_outbox`** — só `global_position` (PK), sem FK de propósito. Inserida na mesma transação do append e **apagada**
+    pelo relay depois do ack do broker. `INSERT`+`DELETE` contínuo = tuplas mortas, por isso
+    `autovacuum_vacuum_scale_factor = 0.01` e `autovacuum_vacuum_threshold = 100`.
+  - **`event_snapshot`** — PK `(stream_type, stream_id)` (um snapshot por stream, o mais novo vence), `version`, `state
+    jsonb`. **Cache descartável**: mudou o formato do estado → apaga e reconstrói.
+  - **`projection_checkpoint`** — PK `(projecao, stream_type, stream_id)`, `version` = última aplicada por projeção; o avanço
+    atômico (`UPDATE ... WHERE version = v-1`, `INSERT ... ON CONFLICT DO NOTHING` na v1) é a idempotência do consumer.
+  - O replay usa um **schema-sombra** criado e derrubado pelo próprio código (nada de `TEMP TABLE`), numa transação
+    `REPEATABLE READ`; fica fora do `SchemaValidationTest` e do `GlobalDbTruncator`.
 
 ## Regras ao alterar o schema
 

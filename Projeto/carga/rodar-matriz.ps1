@@ -1,23 +1,38 @@
 <#
 .SYNOPSIS
   Matriz do experimento (issue #11), a partir do GERADOR: disputa de vagas para uma lista de N,
-  com repeticoes, para UM lag e UM braco (o que o host esta rodando).
+  com repeticoes, para UM braco (o que o host esta rodando).
 
 .DESCRIPTION
-  O lag (READMODEL_AVAILABILITY_REFRESH_MS) e o braco (RESERVATION_READPATH) sao lidos no startup
-  do backend e NAO mudam em runtime: suba o host com `make setup-host READPATH=<..> REFRESH_MS=<..>`
-  e passe aqui os MESMOS valores em -Rotulo / -RefreshMs (so rotulam as colunas braco e lag_ms).
-  Para outro lag ou braco: troque no host e rode de novo; as linhas se acumulam em
-  results\matriz.csv.
+  O braco (RESERVATION_READPATH) e lido no startup do backend e NAO muda em runtime: suba o host com
+  `make setup-host READPATH=<..>` e passe aqui o MESMO valor em -Rotulo (so rotula a coluna braco).
+  Para outro braco: troque no host e rode de novo; as linhas se acumulam em results\matriz.csv.
+
+  O LAG DEIXOU DE SER VARIAVEL CONTROLADA (issue #29): o refresh por timer
+  (READMODEL_AVAILABILITY_REFRESH_MS) saiu, e a disponibilidade do braco naive e uma projecao assincrona
+  (append -> relay -> Redpanda -> consumer). O lag e o do pipeline REAL, MEDIDO sob a carga (variavel
+  independente = a carga: N concorrentes / RPM). A coluna lag_ms do CSV e mantida so por compatibilidade do
+  formato e vale sempre 0 ("nao controlado"); -RefreshMs e aceito e ignorado. Medicao: ver lag_obs_* abaixo.
+
+  ATENCAO: applied_at - last_occurred_at (lag_obs_*) e o lag do ULTIMO evento aplicado e so anda quando o consumer
+  aplica algo: e um LIMITE INFERIOR do atraso (um consumer atrasado ou parado nao o atualiza). A metrica principal da
+  Rodada 2 (#31) e o log `events.lag` do backend (relay_ms / consumer_ms / total_ms por evento; ligue na rodada com
+  LOGGING_LEVEL_EVENTS_LAG=DEBUG no host) MAIS o offset lag do consumer group (`docker exec gerenciador-redpanda rpk
+  group describe gerenciador-eventos`, no host, durante a carga).
 
   Para cada N em -Vus:
     1. semeia N usuarios + -Repeticoes eventos novos, todos com a mesma -Capacidade (seed unico)
     2. antes da 1a rodada do script inteiro: AQUECIMENTO descartado (rajada pequena, evento
        proprio, sem linha no CSV)
-    3. para cada repeticao (um evento novo cada): espera o read model ter a linha do evento, espera
-       um tempo ALEATORIO em [0, RefreshMs) (a rajada cai numa fase pseudo-aleatoria do job de
-       refresh, sem sincronizar com ele), dispara o k6 (PCT_CONFIRMA=100) e, enquanto ele roda,
-       amostra a cada ~-PollMs, no Postgres do host, now() - refreshed_at do evento
+    3. para cada repeticao (um evento novo cada): espera o pipeline de eventos ficar quieto (event_outbox vazio e a
+       projecao sem aplicar evento novo: o backlog de uma repeticao nao vaza para a seguinte), dispara o k6
+       (PCT_CONFIRMA=100) e, enquanto ele roda, amostra a cada ~-PollMs, no Postgres do host, o lag REAL da
+       projecao de disponibilidade do evento: applied_at - last_occurred_at de event_availability (idade, no
+       relogio do Postgres, do ultimo evento aplicado pelo consumer: do append ao commit do consumer, relay
+       incluido). Complemento por rodada (nao automatizado aqui): o offset lag do consumer group, com
+       `docker exec gerenciador-redpanda rpk group describe gerenciador-eventos`; e o lag por evento
+       (relay_ms / consumer_ms / total_ms) no log `events.lag` do backend. LIMITE da amostra: ela so anda quando o
+       consumer aplica um evento; consumer parado nao a atualiza, entao confira tambem o offset lag.
     4. apos a rajada le confirmed/pending do evento no Postgres e acrescenta UMA linha ao CSV
 
   O Postgres do host e consultado por psql remoto (-PgPorta, padrao 5433). A senha vem SO da
@@ -37,13 +52,13 @@
   throughput = reservas/s so na janela da rajada (primeira iteracao iniciada .. ultima terminada);
   nao e o reservas_por_s do k6, cujo tempo inclui os logins do setup().
 
-  lag_obs_disparo / lag_obs_max: -1 = sem leitura (linha do read model inexistente ou nenhuma
+  lag_obs_disparo / lag_obs_max: -1 = sem leitura (a projecao ainda nao tem linha do evento, ou nenhuma
   amostra valida na janela). Resolucao = intervalo do polling; ver lib-matriz.ps1.
 
 .EXAMPLE
   $s = Read-Host 'Senha do Postgres do host' -AsSecureString
   $env:PGPASSWORD = [System.Net.NetworkCredential]::new('', $s).Password
-  .\rodar-matriz.ps1 -HostIp 192.168.0.10 -Vus 50,100,200 -Repeticoes 10 -Capacidade 20 -Rotulo naive -RefreshMs 2000
+  .\rodar-matriz.ps1 -HostIp 192.168.0.10 -Vus 50,100,200 -Repeticoes 10 -Capacidade 20 -Rotulo naive
 #>
 [CmdletBinding()]
 param(
@@ -56,7 +71,7 @@ param(
     [ValidateRange(1, 1000)][int]$Repeticoes = 10,
     [ValidateRange(1, 100000)][int]$Capacidade = 20,
     [ValidateSet('cas', 'naive')][string]$Rotulo = 'cas',
-    [ValidateRange(100, 600000)][int]$RefreshMs = 5000,
+    [ValidateRange(0, 600000)][int]$RefreshMs = 0,   # obsoleto (#29): aceito e ignorado; o lag e medido, nao configurado
     [ValidateRange(1, 5000)][int]$VusAquecimento = 20,
     [ValidateRange(100, 5000)][int]$PollMs = 250
 )
@@ -126,24 +141,46 @@ function Invoke-Psql([string]$Sql, [switch]$Silencioso) {
     return (($saida | Out-String).Trim())
 }
 
-# Amostra do lag: now() - refreshed_at do evento, no relogio do Postgres; Ts no relogio local (o mesmo
-# do k6) = ponto medio entre antes e depois da chamada (o now() do Postgres cai no meio dela).
+# Amostra do lag REAL da projecao assincrona (ADR Event-Backbone-Event-Store, secao 4): applied_at - last_occurred_at
+# do evento = idade, no relogio do Postgres, do ultimo evento aplicado pelo consumer (o antigo now() - refreshed_at
+# nao serve: sob carga continua ficaria perto de 0 com eventos atrasados). Ts no relogio local (o mesmo do k6) =
+# ponto medio entre antes e depois da chamada.
 function Get-AmostraLag([int]$EventId) {
     $t0 = Get-EpochMs
-    $r = Invoke-Psql -Silencioso -Sql "SELECT (EXTRACT(EPOCH FROM (now() - refreshed_at)) * 1000)::bigint FROM event_availability WHERE event_id = $EventId;"
+    $r = Invoke-Psql -Silencioso -Sql "SELECT (EXTRACT(EPOCH FROM (applied_at - last_occurred_at)) * 1000)::bigint FROM event_availability WHERE event_id = $EventId;"
     if ($null -eq $r) { return $null }
     $lag = -1
     if ($r -match '^\d+$') { $lag = [int]$r }
     [pscustomobject]@{ Ts = [long](($t0 + (Get-EpochMs)) / 2); Lag = $lag }
 }
 
-function Wait-ReadModel([int]$EventId) {
-    $limite = (Get-Date).AddMilliseconds(3 * $RefreshMs + 10000)
+# A disponibilidade do naive e eventcap LEFT JOIN a projecao: basta o evento ter eventcap (o seed ja o cria).
+# A linha da projecao so nasce com a 1a reserva (e a 1a amostra de lag vem depois dela).
+function Wait-Evento([int]$EventId) {
+    $limite = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $limite) {
-        if ((Invoke-Psql -Silencioso -Sql "SELECT 1 FROM event_availability WHERE event_id = $EventId;") -eq '1') { return }
+        if ((Invoke-Psql -Silencioso -Sql "SELECT 1 FROM eventcap WHERE event_id = $EventId;") -eq '1') { return }
         Start-Sleep -Milliseconds 250
     }
-    Fail "event_availability sem linha para o evento $EventId apos $([int](3 * $RefreshMs / 1000) + 10) s: o job de refresh esta rodando no host?"
+    Fail "eventcap sem linha para o evento $EventId apos 30 s."
+}
+
+# Antes de cada rajada: o pipeline de eventos tem de estar QUIETO, senao o backlog da repeticao anterior vaza para esta
+# (o consumer ainda aplicando eventos antigos infla o lag e o oversell da rajada seguinte). Quieto = event_outbox vazio
+# (o relay publicou tudo) E o max(applied_at) da projecao parado entre duas leituras (o consumer parou de aplicar).
+# Limite: um consumer TRAVADO tambem parece quieto; confirme o offset lag (rpk group describe gerenciador-eventos).
+function Wait-Estavel([int]$EventId, [int]$TimeoutS = 120) {
+    Wait-Evento $EventId
+    $limite = (Get-Date).AddSeconds($TimeoutS)
+    $anterior = $null
+    while ((Get-Date) -lt $limite) {
+        $outbox = Invoke-Psql -Silencioso -Sql "SELECT count(*) FROM event_outbox;"
+        $aplicado = Invoke-Psql -Silencioso -Sql "SELECT COALESCE(max(applied_at)::text, 'nenhum') FROM event_availability;"
+        if ($outbox -eq '0' -and $aplicado -eq $anterior) { return }
+        $anterior = $aplicado
+        Start-Sleep -Milliseconds 1500
+    }
+    Warn "Pipeline de eventos nao ficou quieto em $TimeoutS s (outbox=$outbox): o backlog pode vazar para esta rajada."
 }
 
 # Dispara o k6 contra o evento. Com -ComPolling, amostra o lag em loop ate o k6 terminar.
@@ -190,7 +227,7 @@ try {
     Info "Conferindo o Postgres do host (${HostIp}:$PgPorta, usuario $PgUsuario, banco $PgBanco)..."
     Invoke-Psql 'SELECT 1;' | Out-Null
     Ok 'psql remoto respondeu.'
-    Info "Matriz: braco=$Rotulo lag=${RefreshMs}ms N=$($Vus -join ',') repeticoes=$Repeticoes capacity=$Capacidade commit=$commit"
+    Info "Matriz: braco=$Rotulo lag=medido N=$($Vus -join ',') repeticoes=$Repeticoes capacity=$Capacidade commit=$commit"
     foreach ($n in $Vus) { if ($n -le $Capacidade) { Warn "N=$n <= capacity=${Capacidade}: sem disputa, nao ha overselling possivel." } }
 
     $runId = [int]((Get-Date).ToUniversalTime() - [datetime]'2026-01-01').TotalSeconds % 1000000
@@ -202,14 +239,14 @@ try {
     $sf = (Join-Path $tmpDir 'summary-aq.json').Replace('\', '/')
     $seed = Invoke-Seed -BaseUrl $Base -Usuarios $VusAquecimento -Eventos 1 -Capacidade $Capacidade `
         -Prefixo "Matriz-$runId-Aq" -Sufixo "$runId-aq" -UsersFile $uf -EventIdsFile $ef
-    Wait-ReadModel $seed.EventIds[0]
+    Wait-Estavel $seed.EventIds[0]
     Invoke-Rajada -EventId $seed.EventIds[0] -UsersFile $uf -SummaryFile $sf | Out-Null
     Remove-Item $uf, $ef -ErrorAction SilentlyContinue
 
     foreach ($n in $Vus) {
         $runId = [int]((Get-Date).ToUniversalTime() - [datetime]'2026-01-01').TotalSeconds % 1000000
         Write-Host ''
-        Info "=== N=$n clientes, $Repeticoes repeticoes, capacity $Capacidade, braco=$Rotulo, lag=${RefreshMs}ms (run $runId) ==="
+        Info "=== N=$n clientes, $Repeticoes repeticoes, capacity $Capacidade, braco=$Rotulo, lag=medido (run $runId) ==="
         $uf = (Join-Path $tmpDir "users-$n.json").Replace('\', '/')
         $ef = (Join-Path $tmpDir "events-$n.json").Replace('\', '/')
         Info "Semeando $n usuarios + $Repeticoes eventos novos (bcrypt no host: pode levar um tempo)..."
@@ -219,10 +256,8 @@ try {
         for ($rep = 1; $rep -le $Repeticoes; $rep++) {
             $eventId = $seed.EventIds[$rep - 1]
             $sf = (Join-Path $tmpDir "summary-$n-$rep.json").Replace('\', '/')
-            Wait-ReadModel $eventId
-            $espera = Get-Random -Minimum 0 -Maximum $RefreshMs   # [0, RefreshMs): fase aleatoria do job
-            Info "rep $rep/${Repeticoes}: evento $eventId, espera aleatoria de $espera ms antes do disparo"
-            Start-Sleep -Milliseconds $espera
+            Wait-Estavel $eventId
+            Info "rep $rep/${Repeticoes}: evento $eventId"
             $amostras = Invoke-Rajada -EventId $eventId -UsersFile $uf -SummaryFile $sf -ComPolling
 
             # So repeticao VALIDA vira linha do CSV: uma invalida enviesaria a media/desvio do overselling
@@ -268,7 +303,7 @@ try {
             # reservas/s so na janela da rajada (o duracao_s do k6 inclui os logins do setup())
             $vazao = Get-VazaoRajada -Tentativas ($s.aceitas + $s.lotado + $s.outros) -DisparoMs ([long]$s.disparo_ms) -FimMs ([long]$s.fim_ms)
 
-            $linha = Format-LinhaMatriz -Braco $Rotulo -LagMs $RefreshMs -N $n -Capacity $Capacidade -Rep $rep `
+            $linha = Format-LinhaMatriz -Braco $Rotulo -LagMs 0 -N $n -Capacity $Capacidade -Rep $rep `
                 -Confirmed $confirmed -Pending $pending -P50 $s.p50_ms -P95 $s.p95_ms -P99 $s.p99_ms `
                 -Throughput $vazao -LagDisparo $lag.Disparo -LagMax $lag.Max -Commit $commit
             Add-LinhaMatriz -Csv $Csv -Linha $linha

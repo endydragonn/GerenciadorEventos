@@ -52,7 +52,7 @@ param(
     [ValidateSet('cas', 'naive')][string]$Rotulo = 'cas',
     [Parameter(Mandatory)][ValidateRange(1, 100000)][int]$MaxConnections,
     [Parameter(Mandatory)][ValidateRange(1, 100000)][int]$PoolHikari,
-    [int]$RefreshMs = 5000,
+    [int]$RefreshMs = 0,   # obsoleto (#29): so rotula a coluna refresh_ms
     [ValidateRange(0, 100)][int]$PctConfirma = 100,
     [ValidateRange(10, 20000)][int]$MaxVus = 2000
 )
@@ -112,10 +112,6 @@ try {
     $seed = Invoke-Seed -BaseUrl $Base -Usuarios $Usuarios -Eventos $eventos -Capacidade $Capacidade `
         -Prefixo $escada -Sufixo "$runId" -UsersFile $uf -EventIdsFile $ef
     Ok "Prefixo '$escada': $eventos eventos prontos."
-
-    $espera = [math]::Ceiling($RefreshMs / 1000) + 2
-    Info "Aguardando $espera s (read model)..."
-    Start-Sleep -Seconds $espera
 
     $env:BASE_URL = $Base; $env:RPMS = ($plano.Rpms -join ','); $env:DURACAO_S = "$Duracao"
     $env:USERS_FILE = $uf; $env:EVENTS_FILE = $ef; $env:SUMMARY_FILE = $sf

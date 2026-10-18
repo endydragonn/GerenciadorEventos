@@ -90,9 +90,14 @@ commitar ou registrar em log.
   (frontend :8088, backend :8081, Postgres host :5433, Supabase Studio :8000 — login com
   `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`; sobe junto `meta` e `kong`).
   O backend em Docker fala com o Postgres pelo `supabase-pooler` (Supavisor, sem porta no host);
-  os testes e a porta 5433 vão direto no `db`.
+  os testes e a porta 5433 vão direto no `db`. Sobe junto o `redpanda` (broker Kafka-compatível da Fase 6, issue #27;
+  só `redpanda:9092` na rede `gerenciador-net`, sem porta no host) e o backend espera ele ficar `healthy`.
 - Antes de considerar uma tarefa de backend pronta: `Projeto/Backend/run-tests.sh`
-  (precisa do container `db` no ar — os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`).
+  (precisa dos containers `db` **e** `redpanda` no ar — `docker compose -f Projeto/docker-compose.yml up -d db redpanda`;
+  os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`, e Redpanda real; o script aborta com mensagem
+  clara se faltar um deles). **Pare o `gerenciador-backend` antes** (`docker stop gerenciador-backend`): desde a #28/#29 o
+  relay e o consumer dele compartilham o `meu_banco` e drenam o `event_outbox` dos testes; o script aborta com
+  mensagem clara se o container estiver rodando.
 - Relate o resultado real dos testes; se algo falhou ou foi pulado, diga.
 
 ## Documentação de arquitetura (vault Obsidian)
@@ -121,8 +126,29 @@ mesmo processo, deploy e schema `public`:
 
 Detalhes no `Projeto/Backend/CLAUDE.md`.
 
+**Implementado (Fase 6, issue #27, 2026-10-18):** só a infra do backbone de eventos, ainda sem domínio — broker
+Redpanda no compose e, em `shared/events`, `event_store` imutável + `event_outbox` + relay para o broker, base do
+consumer idempotente (checkpoint atômico), replay em schema-sombra e snapshots.
+
+**Implementado (Fase 6, issue #28):** `catalog` em CQRS + Event Sourcing — stream `catalog.event`
+(`EventCreated`/`EventUpdated`/`PresenterAdded`/`PresenterRemoved`/`EventCancelled`), append na mesma transação da
+projeção inline `event`/`eventpresenter` (coluna `event.version` como versão esperada; conflito = repete o command),
+`image_data` fora do ES, replay do agregado comparado com a viva, relay ligado no compose (`EVENTS_RELAY_ENABLED`).
+`/bff/events/**` inalterado. Detalhes no `Projeto/Backend/CLAUDE.md`, "Catalog em CQRS + Event Sourcing".
+
+**Implementado (Fase 6, issue #29):** o lado wallet de `reservation` em event sourcing (híbrido) — stream
+`reservation.wallet` (`SlotReserved`, `ReservationConfirmed`, `ReservationExpired`, `ReservationCancelled`) com a versão
+vinda da guarda (`UPDATE walletevent ... RETURNING version`) e o append na mesma transação; `eventcap` + CAS continuam
+relacionais. A disponibilidade do braço `naive` virou projeção assíncrona (consumer do tópico; `event_availability` só com
+`ativos`, disponibilidade calculada na leitura) e o `ReadModelRefreshService` saiu: o lag deixou de ser variável controlada e
+passou a ser medido (pré-requisito da Rodada 2, #31). O compose liga o relay (desde a #28) e o consumer (desde a #29) no backend.
+
+**Implementado (Fase 6, issue #30):** checkpoint — `catalog` e `reservation` event-sourced, contrato `/bff/**` inalterado
+(`HttpContractTest`), replay dos dois agregados coberto (`CatalogEventSourcingTest`, `ReservationReplayTest`) e teste
+ponta a ponta do braço `naive` lendo a projeção real (`EventAvailabilityProjectionTest`). Diagrama command / evento /
+projeção / replay em [`docs/arquitetura/fase6-cqrs-es.md`](docs/arquitetura/fase6-cqrs-es.md). A Rodada 2 (#31) mede o resultado.
+
 **Decidido, não implementado:** extrair os módulos como microsserviços (Opção B — `gateway`, `identity`,
-`catalog`, `reservation`, `notification`, `admission`; a Fase 5 só os separou dentro do monólito); CQRS + Event Sourcing em `catalog` e
-no lado wallet de `reservation` (`eventcap` fica relacional/CAS); backbone Kafka-compatível;
+`catalog`, `reservation`, `notification`, `admission`; a Fase 5 só os separou dentro do monólito);
 camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
 `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.

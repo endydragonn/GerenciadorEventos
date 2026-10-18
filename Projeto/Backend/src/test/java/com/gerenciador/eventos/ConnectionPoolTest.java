@@ -19,8 +19,7 @@ import javax.sql.DataSource;
  * uma conexão TCP nova por chamada ({@code DriverManager}), o que esgotava as portas efêmeras
  * sob carga.
  */
-@SpringBootTest(properties = {
-        "readmodel.availability.refresh.ms=3600000", "reservation.expiry.scan.ms=3600000"})
+@SpringBootTest(properties = "reservation.expiry.scan.ms=3600000")
 class ConnectionPoolTest {
 
     @Autowired

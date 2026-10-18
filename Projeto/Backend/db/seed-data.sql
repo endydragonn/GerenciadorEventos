@@ -2,6 +2,12 @@
 -- SCRIPT PARA POPULAR TABELAS COM DADOS
 -- Executa INSERTs sem limpar dados existentes
 -- Encoding: UTF-8
+--
+-- ATENÇÃO (issue #28): os eventos inseridos aqui entram em `event` direto, com version = 0 e SEM stream no
+-- event_store. O catalog RECUSA alterar/cancelar um evento assim (erro "é pré-ES"). Depois de carregar este seed,
+-- rode o backfill (idempotente: cria o EventCreated v1 de cada evento com version = 0):
+--   docker exec -i gerenciador-db psql -h localhost -U supabase_admin -d meu_banco \
+--     < Projeto/Backend/db/migrations/20261022-catalog-event-version.sql
 -- ==========================================
 
 SET client_encoding = 'UTF8';

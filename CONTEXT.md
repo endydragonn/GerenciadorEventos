@@ -29,12 +29,12 @@ _Avoid_: variante, modo
 Rajada de N clientes concorrentes tentando reservar o mesmo evento de `capacity` finita. É a unidade de execução do experimento de corretude.
 _Avoid_: corrida, stress
 
-**Read model defasado** (`event_availability`):
-Tabela desnormalizada de vagas disponíveis, recalculada por job periódico e, portanto, atrasada em relação à verdade.
+**Projeção de disponibilidade** (`event_availability`):
+Tabela com só o nº de reservas ativas por evento (`ativos`), alimentada pelo consumer do tópico `reservation.wallet`; a disponibilidade é calculada na leitura (`eventcap` LEFT JOIN a projeção) e, portanto, atrasada em relação à verdade pelo lag do pipeline de eventos.
 _Avoid_: cache
 
 **Lag**:
-Intervalo de refresh do read model (`READMODEL_AVAILABILITY_REFRESH_MS`); o atraso máximo da leitura de vagas.
+Atraso real, medido, entre o append de um evento de reserva e a sua aplicação pelo consumer da projeção (`applied_at - last_occurred_at`; relay e consumer separáveis). Era um intervalo de refresh configurado (`READMODEL_AVAILABILITY_REFRESH_MS`) até a Fase 2; desde a #29 não é variável controlada, é medido sob a carga.
 _Avoid_: latência, delay
 
 **Overselling**:

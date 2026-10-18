@@ -16,8 +16,9 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 /**
  * Job que devolve a vaga de reservas {@code pending} que não foram confirmadas até
  * {@code expires_at}. Roda periodicamente; cada reserva é tratada numa transação própria
- * (libera a vaga em {@code eventcap} + marca {@code expired}), e a marcação é condicional
- * ({@code expireIfStale}) para não expirar algo que o usuário acabou de confirmar.
+ * (libera a vaga em {@code eventcap} + marca {@code expired} + appenda {@code ReservationExpired}), e a marcação é
+ * condicional ({@code expireIfStale}, de onde sai a versão do evento) para não expirar algo que o usuário acabou de
+ * confirmar: só emite o evento por linha que a guarda de fato expirou.
  */
 @Service
 public class ReservationExpiryService {
@@ -28,6 +29,8 @@ public class ReservationExpiryService {
     private EventWalletRepository eventWalletRepository;
     @Autowired
     private EventCapRepository eventCapRepository;
+    @Autowired
+    private ReservationEvents reservationEvents;
     @Autowired
     private DatabaseConnection databaseConnection;
 
@@ -50,19 +53,21 @@ public class ReservationExpiryService {
         try (Connection conn = databaseConnection.getConnection()) {
             conn.setAutoCommit(false);
             try {
-                boolean expired = eventWalletRepository.expireIfStale(conn, ew.getUserId(), ew.getEventId());
+                int versao = eventWalletRepository.expireIfStale(conn, ew.getUserId(), ew.getEventId());
+                boolean expired = versao > 0;
                 if (expired) {
                     eventCapRepository.release(conn, ew.getEventId());
+                    reservationEvents.expired(conn, ew.getUserId(), ew.getEventId(), versao);
                 }
                 conn.commit();
                 return expired;
-            } catch (SQLException ex) {
+            } catch (SQLException | RuntimeException ex) {
                 conn.rollback();
                 throw ex;
             } finally {
                 conn.setAutoCommit(true);
             }
-        } catch (SQLException ex) {
+        } catch (SQLException | RuntimeException ex) {
             log.warn("[ReservationExpiry] falha ao expirar reserva user={} event={}: {}",
                     ew.getUserId(), ew.getEventId(), ex.getMessage());
             return false;

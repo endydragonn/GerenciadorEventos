@@ -11,7 +11,6 @@
 [CmdletBinding()]
 param(
     [ValidateSet('cas', 'naive')][string]$ReadPath = 'cas',
-    [int]$RefreshMs = 5000,
     [int]$MaxConnections = 300,
     [switch]$SemBuild,
     [switch]$Verificar,
@@ -32,7 +31,7 @@ function Fail($m) { Write-Host "[erro] $m" -ForegroundColor Red; exit 1 }
 function Registrar($alvo, $saida) {
     $dir = Join-Path (Split-Path $PSScriptRoot -Parent) 'results'
     New-Item -ItemType Directory -Force $dir | Out-Null
-    $cfg = (docker exec gerenciador-backend printenv RESERVATION_READPATH READMODEL_AVAILABILITY_REFRESH_MS 2>$null) -join ' / '
+    $cfg = (docker exec gerenciador-backend printenv RESERVATION_READPATH EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED 2>$null) -join ' / '
     $cab = "===== {0} | {1} | config: {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $alvo, $cfg
     Add-Content -Path (Join-Path $dir 'verificacoes.log') -Value (@($cab, $saida, '') -join "`n") -Encoding utf8
 }
@@ -66,13 +65,12 @@ if ($LASTEXITCODE -ne 0) { Fail 'Daemon do Docker nao responde.' }
 if (-not (Test-Path (Join-Path $Projeto '.env'))) { Fail 'Projeto\.env nao existe.' }
 
 $env:RESERVATION_READPATH = $ReadPath
-$env:READMODEL_AVAILABILITY_REFRESH_MS = "$RefreshMs"
 $env:PG_MAX_CONNECTIONS = "$MaxConnections"
 if ($MaxConnections -le 55) { Fail 'MaxConnections precisa ser > 55 (o pool do pooler e MaxConnections - 55).' }
 # Pool do Supavisor (conexoes reais ao Postgres) acompanha o max_connections, com a mesma folga do
 # padrao (100 -> 45): sem isso o pooler limitaria a 45 e a rodada mediria o pooler, nao o Postgres.
 $env:PG_POOLER_POOL_SIZE = "$($MaxConnections - 55)"
-Info "Subindo (readpath=$ReadPath, refresh=${RefreshMs}ms, max_connections=$MaxConnections, pool do pooler=$($MaxConnections - 55))..."
+Info "Subindo (readpath=$ReadPath, max_connections=$MaxConnections, pool do pooler=$($MaxConnections - 55))..."
 $a = @('compose', '-f', $Compose, '-f', $OvCarga, '-f', $OvRpm, 'up', '-d')
 if (-not $SemBuild) { $a += '--build' }
 & docker @a

@@ -4,16 +4,19 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.gerenciador.eventos.catalog.api.Event;
 import com.gerenciador.eventos.reservation.api.EventCap;
 import com.gerenciador.eventos.reservation.api.EventCapacityApi;
@@ -28,9 +31,16 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
  * O POJO {@link Event} continua carregando {@code lot_quantity}/{@code quantity}/
  * {@code buy_time_limit}/{@code presenters} como campos de transporte da API — este
  * repository os grava/lê no agregado certo.</p>
+ *
+ * <p>As ESCRITAS (issue #28) são commands do stream {@code catalog.event}: {@code save}/{@code update}/{@code delete}
+ * appendam {@code EventCreated}/{@code EventUpdated}/{@code EventCancelled} e aplicam a projeção inline
+ * ({@link CatalogEventProjection}) na mesma transação, via {@link CatalogEventWriter}; as leituras vão direto nas
+ * tabelas-projeção.</p>
  */
 @Repository
 public class EventRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(EventRepository.class);
 
     @Autowired
     private DatabaseConnection databaseConnection;
@@ -39,7 +49,7 @@ public class EventRepository {
     private EventCapacityApi eventCapacityApi;
 
     @Autowired
-    private EventPresenterRepository eventPresenterRepository;
+    private CatalogEventWriter writer;
 
     /**
      * Insere evento + agregado de capacidade + apresentadores numa única transação.
@@ -61,46 +71,23 @@ public class EventRepository {
             throw new IllegalArgumentException("capacity (lot_quantity) é obrigatória: >= 1, ou -1 para ilimitado");
         }
 
-        String sql = "INSERT INTO event (creator_id, event_name, ead, address, event_date, description, image_data) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?)";
-
-        try (Connection conn = databaseConnection.getConnection()) {
-            conn.setAutoCommit(false);
-            try {
-                try (PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
-                    int idx = 1;
-                    stmt.setLong(idx++, e.getCreator_id());
-                    stmt.setString(idx++, e.getEvent_name());
-                    stmt.setBoolean(idx++, toPrimitive(e.getIs_EAD()));
-                    stmt.setString(idx++, nullIfBlank(e.getAddress()));
-                    stmt.setTimestamp(idx++, toTimestamp(e.getEvent_date()));
-                    stmt.setString(idx++, e.getDescription() != null ? e.getDescription() : "");
-                    if (e.getImage_data() != null) {
-                        stmt.setBytes(idx++, e.getImage_data());
-                    } else {
-                        stmt.setNull(idx++, java.sql.Types.BINARY);
-                    }
-                    stmt.executeUpdate();
-                    try (ResultSet rs = stmt.getGeneratedKeys()) {
-                        if (rs.next()) {
-                            e.setEvent_id(rs.getLong(1));
-                        }
-                    }
+        try {
+            // Uma transação: EventCreated (v1) no event_store + projeção inline (event, eventpresenter) + eventcap.
+            // O id vem da sequence ANTES do append (é o streamId); a projeção insere a linha com ele.
+            e.setEvent_id(writer.executar(tx -> {
+                long id = tx.novoStream();
+                ObjectNode payload = EventPayloads.criado(id, e);
+                ArrayNode presenters = payload.putArray("presenters");
+                CatalogEventWriter.normalizar(e.getPresenters()).forEach(presenters::add);
+                tx.append("EventCreated", payload);
+                if (e.getImage_data() != null) { // blob fora do ES: direto na tabela viva
+                    gravarImagem(tx.conn(), id, e.getImage_data());
                 }
-
                 LocalDateTime buyLimit = (e.getBuy_time_limit() != null) ? e.getBuy_time_limit() : e.getEvent_date();
-                EventCap cap = new EventCap(e.getEvent_id(), e.getLot_quantity(), e.getLot_quantity(), buyLimit);
-                eventCapacityApi.create(conn, cap);
-
-                eventPresenterRepository.replaceAll(conn, e.getEvent_id(), e.getPresenters());
-
-                conn.commit();
-            } catch (SQLException ex) {
-                conn.rollback();
-                throw ex;
-            } finally {
-                conn.setAutoCommit(true);
-            }
+                eventCapacityApi.create(tx.conn(),
+                        new EventCap(id, e.getLot_quantity(), e.getLot_quantity(), buyLimit));
+                return id;
+            }));
         } catch (SQLException ex) {
             throw new RuntimeException("Erro ao salvar evento: " + ex.getMessage(), ex);
         }
@@ -196,34 +183,24 @@ public class EventRepository {
         }
     }
 
-    /** Atualizar apenas os metadados do evento (capacidade/janela de venda vão pelo EventCapacityApi). */
+    /**
+     * Atualizar os metadados do evento (capacidade/janela de venda vão pelo EventCapacityApi): appenda
+     * {@code EventUpdated} e aplica a projeção na mesma transação. {@code image_data} (fora do ES) é gravada direto.
+     */
     public Event update(Event e) {
         if (e.getEvent_id() == null) {
             throw new IllegalArgumentException("event_id é obrigatório para atualizar");
         }
-        String upSql = "UPDATE event SET creator_id = ?, event_name = ?, ead = ?, address = ?, "
-                + "event_date = ?, description = ?, image_data = ?, updated_at = CURRENT_TIMESTAMP "
-                + "WHERE event_id = ?";
-
-        try (Connection conn = databaseConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(upSql)) {
-
-            int idx = 1;
-            stmt.setLong(idx++, e.getCreator_id());
-            stmt.setString(idx++, e.getEvent_name());
-            stmt.setBoolean(idx++, toPrimitive(e.getIs_EAD()));
-            stmt.setString(idx++, nullIfBlank(e.getAddress()));
-            stmt.setTimestamp(idx++, toTimestamp(e.getEvent_date()));
-            stmt.setString(idx++, e.getDescription() != null ? e.getDescription() : "");
-            if (e.getImage_data() != null) {
-                stmt.setBytes(idx++, e.getImage_data());
-            } else {
-                stmt.setNull(idx++, java.sql.Types.BINARY);
-            }
-            long eventIdVal = Objects.requireNonNull(e.getEvent_id(), "event_id não pode ser nulo");
-            stmt.setLong(idx++, eventIdVal);
-
-            stmt.executeUpdate();
+        long id = Objects.requireNonNull(e.getEvent_id(), "event_id não pode ser nulo");
+        try {
+            writer.executar(tx -> {
+                if (!tx.bloquear(id)) {
+                    throw new RuntimeException("Evento não encontrado: id=" + id);
+                }
+                tx.append("EventUpdated", EventPayloads.evento(id, e));
+                gravarImagem(tx.conn(), id, e.getImage_data());
+                return null;
+            });
             fetchTimestamps(e);
             return e;
         } catch (SQLException ex) {
@@ -231,19 +208,38 @@ public class EventRepository {
         }
     }
 
-    /** Remover evento definitivamente (eventcap e eventpresenter caem por ON DELETE CASCADE). */
+    /**
+     * Remover evento: appenda {@code EventCancelled} e a projeção faz o mesmo {@code DELETE} de antes (eventcap e
+     * eventpresenter caem por ON DELETE CASCADE) na mesma transação; o stream fica no event_store como auditoria.
+     * Evento inexistente = no-op, como antes.
+     */
     public void delete(Long id) {
-        String sql = "DELETE FROM event WHERE event_id = ?";
-        try (Connection conn = databaseConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setLong(1, id);
-            stmt.executeUpdate();
+        try {
+            writer.executar(tx -> {
+                if (tx.bloquear(id)) {
+                    tx.append("EventCancelled", EventPayloads.cancelado(id));
+                }
+                return null;
+            });
         } catch (SQLException ex) {
             throw new RuntimeException("Erro ao deletar evento: " + ex.getMessage(), ex);
         }
     }
 
     // ===== Helpers =====
+    /** Blob fora do event sourcing: escrito direto na linha viva (o replay e a comparação ignoram a coluna). */
+    private void gravarImagem(Connection conn, long id, byte[] imageData) throws SQLException {
+        try (PreparedStatement stmt = conn.prepareStatement("UPDATE event SET image_data = ? WHERE event_id = ?")) {
+            if (imageData != null) {
+                stmt.setBytes(1, imageData);
+            } else {
+                stmt.setNull(1, java.sql.Types.BINARY);
+            }
+            stmt.setLong(2, id);
+            stmt.executeUpdate();
+        }
+    }
+
     private void fetchTimestamps(Event e) {
         if (e.getEvent_id() == null) return;
         String sql = "SELECT created_at, updated_at FROM event WHERE event_id = ?";
@@ -258,7 +254,7 @@ public class EventRepository {
                 if (u != null) e.setUpdatedAt(u.toLocalDateTime());
             }
         } catch (SQLException ex) {
-            System.err.println("Aviso: não foi possível buscar timestamps do evento: " + ex.getMessage());
+            log.warn("Não foi possível buscar timestamps do evento id={}: {}", e.getEvent_id(), ex.getMessage());
         }
     }
 
@@ -281,19 +277,5 @@ public class EventRepository {
         // capacity/quant/buy_time_limit/presenters: preenchidos pelo Service a partir dos
         // agregados eventcap / eventpresenter.
         return e;
-    }
-
-    private boolean toPrimitive(Boolean b) {
-        return Boolean.TRUE.equals(b);
-    }
-
-    private Timestamp toTimestamp(LocalDateTime dt) {
-        return (dt == null) ? null : Timestamp.valueOf(dt);
-    }
-
-    private String nullIfBlank(String s) {
-        if (s == null) return null;
-        String t = s.trim();
-        return t.isEmpty() ? null : t;
     }
 }

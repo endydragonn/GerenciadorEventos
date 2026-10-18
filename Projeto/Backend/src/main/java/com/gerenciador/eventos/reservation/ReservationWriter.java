@@ -11,7 +11,10 @@ import java.time.LocalDateTime;
  */
 interface ReservationWriter {
 
-    /** Cria (ou revive expired/cancelled) a reserva {@code pending}; {@code false} se já havia uma ativa. */
-    boolean reservePending(Connection conn, Long userId, Long eventId, LocalDateTime expiresAt)
+    /**
+     * Cria (ou revive expired/cancelled) a reserva {@code pending}.
+     * @return a {@code version} do stream após a transição (vem da própria guarda); {@code 0} se já havia uma ativa
+     */
+    int reservePending(Connection conn, Long userId, Long eventId, LocalDateTime expiresAt)
             throws SQLException;
 }

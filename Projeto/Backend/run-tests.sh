@@ -9,8 +9,9 @@
 #  - no Git Bash o binário do Docker é nativo do Windows e não entende "/e/...",
 #    então usamos "pwd -W" (-> "E:/...") e desligamos a conversão de path do MSYS.
 #
-# Pré-requisito: a stack no ar pra existir a rede e o banco
-#   docker compose -f Projeto/docker-compose.yml up -d db
+# Pré-requisito: a stack no ar pra existir a rede, o banco e o broker (Redpanda; os testes do backbone de
+# eventos, issue #27, publicam e consomem nele de verdade)
+#   docker compose -f Projeto/docker-compose.yml up -d db redpanda
 # O cache do Maven fica no volume nomeado "gerenciador-eventos-m2" (persiste entre
 # execuções; não é removido por "docker compose down -v").
 
@@ -51,25 +52,60 @@ case "$(uname -s)" in
         ;;
 esac
 
+# Os testes batem num Postgres e num Redpanda reais: sem o container no ar, falha cedo e explica.
+for CONTAINER in gerenciador-db gerenciador-redpanda; do
+    if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != "true" ]; then
+        echo "❌ O container $CONTAINER não está no ar. Rode:"
+        echo "   docker compose -f Projeto/docker-compose.yml up -d db redpanda"
+        echo ""
+        exit 1
+    fi
+done
+
+# O relay e o consumer do gerenciador-backend (ligados no compose desde a #28/#29) compartilham o meu_banco com os testes:
+# drenariam o event_outbox deles e moveriam a projecao de disponibilidade, quebrando o ReservationReplayTest e a prova de
+# overselling do braco naive (que depende do consumer parado). Falha cedo em vez de dar vermelho misterioso.
+if [ -n "$(docker ps -q -f name=^gerenciador-backend$)" ]; then
+    echo "❌ O container gerenciador-backend está rodando: o relay/consumer dele disputam o banco e o Redpanda dos testes."
+    echo "   Pare-o antes: docker stop gerenciador-backend"
+    echo ""
+    exit 1
+fi
+
 REPORTS_DIR="$SCRIPT_DIR/target/surefire-reports"
+
+# Apaga só os relatórios antigos (não o target/ inteiro): o container copia os XMLs novos por
+# cima, então o de uma classe renomeada/movida/removida sobraria e inflaria o total do resumo.
+# Se não conseguir apagar (ex.: pasta criada como root numa execução antiga em Linux), aborta
+# com mensagem clara — seguir com XML velho faria o resumo mentir sem ninguém perceber.
+if ! rm -rf "$REPORTS_DIR"; then
+    echo "❌ Não consegui apagar $REPORTS_DIR (provável dono root de uma execução antiga)."
+    echo "   Rode: sudo rm -rf \"$REPORTS_DIR\" e execute de novo."
+    echo ""
+    exit 1
+fi
 
 # Cria o diretório de saída ANTES do bind-mount (senão o Docker o cria como root).
 mkdir -p "$SCRIPT_DIR/target"
 
 # Rodar tudo dentro do Docker, copiando fonte para /tmp dentro do container
-# Estica o intervalo do job ReadModelRefreshService (@Scheduled) para 1h durante a suíte.
-# Esse job roda em TODOS os contextos Spring em cache (só fechados no fim do JVM) contra o
-# mesmo Postgres, então um refresh disparado pelo contexto de um teste contaminaria o
-# read model event_availability que outro teste observa. Os testes chamam refresh() na mão.
-# (Mesma ideia do @TestPropertySource de ReservationExpiryTest, aqui para toda a suíte.)
+# IDEMPOTENCY_RETENTION_SCAN_MS=3600000: mesma razão para o job IdempotencyKeyRetentionService (#130) —
+# um contexto em cache apagando chaves vencidas concorreria com os testes que envelhecem linhas na mão.
 #
 # RESERVATION_READPATH=cas: pina o caminho de reserva no default previsível para a suíte
 # inteira, mesmo que o Projeto/.env tenha sido setado para "naive" (experimento #11/#12) —
 # senão os testes CAS (ex.: EventWalletTest.testEventoLotado) quebrariam.
+#
+# SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092: o broker interno do compose (o default do application.properties,
+# localhost:9092, não existe dentro do container de teste).
+# EVENTS_CONSUMER_GROUP=gerenciador-eventos-test: os testes têm group próprio, para nunca entrar (e causar
+# rebalance) no group do backend vivo (gerenciador-eventos) que consome do mesmo Redpanda.
 docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
   "${PLATFORM_ARGS[@]}" \
-  -e READMODEL_AVAILABILITY_REFRESH_MS=3600000 \
+  -e IDEMPOTENCY_RETENTION_SCAN_MS=3600000 \
   -e RESERVATION_READPATH=cas \
+  -e SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092 \
+  -e EVENTS_CONSUMER_GROUP=gerenciador-eventos-test \
   -e "MVN_REPO=$CONTAINER_HOME/.m2/repository" \
   -v "$HOST_SRC":/workspace-src:ro \
   -v "$HOST_SRC/target":/workspace-output \

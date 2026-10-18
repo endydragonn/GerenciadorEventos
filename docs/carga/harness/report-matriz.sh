@@ -395,7 +395,7 @@ END {
         printf "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%d</td><td>%.2f</td><td>%s</td><td>%s</td><td>%s</td><td>%.1f</td><td>%.2f</td><td>%s</td><td>%s</td></tr>\n", esc(A[a]), L[l], gN[G[n]], gC[G[n]], cnt[k], mo[k], (sdo[k] >= 0 ? sprintf("%.2f", sdo[k]) : "–"), fmt(mno[k]), fmt(mxo[k]), mp[k], ma[k], (nld[k] ? sprintf("%.1f", sld[k] / nld[k]) : "–"), (nlm[k] ? sprintf("%.1f", slm[k] / nlm[k]) : "–")
     }
     printf "</tbody>\n</table>\n</div>\n"
-    printf "<footer>Gerado por docs/carga/harness/report-matriz.sh a partir de %s. lag obs. = now() − refreshed_at do evento (média das execuções com leitura; “–” = sem leitura). Desvio amostral (n−1); “–” quando há 1 repetição.</footer>\n</div>\n", esc(fonte)
+    printf "<footer>Gerado por docs/carga/harness/report-matriz.sh a partir de %s. lag obs. = applied_at − last_occurred_at da projeção do evento (lag real do consumer) (média das execuções com leitura; “–” = sem leitura). Desvio amostral (n−1); “–” quando há 1 repetição.</footer>\n</div>\n", esc(fonte)
 }
 ' "$CSV" >> "$TMP" || exit 1
 
