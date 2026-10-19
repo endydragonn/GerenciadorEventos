@@ -18,6 +18,9 @@ import org.junit.jupiter.api.TestInstance;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
+import org.springframework.kafka.listener.BatchMessageListener;
+import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.util.AopTestUtils;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -28,6 +31,7 @@ import com.gerenciador.eventos.catalog.EventService;
 import com.gerenciador.eventos.catalog.api.Event;
 import com.gerenciador.eventos.identity.UserService;
 import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.reservation.EventAvailabilityConsumer;
 import com.gerenciador.eventos.reservation.EventAvailabilityProjection;
 import com.gerenciador.eventos.reservation.EventAvailabilityRepository;
 import com.gerenciador.eventos.reservation.EventCapRepository;
@@ -68,6 +72,7 @@ public class EventAvailabilityProjectionTest {
     @Autowired private IdempotentConsumer idempotentConsumer;
     @Autowired private EventStore eventStore;
     @Autowired private DatabaseConnection databaseConnection;
+    @Autowired private KafkaListenerEndpointRegistry registry;
 
     @Test
     public void disponibilidadeEhCapacidadeMenosReservasAtivasDepoisDoConsumer() throws Exception {
@@ -201,6 +206,16 @@ public class EventAvailabilityProjectionTest {
         } finally {
             ReflectionTestUtils.setField(servico, "readPath", original);
         }
+    }
+
+    /** #146: o listener da projeção é em lote, com o teto de {@code events.consumer.batch-size} (default 500). */
+    @Test
+    public void listenerDaProjecaoEhEmLoteComOTetoConfigurado() {
+        MessageListenerContainer container = registry.getListenerContainer(EventAvailabilityConsumer.LISTENER_ID);
+        assertTrue(container.getContainerProperties().getMessageListener() instanceof BatchMessageListener,
+                "o listener recebe List<ConsumerRecord>");
+        assertEquals("500", container.getContainerProperties().getKafkaConsumerProperties()
+                .getProperty("max.poll.records"));
     }
 
     // ===================== helpers =====================

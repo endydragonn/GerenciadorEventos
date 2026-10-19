@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -11,6 +12,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.kafka.listener.BatchListenerFailedException;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
@@ -20,7 +22,8 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**
  * Base do consumer idempotente das projeções assíncronas (ADR Event-Backbone-Event-Store, seção 2). Ligado por
- * {@code events.consumer.enabled}. O listener de cada projeção (#28/#29) só chama {@link #onMessage}.
+ * {@code events.consumer.enabled}. O listener de cada projeção só chama {@link #onMessage} (uma mensagem por
+ * transação) ou {@link #onBatch} (um lote por transação, #146; é o que a projeção de disponibilidade usa).
  *
  * <p>Por mensagem, numa transação de banco só (checkpoint + projeção juntos; o offset só é comitado depois, por ack
  * manual):</p>
@@ -36,6 +39,19 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
  *       retry limitado e, esgotado, o dead-letter topic ({@link EventsKafkaConfig}). Já erro de banco/conexão
  *       ({@link SQLException}) é transitório: retry sem limite, nunca DLT.</li>
  * </ol>
+ *
+ * <p><b>Em lote</b> ({@link #onBatch}): o passo a passo acima vale para cada mensagem, na ordem, mas na MESMA
+ * transação (um commit e um ack por lote, em vez de um por mensagem). Duplicata e várias versões do mesmo stream no
+ * lote funcionam sem tratamento extra: a leitura do checkpoint, na mesma conexão, enxerga o avanço ainda não
+ * comitado. Perder a corrida do CAS para outro aplicador desfaz e refaz o lote inteiro.</p>
+ *
+ * <p><b>Falha no meio do lote</b> (mensagem {@code i}: payload inválido, buraco, erro de banco/projeção): a transação
+ * inteira é desfeita, as mensagens {@code 0..i-1} são reaplicadas e comitadas numa transação nova, e só então lança
+ * {@link BatchListenerFailedException}{@code (i)}. O error handler comita o offset de {@code 0..i-1} (por isso o banco
+ * já tem que ter comitado: o último evento de um stream nunca seria preenchido como "buraco") e reentrega só de
+ * {@code i} em diante, aplicando a política da {@link EventsKafkaConfig} à causa; só a mensagem {@code i} vai ao DLT.
+ * Nunca escapa exceção crua do lote: uma exceção crua cairia no handler de lote "genérico", que manda o lote inteiro
+ * ao DLT quando o retry esgota e não chama o {@code RetryListener} por mensagem.</p>
  */
 @Component
 @ConditionalOnProperty(name = "events.consumer.enabled", havingValue = "true")
@@ -85,20 +101,88 @@ public class IdempotentConsumer {
         }
     }
 
+    /**
+     * Ponto de entrada do {@code @KafkaListener} em lote (#146): aplica as mensagens, em ordem, numa transação só e
+     * dá o ack do lote depois do commit.
+     *
+     * @return um item por mensagem, na mesma ordem: o envelope se foi aplicada, ou vazio se descartada
+     * @throws BatchListenerFailedException falha na mensagem de índice {@code i}; a causa é o que a
+     *         {@link EventsKafkaConfig} classifica ({@link InvalidEventMessageException}, {@link EventGapException},
+     *         {@link SQLException}...). As anteriores já estão comitadas no banco e o ack NÃO é dado (ver a doc da classe)
+     */
+    public List<Optional<EventEnvelope>> onBatch(Projection projection, List<String> values, Acknowledgment ack) {
+        List<Optional<EventEnvelope>> resultado;
+        try {
+            resultado = aplicarLote(projection, values);
+        } catch (FalhaNoLote f) {
+            throw falhaComPrefixoComitado(projection, values, f);
+        } catch (SQLException | RuntimeException ex) {
+            throw new BatchListenerFailedException("Lote não comitado", ex, 0);
+        }
+        ack.acknowledge();
+        return resultado;
+    }
+
+    /** Desfeito o lote, comita o que veio antes da mensagem culpada e devolve a exceção que o error handler espera. */
+    private BatchListenerFailedException falhaComPrefixoComitado(Projection projection, List<String> values,
+            FalhaNoLote f) {
+        try {
+            aplicarLote(projection, values.subList(0, f.indice));
+        } catch (SQLException | RuntimeException ex) {
+            return new BatchListenerFailedException("Prefixo do lote não comitado", ex, 0);
+        }
+        return new BatchListenerFailedException("Falha na mensagem de índice " + f.indice, f.getCause(), f.indice);
+    }
+
+    /**
+     * Uma transação para as mensagens, em ordem (parse incluído: payload inválido é falha da mensagem como outra
+     * qualquer). Devolve, por mensagem, o envelope se foi aplicada ou vazio se descartada.
+     */
+    private List<Optional<EventEnvelope>> aplicarLote(Projection projection, List<String> values) throws SQLException {
+        if (values.isEmpty()) {
+            return List.of();
+        }
+        return emTransacao(conn -> {
+            List<Optional<EventEnvelope>> aplicadas = new ArrayList<>(values.size());
+            for (int i = 0; i < values.size(); i++) {
+                Boolean aplicou;
+                EventEnvelope msg;
+                try {
+                    msg = parse(values.get(i));
+                    aplicou = tentar(conn, projection, msg);
+                } catch (SQLException | RuntimeException ex) {
+                    throw new FalhaNoLote(i, ex);
+                }
+                if (aplicou == null) {
+                    return null; // perdeu a corrida: desfaz o lote inteiro e refaz
+                }
+                aplicadas.add(aplicou ? Optional.of(msg) : Optional.empty());
+            }
+            return aplicadas;
+        });
+    }
+
     /** Devolve {@code true} se aplicou algum evento, {@code false} se descartou. Lança se não pode avançar. */
     public boolean process(Projection projection, EventEnvelope msg) throws SQLException {
-        // Termina: cada nova tentativa só acontece porque outro aplicador avançou o checkpoint (limitado por msg.version).
+        return emTransacao(conn -> tentar(conn, projection, msg));
+    }
+
+    /**
+     * Roda o corpo numa transação e comita. Corpo que devolve {@code null} = perdeu a corrida do checkpoint para outro
+     * aplicador: desfaz e repete. Termina: cada nova tentativa só acontece porque outro aplicador avançou o checkpoint.
+     */
+    private <T> T emTransacao(Corpo<T> corpo) throws SQLException {
         while (true) {
             try (Connection conn = db.getConnection()) {
                 conn.setAutoCommit(false);
                 try {
-                    Boolean aplicou = tentar(conn, projection, msg);
-                    if (aplicou == null) {
+                    T resultado = corpo.executar(conn);
+                    if (resultado == null) {
                         conn.rollback();
                         continue;
                     }
                     conn.commit();
-                    return aplicou;
+                    return resultado;
                 } catch (SQLException | RuntimeException ex) {
                     conn.rollback();
                     throw ex;
@@ -106,6 +190,22 @@ public class IdempotentConsumer {
                     conn.setAutoCommit(true);
                 }
             }
+        }
+    }
+
+    @FunctionalInterface
+    private interface Corpo<T> {
+        T executar(Connection conn) throws SQLException;
+    }
+
+    /** A mensagem de índice {@code indice} do lote falhou com {@link #getCause()}; só atravessa o {@code emTransacao}. */
+    private static final class FalhaNoLote extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        private final int indice;
+
+        FalhaNoLote(int indice, Throwable causa) {
+            super(causa);
+            this.indice = indice;
         }
     }
 

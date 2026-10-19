@@ -1,9 +1,10 @@
 package com.gerenciador.eventos.reservation;
 
 import java.nio.charset.StandardCharsets;
-import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
 
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -24,6 +25,13 @@ import com.gerenciador.eventos.shared.events.IdempotentConsumer;
  * Listener do tópico {@code reservation.wallet} que alimenta {@link EventAvailabilityProjection} (issue #29). Só com
  * {@code events.consumer.enabled=true}. Toda a idempotência (checkpoint por stream, conferência do {@code eventId},
  * ack manual depois do commit, política de erro) é do {@link IdempotentConsumer} da #27.
+ *
+ * <p><b>Em lote (#146):</b> o listener recebe até {@code events.consumer.batch-size} registros por poll
+ * ({@code EVENTS_CONSUMER_BATCH_SIZE}, default 500; vira o {@code max.poll.records} só deste listener) e o
+ * {@link IdempotentConsumer#onBatch} aplica o lote numa transação e dá um ack. Com pouca carga o lote tem 1 registro
+ * (igual a antes); com o consumer atrasado, até o tamanho máximo. Só este listener é em lote. O lag por evento só é
+ * registrado quando o lote inteiro tem sucesso: se ele falha, o prefixo comitado pelo {@code onBatch} não aparece no
+ * {@code events.lag}.</p>
  *
  * <p>{@code idIsGroup = false} é obrigatório: por padrão o {@code id} do listener vira o {@code group.id}, e aí o
  * {@code spring.kafka.consumer.group-id} ({@code EVENTS_CONSUMER_GROUP}) não valeria.</p>
@@ -54,15 +62,23 @@ public class EventAvailabilityConsumer {
         return TopicBuilder.name(ReservationEvents.STREAM_TYPE).partitions(1).replicas(1).build();
     }
 
-    @KafkaListener(id = LISTENER_ID, idIsGroup = false, topics = ReservationEvents.STREAM_TYPE)
-    void ouvir(ConsumerRecord<String, String> record, Acknowledgment ack) throws SQLException {
-        consumer.onMessage(projection, record.value(), ack).ifPresent(e -> registrarLag(e, record));
+    @KafkaListener(id = LISTENER_ID, idIsGroup = false, topics = ReservationEvents.STREAM_TYPE, batch = "true",
+            properties = "max.poll.records=${events.consumer.batch-size:500}")
+    void ouvir(List<ConsumerRecord<String, String>> records, Acknowledgment ack) {
+        List<Optional<EventEnvelope>> aplicadas = consumer.onBatch(projection,
+                records.stream().map(ConsumerRecord::value).toList(), ack);
+        if (lagLog.isDebugEnabled()) {
+            for (int i = 0; i < records.size(); i++) {
+                registrarLag(aplicadas.get(i), records.get(i));
+            }
+        }
     }
 
-    private void registrarLag(EventEnvelope e, ConsumerRecord<String, String> record) {
-        if (!lagLog.isDebugEnabled()) {
+    private void registrarLag(Optional<EventEnvelope> aplicada, ConsumerRecord<String, String> record) {
+        if (aplicada.isEmpty()) {
             return;
         }
+        EventEnvelope e = aplicada.get();
         Instant aplicado = Instant.now();
         Header h = record.headers().lastHeader("publishedAt");
         Instant publicado = h == null ? null : Instant.parse(new String(h.value(), StandardCharsets.UTF_8));

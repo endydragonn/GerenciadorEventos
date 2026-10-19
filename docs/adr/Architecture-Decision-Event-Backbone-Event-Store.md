@@ -137,6 +137,13 @@ stream (nenhum evento seguinte o preencheria como "buraco"):
   fixo (5 × 1 s por padrão) e depois DLT;
 - **payload inválido** (JSON quebrado, sem os campos obrigatórios): DLT direto, sem retry.
 
+**Em lote (#146).** O listener da projeção de disponibilidade recebe as mensagens em lote (`max.poll.records`,
+`EVENTS_CONSUMER_BATCH_SIZE`) e aplica o lote numa única transação, uma mensagem após a outra com as mesmas regras acima
+(conferência do `eventId`, descarte de reenvio, buraco, CAS do checkpoint); um commit e um ack por lote. Falha na mensagem
+`i`: o lote é desfeito, as `0..i-1` são comitadas e o `spring-kafka` recebe `BatchListenerFailedException(i)`, então a
+política de erro acima vale por mensagem (só a `i` vai ao DLT). Na sobreposição de dois consumers (rebalance) os lotes podem
+tomar os mesmos locks de linha do checkpoint em ordens diferentes: o `40P01` (deadlock) é transitório e se recupera pelo retry.
+
 **Catch-up** (o "poller ou `pg_cron`" do aceite da #27) = esse consumer: o que ficou para trás vem do broker, e o buraco é preenchido relendo o `event_store`. Para começar do zero, há o replay abaixo. Não há poller nem `pg_cron` à parte.
 
 Checkpoint + projeção na **mesma transação de banco**; o offset só é comitado depois desse commit
@@ -207,7 +214,9 @@ Pontos: `occurredAt` (append) → `publishedAt` (header do relay) → `applied_a
 A linha da projeção de disponibilidade guarda `applied_at` e o `occurredAt` do último evento
 aplicado. `occurredAt` e `applied_at` são gravados com `clock_timestamp()`, não `now()`. O `now()` é
 o início da transação e, no braço `cas`, incluiria a espera pelo lock da linha quente de `eventcap`.
-Como o append é o último comando antes do commit, ali `clock_timestamp()` ≈ commit. Métricas:
+Como o append é o último comando antes do commit, ali `clock_timestamp()` ≈ commit. No consumer em lote (#146) o
+`applied_at` é a hora do statement dentro de uma transação de até N mensagens, não a do commit: `applied_at − last_occurred_at`
+pode subestimar o lag visível em até a duração do lote (o `events.lag` por evento é medido depois do commit). Métricas:
 
 - **lag por evento** = `applied_at − occurredAt`, separável em relay (`publishedAt − occurredAt`) e
   consumer (`applied_at − publishedAt`), registrado pelo consumer (log/histograma);

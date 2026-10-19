@@ -30,6 +30,10 @@ import org.springframework.util.backoff.FixedBackOff;
  * O {@code RetryListener} loga em ERROR a partir da {@code events.consumer.retry.error-after-attempts}-ésima tentativa
  * (default 10) de uma mesma mensagem, para o retry sem limite não esconder um consumer travado.
  * O DLT é {@code <tópico>.DLT}, com partição escolhida pela chave (não precisa ter as mesmas partições do tópico).
+ *
+ * <p><b>Listener em lote (#146):</b> a mesma política vale por mensagem. O {@link IdempotentConsumer#onBatch} lança
+ * {@code BatchListenerFailedException(i)} com a causa de sempre; o handler comita o offset de {@code 0..i-1}, aplica o
+ * backoff/classificação à causa (por isso {@code temCausa} percorre as causas) e só a mensagem {@code i} vai ao DLT.</p>
  */
 @Configuration
 @ConditionalOnProperty(name = "events.consumer.enabled", havingValue = "true")
