@@ -68,7 +68,7 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 27 | #28 | fechada — `catalog` em CQRS + ES (5 eventos, projeção inline `event`/`eventpresenter`, replay) | #142 |
 | 28 | #29 | fechada — lado wallet de `reservation` em ES (híbrido com o CAS); disponibilidade do braço naive como projeção assíncrona com lag real | #143 |
 | 29 | #30 | fechada — checkpoint ES-native ponta a ponta; diagrama `docs/arquitetura/fase6-cqrs-es.md` | #144 |
-| 30 | #31 | em PR — Rodada 2 em `Projeto/carga/results/04-fase6-es`, ponto 2 em `docs/artigo/experimento-monolito.md` (fecha no merge) | a definir |
+| 30 | #31 | fechada — Rodada 2 em `Projeto/carga/results/04-fase6-es`, ponto 2 em `docs/artigo/experimento-monolito.md` | #148 |
 | 31–46 | #32–#47 | abertas | — |
 | 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
 
@@ -84,12 +84,12 @@ endurecer schema, cobertura, transações do `updateEvent`, N+1/pool); #78 (BFF 
 deny-by-default, PR #79), #83 (quality gates, PR #85), #86 (PR #88), #92 (`/actuator/health`,
 PR #93) e #67 fechadas; #81, #84, #89 abertas. Da Fase 5: #129 (PK da idempotência por usuário, PR #137), #130 (retenção
 da `idempotency_key`, PR #139), #131 (`run-tests.sh` limpa `surefire-reports`, PR #135) e #136 (`verify-20260901` com o init-script 10, PR #140)
-fechadas na `Fase_6`; #133 (CORS `*` com credenciais) aberta. #146 (consumer da projeção de disponibilidade aplica em lote, PR #147) fechada, follow-up da Rodada 2 (#31). PR #90 adicionou os scripts de teste de carga
+fechadas na `Fase_6`; #133 (CORS `*` com credenciais) aberta. #146 (consumer da projeção de disponibilidade aplica em lote, PR #147) e #149 (GUID do plano Alto desempenho nos scripts de setup, PR #150) fechadas, follow-ups da Rodada 2 (#31). PR #90 adicionou os scripts de teste de carga
 (disputa de vagas e taxa fixa/RPM) em `Projeto/carga/`.
 
 Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feitas (marco de banca atingido); Fase 4: #17 → #18
 → #19/#20/#21 → #22 feitas (ponto 1 da série; PR #122); Fase 5: #23 → #24/#25 feitas (PR #134); Fase 6: #26 → #27 → #28/#29 → #30 feitas (na `Fase_6`);
-Rodada 2 (#31, ponto 2 da série) feita em 2026-10-19, em PR.
+Rodada 2 (#31, ponto 2 da série) feita em 2026-10-19 (PR #148).
 
 ## Fase 0 — Desbloqueio de ambiente
 
@@ -265,7 +265,7 @@ Rodada 2 (#31, ponto 2 da série) feita em 2026-10-19, em PR.
 > ES, híbrido com o CAS (28): a disponibilidade do braço `naive` virou projeção assíncrona alimentada pelo consumer, com lag
 > real (`applied_at`/`last_occurred_at`, log `events.lag`, offset lag), e o refresh por timer da Fase 2 saiu. Checkpoint
 > ponta a ponta e diagrama `docs/arquitetura/fase6-cqrs-es.md` (29). O contrato `/bff/**` não mudou. A Rodada 2 (item 30) foi
-> feita em 2026-10-19 (`Projeto/carga/results/04-fase6-es`; ponto 2 em `docs/artigo/experimento-monolito.md`), em PR.
+> feita em 2026-10-19 (`Projeto/carga/results/04-fase6-es`; ponto 2 em `docs/artigo/experimento-monolito.md`; PR #148).
 
 ### 25. ADR — backbone de eventos + event store + contrato do evento de domínio
 `fase/6` `area/eventos` `area/backend`
