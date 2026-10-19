@@ -3,16 +3,21 @@
 > **Status: rascunho de seção do artigo (issue #15).** Os resultados das rodadas 1a e 1b e da escada de
 > carga (issues #12, #13 e #14) foram preenchidos com as rodadas de 2026-10-16. O **ponto 1 da série** (monólito
 > CRUD + pooler) foi medido depois, com as rodadas 1a e 1b repetidas com o Supavisor (issue #22). Em 2026-10-17 vieram
-> as rodadas de isolamento do pooler e a escada X pelo pooler.
+> as rodadas de isolamento do pooler e a escada X pelo pooler. O **ponto 2 da série** (monólito com CQRS + ES, issue #31)
+> foi medido em 2026-10-19, com o braço ingênuo lendo a projeção assíncrona real.
 > Revisão com o orientador pendente. Caminhos de arquivo são relativos à raiz do repositório (nos comandos
 > `make`, relativos a `Projeto/carga`); os termos seguem o glossário de `CONTEXT.md`.
 >
-> **Escopo dos números.** Há dois conjuntos, que **não se misturam**:
+> **Escopo dos números.** Há três conjuntos, que **não se misturam**:
 >
 > - **Ponto 1 (pós-pooler, "monólito CRUD + pooler").** As rodadas 1a e 1b repetidas em 2026-10-16 com o
 >   Supabase Postgres 17 e o Supavisor (issue #22). É a linha de base oficial da série de 3 pontos (`CONTEXT.md`,
 >   "Ponto da série"): subseção "Ponto 1 (pós-pooler)" dos Resultados. A escada X pelo pooler (X ≈ 78k RPM) e as
 >   rodadas de isolamento foram feitas em 2026-10-17 (subseções "Isolamento do pooler" e "Limiar X pelo pooler").
+> - **Ponto 2 (CQRS + ES no monólito, Rodada 2).** A matriz CAS × ingênuo, as escadas X e o aleatório de 45 min repetidos
+>   em 2026-10-19 (issue #31) com `catalog` e `reservation` em event sourcing, relay e consumer no Redpanda, e o braço
+>   ingênuo lendo a projeção assíncrona: subseção "Ponto 2 (CQRS + ES no monólito, Rodada 2, 2026-10-19)" dos
+>   Resultados. Compara-se com o ponto 1, não com o pré-pooler. O lag é medido, não configurado.
 > - **Pré-pooler (referência, "monólito + HikariCP").** A matriz 1a/1b anterior e a escada de carga (limiar X),
 >   com o backend direto no PG 16 (pool e `max_connections` informados no Setup). Ficam como histórico e como
 >   comparação. O X pré-pooler (97k) é a referência do X pelo pooler.
@@ -101,14 +106,28 @@ e o estado do banco. Rodadas de 2026-10-16, por volta de 21:38 a 21:49 (horário
 
 Fonte: `Projeto/carga/results/03-supabase-pooler/README.md`. O CSV não grava essas colunas.
 
+**Condições do ponto 2 (Rodada 2, CQRS + ES).** Mesmas máquinas e mesmo protocolo; mudaram o código, a rede e o estado
+do banco. Rodadas de 2026-10-19. Fonte: `Projeto/carga/results/04-fase6-es/README.md` e
+`baseline-20261019-074604.txt`.
+
+| Componente | Valor |
+|---|---|
+| Commit | `1ee6fbe` (`main` com o merge do PR #145, Fase 6), host e gerador. No bloco 5 o backend rodou uma imagem local `:146`, montada com as classes da branch `Issue-146`; a coluna `commit` dos CSVs continua `1ee6fbe` |
+| Conexões e Tomcat | `max_connections` 300; pool do Supavisor 245; HikariCP 1000; Tomcat com **300** threads (o ponto 1 usou 200) |
+| Event backbone | Redpanda em modo dev-container (sem fsync), só na rede `gerenciador-net`; relay e consumer ligados no backend; no bloco 5, consumer em lote (até 500 mensagens por transação) e, no 3b, consumer desligado (`EVENTS_CONSUMER_ENABLED=false`, override local não versionado) |
+| Rede | **Wi-Fi**, com IPs novos (o host trocou de IP durante a sessão). Baseline: HTTP p50 26,6 / p95 42,9 ms (n = 30), ping médio 18,55 ms (máx. 180 ms, 0 de 100 perdidos); nas rodadas anteriores, no cabo, ~14,9 / 19 ms |
+| Estado do banco | **Acumulado** nos blocos 1 a 3b (matrizes ingênuo e CAS, escadas com e sem consumer, sem limpeza entre eles); **limpo antes de cada teste** do bloco 4 em diante (TRUNCATE em todas as tabelas, tópicos e consumer group do Redpanda apagados, backend reiniciado) |
+| Braço e lag | `RESERVATION_READPATH` `naive` (bloco 1) e `cas` (demais); `lag_ms` = 0 (não há mais timer) |
+| Ferramentas do gerador | AMD Ryzen 5 7600, k6 v2.2.0, `psql` 16.15, plano de energia "Alto desempenho" ativado à mão, portas dinâmicas TCP `start=10000 num=55535` |
+
 **Latência base HTTP (não comparável; não subtraída).** O `setup-gerador.ps1` mediu, em 2026-10-04, 30
 requisições `GET /actuator/health` cronometradas com `Stopwatch` em torno de `Invoke-WebRequest` (PowerShell):
 p50 14,9 / p95 19,0 / máx 21,1 ms, numa única medição (`docs/carga/setup.md`, seção 5). Esse valor vem de
 outro cliente que não o k6 e de um endpoint que consulta o Postgres; portanto não é a latência de rede (RTT) e
 não é comparável ao tempo de requisição do k6 (excede, por exemplo, a latência de reserva medida pelo k6 nas
 rodadas preliminares). Por isso **não é subtraído**: as latências do k6 são reportadas como medidas, com o RTT
-embutido e não isolado. O ICMP não respondeu (100 pacotes sem retorno), então não há ping nem perda de
-pacotes. Nova medição em 2026-10-16, antes das escadas da #14, pelo mesmo método: p50 14,7 / p95 18,2 / máx
+embutido e não isolado. Nessas rodadas (até o ponto 1) o ICMP não respondeu (100 pacotes sem retorno), então não há
+ping nem perda de pacotes; no ponto 2 o ping respondeu (ver "Condições do ponto 2", acima). Nova medição em 2026-10-16, antes das escadas da #14, pelo mesmo método: p50 14,7 / p95 18,2 / máx
 20,1 ms (n = 30; `Projeto/carga/results/02-hikari/smoke-20261016/baseline-20261016-162438.txt`); de novo maior que a
 latência de reserva do k6 nos degraus baixos (p95 de 7,7 a 10,9 ms na `degraus-953959`).
 
@@ -178,8 +197,8 @@ As definições seguem `CONTEXT.md`. A tabela diz como cada uma é coletada.
 | **Overselling primário** | Evento com `confirmed` maior que `capacity`. Coluna `oversell` = `max(0, confirmed − capacity)`, a magnitude. | `psql` remoto no Postgres do host (fonte de verdade), depois da rajada. |
 | **Overselling secundário** | `pending + confirmed` maior que `capacity`. Derivável das colunas `pending` e `confirmed`. | Mesma leitura. |
 | **Tolerância no braço CAS** | 0 nas duas métricas: igual a `capacity` passa; maior falha (código 3 do runner). | Verificada pelo runner a cada execução. |
-| **Lag** | Intervalo de refresh do read model (`READMODEL_AVAILABILITY_REFRESH_MS`); coluna `lag_ms`. É a variável independente do braço ingênuo. O job usa `fixedDelay`, então o período efetivo é o lag mais a duração de cada refresh. | Configurado no host; rotulado no CSV. |
-| **Lag observado** | `lag_obs_disparo` (última amostra antes do disparo) e `lag_obs_max` (maior valor entre essa amostra e as da rajada); `-1` = sem leitura. | `now() − refreshed_at` do evento (relógio do Postgres), amostrado a cada ~250 ms pelo gerador por `psql` remoto; o instante da amostra é o do relógio do gerador, o mesmo do k6. |
+| **Lag** | Intervalo de refresh do read model (`READMODEL_AVAILABILITY_REFRESH_MS`); coluna `lag_ms`. É a variável independente do braço ingênuo **no ponto 1**; no ponto 2 não há timer, `lag_ms` vale 0 e o lag é medido (`Lag observado`). O job usa `fixedDelay`, então o período efetivo é o lag mais a duração de cada refresh. | Configurado no host; rotulado no CSV. |
+| **Lag observado** | `lag_obs_disparo` (última amostra antes do disparo) e `lag_obs_max` (maior valor entre essa amostra e as da rajada); `-1` = sem leitura. | Ponto 1: `now() − refreshed_at` do evento (relógio do Postgres). **Ponto 2:** `applied_at − last_occurred_at` da linha do evento em `event_availability`, isto é, a idade do último evento aplicado pelo consumer; a linha só nasce com a 1ª reserva, então `lag_obs_disparo` vale -1 sempre e só `lag_obs_max` traz leitura, como limite inferior (ameaça 20). Nos dois, amostrado a cada ~250 ms (`-PollMs`) pelo gerador por `psql` remoto; o instante da amostra é o do relógio do gerador, o mesmo do k6. |
 | **Latência da reserva** | p50, p95 e p99 de `POST /bff/event-wallets`, em ms. | k6 no gerador; reportada como medida, sem subtrair a latência base HTTP (ver Setup: não é comparável). |
 | **Vazão** | Matriz: tentativas por segundo na janela da rajada (1ª iteração iniciada até a última terminada), sem os logins do `setup()`. Escada: reservas por segundo respondidas sem 5xx. | k6 (resumo da execução). |
 | **Taxa de 5xx** | `erros_5xx / reservas` (só os 5xx da reserva, sobre as reservas do degrau), como fração. Os 5xx da confirmação ficam em `erros_5xx_confirma`, informativos, fora do X. Respostas inesperadas (4xx fora de "lotado", timeout, conexão recusada) vão para `outros` e não entram em X. | k6, por degrau. |
@@ -214,7 +233,9 @@ versionado em `1fbe12b` como `matriz.csv`). O gráfico de cada etapa sai de `rep
 (HTML regenerável, fora do git; `Projeto/carga/README.md`, "Resultados"). A escada (#14) gera
 `Projeto/carga/results/02-hikari/degraus-<id>.csv` e `summary-degraus-<id>.json` (a escada pelo pooler, em `03-supabase-pooler/`); o gráfico sai de
 `make report-degraus`. Resultado como medido: lags e execuções não são descartados nem repetidos para
-melhorar a curva (só as repetições inválidas são refeitas, pelas regras do runner).
+melhorar a curva (só as repetições inválidas são refeitas, pelas regras do runner). O **ponto 2** (Rodada 2,
+`Projeto/carga/results/04-fase6-es/`) vem depois do "Limiar X pelo pooler", na subseção "Ponto 2 (CQRS + ES no monólito,
+Rodada 2, 2026-10-19)".
 
 ### Ponto 1 (pós-pooler): overselling × lag e latência
 
@@ -430,6 +451,181 @@ Como no pré-pooler, o X é o **da linha quente de um evento** (mapeamento seque
 (#113). **Impacto:** as regras de autoescala 50/80 (#111 e #112), que usam o X, passam a ter como base ≈ 78k pelo pooler,
 não 97k (as issues não foram alteradas).
 
+### Ponto 2 (CQRS + ES no monólito, Rodada 2, 2026-10-19)
+
+Rodada 2 do experimento (issue #31), contra a `main` em `1ee6fbe` (merge do PR #145, Fase 6), capacidade 20 e 100% de
+confirmação. As condições estão em "Condições do ponto 2" (Setup). Fonte: `Projeto/carga/results/04-fase6-es/` (o
+`README.md` da etapa descreve os 6 blocos; `matriz-naive.csv`, `matriz-cas.csv`, `degraus-*.csv`,
+`resultados-aleatorio.csv` e as amostras de lag do host em `host-lag/`). Nenhuma repetição foi descartada. Os agregados
+foram recalculados dos CSVs. As ressalvas da rodada (Wi-Fi, banco acumulado em parte dos blocos, imagem local da #146)
+estão nas ameaças 16 a 21 e valem para toda a subseção. Compara-se com o ponto 1 (subseções anteriores), com o
+pré-pooler só como referência do X.
+
+**O que mudou em relação ao ponto 1.**
+
+- `catalog` e o lado wallet de `reservation` passaram a event sourcing: cada command grava o evento no `event_store` e
+  no `event_outbox` na mesma transação do estado (`docs/arquitetura/fase6-cqrs-es.md`). O `eventcap` e o CAS continuam
+  relacionais e síncronos.
+- O **relay** (outbox → Redpanda) e o **consumer** (tópico → projeção) rodam no processo do backend. O broker é um
+  Redpanda em modo dev-container, só na rede interna do compose.
+- O braço `naive` deixou de ler um read model recalculado por timer: lê a projeção assíncrona `event_availability`,
+  alimentada pelo consumer do tópico. O `ReadModelRefreshService` saiu.
+- O **lag virou variável medida**, não controlada (`docs/adr/Architecture-Decision-Event-Backbone-Event-Store.md`,
+  seção 4). A coluna `lag_ms` vale sempre 0; o `lag_obs_*` é a idade do último evento aplicado na linha do evento
+  (`applied_at − last_occurred_at`), amostrada pelo gerador durante a rajada (definição em Métricas). A variável
+  independente passa a ser a carga (N concorrentes na matriz).
+- O braço `cas` não mudou. O runner da matriz espera o pipeline ficar ocioso (`Wait-Estavel`) antes de cada repetição.
+
+**Overselling × lag.** Matrizes de N ∈ {100, 200}, 5 repetições cada, nos dois braços (20 linhas):
+
+| Braço | N | `confirmed` | `oversell` | `lag_obs_max` com leitura (ms) |
+|---|---|---|---|---|
+| `naive` | 100 | 100 em todas | 80 em todas (teto) | 19 a 171 (4 de 5 repetições) |
+| `naive` | 200 | 200 em todas | 180 em todas (teto) | 53 a 280 (3 de 5) |
+| `cas` | 100 | 20 em todas | 0 em todas | 61 a 112 (4 de 5) |
+| `cas` | 200 | 20 em todas | 0 em todas | 110 a 116 (2 de 5) |
+
+- **CAS: `oversell = 0` nas 10 linhas**, com `confirmed = 20` e `pending = 0` em todas (80 e 180 clientes recusados como
+  lotado). H1 se sustenta no ponto 2. 0 erros 5xx nos dois braços.
+- **Ingênuo: overselling máximo nas 10 repetições** (80 com N = 100; 180 com N = 200), com todos os N clientes aceitos e
+  confirmados. No ponto 1 o ingênuo oversellou nas 40 repetições, mas ficou no teto em 36 de 40 (quatro rajadas
+  atravessaram um refresh); no pré-pooler, no teto em 40 de 40. Com a projeção real, o teto voltou a ser universal.
+- **A hipótese H2 (overselling cresce com o lag) não pode mais ser testada pelo lag**, porque o lag deixou de ser
+  configurado. O que a rodada mostra é o outro lado: com o lag que o pipeline de fato tem (append → relay → Redpanda →
+  consumer), a janela basta para o overselling ser total, isto é, no teto em 10 de 10 repetições. O `lag_obs` de 19 a
+  280 ms que acompanha esse resultado é um limite inferior (ameaça 20).
+- **Lag observado.** Das 20 linhas, 13 têm `lag_obs_max` com leitura, entre 19 e 280 ms (média de 116,5 ms; 129,4 no
+  ingênuo e 101,3 no CAS). `lag_obs_disparo` vale -1 nas 20, e isso é **estrutural, não um achado**: a linha do evento
+  na projeção só nasce com a primeira reserva, e o disparo usa a última amostra anterior à rajada (`rodar-matriz.ps1`,
+  comentário acima de `Wait-Evento`; `lib-matriz.ps1`, `Get-LagRajada`). Em 7 linhas (3 do ingênuo, 4 do CAS) nem
+  `lag_obs_max` teve leitura, isto é, a linha do evento não apareceu na projeção durante a amostragem. **O `lag_obs` é
+  um limite inferior** do atraso da projeção: mede a idade do último evento já aplicado, não quanto a projeção está
+  atrás do "agora", e só existe depois do primeiro evento aplicado.
+- **Lag de consumer do host.** Na amostra `host-lag/lag-poll-cas-*` (80 amostras em cerca de 2 min, nomeada para a matriz
+  CAS; a cobertura completa da matriz não foi conferida), o offset lag do grupo chegou a no máximo 21 mensagens e o
+  `event_outbox` a no máximo 3. Para o ingênuo não há amostra do host.
+
+**Latência e vazão das matrizes.** Média de 5 repetições, comparada com o ponto 1 (`03-supabase-pooler/matriz.csv`,
+Tomcat 200, banco limpo, cabo). Para o ingênuo, o ponto 1 é a média das 20 repetições (4 lags × 5), pois o lag não
+tem efeito mensurável sobre p50, p95 e vazão no ponto 1. O p95 do ponto 2 vem com mín–máx:
+
+| Braço | N | p50 ponto 1 → 2 (ms) | p95 ponto 1 → 2 (ms) | Vazão ponto 1 → 2 (tentativas/s) |
+|---|---|---|---|---|
+| `cas` | 100 | 84,0 → 107,6 | 103,9 → 130,9 (118,9–147,2) | 870,9 → 555,8 (−36,2%) |
+| `cas` | 200 | 115,8 → 132,6 | 155,3 → 166,1 (139,3–216,1) | 1178,5 → 813,2 (−31,0%) |
+| `naive` | 100 | 74,0 → 65,2 | 122,0 → 112,8 (70,3–150,2) | 730,2 → 547,6 (−25,0%) |
+| `naive` | 200 | 86,7 → 99,5 | 150,6 → 184,3 (164,5–223,8) | 1077,0 → 707,9 (−34,3%) |
+
+- **CAS:** o p95 sobe 26% com N = 100 e 7% com N = 200; neste último os intervalos de p95 entre repetições se
+  sobrepõem (125,5–203,7 no ponto 1; 139,3–216,1 no ponto 2), então a diferença não é firme. A vazão cai de 31% a 36%.
+- **Ingênuo:** o p95 muda −8% com N = 100 (intervalos sobrepostos) e +22% com N = 200; a vazão cai de 25% a 34%.
+- **A comparação certa do CAS é com o Tomcat 300.** O ponto 1 foi medido com 200 threads, e o ponto 2 com 300. A matriz
+  CAS do ponto 1 refeita com 300 threads (`03-supabase-pooler/matriz-tomcat300.csv`, 2026-10-17) deu p50 de 75,3 e
+  92,6 ms, p95 de 91,9 e 114,4 ms e vazão de 1006,3 e 1514,7 tentativas/s (N = 100 e 200). Contra essa linha, o CAS do
+  ponto 2 tem p95 cerca de 42% (N = 100) e 45% (N = 200) maior, e a vazão com N = 200 é 46% menor.
+- **O que não se atribui ao ES:** a queda de vazão e o aumento de latência vêm junto de três fatores que mudaram ao
+  mesmo tempo: o append do evento no caminho quente, a rede em Wi-Fi (baseline de HTTP de 26,6 / 42,9 ms, contra
+  ~15 / 19 ms no cabo) e o banco acumulado dos blocos 1 e 2 (ameaças 16 e 17). Os dados não separam os três. O
+  overselling, ao contrário, está no teto (ingênuo) ou em zero (CAS) em qualquer um desses cenários.
+
+**Limiar X: o custo por camada.** Escada do braço CAS, 200 usuários, `MAX_VUS` 3000, mapeamento sequencial (a mesma
+linha quente do `eventcap` de todas as escadas anteriores), degraus de 60 s, 0 erros 5xx em todos os degraus de todas
+as escadas. O X segue o critério do resto do artigo, o **primeiro degrau de saturação sustentada**: um pico isolado
+(um degrau acima de 1 s entre degraus abaixo de 1 s) não conta, como os 71k e 75k do pós-pooler. As camadas **não diferem só
+pelo que foi ligado no host**: ver o bullet "O que não se atribui ao ES".
+
+| Camada | X (RPM) | Escada(s) | Queda em relação ao pós-pooler | Backlog máximo do consumer |
+|---|---|---|---|---|
+| Pré-pooler (PG 16, HikariCP direto) | ~97k | `degraus-958305` | — | — |
+| Pós-pooler (ponto 1, sem ES) | ~78k | `degraus-33459` | — | — |
+| ES: append + relay, sem consumer (bloco 3b) | ~61k | `degraus-188193`, `-188802` | ~17k | consumer desligado |
+| ES com consumer, 1 evento por transação (bloco 3) | ~56k | `degraus-181953`, `-183194` | ~22k | 362.342 na grossa; 578.674 no refino (187.917 herdados) |
+| ES com consumer em lote, #146 (bloco 5) | ~58k | `degraus-193515`, `-194168` | ~20k | 66.333 na grossa; 118.606 no refino |
+
+O backlog é o máximo do offset lag do grupo nas amostras de 1 s do host, em cada escada (`host-lag/`). A escada grossa
+e o refino de cada bloco estão no `README.md` da etapa; os pontos de corte:
+
+- **ES com consumer (bloco 3).** Grossa de 40k a 120k: 60k já satura (p95 de janela 1,28 s, 877 timeouts de leitura,
+  277 descartes) e de 70k a 120k o efetivo fica em ~62–63k RPM (68k só em 80k) com p95 de janela de ~2,2–2,4 s. Refino
+  de 50k a 60k: **X = 56k** (p95 de janela 1,84 s), e a degradação se sustenta (57k, 58k e 59k também acima de 1 s),
+  com 0 descartes e 0 outros em todos os degraus. O 1º degrau é aquecimento.
+- **ES sem consumer (bloco 3b).** Grossa de 40k a 80k: 60k limpo (p95 de janela 590 ms); 70k satura (efetivo ~59k, p95
+  de 2,56 s, 10.612 descartes). Refino de 60k a 70k: o report marca X = 60k (1005 ms, no limite), mas é o degrau de
+  aquecimento, e o mesmo degrau deu 590 ms na grossa; descontado, **X ≈ 61k** (1,64 s, 0 descartes).
+- **ES com consumer em lote (bloco 5).** Grossa de 40k a 80k: 50k limpo (351 ms), 60k já com 1,76 s, acima de 70k o
+  efetivo trava em ~58–59k. Refino de 50k a 60k: o degrau de 55k deu 1077 ms, mas é um **pico isolado** (56k e 57k
+  voltam a ficar abaixo de 1 s, com 991 e 990 ms), e a degradação sustentada começa em 58k (1,81 s; 59k e 60k também
+  acima de 1 s). Pelo critério do artigo, **X = 58k**; a regra estrita do report marca 55k. Só o degrau de 60k teve
+  descartes (302).
+- **O que não se atribui ao ES.** O ponto 1 (78k) foi medido no cabo, em banco limpo e com o host na `main` `a8fc86a`.
+  Os blocos 3 e 3b rodaram no Wi-Fi, em banco **acumulado**, e o 3b depois do 3 (herdando o volume e o backlog dele). O
+  bloco 5 rodou em banco limpo. O Tomcat não explica a queda: com 300 threads o teto do ponto 1 foi o mesmo
+  (`03-supabase-pooler/degraus-39710.csv`: efetivo de 74.064 a 75.412 RPM de 80k a 100k, contra `degraus-32105`, com 200
+  threads). Logo, os ~17k do append e os ~20–22k do total **incluem o Wi-Fi e o estado do banco**, que os dados não
+  separam; é uma escada por camada.
+
+**Leitura.**
+
+- **O append no caminho quente custa até ~17k RPM.** De ~78k (pós-pooler, sem ES) para ~61k (append + relay, sem
+  consumer), com o `event_store` e o `event_outbox` gravados na mesma transação da reserva e o relay ligado. A ressalva
+  do bullet acima vale: parte desses 17k pode ser rede e estado do banco.
+- **O consumer custa de ~2k a ~5k RPM, conforme o critério.** Pelo X, ~61k (3b) contra ~56k com o consumer de 1 evento
+  por transação (~5k) e contra ~58k com o consumer em lote (~3k). Pelo início dos descartes, ≈60k no bloco 3 (277
+  descartes em 60k) contra ≈62k no 3b (1570 em 62k), ~2k; o degrau de 60k do 3b é aquecimento e não entra. Uma escada por
+  camada, resolução de 1k. O
+  consumer e a reserva disputam o mesmo Postgres.
+- **O consumer em lote empata em vazão com o atual.** X de ~58k contra ~56k, dentro da resolução de 1k e com uma
+  escada por camada; a queda total em relação ao pós-pooler passa a ser de ~20k.
+- **O consumer em lote mantém a projeção mais em dia.** Com janelas iguais: no degrau de 80k, o backlog máximo foi de
+  179.634 mensagens no bloco 3 e de 66.333 no bloco 5 (≈ 2,7×); no refino, o backlog do bloco 3 cresceu 390.757
+  (578.674 menos os 187.917 herdados da grossa) e o do bloco 5 chegou a 118.606 (≈ 3,3×). De 40k a 80k, o backlog
+  cresceu até 179.634 em 5 degraus (pico do degrau de 80k, a partir de 0) no bloco 3 (~36 mil por degrau) e 66.333 no bloco 5 (~13 mil por degrau). Na drenagem com
+  a carga parada, o lote caiu de 66.333 para 45.586 em 28 s (741 msg/s) e o consumer atual de 362.342 para 187.917 em
+  382 s (457 msg/s). O zero que aparece no bloco 5 em seguida (de 42.463 para 0 em 1 s) é o **reset do banco** entre as
+  escadas (TRUNCATE, tópicos e grupo apagados), não drenagem: não se lê como "o lote zerou" nem como "o atual não
+  zerou". Os dois blocos também diferem no estado do banco (acumulado no 3, limpo no 5).
+- **O p95 em 60k não melhorou com o lote, e a causa é uma hipótese.** Na grossa, o degrau de 60k teve p95 de janela de
+  1,76 s no lote e de 1,28 s no consumer atual. A hipótese é que o consumer em lote faz o trabalho de banco durante o
+  teste e disputa mais com a reserva: uma troca entre projeção fresca e vazão de escrita num banco compartilhado. Mas o
+  degrau de 60k do bloco 3 teve 877 `outros` e 277 descartes fora do p95 (p99 de 4816 ms), e o do bloco 5, 0 e 0 (p99
+  de 1813 ms), e o banco estava acumulado no 3 e limpo no 5. A hipótese não está isolada.
+- **Motivação para a Fase 7, não conclusão.** Se a troca existe, ela motiva **separar o banco de leitura** do que
+  recebe as escritas; os dados desta rodada não medem esse ganho.
+- Como nas escadas anteriores, o X é o da **linha quente de um evento** (ameaça 10), não a capacidade agregada.
+  Os 5xx ficam em 0: quando satura, o host fica lento e dispara o p95 de janela, não 5xx.
+- As regras de autoescala 50/80 (#111 e #112) usam o X como base; com o ES no caminho da reserva, ela seria ~56k a
+  ~58k, não ~78k (as issues não foram alteradas).
+
+**Carga aleatória de 45 min (`Ale-190276`) × `Ale-29057` (#109).** Mesmo perfil (semente 617706, 1k–12k RPM, passo de
+30 s, 30% de leitura, 200 usuários, `PCT_CONFIRMA=100`), braço `cas`, banco **limpo** nos dois, o novo com o ES e o
+consumer ligados. Fontes: `04-fase6-es/resultados-aleatorio.csv` e `summary-ale-190276.json`;
+`03-supabase-pooler/resultados-aleatorio-109.csv`. Os deltas são do p50 e do p95, em ms:
+
+| Endpoint | p50 / p95 / p99 `Ale-29057` (ms) | p50 / p95 / p99 `Ale-190276` (ms) | Δ p50 / Δ p95 (ms) | p95 (×) |
+|---|---|---|---|---|
+| Reserva | 3,9 / 5,7 / 10,7 | 10,8 / 36,2 / 62,0 | +6,9 / +30,5 | 6,3 |
+| Confirma | 2,1 / 5,0 / 8,8 | 8,7 / 29,7 / 56,0 | +6,6 / +24,7 | 5,9 |
+| Evento | 1,9 / 3,4 / 6,2 | 7,9 / 32,7 / 58,1 | +6,0 / +29,3 | 9,6 |
+| Carteira | 3,2 / 12,6 / 25,0 | 16,6 / 56,9 / 105,1 | +13,4 / +44,3 | 4,5 |
+| Busca | 11,4 / 15,0 / 21,8 | 58,8 / 128,3 / 222,4 | +47,4 / +113,3 | 8,6 |
+| Leitura agregada | 2,6 / 12,9 / 19,9 | 13,6 / 82,6 / 142,7 | +11,0 / +69,7 | 6,4 |
+
+- **Mesma correção, 0 erros.** 146.400 aceitas (1464 eventos × 100 vagas), todas confirmadas; 48.617 recusadas como
+  lotado (48.612 na `Ale-29057`); 0 erros 5xx, 0 outros, 0 descartes, 0 leituras com erro. Overselling 0.
+- **O p95 ficou de 4,5× a 9,6× maior** (6,3× na reserva), e o p50 de 2,8× a 5,2×. O p95 de reserva de 36,2 ms ainda é
+  baixo em termos absolutos; as razões exageram porque a base da `Ale-29057` é muito baixa.
+- **O backlog do consumer não é a causa.** Na amostra de 1 s do host durante o aleatório (2.625 amostras, na janela do
+  teste: do horário de término menos a duração de 2702 s até o término), o lag do consumer ficou em média em 2,9
+  mensagens, com máximo de 49 e mediana 0: o consumer acompanhou a carga. Não houve aleatório com o consumer desligado,
+  então isso não diz que o consumer não custa nada, só que não havia fila.
+- **A origem do aumento é uma hipótese: ES no banco e Wi-Fi, sem separar os dois.** O delta do p95 da baseline de HTTP
+  entre o Wi-Fi e o cabo foi de ~+24 ms, e o do p50, de ~+12 ms (ordem de grandeza: é outro cliente). A reserva
+  (+30,5 ms), a confirmação (+24,7) e o evento (+29,3) ficam na mesma faixa, e o evento, que é só leitura de uma
+  projeção inline, subiu tanto quanto a reserva, o que é compatível com o jitter do Wi-Fi. No p50, os deltas de +6 a +7
+  ms dos três ficam abaixo dos ~+12 ms da baseline. **Só a busca (+113 ms no p95) e a carteira (+44 ms) excedem a
+  rede com clareza**; é nelas que o custo do ES (ou outro efeito) fica visível. Separar as parcelas pede uma repetição
+  no cabo.
+
 ### Resultados preliminares (fora do protocolo)
 
 Antes do protocolo acima, rodadas de 2026-10-04 (`Projeto/carga/results/02-hikari/ANALISE.md`) mediram os dois braços
@@ -575,16 +771,62 @@ Ameaças adicionais, sustentadas pelos documentos do kit:
     medida). A diferença do overselling do ingênuo entre as duas matrizes acompanha o lag observado, e portanto o estado do
     banco; não foi isolada dos demais fatores (ameaça 14).
 
+Ressalvas do ponto 2 (Rodada 2, 2026-10-19; fonte: `Projeto/carga/results/04-fase6-es/README.md`):
+
+16. **Rede em Wi-Fi.** Nesta rodada o gerador e o host estavam em Wi-Fi, com IPs novos. A baseline
+    (`baseline-20261019-074604.txt`) deu HTTP p50 26,6 / p95 42,9 ms (n = 30) e ping médio de 18,55 ms (máx. 180 ms, 0 de
+    100 perdidos), contra ~15 / 19 ms no cabo das rodadas anteriores (ameaça 1). Como a baseline vem de outro cliente que
+    o k6, ela não dá a parcela de rede nas latências do k6, e a parcela do Wi-Fi nelas não foi isolada. Afeta as
+    latências e a vazão da matriz, do aleatório e, pelo p95 de janela, o X; o overselling do ingênuo já está no teto, e
+    uma rajada mais longa não o aumentaria. A comparação de latência com as etapas anteriores fica com essa ressalva.
+    O cabo volta no fim de semana; repetir no cabo é o que separa o Wi-Fi do custo do ES. O plano de energia do gerador
+    foi ajustado à mão (o `setup-gerador.ps1` usou um GUID errado).
+17. **Estado do banco entre os blocos e comparabilidade com o ponto 1.** Os blocos 1 a 3b (matrizes ingênuo e CAS,
+    escadas com e sem consumer) rodaram sobre banco **acumulado**, sem limpeza entre eles, e o backlog do consumer foi
+    crescendo; do bloco 4 em diante, o banco foi limpo antes de cada teste (TRUNCATE, tópicos e consumer group do
+    Redpanda apagados, backend reiniciado). O ponto 1 rodou com banco limpo, cabo e Tomcat de 200 threads, e o ponto 2
+    com Tomcat de 300. Logo, a comparação das matrizes com o ponto 1 mistura o ES, o Wi-Fi, o banco acumulado e as
+    threads (por isso a matriz CAS com Tomcat 300 entra como referência); o X do pós-pooler (cabo, banco limpo) é
+    comparado com o dos blocos 3 e 3b (Wi-Fi, banco acumulado); e a comparação entre os blocos 3, 3b e 5
+    mistura o consumer com o estado do banco (acumulado nos dois primeiros, limpo no 5); o 3b rodou depois do 3, herdando
+    o volume e o backlog dele. A `Ale-29057` (#109) não
+    registra as threads do Tomcat; a #124, que fixou 300, é do mesmo dia.
+18. **Imagem `:146` montada localmente.** O bloco 5 rodou com o consumer em lote (issue #146) numa imagem do backend
+    montada à mão com as classes da branch `Issue-146`, porque o Maven Central estava bloqueado na rede do host (erro de
+    certificado PKIX) e o `docker compose build` normal não fechava. A coluna `commit` dos CSVs desse bloco (`1ee6fbe`) é a
+    do checkout do gerador e não reflete a imagem (ameaça 13).
+19. **Redpanda em modo dev-container, sem fsync.** O broker sobe com `--mode=dev-container` (`docs/arquitetura/fase6-cqrs-es.md`),
+    que não força gravação em disco. A latência do relay e o lag do consumer são **otimistas** em relação a um broker
+    com disco durável; um lag maior só reforçaria o overselling do ingênuo, mas o custo do ES no X e no aleatório pode
+    estar subestimado.
+20. **`lag_obs` é limite inferior e o lag do consumer vem de amostras do host.** Na matriz, o `lag_obs_*` mede a idade do
+    último evento aplicado na linha do evento, amostrada pelo gerador durante uma rajada de ~0,2 s: vale -1 no disparo
+    em todas as 20 linhas (a linha só nasce com a 1ª reserva) e ficou sem leitura em 7 delas, e não mede quanto a
+    projeção está atrás do "agora". O lag de consumer das escadas e do aleatório vem do offset lag do grupo, amostrado a
+    cada 1 s no host (`host-lag/`; três arquivos com `ts` provavelmente em UTC, 3:00:00 à frente do nome do arquivo e do gerador (a confirmar), e o
+    `lag-poll-cas` no horário local). A captura do aleatório continuou rodando depois do fim do teste (e pegou o início
+    do bloco 5), e a da escada do bloco 3 parou de drenar depois do fim da carga (564.215 e depois 792.777), o que é
+    compatível com o consumer desligado para o 3b. Só as janelas de cada teste entram nos números acima; os valores
+    fora delas não são backlog do bloco, e o máximo do bloco 3 com o consumer ligado é 578.674.
+21. **Incidentes da sessão.** O host trocou de IP durante a sessão (DHCP do Wi-Fi): a 2ª tentativa do 3b abortou antes
+    do seed, com o backend inacessível no IP antigo, e a escada foi relançada no IP novo, sem efeito nos resultados já
+    coletados. A 1ª tentativa do 3b (40k a 120k) foi abortada no degrau de 80k por falta de memória no gerador, sem CSV
+    (o host não foi afetado), e refeita só até 80k.
+
 ## Limitações
 
-- **Ponto 1 e X.** O ponto 1 (monólito CRUD + pooler) cobre as rodadas 1a e 1b e, desde 2026-10-17, o limiar X
-  pelo pooler (≈ 78k RPM), com o 97k pré-pooler (HikariCP direto, PG 16) como referência. Os pontos 2 (monólito com CQRS +
-  ES) e 3 (distribuído) vêm depois e se comparam com o ponto 1, não com os números pré-pooler. A comparação
-  pré × pós-pooler dentro do ponto 1 mistura três mudanças e o estado do banco (ameaças 14 e 15).
-- **Lag sintético.** O read model é recalculado por timer (lag fixo e configurável); não é o atraso de uma
-  projeção real, que varia com o consumidor. A transferência do resultado para a projeção ES é o objeto dos
-  pontos 2 e 3.
-- **X preliminar e em RPM agregado.** Cada X (97k pré-pooler; ≈ 78k pelo pooler, de três execuções) vem de poucas
+- **Pontos 1 e 2 e X.** O ponto 1 (monólito CRUD + pooler) cobre as rodadas 1a e 1b e, desde 2026-10-17, o limiar X
+  pelo pooler (≈ 78k RPM), com o 97k pré-pooler (HikariCP direto, PG 16) como referência. O ponto 2 (monólito com
+  CQRS + ES, 2026-10-19) se compara com o ponto 1, não com os números pré-pooler; o ponto 3 (distribuído) vem depois
+  e se compara com os dois. A comparação pré × pós-pooler dentro do ponto 1 mistura três mudanças e o estado do banco
+  (ameaças 14 e 15); a do ponto 2 com o ponto 1 mistura o ES, o Wi-Fi, o banco acumulado e as threads do Tomcat
+  (ameaças 16 e 17).
+- **Lag sintético × lag real.** No ponto 1 o read model é recalculado por timer (lag fixo e configurável), que não é o
+  atraso de uma projeção real. No ponto 2 o lag é o do consumer real, mas só foi medido como limite inferior na matriz
+  (ameaça 20) e como offset lag do host nas escadas e no aleatório. A transferência para o ponto 3 (consumer em
+  outro processo, banco separado) continua em aberto.
+- **X preliminar e em RPM agregado.** Cada X (97k pré-pooler; ≈ 78k pelo pooler, de três execuções; ≈ 56k com o ES e o
+  consumer atual, ≈ 61k sem consumer e ≈ 58k com o consumer em lote, de duas escadas cada) vem de poucas
   execuções da escada e é expresso em reservas por minuto do total, somando todos os eventos. Não se lê como RPM por evento: pela regra de pares,
   a carga por evento é fixa (até 200 tentativas, capacidade 100) e só a duração da rajada por evento encurta
   com o RPM (ameaça 10). O limiar da arquitetura de admissão é definido por evento (`RPM(evento) ≥ X` em
@@ -592,7 +834,7 @@ Ameaças adicionais, sustentadas pelos documentos do kit:
   converte.
 - **Escopo do workload.** Só escrita (reserva e confirmação) com `PCT_CONFIRMA=100`; capacidade fixa em 20 e
   N ∈ {100, 200} na disputa; um único evento por disputa. A escada não tem leituras, e o teste aleatório
-  (com leituras) ficou fora do protocolo.
+  (com leituras) ficou fora do protocolo da matriz e da escada; entra só no ponto 2, como comparação com a #109.
 - **Vazão do kit anterior não usada.** Os números de "Vazão" e `reservas_por_s` do teste 1 anterior à matriz
   (`docs/carga/setup.md`, seção 6, tabela da disputa; coluna `reservas_por_s` de
   `Projeto/carga/results/02-hikari/resultados.csv`) não são reportados aqui. Há uma hipótese, **não confirmada**, de que meçam a taxa de login do
