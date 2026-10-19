@@ -72,10 +72,15 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   stream), `OutboxRelayTest` (publica no tópico na ordem por stream com chave e header `publishedAt`, apaga o outbox,
   falha de envio = rollback, dois relays concorrentes: só um pega o lock), `IdempotentConsumerTest` (checkpoint atômico:
   duplicata, `eventId` divergente, buraco preenchido do `event_store`, buraco que falta = lança, 8 aplicadores
-  concorrentes), `EventReplayTest` (**teste de replay**: N eventos, projeção reconstruída do zero na sombra == viva;
+  concorrentes; na #146, o `onBatch`: lote com duplicata, dois streams intercalados, buraco preenchido, `eventId` divergente,
+  falha no meio do lote — buraco, JSON inválido e `SQLException` — comitando só o prefixo e acusando o índice via
+  `BatchListenerFailedException`, e 8 aplicadores concorrentes do mesmo lote), `EventReplayTest` (**teste de replay**: N eventos, projeção reconstruída do zero na sombra == viva;
   snapshot + cauda == replay completo; as páginas do replay leem o mesmo snapshot, `REPEATABLE READ`), `EventBackboneTest` (ponta a ponta com relay `@Scheduled` + `@KafkaListener` +
   dead-letter topic; política de erro: SQLException transitória é reentregue sem limite e nunca vai ao DLT, buraco
-  irrecuperável e JSON inválido vão ao DLT; o listener de teste usa `idIsGroup = false` e um teste confere o `group.id`).
+  irrecuperável e JSON inválido vão ao DLT; o listener de teste usa `idIsGroup = false` e um teste confere o `group.id`;
+  na #146, um segundo listener `batch = "true"` em outro tópico, com o container pausado para acumular o lote: só a mensagem
+  culpada (buraco ou JSON inválido) vai ao DLT e o resto do lote é aplicado, e o erro transitório no meio do lote não vai ao
+  DLT; os filtros do DLT usam os streams de cada teste porque o DLT é lido do início e compartilhado).
   Os que precisam de relay/consumer ligam a flag por `@SpringBootTest(properties=...)`; `EventReplay.divergentTables`
   ganhou o overload com `Map<tabela, colunas>` (compara só as colunas informadas: as com `clock_timestamp()` diferem entre viva
   e sombra);
@@ -316,7 +321,7 @@ Tudo em `public` por ora (schema por serviço é a Fase 7).
   `drain()` ocupa uma das threads enquanto houver outbox; o relay está ligado no compose desde a #28: conferir se 3 threads bastam
   para o relay, `ReservationExpiryService` e `IdempotencyKeyRetentionService` junto com a medição da #31.
 - **`IdempotentConsumer`** (`events.consumer.enabled`): o listener de cada projeção chama
-  `onMessage(Projection, json, ack)`. Por mensagem, numa transação (checkpoint + projeção) e com ack manual depois do
+  `onMessage(Projection, json, ack)` (uma mensagem por transação) ou `onBatch(Projection, List<json>, ack)` (#146, abaixo). Por mensagem, numa transação (checkpoint + projeção) e com ack manual depois do
   commit: confere o `eventId` no `event_store` (inexistente/diferente = descarta), descarta `version <= checkpoint`, relê
   as versões que faltam (`checkpoint+1 .. version`) e avança o checkpoint por CAS (`UPDATE projection_checkpoint ... WHERE
   version = v-1`; `INSERT ... ON CONFLICT DO NOTHING` na v1) aplicando só se o rowcount for 1. `Projection` = `name()`, `tables()`,
@@ -327,6 +332,23 @@ Tudo em `public` por ora (schema por serviço é a Fase 7).
   anterior não existe nem no `event_store`; não avança nada): `events.consumer.retry.max-attempts` retries a cada
   `interval-ms` e depois `<tópico>.DLT`; (3) **payload inválido** (`InvalidEventMessageException`: JSON quebrado/sem campos
   obrigatórios): DLT direto, sem retry.
+  - **Em lote (`onBatch`, issue #146).** As mensagens do lote, na ordem, rodam a MESMA lógica de cima (`tentar`) na MESMA
+    transação: um commit e um ack (`ack.acknowledge()` depois do commit) por lote, em vez de um por mensagem. Duplicata e
+    várias versões do mesmo stream no lote funcionam porque a leitura do checkpoint, na mesma conexão, enxerga o avanço ainda
+    não comitado; perder a corrida do CAS para outro aplicador desfaz e refaz o lote inteiro. **Falha na mensagem `i`
+    (decisão): comita o prefixo `0..i-1` e acusa só a `i`.** A transação inteira é desfeita, as `0..i-1` são reaplicadas e
+    comitadas numa transação nova e então se lança `BatchListenerFailedException(i)` (causa = a exceção original); o `DefaultErrorHandler` comita o offset de
+    `0..i-1`, reentrega de `i` em diante e aplica a política de erro acima à CAUSA, então só a mensagem `i` vai ao DLT
+    (buraco após `max-attempts`, JSON inválido direto) e o transitório (`SQLException`) tenta de novo sem limite, nunca DLT.
+    O prefixo precisa estar comitado no banco porque o offset dele avança: o último evento de um stream, perdido ali,
+    nunca seria preenchido como "buraco". Nunca escapa exceção crua do lote: uma exceção crua cairia no handler de lote
+    genérico, que manda o LOTE INTEIRO ao DLT quando o retry esgota e não chama o `RetryListener` por mensagem (o
+    `RetryListener` de lote é um método vazio por padrão). O ack não é dado na falha; mensagens já comitadas e reentregues
+    são descartadas pelo checkpoint. Um `eventId` que não bate com o `event_store` não é falha: é descartado como antes.
+    **Limite conhecido:** lotes concorrentes em ordens de stream diferentes podem dar deadlock de linha de checkpoint
+    (`40P01`, tratado como `SQLException` transitória); em produção há 1 consumer e 1 partição, e na sobreposição de consumers de um
+    rebalance o deadlock se recupera pelo retry. Quando o lote falha, o prefixo comitado não aparece no `events.lag` (o log só sai
+    com o lote bem-sucedido).
 - **`EventReplay`**: `rebuild(projecao, streamType, schema)` cria o schema-sombra (`CREATE TABLE ... (LIKE public.t
   INCLUDING ALL)`), reaplica todos os eventos do tipo por `global_position` e `divergentTables` compara com a viva
   (`EXCEPT ALL` nos dois sentidos); `drop(schema)` derruba. Roda em **`REPEATABLE READ`** (`SET TRANSACTION` como primeiro
@@ -524,9 +546,20 @@ tem os eventos `SlotReserved` (`{userId, eventId, expiresAt}`, metadata `{idempo
   read-your-writes do `HttpContractTest` não mudou (a `version` não aparece no JSON de `EventWallet`).
 - **Projeção assíncrona de disponibilidade** (`event_availability`, lida só pelo braço `naive`): o
   `EventAvailabilityConsumer` (`@KafkaListener(id = "reservation-availability", idIsGroup = false, topics =
-  "reservation.wallet")`, `events.consumer.enabled`) usa o `IdempotentConsumer` da #27 e a `EventAvailabilityProjection`.
+  "reservation.wallet", batch = "true", properties = "max.poll.records=${events.consumer.batch-size:500}")`,
+  `events.consumer.enabled`) usa o `IdempotentConsumer` da #27 e a `EventAvailabilityProjection`.
+  **Em lote desde a #146:** recebe `List<ConsumerRecord>` (até `events.consumer.batch-size`, env `EVENTS_CONSUMER_BATCH_SIZE`,
+  default **500**; vira o `max.poll.records` só deste listener) e chama `onBatch`: uma transação e um ack por lote, em vez de uma
+  transação curta por mensagem. Só este listener é em lote (`spring.kafka.listener.type` continua `single`; o `onMessage` fica
+  para os testes da #27). **Efeito esperado (a medir na Rodada 2, #31):** o achado da #31 foi X ≈ 56k RPM com o consumer ligado
+  contra 60k estável com ele desligado, e backlog de ~793 mil mensagens; o lote troca N transações/commits/acks por 1, então
+  o custo por mensagem cai (menos transações curtas disputando o mesmo Postgres e o mesmo pooler do caminho quente), o consumer
+  passa a acompanhar o append (o lag deve cair e o backlog não crescer) e o X deve voltar para perto dos 60k. Com o consumer em dia o lote
+  tem poucos registros e o comportamento é o de antes. Continuam 1 partição e 1 consumer (mais partições/consumers e mudar
+  o relay estão fora do escopo da #146). O que não muda: o lag por evento (`events.lag`) é medido depois do commit do lote.
   A tabela guarda **só `ativos`** por evento (`SlotReserved` +1; `ReservationExpired`/`ReservationCancelled` −1;
-  `ReservationConfirmed` 0) + `applied_at` (`clock_timestamp()` do commit do consumer) + `last_occurred_at` (maior
+  `ReservationConfirmed` 0) + `applied_at` (`clock_timestamp()` do statement; com o lote da #146 é a hora dentro de uma transação de até N mensagens, não exatamente
+  a do commit, então `applied_at − last_occurred_at` pode subestimar o lag visível em até a duração do lote; o `events.lag` é medido depois do commit) + `last_occurred_at` (maior
   `occurredAt` visto, igual ao `occurred_at` do `event_store`). **Sem FK e sem CHECK** em `ativos`: toda violação no consumer
   é `SQLException`, retentada sem limite, e travaria a partição; um `Cancelled` sem `SlotReserved` (linha anterior ao ES)
   deixa o saldo negativo, e a leitura trata `ativos` negativo como 0 (senão a disponibilidade passaria da capacidade). A **disponibilidade é calculada na leitura**
@@ -665,7 +698,8 @@ Rodada 1 (`docs/carga/resultados-*`) foram medidos com o refresh e ficam como hi
   `EVENTS_CONSUMER_ENABLED` (default `false`), `EVENTS_CONSUMER_GROUP` (`gerenciador-eventos`),
   `EVENTS_CONSUMER_RETRY_INTERVAL_MS` (`1000`; base do backoff transitório e intervalo do retry do buraco),
   `EVENTS_CONSUMER_RETRY_MAX_ATTEMPTS` (`5`; só para o buraco irrecuperável), `EVENTS_CONSUMER_RETRY_ERROR_AFTER_ATTEMPTS` (`10`; a
-  partir daí cada tentativa do retry transitório ilimitado loga em ERROR), `EVENTS_SNAPSHOT_EVERY` (`100`). Sem segredo novo. As flags
+  partir daí cada tentativa do retry transitório ilimitado loga em ERROR), `EVENTS_CONSUMER_BATCH_SIZE` (`500`, #146; tamanho máximo
+  do lote do listener da projeção de disponibilidade, o `max.poll.records` dele; o compose o repassa), `EVENTS_SNAPSHOT_EVERY` (`100`). Sem segredo novo. As flags
   `EVENTS_RELAY_ENABLED`/`EVENTS_CONSUMER_ENABLED` têm default `false` (os testes ligam por `@SpringBootTest(properties=...)`); o
   `docker-compose.yml` passa `EVENTS_RELAY_ENABLED=true` desde a #28 (o `catalog` appenda eventos) e `EVENTS_CONSUMER_ENABLED=true` desde a #29
   (projeção assíncrona de disponibilidade). **Aviso:** com o `gerenciador-backend` no ar, o relay dele drena o `event_outbox` do

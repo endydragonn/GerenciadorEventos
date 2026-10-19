@@ -6,11 +6,14 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -22,6 +25,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.function.Executable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -47,6 +51,10 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
  * mensagem que não dá para aplicar (buraco) indo para o dead-letter topic depois do retry.
  * {@code @DirtiesContext}: o relay de 50 ms e o listener não podem sobrar no cache de contextos e disputar o outbox
  * com os testes seguintes.
+ *
+ * <p>Os testes "em lote" (#146) usam um segundo listener, {@code batch = "true"}, em outro tópico: o container é pausado,
+ * os eventos se acumulam no tópico e, ao retomar, chegam num lote só. Cobrem o que o handler faz com a
+ * {@code BatchListenerFailedException} (só a culpada vai ao DLT, o resto do lote segue).</p>
  */
 @SpringBootTest(properties = {
         "events.relay.enabled=true", "events.relay.interval-ms=50",
@@ -58,6 +66,11 @@ public class EventBackboneTest {
 
     private static final String TOPICO = "t27.e2e";
     private static final String LISTENER_ID = "t27-somatorio";
+    private static final String TOPICO_LOTE = "t146.e2e";
+    private static final String LISTENER_LOTE_ID = "t146-somatorio";
+
+    /** Tamanho de cada lote entregue ao listener em lote. */
+    static final List<Integer> TAMANHOS_DE_LOTE = new CopyOnWriteArrayList<>();
 
     /** Streams cujo apply falha com SQLException N vezes antes de funcionar (queda transitória de banco simulada). */
     static final Map<String, AtomicInteger> FALHAS_RESTANTES = new ConcurrentHashMap<>();
@@ -92,6 +105,23 @@ public class EventBackboneTest {
         }
     }
 
+    /** O mesmo que {@link ListenerSomatorio} em lote, como o {@code EventAvailabilityConsumer}. */
+    static class ListenerSomatorioEmLote {
+        private final IdempotentConsumer consumer;
+        private final Projection projecao = new SomatorioInstavel();
+
+        ListenerSomatorioEmLote(IdempotentConsumer consumer) {
+            this.consumer = consumer;
+        }
+
+        @KafkaListener(id = LISTENER_LOTE_ID, idIsGroup = false, topics = TOPICO_LOTE, batch = "true",
+                properties = "max.poll.records=${events.consumer.batch-size:500}")
+        void ouvir(List<ConsumerRecord<String, String>> records, Acknowledgment ack) {
+            TAMANHOS_DE_LOTE.add(records.size());
+            consumer.onBatch(projecao, records.stream().map(ConsumerRecord::value).toList(), ack);
+        }
+    }
+
     @AfterAll
     void derrubarTabelaDeTeste() throws Exception {
         TestSomatorio.derrubarTabela(db);
@@ -107,6 +137,16 @@ public class EventBackboneTest {
         @Bean
         ListenerSomatorio listenerSomatorio(IdempotentConsumer consumer) {
             return new ListenerSomatorio(consumer);
+        }
+
+        @Bean
+        NewTopic topicoLote() {
+            return TopicBuilder.name(TOPICO_LOTE).partitions(1).replicas(1).build();
+        }
+
+        @Bean
+        ListenerSomatorioEmLote listenerSomatorioEmLote(IdempotentConsumer consumer) {
+            return new ListenerSomatorioEmLote(consumer);
         }
     }
 
@@ -141,19 +181,27 @@ public class EventBackboneTest {
     }
 
     private void append(String stream, int version, int valor) throws Exception {
+        append(TOPICO, stream, version, valor);
+    }
+
+    private void append(String tipo, String stream, int version, int valor) throws Exception {
         try (Connection c = db.getConnection()) {
             c.setAutoCommit(false);
-            eventStore.append(c, NovoEvento.of(TOPICO, stream, version, "Teste",
+            eventStore.append(c, NovoEvento.of(tipo, stream, version, "Teste",
                     json.createObjectNode().put("valor", valor), "ev-1")).orElseThrow();
             c.commit();
         }
     }
 
     private int checkpoint(String stream) throws Exception {
+        return checkpoint(TOPICO, stream);
+    }
+
+    private int checkpoint(String tipo, String stream) throws Exception {
         try (Connection c = db.getConnection();
              PreparedStatement ps = c.prepareStatement("SELECT version FROM public.projection_checkpoint "
                      + "WHERE stream_type = ? AND stream_id = ?")) {
-            ps.setString(1, TOPICO);
+            ps.setString(1, tipo);
             ps.setString(2, stream);
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? rs.getInt(1) : 0;
@@ -261,5 +309,149 @@ public class EventBackboneTest {
         }, "consumer seguiu para o próximo stream");
         assertEquals(1, checkpoint(dlt), "a v3 não avançou o checkpoint");
         assertTrue(TestSomatorio.ler(db, "public", dlt)[0] == 1);
+    }
+
+    // ===================== listener em lote (#146) =====================
+
+    private boolean checkpointEm(String tipo, String stream, int esperado) {
+        try {
+            return checkpoint(tipo, stream) == esperado;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Pausa o listener em lote, roda os appends, espera o relay publicar tudo e retoma: o que foi publicado
+     * enquanto estava pausado chega junto, no mesmo poll (até {@code max.poll.records}).
+     */
+    private void acumularEDespausar(Executable appends) throws Throwable {
+        MessageListenerContainer container = registry.getListenerContainer(LISTENER_LOTE_ID);
+        EventsTestSupport.aguardar(Duration.ofSeconds(60),
+                () -> container.getAssignedPartitions() != null && !container.getAssignedPartitions().isEmpty(),
+                "atribuição de partição do listener em lote");
+        container.pause();
+        EventsTestSupport.aguardar(Duration.ofSeconds(30), container::isContainerPaused, "listener em lote pausado");
+        TAMANHOS_DE_LOTE.clear();
+        try {
+            appends.execute();
+            EventsTestSupport.aguardar(Duration.ofSeconds(30), () -> {
+                try {
+                    return outboxVazio();
+                } catch (Exception e) {
+                    return false;
+                }
+            }, "relay publicar o que se acumulou");
+        } finally {
+            container.resume();
+        }
+    }
+
+    /** Filtro do DLT: só as mensagens dos streams do próprio teste (o DLT é lido do início e é compartilhado). */
+    private static Predicate<ConsumerRecord<String, String>> dosStreams(String... streams) {
+        return r -> Arrays.stream(streams).anyMatch(s -> r.value().contains("\"streamId\":\"" + s + "\""));
+    }
+
+    /** O que foi acumulado chegou junto: passou pelo caminho do lote (prefixo + índice > 0), não uma a uma. */
+    private static void assertChegouEmLote() {
+        assertTrue(TAMANHOS_DE_LOTE.stream().anyMatch(n -> n > 1),
+                "as mensagens acumuladas chegaram em lote(s), não uma a uma: " + TAMANHOS_DE_LOTE);
+    }
+
+    @Test
+    void listenerEmLoteRecebeVariasMensagensPorPollEAplicaTodasEmOrdem() throws Throwable {
+        String a = rodada + "LA";
+        String b = rodada + "LB";
+        acumularEDespausar(() -> {
+            for (int v = 1; v <= 10; v++) {
+                append(TOPICO_LOTE, a, v, v);       // soma 55
+                append(TOPICO_LOTE, b, v, 10 * v);  // soma 550
+            }
+        });
+
+        EventsTestSupport.aguardar(Duration.ofSeconds(30),
+                () -> checkpointEm(TOPICO_LOTE, a, 10) && checkpointEm(TOPICO_LOTE, b, 10),
+                "os 2 streams em v10 pelo listener em lote");
+
+        assertArrayEquals(new long[] {10, 55}, TestSomatorio.ler(db, "public", a));
+        assertArrayEquals(new long[] {10, 550}, TestSomatorio.ler(db, "public", b));
+        assertChegouEmLote();
+    }
+
+    @Test
+    void buracoNoMeioDoLoteMandaSoAMensagemCulpadaParaODeadLetterTopicEOLoteSegue() throws Throwable {
+        String antes = rodada + "LBEFORE";
+        String dlt = rodada + "LDLT";
+        String depois = rodada + "LAFTER";
+        acumularEDespausar(() -> {
+            append(TOPICO_LOTE, antes, 1, 1);
+            append(TOPICO_LOTE, dlt, 1, 1);
+            append(TOPICO_LOTE, dlt, 3, 3); // a v2 nunca existe
+            append(TOPICO_LOTE, depois, 1, 7);
+        });
+
+        List<ConsumerRecord<String, String>> naDlt = EventsTestSupport.lerTopico(bootstrap, TOPICO_LOTE + ".DLT", 1,
+                Duration.ofSeconds(60), dosStreams(dlt));
+        assertEquals(1, naDlt.size());
+        assertTrue(naDlt.get(0).value().contains("\"version\":3"), naDlt.get(0).value());
+
+        EventsTestSupport.aguardar(Duration.ofSeconds(30),
+                () -> checkpointEm(TOPICO_LOTE, depois, 1), "o resto do lote (depois da culpada) ser aplicado");
+        assertEquals(1, checkpoint(TOPICO_LOTE, antes), "o que veio antes da culpada foi comitado");
+        assertEquals(1, checkpoint(TOPICO_LOTE, dlt), "a v1 do mesmo stream foi aplicada; a v3 não");
+        assertEquals(1, EventsTestSupport.lerTopico(bootstrap, TOPICO_LOTE + ".DLT", 2, Duration.ofSeconds(2),
+                dosStreams(antes, dlt, depois)).size(), "nenhuma outra mensagem do lote foi para o DLT");
+        assertChegouEmLote();
+    }
+
+    @Test
+    void payloadInvalidoNoMeioDoLoteVaiAoDeadLetterTopicEAsDemaisSaoAplicadas() throws Throwable {
+        String lixo = "isto-nao-e-json-lote-" + rodada;
+        String antes = rodada + "LJBEFORE";
+        String depois = rodada + "LJAFTER";
+        acumularEDespausar(() -> {
+            append(TOPICO_LOTE, antes, 1, 1);
+            EventsTestSupport.aguardar(Duration.ofSeconds(30), () -> {
+                try {
+                    return outboxVazio();
+                } catch (Exception e) {
+                    return false;
+                }
+            }, "relay publicar a 1ª antes do lixo (a ordem no tópico importa)");
+            template.send(TOPICO_LOTE, "ev-1", lixo).get();
+            append(TOPICO_LOTE, depois, 1, 3);
+        });
+
+        List<ConsumerRecord<String, String>> naDlt = EventsTestSupport.lerTopico(bootstrap, TOPICO_LOTE + ".DLT", 1,
+                Duration.ofSeconds(30), r -> lixo.equals(r.value()));
+        assertEquals(1, naDlt.size(), "o JSON inválido vai para o DLT, direto");
+        EventsTestSupport.aguardar(Duration.ofSeconds(30),
+                () -> checkpointEm(TOPICO_LOTE, antes, 1) && checkpointEm(TOPICO_LOTE, depois, 1),
+                "as mensagens válidas dos dois lados do lixo serem aplicadas");
+        assertEquals(1, EventsTestSupport.lerTopico(bootstrap, TOPICO_LOTE + ".DLT", 2, Duration.ofSeconds(2),
+                r -> lixo.equals(r.value()) || dosStreams(antes, depois).test(r)).size(), "só o lixo foi para o DLT");
+        assertChegouEmLote();
+    }
+
+    @Test
+    void erroTransitorioNoMeioDoLoteNuncaVaiAoDeadLetterTopicEOLoteSeRecupera() throws Throwable {
+        String antes = rodada + "LTBEFORE";
+        String trans = rodada + "LTTRANS";
+        String depois = rodada + "LTAFTER";
+        FALHAS_RESTANTES.put(trans, new AtomicInteger(4)); // mais que max-attempts (2): o retry transitório é ilimitado
+        acumularEDespausar(() -> {
+            append(TOPICO_LOTE, antes, 1, 1);
+            append(TOPICO_LOTE, trans, 1, 5);
+            append(TOPICO_LOTE, depois, 1, 9);
+        });
+
+        EventsTestSupport.aguardar(Duration.ofSeconds(60),
+                () -> checkpointEm(TOPICO_LOTE, antes, 1) && checkpointEm(TOPICO_LOTE, trans, 1)
+                        && checkpointEm(TOPICO_LOTE, depois, 1),
+                "o lote se recuperar da falha transitória e aplicar as 3");
+        assertArrayEquals(new long[] {1, 5}, TestSomatorio.ler(db, "public", trans));
+        assertEquals(0, EventsTestSupport.lerTopico(bootstrap, TOPICO_LOTE + ".DLT", 1, Duration.ofSeconds(2),
+                dosStreams(antes, trans, depois)).size(), "transitório no lote não vai ao DLT");
+        assertChegouEmLote();
     }
 }
