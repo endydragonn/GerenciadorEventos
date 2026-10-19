@@ -60,7 +60,7 @@ if ($psql) {
 
 # ---------------------------------------------------------------- energia
 try {
-    powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e9fa6c1f2d 2>$null
+    powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
     if ($LASTEXITCODE -eq 0) { Ok 'Plano de energia: Alto desempenho.' } else { Warn 'Plano Alto desempenho indisponivel; ajuste manualmente.' }
 } catch { Warn 'Nao foi possivel ajustar o plano de energia.' }
 
