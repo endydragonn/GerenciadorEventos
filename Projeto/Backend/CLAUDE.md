@@ -903,8 +903,18 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   `db/migrations/20261025-reservation-schema.sql` (idempotente; `ALTER TABLE ... SET SCHEMA`, derruba as FKs, **move os streams `reservation.wallet`
   do `public.event_store`/outbox/checkpoint/snapshot** — sem isso o consumer acharia buraco em todo stream antigo —, `lock_timeout` 5 s; pare o
   backend e o reservation antes).
-- **API interna** (HTTP, `/internal/**`, sem autenticação própria: só alcançável na rede `gerenciador-net`; o `userId` vai como **parâmetro
-  explícito** no corpo/query, a correção do IDOR #57 mexe só no gateway). Erros: corpo = mensagem em texto puro; **400** regra de negócio
+- **API interna** (HTTP, `/internal/**`, só alcançável na rede `gerenciador-net`; o `userId` vai como **parâmetro
+  explícito** no corpo/query, a correção do IDOR #57 mexe só no gateway). **Autenticada por token de serviço compartilhado (volta 3 da #33):**
+  header `X-Internal-Token` com o valor de `INTERNAL_API_TOKEN`, enviado pelo `ReservationClient` em TODA chamada e exigido pelo
+  `InternalTokenFilter` do reservation em TODA requisição do serviço (sem filtro por caminho: o serviço não tem rota pública, o healthcheck é TCP, e
+  um teste do URI cru deixaria passar `/internal;x=1/...` e `/%69nternal/...`, que o Spring MVC normaliza) (comparação em tempo constante, `MessageDigest.isEqual`; **401** sem o header ou
+  com valor errado, sem chegar ao controller; o healthcheck é TCP e não passa por aí). **Sem valor default** (nem no código, nem no compose): o
+  reservation e o monólito **falham no boot** com mensagem clara se `INTERNAL_API_TOKEN` faltar. **Você precisa acrescentar ao `Projeto/.env`**
+  `INTERNAL_API_TOKEN=<valor aleatório>` (gerar: `openssl rand -hex 32`); o compose passa o mesmo valor aos dois containers
+  (`INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?...}`: o compose recusa subir sem a variável); o `run-tests.sh` usa o valor de teste `token-de-teste-nao-e-segredo`. Custo no caminho
+  quente (comparabilidade com o ponto 2): a leitura de um header e uma comparação de bytes. Testes: `ReservationApiE2ETest` (sem token,
+  token errado ou vazio -> 401 em toda rota e o PUT sem token não grava; token certo -> fluxo normal; sem a variável o filtro e o cliente
+  não sobem) e o `FakeReservationServer`, que responde 401 sem o header (prova que o cliente o envia). Erros: corpo = mensagem em texto puro; **400** regra de negócio
   (`IllegalArgumentException`: "Evento lotado", "Vínculo já existente"...), **422** `Idempotency-Key` reusada com outro evento
   (`IdempotencyConflictException`), **409** apagar capacidade de evento com reserva (`IllegalStateException` no cliente), **404** sem
   `eventcap`/sem chave (o cliente devolve `null`), 500 o resto.

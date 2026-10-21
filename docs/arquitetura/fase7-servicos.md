@@ -9,6 +9,8 @@ replay da Fase 6 continua valendo, agora **dentro do `reservation`**, com event 
 [Event Backbone e Event Store](../adr/Architecture-Decision-Event-Backbone-Event-Store.md). Detalhes de código e configuração em
 `Projeto/Backend/CLAUDE.md` ("Serviço reservation", "Serviço notification").
 
+> As chamadas `/internal/**` carregam o header `X-Internal-Token` (token de serviço compartilhado, `INTERNAL_API_TOKEN`); sem ele o reservation responde 401.
+
 ## Topologia
 
 ```mermaid

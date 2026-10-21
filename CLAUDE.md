@@ -106,6 +106,12 @@ commitar ou registrar em log.
   `reservation.wallet` / `catalog.event` (a reconciliação criaria `eventcap` para ids de evento de teste). Banco já existente precisa dos
   schemas novos: aplicar `Projeto/Backend/db/migrations/20261024-notification-schema.sql` e, **com o backend e o reservation parados**,
   `20261025-reservation-schema.sql` (idempotentes; bancos novos já nascem com eles).
+- **`INTERNAL_API_TOKEN` (desde a #33, volta 3):** as chamadas internas gateway → reservation (`/internal/**`) exigem um token de serviço
+  (header `X-Internal-Token`; 401 sem/errado). **Acrescente ao `Projeto/.env` (você mesmo; o repo nunca edita nem imprime o `.env`)**
+  `INTERNAL_API_TOKEN=<valor aleatório>`, por exemplo gerado com `openssl rand -hex 32`. O compose repassa o MESMO valor ao `backend` e ao
+  `reservation`. Não há valor default: sem a variável **qualquer `docker compose`** (inclusive o `up -d db redpanda` dos testes)
+  recusa com mensagem clara (`${INTERNAL_API_TOKEN:?...}`), e os dois serviços também falham no boot. O `run-tests.sh` usa um valor de teste
+  explícito (não é segredo).
 - O serviço `notification` sobe junto com `up -d --build` (container `gerenciador-notification`); o `backend` não depende dele. O serviço
   `reservation` (container `gerenciador-reservation`, API interna `:8082` só na rede `gerenciador-net`) também sobe junto, mas o `backend`
   **depende dele** (`service_healthy`).
@@ -168,7 +174,7 @@ tópico com schema próprio (`notification.processed_event`), monta e manda o e-
 cadastro/login (o e-mail sai quando ele volta). `/bff/**` inalterado. Detalhes e a conta do pool Hikari/Supavisor no
 `Projeto/Backend/CLAUDE.md`, "Serviço notification"; layout em "Layout multi-módulo Maven".
 
-**Implementado (Fase 7, issue #33):** segunda extração, o `reservation` — `eventcap` (CAS) + `walletevent` (ES) viraram o serviço
+**Implementado (Fase 7, issue #33):** segunda extração, o `reservation` (API interna autenticada por `INTERNAL_API_TOKEN`) — `eventcap` (CAS) + `walletevent` (ES) viraram o serviço
 `reservation` (módulo Maven próprio, **Dockerfile, imagem e container próprios**, schema `reservation`, **event store e relay próprios**,
 `ReservationExpiryService`, retenção das chaves de idempotência e a projeção de disponibilidade dentro dele). O `gateway` (monólito) o chama
 por **API interna HTTP** (`/internal/**`, só na rede `gerenciador-net`) com um cliente de pool dimensionado (lib `reservation-client`): braço

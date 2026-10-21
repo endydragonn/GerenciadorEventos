@@ -5,6 +5,8 @@ Serviço de reservas do Gerenciador de Eventos (issue #33, Fase 7: segunda extra
 projeção `event_availability`, no schema `reservation`. Expõe uma **API interna HTTP** (`/internal/**`, porta 8082) chamada pelo `gateway` do
 monólito. Processo, imagem e container (`gerenciador-reservation`) próprios; **sem porta no host**.
 
+- **Autenticação:** todo `/internal/**` exige o header `X-Internal-Token` = `INTERNAL_API_TOKEN` (401 sem/errado); sem a variável o serviço
+  não sobe. O mesmo valor vai ao backend (o compose repassa do `Projeto/.env`).
 - **API interna:** reservar (`POST /internal/reservations?path=cas|naive`, com `Idempotency-Key`), confirmar, cancelar, listar por usuário,
   disponibilidade defasada (`GET /internal/events/{id}/availability`, usada só pelo braço `naive`) e a capacidade do evento
   (`/internal/eventcaps`, criada pelo catalog, idempotente por `event_id`; busca em lote por `POST .../batch`, ids no corpo). O `userId` vai como parâmetro explícito. Lista completa e códigos
@@ -20,7 +22,7 @@ monólito. Processo, imagem e container (`gerenciador-reservation`) próprios; *
 - **Independência:** só depende das libs `shared` e `reservation-client`, do Postgres e do Redpanda; não lê tabela do monólito.
 - **Configuração do caminho quente** (comparabilidade com o ponto 2): Tomcat 300, Hikari 1000, virtual threads desligadas. A conta do pool do
   Supavisor (mesmo tenant e usuário, o pool real não cresce; 1000 + 350 + 3 <= 1500 conexões de cliente) está no `CLAUDE.md`.
-- **Rodar:** `docker compose -f Projeto/docker-compose.yml up -d --build reservation`. Variáveis (só pelo nome): `SPRING_DATASOURCE_*`,
+- **Rodar:** `docker compose -f Projeto/docker-compose.yml up -d --build reservation`. Variáveis (só pelo nome): `INTERNAL_API_TOKEN`, `SPRING_DATASOURCE_*`,
   `SPRING_KAFKA_BOOTSTRAP_SERVERS`, `EVENTS_*`, `RESERVATION_CATALOG_RECONCILIATION_ENABLED`.
 - **Banco existente:** aplicar `Projeto/Backend/db/migrations/20261025-reservation-schema.sql` (com o backend e o reservation parados).
 - **Testar:** `Projeto/Backend/run-tests.sh` (reactor inteiro; precisa de `db` e `redpanda`, com `gerenciador-backend`,

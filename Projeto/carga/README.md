@@ -21,6 +21,8 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 >   `gerenciador-reservation` e `gerenciador-backend` (a lista exata está no relatório da #33).
 > - **Smoke antes de medir**: `docs/testes-manuais/smoke-reservation-servico-separado.sh` (stack no ar) prova overselling 0 no `cas` com o
 >   serviço separado e confere o banco lendo o schema `reservation`; ou `make test-matriz-cas HOST_IP=<ip> VUS=50 REPETICOES=2` (N pequeno).
+> - **`INTERNAL_API_TOKEN`** precisa estar no `Projeto/.env` do HOST (o compose o repassa ao `backend` e ao `reservation`, que não sobem sem
+>   ele). O gerador não precisa dele: o k6 só fala `/bff/**`.
 > - **Pool do Supavisor não cresce** (mesmo tenant e usuário dos três serviços); a soma dos Hikari de cliente é 1000 + 350 + 3 = 1353 <= 1500.
 
 Duas máquinas: o **host** (roda a stack, o alvo do teste) e o **gerador** (roda o k6).

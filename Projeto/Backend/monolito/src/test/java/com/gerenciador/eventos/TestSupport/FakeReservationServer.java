@@ -122,6 +122,12 @@ public final class FakeReservationServer {
     private void tratar(HttpExchange ex) throws IOException {
         String metodo = ex.getRequestMethod();
         String caminho = ex.getRequestURI().getPath();
+        String esperado = System.getenv("INTERNAL_API_TOKEN");
+        if (esperado != null && !esperado.equals(ex.getRequestHeaders().getFirst("X-Internal-Token"))) {
+            chamadas.add("401 " + metodo + " " + caminho); // como o serviço real: sem o token de serviço, 401
+            responder(ex, 401, "text/plain", "Token interno ausente ou inválido");
+            return;
+        }
         chamadas.add(metodo + " " + caminho);
         try {
             Map<String, String> q = query(ex.getRequestURI().getRawQuery());

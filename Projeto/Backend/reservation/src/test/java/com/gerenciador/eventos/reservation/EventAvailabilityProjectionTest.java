@@ -16,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
@@ -65,6 +66,7 @@ public class EventAvailabilityProjectionTest extends ReservationTestSupport {
     @Autowired private DatabaseConnection databaseConnection;
     @Autowired private KafkaListenerEndpointRegistry registry;
     @LocalServerPort private int porta;
+    @Value("${internal.api.token}") private String tokenInterno;
 
     @Test
     public void disponibilidadeEhCapacidadeMenosReservasAtivasDepoisDoConsumer() throws Exception {
@@ -181,7 +183,7 @@ public class EventAvailabilityProjectionTest extends ReservationTestSupport {
         Usuario u2 = novoUsuario("u2");
         Usuario u3 = novoUsuario("u3");
 
-        ReservationClient cliente = new ReservationClient("http://localhost:" + porta, 10, Duration.ofSeconds(2),
+        ReservationClient cliente = new ReservationClient("http://localhost:" + porta, tokenInterno, 10, Duration.ofSeconds(2),
                 Duration.ofSeconds(2), Duration.ofSeconds(10), Duration.ofSeconds(30));
         try {
             cliente.addLink(new EventWallet(u1.getId(), e.getEvent_id()), null, true);

@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.mockito.InOrder;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
@@ -62,6 +63,7 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 public class ReservationApiE2ETest extends ReservationTestSupport {
 
     @LocalServerPort private int porta;
+    @Value("${internal.api.token}") private String tokenInterno;
     @Autowired private DatabaseConnection databaseConnection;
     @Autowired private EventWalletRepository eventWalletRepository;
     @MockitoSpyBean private ReservationController reservationController;
@@ -71,7 +73,7 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
 
     @BeforeAll
     void abrirCliente() {
-        cliente = new ReservationClient("http://localhost:" + porta, 100, Duration.ofSeconds(2),
+        cliente = new ReservationClient("http://localhost:" + porta, tokenInterno, 100, Duration.ofSeconds(2),
                 Duration.ofSeconds(5), Duration.ofSeconds(15), Duration.ofSeconds(30));
     }
 
@@ -332,10 +334,93 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
         assertNull(cliente.findByEventId(987_000_001L), "nada foi criado");
     }
 
+    // ===================== token de serviço (autenticação das chamadas internas) =====================
+
+    /** Sem o header, ou com o valor errado, todo {@code /internal/**} responde 401 e nada chega ao controller. */
+    @Test
+    public void semTokenOuComTokenErradoTodaRotaInternaDa401() {
+        RestClient cru = RestClient.builder().baseUrl("http://localhost:" + porta).build();
+        String[] rotas = {"/internal/reservations/active?userId=1&eventId=1", "/internal/events/1/availability",
+                "/internal/eventcaps/1", "/internal/reservations/user/1"};
+        for (String rota : rotas) {
+            int semToken = cru.get().uri(rota).exchange((req, resp) -> resp.getStatusCode().value());
+            int errado = cru.get().uri(rota).header(ReservationClient.HEADER_TOKEN_INTERNO, tokenInterno + "x")
+                    .exchange((req, resp) -> resp.getStatusCode().value());
+            int vazio = cru.get().uri(rota).header(ReservationClient.HEADER_TOKEN_INTERNO, "")
+                    .exchange((req, resp) -> resp.getStatusCode().value());
+            assertEquals(401, semToken, rota);
+            assertEquals(401, errado, rota);
+            assertEquals(401, vazio, rota);
+        }
+        // escrita sem token: 401 e NADA gravado
+        long id = 2_050_000_001L;
+        int put = cru.put().uri("/internal/eventcaps/{id}", id).contentType(MediaType.APPLICATION_JSON)
+                .body("{\"capacity\":5}").exchange((req, resp) -> resp.getStatusCode().value());
+        assertEquals(401, put);
+        assertNull(cliente.findByEventId(id), "o PUT sem token não criou o eventcap");
+    }
+
+    /**
+     * O filtro não pode decidir por prefixo do URI cru: {@code /internal;x=1/...} (matrix param) e {@code /%69nternal/...}
+     * (percent-encoding) são normalizados pelo Spring MVC para a rota interna e passariam sem token. Toda requisição sem token é 401,
+     * inclusive caminho fora de {@code /internal}.
+     */
+    @Test
+    public void caminhosDisfarcadosEForaDeInternalTambemDao401SemToken() {
+        RestClient cru = RestClient.builder().baseUrl("http://localhost:" + porta).build();
+        java.net.URI base = java.net.URI.create("http://localhost:" + porta);
+        int get = cru.get().uri(base.resolve("/internal;x=1/eventcaps/1")).exchange((req, resp) -> resp.getStatusCode().value());
+        int post = cru.post().uri(base.resolve("/%69nternal/reservations?path=cas")).contentType(MediaType.APPLICATION_JSON)
+                .body("{\"userId\":1,\"eventId\":1}").exchange((req, resp) -> resp.getStatusCode().value());
+        int delete = cru.delete().uri(base.resolve("/internal;a/reservations?userId=1&eventId=1"))
+                .exchange((req, resp) -> resp.getStatusCode().value());
+        int fora = cru.get().uri(base.resolve("/qualquer/coisa")).exchange((req, resp) -> resp.getStatusCode().value());
+        int raiz = cru.get().uri(base.resolve("/")).exchange((req, resp) -> resp.getStatusCode().value());
+        assertEquals(401, get);
+        assertEquals(401, post);
+        assertEquals(401, delete);
+        assertEquals(401, fora);
+        assertEquals(401, raiz);
+    }
+
+    /** Com o token certo o fluxo é o normal (é o que todos os outros testes deste arquivo fazem pelo cliente real). */
+    @Test
+    public void comTokenCertoOFluxoEhNormal() {
+        RestClient cru = RestClient.builder().baseUrl("http://localhost:" + porta).build();
+        int status = cru.get().uri("/internal/reservations/active?userId=1&eventId=1")
+                .header(ReservationClient.HEADER_TOKEN_INTERNO, tokenInterno).exchange((req, resp) -> resp.getStatusCode().value());
+        assertEquals(200, status);
+        // o 401 vira RuntimeException no cliente (token errado no gateway = falha alta, nunca "vazio")
+        ReservationClient tokenErrado = new ReservationClient("http://localhost:" + porta, "outro-token", 2, Duration.ofSeconds(2),
+                Duration.ofSeconds(2), Duration.ofSeconds(5), Duration.ofSeconds(20));
+        try {
+            RuntimeException ex = assertThrows(RuntimeException.class, () -> tokenErrado.existsActive(1L, 1L));
+            assertTrue(ex.getMessage().contains("401"), ex.getMessage());
+        } finally {
+            try {
+                tokenErrado.close();
+            } catch (java.io.IOException ignorada) {
+                // nada a fechar além do pool
+            }
+        }
+    }
+
+    /** Sem a variável o serviço (e o cliente) FALHAM NO BOOT com mensagem clara: sem default, sem subir aberto. */
+    @Test
+    public void semTokenConfiguradoServicoEClienteNaoSobem() {
+        IllegalStateException servico = assertThrows(IllegalStateException.class, () -> new InternalTokenFilter(""));
+        assertTrue(servico.getMessage().contains("INTERNAL_API_TOKEN"), servico.getMessage());
+        assertThrows(IllegalStateException.class, () -> new InternalTokenFilter("   "));
+        IllegalStateException clienteSemToken = assertThrows(IllegalStateException.class, () -> new ReservationClient(
+                "http://localhost:1", "", 2, Duration.ofSeconds(1), Duration.ofSeconds(1), Duration.ofSeconds(1), Duration.ofSeconds(1)));
+        assertTrue(clienteSemToken.getMessage().contains("INTERNAL_API_TOKEN"), clienteSemToken.getMessage());
+    }
+
     /** Pedido malformado é erro do chamador (400), não falha do serviço (500). */
     @Test
     public void corpoMalformadoEParametroAusenteDao400() {
-        RestClient cru = RestClient.builder().baseUrl("http://localhost:" + porta).build();
+        RestClient cru = RestClient.builder().baseUrl("http://localhost:" + porta)
+                .defaultHeader(ReservationClient.HEADER_TOKEN_INTERNO, tokenInterno).build();
         int jsonRuim = cru.post().uri("/internal/reservations").contentType(MediaType.APPLICATION_JSON).body("{nao e json")
                 .exchange((req, resp) -> resp.getStatusCode().value());
         int semParametro = cru.get().uri("/internal/reservations/active")

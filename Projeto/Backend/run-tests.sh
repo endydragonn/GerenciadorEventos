@@ -122,6 +122,9 @@ mkdir -p "$SCRIPT_DIR/target"
 # inteira, mesmo que o Projeto/.env tenha sido setado para "naive" (experimento #11/#12) — senão os testes CAS do gateway
 # (ex.: EventWalletGatewayCasTest) quebrariam.
 #
+# INTERNAL_API_TOKEN: token de serviço das chamadas internas gateway -> reservation (#33). Valor de TESTE explícito, não é segredo; o
+# serviço e o cliente não sobem sem a variável (sem default).
+#
 # SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092: o broker interno do compose (o default do application.properties,
 # localhost:9092, não existe dentro do container de teste).
 # EVENTS_CONSUMER_GROUP=gerenciador-eventos-test: os testes têm group próprio, para nunca entrar (e causar
@@ -131,6 +134,7 @@ docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
   -e IDEMPOTENCY_RETENTION_SCAN_MS=3600000 \
   -e NOTIFICATION_EVENTS_RETENTION_SCAN_MS=3600000 \
   -e RESERVATION_READPATH=cas \
+  -e INTERNAL_API_TOKEN=token-de-teste-nao-e-segredo \
   -e SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092 \
   -e EVENTS_CONSUMER_GROUP=gerenciador-eventos-test \
   -e "MVN_REPO=$CONTAINER_HOME/.m2/repository" \

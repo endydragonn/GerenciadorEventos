@@ -59,14 +59,25 @@ public class ReservationClient implements EventWalletApi, EventCapacityApi {
 
     private static final MediaType JSON = MediaType.APPLICATION_JSON;
 
+    /** Header do token de serviço compartilhado que o reservation exige em todo {@code /internal/**} (issue #33, volta 3). */
+    public static final String HEADER_TOKEN_INTERNO = "X-Internal-Token";
+
     /** Resposta de {@code GET /internal/events/{id}/availability}. */
     public record Disponibilidade(int available) { }
 
     private final RestClient http;
     private final CloseableHttpClient httpClient;
 
-    public ReservationClient(String baseUrl, int maxConnections, Duration connectTimeout,
+    /**
+     * @param internalToken token de serviço compartilhado ({@code INTERNAL_API_TOKEN}), enviado em TODA chamada; obrigatório:
+     *                      sem ele o reservation responde 401 a tudo, então falhar aqui, na construção, é melhor que descobrir em produção
+     */
+    public ReservationClient(String baseUrl, String internalToken, int maxConnections, Duration connectTimeout,
             Duration connectionRequestTimeout, Duration responseTimeout, Duration evictIdle) {
+        if (internalToken == null || internalToken.isBlank()) {
+            throw new IllegalStateException("INTERNAL_API_TOKEN não configurado: o cliente do reservation precisa do token de "
+                    + "serviço (o mesmo valor do serviço reservation). Gere um com `openssl rand -hex 32` e ponha no Projeto/.env.");
+        }
         PoolingHttpClientConnectionManager pool = PoolingHttpClientConnectionManagerBuilder.create()
                 .setMaxConnTotal(maxConnections)
                 .setMaxConnPerRoute(maxConnections)
@@ -90,6 +101,7 @@ public class ReservationClient implements EventWalletApi, EventCapacityApi {
                 .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         this.http = RestClient.builder()
                 .baseUrl(baseUrl)
+                .defaultHeader(HEADER_TOKEN_INTERNO, internalToken)
                 .requestFactory(new HttpComponentsClientHttpRequestFactory(httpClient))
                 .messageConverters(c -> {
                     c.removeIf(MappingJackson2HttpMessageConverter.class::isInstance);
