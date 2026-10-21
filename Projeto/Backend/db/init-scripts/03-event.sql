@@ -3,9 +3,9 @@
 -- Encoding: UTF-8
 --
 -- NOTA DE ARQUITETURA: capacidade/vagas (capacity, quant) e a janela de venda
--- (buy_time_limit) NÃO ficam aqui. Foram isoladas no agregado public.eventcap
--- (ver 04-eventcap.sql), que tem sua própria fronteira de consistência forte e é
--- protegido por UPDATE condicional atômico. Aqui ficam só os metadados do evento.
+-- (buy_time_limit) NÃO ficam aqui. Foram isoladas no agregado eventcap, que desde a #33 é do serviço
+-- reservation (schema reservation, ver 13-reservation.sql; antes public.eventcap em 04-eventcap.sql), com sua própria
+-- fronteira de consistência forte, protegido por UPDATE condicional atômico. Aqui ficam só os metadados do evento.
 --
 -- NOTA DE EVENT SOURCING (issue #28): esta tabela é a PROJEÇÃO INLINE do stream 'catalog.event' do
 -- event_store. 'version' = versão do último evento aplicado (0 = evento pré-ES, sem stream); é a versão

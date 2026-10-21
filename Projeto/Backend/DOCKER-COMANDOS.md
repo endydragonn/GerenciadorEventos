@@ -253,7 +253,7 @@ docker compose exec db psql -h localhost -U admin -d meu_banco \
 
 # Limpar todas as tabelas (CUIDADO!)
 docker compose exec db psql -h localhost -U admin -d meu_banco \
-  -c "TRUNCATE users, event, mywallet, walletevent RESTART IDENTITY CASCADE;"
+  -c "TRUNCATE users, event, mywallet, reservation.eventcap, reservation.walletevent, reservation.event_availability, reservation.idempotency_key RESTART IDENTITY CASCADE;"
 ```
 
 ---

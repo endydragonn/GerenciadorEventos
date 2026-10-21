@@ -257,7 +257,7 @@ e dead-letter nativos); o Kafka fica só com eventos de domínio.
   `event_outbox`, `event_snapshot` + migração idempotente; em `shared`: append/read por stream com
   concorrência otimista, relay, base de consumer idempotente (regra de versão acima) e replay em
   tabela-sombra; teste de replay. Tudo em `public` agora; vira uma por schema de serviço na extração
-  (Fase 7). `run-tests.sh` passa a exigir `db` **e** `redpanda` no ar.
+  (Fase 7: o `reservation` da #33 tem a sua). `run-tests.sh` passa a exigir `db` **e** `redpanda` no ar.
 - **#28:** `catalog` grava `EventCreated`, `EventUpdated`, `PresenterAdded`, `PresenterRemoved`,
   `EventCancelled` e projeta `event`/`eventpresenter` inline (com coluna `version`).
 - **#29:** reserva appenda `SlotReserved` na transação do CAS; confirm/expire/cancel emitem
@@ -270,6 +270,16 @@ e dead-letter nativos); o Kafka fica só com eventos de domínio.
     do harness de carga (`Get-AmostraLag` em `Projeto/carga/rodar-matriz.ps1`);
   - `READMODEL_AVAILABILITY_REFRESH_MS` sai do `Backend/CLAUDE.md` e do compose.
 - **#30:** checkpoint ponta a ponta e diagrama command → evento → projeção em `docs/`.
+- **#33 (Fase 7, extração do `reservation`): um event store POR SERVIÇO.** O `reservation` appenda `reservation.wallet` na mesma transação
+  do CAS e o consumer idempotente dele confere o `eventId` e lê/avança o checkpoint; se essas tabelas ficassem em `public`, o serviço leria e
+  escreveria tabelas do monólito (e o relay dele disputaria o outbox do `catalog`), contra a regra "nenhum serviço lê tabela de outro". Decisão:
+  `event_store`, `event_outbox`, `event_snapshot` e `projection_checkpoint` existem em cada schema de serviço (`public` para o monólito, com
+  `catalog.event` e `identity.notification`; `reservation` para `reservation.wallet`), com **relay e consumer próprios**. A `shared` ganhou o
+  parâmetro `events.schema` (default `public`): `EventStore.tabela(...)` qualifica as tabelas para o append, o relay, o consumer, o replay
+  (tabelas vivas e sombra) e o snapshot; o **advisory lock do relay passou a ser por schema** (é do BANCO; a mesma chave serializaria os relays
+  de serviços diferentes e inflaria o lag medido). O broker continua único (um tópico por `streamType`). A migração `20261025` move os streams
+  `reservation.wallet` que já existiam. O consumer `catalog.event → reservation` (reconciliação do `eventcap`) NÃO usa o checkpoint: a criação
+  é idempotente por `event_id`. O custo para a Rodada 3 não muda no append (o mesmo `INSERT` único com o outbox), só o schema onde mora.
 - **Testes:**
   - relay e consumer ligados por flag (`events.relay.enabled`, `events.consumer.enabled`) só nos
     contextos que precisam;

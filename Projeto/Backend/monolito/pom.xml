@@ -8,12 +8,18 @@
     </parent>
     <artifactId>monolito</artifactId>
     <name>monolito</name>
-    <description>Monólito: identity, catalog, reservation e gateway (/bff/**). O envio de e-mail saiu para o serviço notification (issue 32)</description>
+    <description>Monólito: identity, catalog e gateway (/bff/**). O e-mail saiu para o serviço notification (issue 32) e a reserva para o serviço reservation (issue 33)</description>
     <dependencies>
         <!-- Lib comum: DatabaseConnection + infra de event sourcing (shared.events) -->
         <dependency>
             <groupId>com.example.demo</groupId>
             <artifactId>shared</artifactId>
+        </dependency>
+        <!-- Contrato HTTP do serviço reservation (issue #33): DTOs + ReservationClient. É só o cliente; o código do serviço
+             (módulo reservation) NÃO está no classpath do monólito. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>reservation-client</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -64,11 +70,19 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
-        <!-- Kafka-compatível (Redpanda): relay do outbox e consumer da projeção de disponibilidade (#27/#29).
-             Versão gerenciada pelo Spring Boot. O spring-boot-starter-mail SAIU daqui na #32: o e-mail é do serviço notification. -->
+        <!-- Kafka-compatível (Redpanda): relay do outbox do catalog e do identity (#27/#28/#32). Versão gerenciada pelo Spring
+             Boot. O spring-boot-starter-mail SAIU daqui na #32 (o e-mail é do serviço notification) e o consumer da
+             projeção de disponibilidade na #33 (é do serviço reservation). -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <!-- LauncherSessionListener (TestSupport/ReservationFakeSession): sobe o servidor falso do reservation antes de
+             qualquer contexto Spring dos testes (versão do BOM do Spring Boot). -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <scope>test</scope>
         </dependency>
         <!-- ArchUnit: testes de fronteira de camada (issue #83) -->
         <dependency>

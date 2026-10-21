@@ -45,19 +45,23 @@ public class TestSchemasTest {
     void defaultCobreSoPublicEIncluiTabelasDoApp() throws Exception {
         try (Connection c = databaseConnection.getConnection()) {
             List<String> tabelas = TestSchemas.tabelas(c, TestSchemas.parse("public"));
-            assertTrue(tabelas.containsAll(List.of("public.users", "public.event", "public.eventcap",
-                    "public.walletevent", "public.mywallet", "public.event_availability")));
+            assertTrue(tabelas.containsAll(List.of("public.users", "public.event", "public.eventpresenter",
+                    "public.mywallet", "public.event_store")));
             assertTrue(tabelas.stream().allMatch(t -> t.startsWith("public.")));
+            assertFalse(tabelas.contains("public.eventcap"), "eventcap saiu de public na #33");
         }
     }
 
-    /** Fase 7 (#32): o schema do serviço notification entra no harness (truncate + validação) por padrão. */
+    /** Fase 7 (#32, #33): os schemas dos serviços notification e reservation entram no harness (truncate + validação) por padrão. */
     @Test
-    void defaultDoHarnessCobrePublicENotification() throws Exception {
-        assertEquals(List.of("public", "notification"), TestSchemas.parse(TestSchemas.DEFAULT));
+    void defaultDoHarnessCobrePublicNotificationEReservation() throws Exception {
+        assertEquals(List.of("public", "notification", "reservation"), TestSchemas.parse(TestSchemas.DEFAULT));
         try (Connection c = databaseConnection.getConnection()) {
             List<String> tabelas = TestSchemas.tabelas(c, TestSchemas.parse(TestSchemas.DEFAULT));
             assertTrue(tabelas.contains("notification.processed_event"), "tabelas: " + tabelas);
+            assertTrue(tabelas.containsAll(List.of("reservation.eventcap", "reservation.walletevent",
+                    "reservation.event_availability", "reservation.idempotency_key", "reservation.event_store")),
+                    "tabelas: " + tabelas);
             assertTrue(tabelas.contains("public.users"));
         }
     }

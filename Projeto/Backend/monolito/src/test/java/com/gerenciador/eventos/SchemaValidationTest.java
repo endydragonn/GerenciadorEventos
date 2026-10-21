@@ -35,16 +35,12 @@ public class SchemaValidationTest {
     void shouldHaveRequiredTables() throws Exception {
         assertTrue(tableExists("users"), "Tabela 'users' não existe");
         assertTrue(tableExists("event"), "Tabela 'event' não existe");
-        assertTrue(tableExists("eventcap"), "Tabela 'eventcap' não existe");
         assertTrue(tableExists("eventpresenter"), "Tabela 'eventpresenter' não existe");
         assertTrue(tableExists("mywallet"), "Tabela 'mywallet' não existe");
-        assertTrue(tableExists("walletevent"), "Tabela 'walletevent' não existe");
-        assertTrue(tableExists("event_availability"), "Tabela 'event_availability' não existe");
-        assertTrue(tableExists("idempotency_key"), "Tabela 'idempotency_key' não existe");
-        assertTrue(tableExists("event_store"), "Tabela 'event_store' não existe");
-        assertTrue(tableExists("event_outbox"), "Tabela 'event_outbox' não existe");
-        assertTrue(tableExists("event_snapshot"), "Tabela 'event_snapshot' não existe");
-        assertTrue(tableExists("projection_checkpoint"), "Tabela 'projection_checkpoint' não existe");
+        assertTrue(tableExists("public.event_store"), "Tabela 'public.event_store' não existe");
+        assertTrue(tableExists("public.event_outbox"), "Tabela 'public.event_outbox' não existe");
+        assertTrue(tableExists("public.event_snapshot"), "Tabela 'public.event_snapshot' não existe");
+        assertTrue(tableExists("public.projection_checkpoint"), "Tabela 'public.projection_checkpoint' não existe");
         assertTrue(tableExists("processed_event"), "Tabela 'notification.processed_event' não existe");
     }
 
@@ -72,13 +68,6 @@ public class SchemaValidationTest {
     }
 
     @Test
-    void eventCapTableShouldHaveKeyColumns() throws Exception {
-        assertColumns("eventcap",
-            "event_id", "capacity", "quant", "buy_time_limit", "max_time_in_line"
-        );
-    }
-
-    @Test
     void eventPresenterTableShouldHaveKeyColumns() throws Exception {
         assertColumns("eventpresenter", "event_id", "presenter_name");
     }
@@ -90,74 +79,26 @@ public class SchemaValidationTest {
         );
     }
 
-    @Test
-    void walletEventTableShouldHaveKeyColumns() throws Exception {
-        assertColumns("walletevent",
-            "user_id", "event_id", "status", "expires_at", "created_at", "updated_at", "version"
-        );
-    }
-
-    @Test
-    void eventAvailabilityTableShouldHaveKeyColumns() throws Exception {
-        assertColumns("event_availability",
-            "event_id", "ativos", "last_occurred_at", "applied_at"
-        );
-    }
-
-    /**
-     * Issue #29: event_availability é a projeção assíncrona (só {@code ativos}; a disponibilidade é calculada na
-     * leitura). Sai o schema do refresh por timer (available/refreshed_at) e a FK para event: uma violação no consumer
-     * seria SQLException, retentada sem limite, e travaria a partição.
-     */
-    @Test
-    void eventAvailabilityShouldBeTheAsyncProjectionWithoutFkNorOldColumns() throws Exception {
-        assertEquals(List.of("event_id"), constraintColumns("event_availability", 'p'), "PK de event_availability");
-        assertEquals(List.of(), constraintColumns("event_availability", 'f'), "event_availability não tem FK");
-        String sql = "select count(*) from information_schema.columns where table_schema = any(?) "
-            + "and table_name = 'event_availability' and column_name in ('available', 'refreshed_at')";
-        try (Connection c = databaseConnection.getConnection();
-             PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
-            try (ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                assertEquals(0, rs.getInt(1), "colunas do schema antigo (available/refreshed_at) sumiram");
-            }
-        }
-    }
-
-    @Test
-    void idempotencyKeyTableShouldHaveKeyColumns() throws Exception {
-        assertColumns("idempotency_key",
-            "idempotency_key", "user_id", "event_id", "expires_at", "created_at"
-        );
-    }
-
-    /** Issue #129: a chave de idempotência é escopada por usuário: PK = (user_id, idempotency_key), nessa ordem. */
-    @Test
-    void idempotencyKeyPrimaryKeyShouldBeUserIdAndKey() throws Exception {
-        assertEquals(List.of("user_id", "idempotency_key"), constraintColumns("idempotency_key", 'p'), "PK de idempotency_key");
-    }
-
     /** Issue #27: envelope do evento no event_store; a PK é a global_position e o UNIQUE dá a concorrência otimista. */
     @Test
     void eventStoreShouldHaveEnvelopeColumnsAndKeys() throws Exception {
-        assertColumns("event_store",
+        assertColumns("public.event_store",
             "global_position", "event_id", "stream_type", "stream_id", "version", "event_type",
             "schema_version", "occurred_at", "payload", "metadata", "partition_key"
         );
-        assertEquals(List.of("global_position"), constraintColumns("event_store", 'p'), "PK de event_store");
-        assertEquals(List.of("stream_type", "stream_id", "version"), constraintColumns("event_store", 'u'),
+        assertEquals(List.of("global_position"), constraintColumns("public.event_store", 'p'), "PK de event_store");
+        assertEquals(List.of("stream_type", "stream_id", "version"), constraintColumns("public.event_store", 'u'),
             "UNIQUE de event_store");
     }
 
     @Test
     void eventOutboxSnapshotAndCheckpointShouldHaveKeyColumnsAndKeys() throws Exception {
-        assertColumns("event_outbox", "global_position");
-        assertEquals(List.of("global_position"), constraintColumns("event_outbox", 'p'), "PK de event_outbox");
-        assertColumns("event_snapshot", "stream_type", "stream_id", "version", "state");
-        assertEquals(List.of("stream_type", "stream_id"), constraintColumns("event_snapshot", 'p'), "PK de event_snapshot");
-        assertColumns("projection_checkpoint", "projecao", "stream_type", "stream_id", "version");
-        assertEquals(List.of("projecao", "stream_type", "stream_id"), constraintColumns("projection_checkpoint", 'p'),
+        assertColumns("public.event_outbox", "global_position");
+        assertEquals(List.of("global_position"), constraintColumns("public.event_outbox", 'p'), "PK de event_outbox");
+        assertColumns("public.event_snapshot", "stream_type", "stream_id", "version", "state");
+        assertEquals(List.of("stream_type", "stream_id"), constraintColumns("public.event_snapshot", 'p'), "PK de event_snapshot");
+        assertColumns("public.projection_checkpoint", "projecao", "stream_type", "stream_id", "version");
+        assertEquals(List.of("projecao", "stream_type", "stream_id"), constraintColumns("public.projection_checkpoint", 'p'),
             "PK de projection_checkpoint");
     }
 
@@ -165,11 +106,10 @@ public class SchemaValidationTest {
     @Test
     void eventOutboxShouldHaveAggressiveAutovacuum() throws Exception {
         String sql = "select array_to_string(c.reloptions, ',') from pg_class c "
-            + "join pg_namespace n on n.oid = c.relnamespace where c.relname = 'event_outbox' and n.nspname = any(?)";
+            + "join pg_namespace n on n.oid = c.relnamespace where c.relname = 'event_outbox' and n.nspname = 'public'";
         String opcoes;
         try (Connection c = databaseConnection.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
             try (ResultSet rs = ps.executeQuery()) {
                 assertTrue(rs.next(), "Tabela 'event_outbox' não existe");
                 opcoes = rs.getString(1);
@@ -191,8 +131,8 @@ public class SchemaValidationTest {
         try (Connection c = databaseConnection.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, String.valueOf(contype));
-            ps.setString(2, table);
-            ps.setArray(3, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
+            ps.setString(2, nome(table));
+            ps.setArray(3, c.createArrayOf("text", schemasDe(table)));
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) cols.add(rs.getString(1));
             }
@@ -200,27 +140,45 @@ public class SchemaValidationTest {
         return cols;
     }
 
-    /** Issue #130: o job de retenção filtra por created_at; sem o índice cada rodada faz seq scan. */
+    /**
+     * Issue #33 (Fase 7): {@code eventcap}, {@code walletevent}, {@code event_availability} e {@code idempotency_key} SAÍRAM de
+     * {@code public} para o schema {@code reservation} (do serviço reservation, validado no módulo dele), e não restou FK de
+     * {@code public} para o schema novo: o monólito não lê nem referencia tabela do serviço.
+     */
     @Test
-    void idempotencyKeyShouldHaveCreatedAtIndex() throws Exception {
-        String sql = "select count(*) from pg_indexes where schemaname = any(?) "
-            + "and tablename = 'idempotency_key' and indexname = 'idx_idempotency_key_created_at'";
-        try (Connection c = databaseConnection.getConnection();
-             PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
-            try (ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                assertEquals(1, rs.getInt(1), "índice idx_idempotency_key_created_at");
-            }
+    void reservationTablesLeftPublicAndNothingReferencesThem() throws Exception {
+        for (String t : List.of("eventcap", "walletevent", "event_availability", "idempotency_key")) {
+            assertTrue(!tableExists("public." + t), "public." + t + " deveria ter ido para o schema reservation");
+            assertTrue(tableExists("reservation." + t), "reservation." + t + " não existe");
         }
+        String sql = "select count(*) from pg_constraint c join pg_class t on t.oid = c.conrelid "
+            + "join pg_namespace n on n.oid = t.relnamespace join pg_class r on r.oid = c.confrelid "
+            + "join pg_namespace rn on rn.oid = r.relnamespace "
+            + "where c.contype = 'f' and n.nspname <> rn.nspname and 'reservation' in (n.nspname, rn.nspname)";
+        try (Connection c = databaseConnection.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            rs.next();
+            assertEquals(0, rs.getInt(1), "nenhuma FK cross-schema envolvendo reservation");
+        }
+    }
+
+    /** {@code "schema.tabela"} => só aquele schema; sem prefixo => os schemas configurados ({@code test.db.schemas}). */
+    private Object[] schemasDe(String table) {
+        return table.contains(".") ? new Object[] {table.substring(0, table.indexOf('.'))}
+                : TestSchemas.parse(schemasConfig).toArray();
+    }
+
+    private static String nome(String table) {
+        return table.substring(table.indexOf('.') + 1);
     }
 
     private boolean tableExists(String table) throws Exception {
         String sql = "select count(*) from information_schema.tables where table_schema = any(?) and table_name = ?";
         try (Connection c = databaseConnection.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
-            ps.setString(2, table);
+            ps.setArray(1, c.createArrayOf("text", schemasDe(table)));
+            ps.setString(2, nome(table));
             try (ResultSet rs = ps.executeQuery()) {
                 rs.next();
                 return rs.getInt(1) > 0;
@@ -234,8 +192,8 @@ public class SchemaValidationTest {
         Set<String> actual = new HashSet<>();
         try (Connection c = databaseConnection.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
-            ps.setString(2, table);
+            ps.setArray(1, c.createArrayOf("text", schemasDe(table)));
+            ps.setString(2, nome(table));
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     actual.add(rs.getString(1).toLowerCase());

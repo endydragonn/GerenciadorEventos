@@ -61,6 +61,9 @@ public class EventReplay {
      */
     public void rebuild(Projection projection, String streamType, String schema) throws SQLException {
         String sombra = identificador(schema);
+        if (sombra.equals(eventStore.schema())) {
+            throw new IllegalArgumentException("O schema-sombra não pode ser o schema vivo do serviço: '" + sombra + "'");
+        }
         try (Connection conn = db.getConnection()) {
             conn.setAutoCommit(false);
             try (Statement st = conn.createStatement()) {
@@ -70,7 +73,7 @@ public class EventReplay {
                 st.execute("CREATE SCHEMA " + sombra);
                 for (String tabela : projection.tables()) {
                     st.execute("CREATE TABLE " + sombra + "." + identificador(tabela)
-                            + " (LIKE public." + identificador(tabela) + " INCLUDING ALL)");
+                            + " (LIKE " + eventStore.schema() + "." + identificador(tabela) + " INCLUDING ALL)");
                 }
                 long ultima = 0;
                 List<EventEnvelope> lote;
@@ -110,7 +113,7 @@ public class EventReplay {
                 // tabela ausente do mapa, ou lista nula/vazia, compara SELECT * (lista vazia geraria "SELECT  FROM")
                 String cols = lista == null || lista.isEmpty() ? "*"
                         : lista.stream().map(EventReplay::identificador).collect(Collectors.joining(", "));
-                String viva = "SELECT " + cols + " FROM public." + identificador(tabela);
+                String viva = "SELECT " + cols + " FROM " + eventStore.schema() + "." + identificador(tabela);
                 String copia = "SELECT " + cols + " FROM " + sombra + "." + identificador(tabela);
                 String sql = "SELECT (SELECT count(*) FROM (" + viva + " EXCEPT ALL " + copia
                         + ") a) + (SELECT count(*) FROM (" + copia + " EXCEPT ALL " + viva + ") b)";
@@ -133,7 +136,7 @@ public class EventReplay {
     }
 
     private List<EventEnvelope> proximaPagina(Connection conn, String streamType, long depoisDe) throws SQLException {
-        String sql = "SELECT " + EventStore.COLUNAS + " FROM public.event_store "
+        String sql = "SELECT " + EventStore.COLUNAS + " FROM " + eventStore.tabela("event_store") + " "
                 + "WHERE stream_type = ? AND global_position > ? ORDER BY global_position LIMIT " + pagina;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, streamType);

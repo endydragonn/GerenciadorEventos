@@ -28,6 +28,12 @@ public class GlobalDbTruncator {
     }
 
     private void truncateAll() {
+        // o servidor falso do reservation guarda estado em memória (eventcap por event_id): o TRUNCATE ... RESTART IDENTITY
+        // reaproveita os ids de evento, então o estado dele tem de ir junto
+        FakeReservationServer fake = FakeReservationServer.get();
+        if (fake != null) {
+            fake.reset();
+        }
         String truncateSQL = null;
         try (Connection conn = databaseConnection.getConnection();
              Statement stmt = conn.createStatement()) {

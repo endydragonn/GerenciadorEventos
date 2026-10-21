@@ -26,8 +26,8 @@
   quando o host ja degradou. Dimensione -MaxVus pela memoria do gerador (~1-2 MB por VU, estimativa).
 
   -MaxConnections e -PoolHikari so REGISTRAM no CSV o que o HOST esta rodando (o gerador nao os enxerga):
-  host: make host-rpm MAX_CONN=<n> (pool: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE, padrao 1000).
-  Confira no host: docker exec gerenciador-backend printenv SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE
+  host: make host-rpm MAX_CONN=<n> (pool do SERVICO reservation, o caminho quente: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE, padrao 1000).
+  Confira no host: docker exec gerenciador-reservation printenv SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE
 
   Sem limite de duracao de 110 s do teste 2: aquele limite evita que reservas pending expirem e falseiem a
   conta de overselling; aqui nao se mede overselling e, com -PctConfirma 100 (padrao), nada fica pending.
@@ -105,7 +105,7 @@ Info "Pares: $($plano.TotalPares) (soma das cotas ceil(RPM*$Duracao/60)+1); $Usu
 $tolS = $MaxVus / ($plano.Rpms[-1] / 60.0)
 Info ("VUs: {0} pre-alocados (= maximo; ~1-2 MB cada: confira a RAM do gerador). So ha descarte se uma iteracao (reserva + confirma) passar de {1:N1} s no degrau de {2} RPM." -f $MaxVus, $tolS, $plano.Rpms[-1])
 if ($tolS -lt 2.5) { Warn "MaxVus cobre iteracoes de ate $([math]::Round($tolS, 1)) s no maior degrau: com p95 de 1 s por requisicao (reserva + confirma) o k6 pode descartar iteracoes antes de o p95 chegar a 1 s, e o report leria isso como saturacao do gerador. Aumente -MaxVus ou reduza -RpmMax." }
-Info "Registrando do host: braco=$Rotulo max_connections=$MaxConnections pool_hikari=$PoolHikari (confira: docker exec gerenciador-backend printenv SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE)."
+Info "Registrando do host: braco=$Rotulo max_connections=$MaxConnections pool_hikari=$PoolHikari (confira: docker exec gerenciador-reservation printenv SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE)."
 
 try {
     Info "Semeando $Usuarios usuarios + $eventos eventos (bcrypt no host: pode levar um bom tempo)..."

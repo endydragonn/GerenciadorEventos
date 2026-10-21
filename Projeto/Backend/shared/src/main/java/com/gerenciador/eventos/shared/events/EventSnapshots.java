@@ -23,10 +23,12 @@ public class EventSnapshots {
 
     private final ObjectMapper json;
     private final int every;
+    private final EventStore eventStore;
 
-    public EventSnapshots(ObjectMapper json, @Value("${events.snapshot.every:100}") int every) {
+    public EventSnapshots(ObjectMapper json, @Value("${events.snapshot.every:100}") int every, EventStore eventStore) {
         this.json = json;
         this.every = every;
+        this.eventStore = eventStore;
     }
 
     /** O stream acabou de chegar em {@code version}: é hora de salvar um snapshot? */
@@ -36,7 +38,7 @@ public class EventSnapshots {
 
     /** Grava o snapshot (um por stream). Um snapshot mais antigo que o gravado é ignorado. */
     public void save(Connection conn, Snapshot s) throws SQLException {
-        String sql = "INSERT INTO public.event_snapshot (stream_type, stream_id, version, state) "
+        String sql = "INSERT INTO " + eventStore.tabela("event_snapshot") + " (stream_type, stream_id, version, state) "
                 + "VALUES (?, ?, ?, ?::jsonb) ON CONFLICT (stream_type, stream_id) DO UPDATE "
                 + "SET version = EXCLUDED.version, state = EXCLUDED.state, created_at = now() "
                 + "WHERE event_snapshot.version < EXCLUDED.version";
@@ -50,7 +52,8 @@ public class EventSnapshots {
     }
 
     public Optional<Snapshot> load(Connection conn, String streamType, String streamId) throws SQLException {
-        String sql = "SELECT version, state::text FROM public.event_snapshot WHERE stream_type = ? AND stream_id = ?";
+        String sql = "SELECT version, state::text FROM " + eventStore.tabela("event_snapshot")
+                + " WHERE stream_type = ? AND stream_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, streamType);
             ps.setString(2, streamId);

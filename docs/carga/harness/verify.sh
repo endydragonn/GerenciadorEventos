@@ -51,9 +51,9 @@ psql_db() {
         sh "$1"
 }
 
-CAPACITY="$(psql_db "SELECT capacity FROM eventcap WHERE event_id = ${EVENT_ID};" | tr -d '[:space:]')"
-CONFIRMADAS="$(psql_db "SELECT count(*) FROM walletevent WHERE event_id = ${EVENT_ID} AND status = 'confirmed';" | tr -d '[:space:]')"
-PENDENTES="$(psql_db "SELECT count(*) FROM walletevent WHERE event_id = ${EVENT_ID} AND status = 'pending';" | tr -d '[:space:]')"
+CAPACITY="$(psql_db "SELECT capacity FROM reservation.eventcap WHERE event_id = ${EVENT_ID};" | tr -d '[:space:]')"
+CONFIRMADAS="$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = ${EVENT_ID} AND status = 'confirmed';" | tr -d '[:space:]')"
+PENDENTES="$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = ${EVENT_ID} AND status = 'pending';" | tr -d '[:space:]')"
 
 if [ -z "$CAPACITY" ]; then
     echo "   ERRO: eventcap não encontrado para event_id=${EVENT_ID}" >&2

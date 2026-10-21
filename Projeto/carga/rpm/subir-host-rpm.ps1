@@ -31,7 +31,8 @@ function Fail($m) { Write-Host "[erro] $m" -ForegroundColor Red; exit 1 }
 function Registrar($alvo, $saida) {
     $dir = Join-Path (Split-Path $PSScriptRoot -Parent) 'results'
     New-Item -ItemType Directory -Force $dir | Out-Null
-    $cfg = (docker exec gerenciador-backend printenv RESERVATION_READPATH EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED 2>$null) -join ' / '
+    # RESERVATION_READPATH e do backend (gateway); relay/consumer sao do servico reservation (#33)
+    $cfg = ((docker exec gerenciador-backend printenv RESERVATION_READPATH 2>$null) + ' / ' + ((docker exec gerenciador-reservation printenv EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED 2>$null) -join ' / '))
     $cab = "===== {0} | {1} | config: {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $alvo, $cfg
     Add-Content -Path (Join-Path $dir 'verificacoes.log') -Value (@($cab, $saida, '') -join "`n") -Encoding utf8
 }
@@ -40,17 +41,19 @@ if ($Verificar) {
     if (-not $Prefixo) { Fail 'Informe -Prefixo (nome impresso pelo rodar-rpm.ps1, ex.: Rpm-123456).' }
     if ($Prefixo -notmatch '^[A-Za-z0-9-]+$') { Fail '-Prefixo so aceita letras, numeros e hifen.' }
     $sql = @"
-WITH ev AS (SELECT e.event_id, c.capacity FROM event e JOIN eventcap c USING (event_id)
+-- O prefixo e atributo do CATALOG (public.event); capacidade e reservas sao do servico (schema reservation). Consulta de
+-- verificacao do OPERADOR (psql como admin), nao leitura de um servico em tabela de outro.
+WITH ev AS (SELECT e.event_id, c.capacity FROM public.event e JOIN reservation.eventcap c USING (event_id)
             WHERE e.event_name LIKE '$Prefixo-%'),
 ativas AS (SELECT ev.event_id, ev.capacity,
                   count(w.*) FILTER (WHERE w.status IN ('pending','confirmed')) AS n
-           FROM ev LEFT JOIN walletevent w ON w.event_id = ev.event_id GROUP BY ev.event_id, ev.capacity)
+           FROM ev LEFT JOIN reservation.walletevent w ON w.event_id = ev.event_id GROUP BY ev.event_id, ev.capacity)
 SELECT count(*) AS eventos, sum(n) AS reservas_ativas, sum(capacity) AS capacidade_total,
        count(*) FILTER (WHERE n > capacity) AS eventos_com_overselling,
        coalesce(sum(n - capacity) FILTER (WHERE n > capacity), 0) AS overselling_total
 FROM ativas;
-SELECT status, count(*) FROM walletevent
- WHERE event_id IN (SELECT event_id FROM event WHERE event_name LIKE '$Prefixo-%') GROUP BY status ORDER BY status;
+SELECT status, count(*) FROM reservation.walletevent
+ WHERE event_id IN (SELECT event_id FROM public.event WHERE event_name LIKE '$Prefixo-%') GROUP BY status ORDER BY status;
 "@
     $saida = $sql | docker exec -i gerenciador-db sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB' | Out-String
     Write-Host $saida
@@ -76,7 +79,7 @@ if (-not $SemBuild) { $a += '--build' }
 & docker @a
 if ($LASTEXITCODE -ne 0) { Fail 'docker compose falhou.' }
 
-Info 'Aguardando o backend (ate 180 s)...'
+Info 'Aguardando o backend (ate 180 s; o compose so o sobe com o servico reservation saudavel)...'
 $ok = $false
 for ($i = 0; $i -lt 90; $i++) {
     try { if ((Invoke-WebRequest -Uri 'http://localhost:8081/actuator/health' -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { $ok = $true; break } } catch { }

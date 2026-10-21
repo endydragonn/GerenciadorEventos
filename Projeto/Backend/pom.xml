@@ -15,12 +15,14 @@
     <description>Agregador Maven do backend: lib shared + monolito + serviços extraídos (Fase 7)</description>
 
     <!-- Multi-módulo (issue #32, Fase 7): cada serviço é um módulo com o próprio jar e o próprio Dockerfile;
-         o que é comum vive na lib "shared" (sem spring-boot-maven-plugin: não é executável).
-         A issue #33 (reservation) acrescenta um módulo aqui, sem mexer no resto. -->
+         o que é comum vive nas libs (sem spring-boot-maven-plugin: não são executáveis): "shared" (conexão e infra de
+         event sourcing) e, desde a #33, "reservation-client" (contrato HTTP do serviço reservation: DTOs + cliente). -->
     <modules>
         <module>shared</module>
+        <module>reservation-client</module>
         <module>monolito</module>
         <module>notification</module>
+        <module>reservation</module>
     </modules>
 
     <properties>
@@ -32,6 +34,11 @@
             <dependency>
                 <groupId>com.example.demo</groupId>
                 <artifactId>shared</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.example.demo</groupId>
+                <artifactId>reservation-client</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>

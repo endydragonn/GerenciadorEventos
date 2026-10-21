@@ -34,15 +34,12 @@ SET ROLE :"app_user";
 \i /app-init/01-functions.sql
 \i /app-init/02-users.sql
 \i /app-init/03-event.sql
-\i /app-init/04-eventcap.sql
 \i /app-init/05-eventpresenter.sql
 \i /app-init/06-mywallet.sql
-\i /app-init/07-walletevent.sql
 \i /app-init/08-pending-verifications.sql
-\i /app-init/09-event-availability.sql
-\i /app-init/10-idempotency-key.sql
 \i /app-init/11-event-store.sql
 \i /app-init/12-notification.sql
+\i /app-init/13-reservation.sql
 \i /app-init/99-tests.sql
 
 RESET ROLE;

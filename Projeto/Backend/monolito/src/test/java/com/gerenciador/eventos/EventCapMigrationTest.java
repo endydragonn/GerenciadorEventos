@@ -69,6 +69,14 @@ public class EventCapMigrationTest {
             // evento ILIMITADO no modelo antigo: capacity NULL
             long idIlimitado = inserirEventoAntigo(conn, creatorId, "Migracao Evento Ilimitado", null, 0);
 
+            // Desde a #33 walletevent/eventcap moram no schema reservation; a migração de 2026-09-01 só conhece o estado
+            // LEGADO em public (ela faz ALTER TABLE public.walletevent). O teste monta a walletevent legada e a derruba no fim.
+            try (Statement st = conn.createStatement()) {
+                st.execute("CREATE TABLE IF NOT EXISTS public.walletevent (user_id integer NOT NULL, "
+                        + "event_id integer NOT NULL, created_at timestamp DEFAULT CURRENT_TIMESTAMP, "
+                        + "updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, event_id))");
+            }
+
             // 2) roda a migração de verdade
             try (Statement st = conn.createStatement()) {
                 st.execute(Files.readString(migracao));
@@ -153,6 +161,8 @@ public class EventCapMigrationTest {
                 ps.executeUpdate();
             }
             try (Statement st = conn.createStatement()) {
+                // a migração recriou as tabelas legadas em public: não existem no schema atual (estão em reservation)
+                st.execute("DROP TABLE IF EXISTS public.eventcap, public.walletevent CASCADE");
                 st.execute("ALTER TABLE public.event "
                         + "DROP COLUMN IF EXISTS capacity, "
                         + "DROP COLUMN IF EXISTS quant, "
