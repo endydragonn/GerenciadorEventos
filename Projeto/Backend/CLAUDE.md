@@ -9,17 +9,66 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
   — porta `8081`, container `gerenciador-backend`. Sobe junto `db`, `supabase-pooler` e `redpanda` (o
   backend espera o broker ficar `healthy`); no Docker o backend fala **pelo pooler** (Supavisor), ver
   "Pooler" em Persistência, e com o broker em `redpanda:9092` (`SPRING_KAFKA_BOOTSTRAP_SERVERS`).
-- Local: `cd Projeto/Backend && mvn spring-boot:run` — precisa de um Postgres em
-  `localhost:5433`. `application.properties` tem defaults de dev para as vars do `.env`.
-- Entrypoint do jar: `com.gerenciador.eventos.Main` (fixado no `pom.xml` e no `Dockerfile`).
-- Build da imagem: multi-stage — compila com `maven:3.9.7-temurin-21`, roda em `temurin:25-jre`.
+- Serviço `notification` (issue #32): `docker compose -f Projeto/docker-compose.yml up -d --build notification`
+  — container `gerenciador-notification`, sem porta. Ver "Serviço notification". O `backend` NÃO depende dele.
+- Local: `cd Projeto/Backend && mvn -pl monolito -am spring-boot:run` (ou `mvn -pl notification -am spring-boot:run`) —
+  precisa de um Postgres em `localhost:5433`. `application.properties` de cada módulo tem defaults de dev para as vars do `.env`,
+  **exceto** `MAIL_USERNAME`/`MAIL_PASSWORD` do `notification` (sem default de propósito: não vai e-mail pessoal no código):
+  para rodar o serviço local, exporte as duas.
+- Entrypoint do jar do monólito: `com.gerenciador.eventos.Main` (fixado em `monolito/pom.xml` e `monolito/Dockerfile`); o do
+  `notification`: `com.gerenciador.eventos.notification.NotificationApplication`.
+- Build da imagem: um Dockerfile por serviço (`monolito/Dockerfile`, `notification/Dockerfile`), contexto = `Projeto/Backend/`
+  (a raiz do multi-módulo); multi-stage — compila com `maven:3.9.7-temurin-21` (`-pl <serviço> -am`), roda em `temurin:25-jre`.
+
+## Layout multi-módulo Maven — issue #32 (Fase 7)
+
+`Projeto/Backend/` deixou de ser um módulo só: o `pom.xml` da raiz é o **agregador** (`packaging=pom`, parent
+`spring-boot-starter-parent` 3.5.7, `dependencyManagement` de `shared`, compiler e Checkstyle herdados por todos). Cada
+serviço é um módulo com o próprio jar e Dockerfile; o que é comum é uma lib.
+
+```
+Backend/
+  pom.xml                agregador (módulos: shared, monolito, notification)
+  checkstyle*.xml        um só para todos os módulos (${maven.multiModuleProjectDirectory})
+  run-tests.sh           roda o reactor inteiro
+  shared/                LIB (jar simples, sem repackage): DatabaseConnection + shared.events (EventStore, relay, consumer,
+                         replay...) + NotificationEvents (contrato do stream identity.notification)
+  monolito/              identity, catalog, reservation, gateway (/bff/**), CorsConfig/SchedulingConfig; src/, Dockerfile, pom.xml
+  notification/          serviço extraído (README.md próprio); src/, Dockerfile, pom.xml
+  db/                    schema (fora do Maven)
+```
+
+- **Fronteira física**: `notification` NÃO depende de `monolito` (só de `shared`) e não lê tabela do monólito; tem schema próprio
+  (`notification`) e processo/imagem próprios. `shared` só leva o que mais de um serviço usa de verdade; o pacote Java continua
+  `com.gerenciador.eventos.shared[.events]` (mesmos imports do monólito). **Módulo novo** (a #33 `reservation` será o próximo):
+  novo diretório com `pom.xml` (parent `backend`, dep em `shared`), uma linha em `<modules>` do agregador, um
+  `<serviço>/Dockerfile` copiado dos existentes e um serviço no compose.
+- **Testes** de cada módulo ficam no próprio módulo. Os de `shared.events` (e o `TestSupport`) continuam em `monolito/src/test`,
+  porque sobem o contexto Spring do monólito (`Main`) para exercitar a lib com Postgres e Redpanda reais.
+- `Backend/.mvn/maven.config` existe para o Maven achar a raiz do multi-módulo (`${maven.multiModuleProjectDirectory}`, onde
+  moram `checkstyle*.xml`) mesmo rodando de dentro de `monolito/` ou `notification/` (IDE); sem a pasta `.mvn` o Maven usa o cwd e o
+  Checkstyle não acha a config.
+- Comandos: tudo na raiz de `Backend/`. `mvn -pl monolito -am test` (monólito + shared), `mvn -pl notification -am test`,
+  `mvn -Dtest=ClasseTest -Dsurefire.failIfNoSpecifiedTests=false test` (uma classe, em qualquer módulo). `-pl X -am` compila
+  `shared` junto; sem `-am` o Maven procura `shared` no repositório local e falha.
 
 ## Testes
 
 `./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`
 (URL direta `db:5432`, **sem passar pelo pooler**),
-e roda `mvn clean test` (antes disso apaga `target/surefire-reports` sozinho, então o total do
-resumo reflete só os testes desta rodada — não precisa limpar na mão).
+e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `monolito`, `notification`; `-fae` = um módulo vermelho
+não esconde o resultado dos outros). Antes disso apaga `target/surefire-reports` sozinho, então o total do
+resumo reflete só os testes desta rodada — não precisa limpar na mão; os relatórios de todos os módulos são copiados para
+`Backend/target/surefire-reports` (nomes de classe únicos). **Pré-requisito do `notification` (#32):** o schema `notification`
+no banco (`db/migrations/20261024-notification-schema.sql`, num volume antigo; bancos novos já nascem com ele). **Pare também o
+`gerenciador-notification`** (`docker stop gerenciador-notification`): o relay dos testes do monólito publica em
+`identity.notification` e um notification vivo mandaria e-mail de verdade (SMTP real) para os endereços de teste; o script aborta
+com mensagem clara se ele estiver rodando. **Ao fim da rodada (verde ou vermelha) o script move o consumer group `notification` para o
+FIM do tópico** (`docker exec gerenciador-redpanda rpk group seek notification --to end --topics identity.notification
+--allow-new-topics`): os testes publicam ali (direto e pelo relay), e sem isso o próximo `up` do serviço (offset atrasado, ou group
+novo em `earliest`) mandaria e-mail REAL do Gmail para cada endereço de teste. **Trade-off:** um e-mail legítimo que estivesse
+pendente antes da rodada é pulado (aceitável em dev: o backend, e portanto o cadastro real, precisa estar parado para testar). Se o
+seek falhar, o script avisa e imprime o comando: rode-o ANTES de qualquer `up` do `notification`.
 **Exige os containers `db` e `redpanda` no ar** (`docker compose -f Projeto/docker-compose.yml up -d db redpanda`;
 o script aborta com mensagem clara se faltar um): os testes batem num Postgres e num Redpanda reais.
 **Pare o `gerenciador-backend` antes** (`docker stop gerenciador-backend`): o relay e o consumer dele (ligados no compose desde a #28/#29)
@@ -28,15 +77,15 @@ naive); o script aborta com mensagem clara se o container estiver rodando. O scr
 passa `SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092` e `EVENTS_CONSUMER_GROUP=gerenciador-eventos-test` ao container
 de teste (group próprio: os testes nunca entram no group do backend vivo que consome do mesmo Redpanda).
 
-- `src/test/.../SchemaValidationTest` valida o schema real contra o esperado.
+- `monolito/src/test/.../SchemaValidationTest` valida o schema real contra o esperado (inclui `notification.processed_event`).
 - `TestSupport/GlobalDbTruncator` dá `TRUNCATE` (início/fim da suíte) em **todas** as tabelas dos
   schemas configurados, descobertas por catálogo (`TestSupport/TestSchemas`) — não há mock de banco.
-  Schemas alvo: propriedade `test.db.schemas` (lista separada por vírgula, default `public`; vale
+  Schemas alvo: propriedade `test.db.schemas` (lista separada por vírgula, default `public,notification` desde a #32; vale
   também via env `TEST_DB_SCHEMAS` ou `-Dtest.db.schemas=`), usada também por `SchemaValidationTest`
   (`table_schema = any(?)`). Nomes validados por `[a-z_][a-z0-9_]*` (identificador não é
-  parametrizável em SQL). **Mantenha o default `public`**: os schemas do Supabase (`auth`, `storage`,
-  `extensions`...) vivem no mesmo banco e não podem ser truncados nem validados. Fase 5
-  (schema por serviço): `test.db.schemas=catalog,reservation,...`. O `run-tests.sh` roda o mvn num
+  parametrizável em SQL). **O default só lista schemas do app** (`TestSchemas.DEFAULT`): os schemas do Supabase (`auth`, `storage`,
+  `extensions`...) vivem no mesmo banco e não podem ser truncados nem validados. Cada serviço extraído acrescenta o seu schema
+  ao default (Fase 7: `notification`; a #33 acrescenta `reservation`). O `run-tests.sh` roda o mvn num
   container com env fixo (`--env-file ../.env`): para mudar `test.db.schemas` por ali, passe
   `-e TEST_DB_SCHEMAS=...` no `docker run` do script. Coberto por `TestSchemasTest`.
 - `EventTest`, `UserTest`, `EventWalletTest`, `MyWalletTest` exercitam services + repositories.
@@ -89,11 +138,23 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   derrubada no `@AfterAll` de cada classe: não é schema do app e não sobra no banco compartilhado; nenhum outro teste
   depende dela). O `GlobalDbTruncator` trunca **todas** as tabelas de `public` descobertas por catálogo, `test_somatorio`
   inclusive quando existir; ela só não existe nessa hora. O `SchemaValidationTest` não a menciona. Helpers em `TestSupport/EventsTestSupport` (espera com timeout, leitura de tópico).
+- Extração do `notification` (issue #32; ver "Serviço notification"): `IdentityNotificationEventsTest` (monólito: pedido de
+  cadastro, reenvio e MFA appendam `VerificationCodeRequested`/`PasswordResetMfaRequested` em `identity.notification` com o
+  `event_outbox` na mesma transação e o mesmo código gravado em `pending_verifications`/`users`; falha no append desfaz o cadastro
+  pendente; **cadastro, verificação e login funcionam sem o serviço** e o evento sai pelo relay para o tópico) e, no módulo
+  `notification`, `NotificationConsumerTest` (Postgres e Redpanda reais + `JavaMailSender` fake via `@MockitoBean`: e-mail de
+  verificação e de MFA montados com código/nome/prazo, **mensagem publicada antes do contexto subir é enviada quando ele sobe**,
+  **reentrega do mesmo evento não manda dois e-mails**, falha transitória de SMTP reentrega até enviar sem duplicar e sem
+  checkpoint prematuro, rejeição permanente do destinatário e JSON inválido vão ao `.DLT` sem travar os próximos, **código já
+  vencido não é enviado**, evento sem `expiresAt` vai ao `.DLT`, tipo desconhecido não envia), `RejeicaoPermanenteTest` (unitário:
+  usuário inexistente = permanente; quota/limite de taxa do remetente, falta de conexão e autenticação = reentrega) e
+  `NotificationEventRetentionTest` (monólito, retenção do dado pessoal: vencido há mais de 30 s e já publicado some; dentro da
+  carência, ainda válido, ainda no outbox e outro stream ficam). O group do teste (`notification-test`) é próprio, nunca o do
+  serviço vivo.
 - `HttpContractTest` (`webEnvironment = RANDOM_PORT` + `TestRestTemplate`) fixa path + método
   + forma de request/response de cada endpoint `/bff/**` que o Flutter consome — bate no
-  HTTP real (inclusive `SecurityConfig`), não MockMvc. `JavaMailSender` é mockado
-  (`@MockitoBean`) e `RECAPTCHA_SECRET_KEY` é forçada vazia via `@TestPropertySource` para
-  não depender de SMTP/Google reais.
+  HTTP real (inclusive `SecurityConfig`), não MockMvc. Desde a #32 não há mock de `JavaMailSender` (o monólito
+  não tem SMTP); `RECAPTCHA_SECRET_KEY` é forçada vazia via `@TestPropertySource` para não depender do Google real.
 - Não há testes unitários isolados; tudo é de integração com banco (exceto os mocks pontuais
   do `HttpContractTest` para dependências externas).
 - `LayerBoundaryArchTest` e `ModuleBoundaryArchTest` (ArchUnit) são a exceção: não usam Spring/banco, só analisam bytecode.
@@ -104,7 +165,7 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
 - `maven-checkstyle-plugin` roda no `mvn test`/`mvn clean test` (preso na fase `validate`,
   antes de compilar) — por isso `./run-tests.sh` já quebra se uma regra travar. Config em
   `checkstyle.xml`, baseline de violações antigas em `checkstyle-suppressions.xml` (ambos na
-  raiz de `Backend/`).
+  raiz de `Backend/`, valendo para todos os módulos; as `suppress` casam por nome de arquivo, não por caminho).
   - Rodar isolado (sem subir o resto da suíte): `mvn checkstyle:check` (ou `mvn validate`).
     Via Docker, sem precisar do container `db`:
     ```
@@ -126,13 +187,15 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
     violavam no dia em que a regra entrou ganham uma linha em `checkstyle-suppressions.xml`
     (não corrigidos por essa issue — é o próximo passo). Corrigiu um arquivo da baseline?
     Remova a linha dele do suppressions.
-- ArchUnit (`archunit-junit5`, em `src/test/java`), dois testes, sem baseline (zero violações):
+- ArchUnit (`archunit-junit5`, em `monolito/src/test/java`), dois testes, sem baseline (zero violações):
   - `LayerBoundaryArchTest` trava se o pacote `gateway` (controllers) depender direto de uma classe
     `@Repository` (DAO) ou de JDBC cru
     (`java.sql.Connection/PreparedStatement/Statement/ResultSet/DriverManager`) — acesso a dado
     deve passar por `Service`.
   - `ModuleBoundaryArchTest` (issue #23) trava: (a) `identity`/`catalog`/`reservation`/
-    `notification`/`gateway` só dependem de outro módulo por `<modulo>.api` (nenhum módulo importa `gateway.*`);
+    `gateway` só dependem de outro módulo por `<modulo>.api` (nenhum módulo importa `gateway.*`; `notification` saiu do
+    monólito na #32 e já não está no classpath dele); (f) `monolito_nao_envia_email` (#32): nada do monólito depende de
+    `org.springframework.mail..`/`jakarta.mail..` — o e-mail é do serviço `notification`;
     (b) `shared` não depende de módulo de domínio; (c) todo código de produção mora num módulo (nada volta para
     `POJO/Repository/Service`); (d) `<modulo>.api` não depende de classe interna de módulo nenhum
     (só de outros `*.api`, `shared` e libs); (e) `@RestController`/`@Controller` só no `gateway`
@@ -143,14 +206,16 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
 
 ## Módulos (pacote `com.gerenciador.eventos`) — issues #23 e #25
 
-Pacotes-por-serviço, ainda no mesmo processo/deploy/banco (schema `public`): é a preparação da
-Fase 5 para a decomposição em microsserviços (CQRS/ES na Fase 6, extração na Fase 7). Dentro de
+Pacotes-por-serviço, no mesmo processo/deploy/banco (schema `public`) do monólito: é a preparação da
+Fase 5 para a decomposição em microsserviços (CQRS/ES na Fase 6, extração na Fase 7: o `notification` já saiu, na #32 —
+é o único módulo abaixo que NÃO está em `monolito/`; os demais seguem lá até a sua vez). Dentro de
 cada módulo as classes ficam **planas** (sem `POJO/`/`Repository/`/`Service/`), mais o subpacote
 `api`: as **interfaces e DTOs públicos** que os outros módulos podem usar.
 
 ```
 Main.java        entrypoint @SpringBootApplication (único; o component scan cobre os subpacotes)
 identity/        UserService, UserRepository, EmailVerificationService, PendingVerification(+Repository),
+                 IdentityNotifications (#32: appenda o evento que pede o e-mail; o monólito não envia mais),
                  security/ (JwtUtil, JwtAuthenticationFilter, AuthorizationUtil, SecurityConfig)
   api/           User, UserApi, EmailVerificationApi, TokenApi, HostAuthorizationApi
 catalog/         EventService, EventRepository, EventPresenterRepository (leitura),
@@ -164,11 +229,10 @@ reservation/     EventWalletService, MyWalletService, ReservationExpiryService,
                  EventAvailabilityProjection + EventAvailabilityConsumer (projeção assíncrona de disponibilidade, #29)
   api/           EventCap, EventWallet, MyWallet, EventCapacityApi, EventWalletApi, MyWalletApi,
                  IdempotencyConflictException
-notification/    EmailNotificationService, EmailTemplates (envio de e-mail / JavaMailSender)
-  api/           EmailNotificationApi
-shared/          DatabaseConnection, CorsConfig, SchedulingConfig (infra sem domínio)
-  events/        infra de event sourcing sem domínio (#27): EventEnvelope, NovoEvento, EventStore, OutboxRelay,
-                 IdempotentConsumer + Projection, EventReplay, EventSnapshots/Snapshot, EventsKafkaConfig
+shared/          DatabaseConnection (módulo `shared`, lib), CorsConfig, SchedulingConfig (monólito) (infra sem domínio)
+  events/        (módulo `shared`) infra de event sourcing sem domínio (#27): EventEnvelope, NovoEvento, EventStore, OutboxRelay,
+                 IdempotentConsumer + Projection, EventReplay, EventSnapshots/Snapshot, EventsKafkaConfig,
+                 NotificationEvents (#32: contrato do stream identity.notification)
 gateway/         BffUserController, BffEventController, BffEventWalletController, BffMyWalletController,
                  BffSeedController (@RestController, paths /bff/**) + SeedData; roteia e agrega, sem domínio
 ```
@@ -179,7 +243,7 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
   `ModuleBoundaryArchTest` (ver "Quality gates"); as FKs do SQL ficam como estão (schema é Fase 7).
 - **Grafo de dependências** (sempre via `api`):
   `gateway → identity, catalog, reservation`;
-  `identity → notification`;
+  (`identity → notification` acabou na #32: o `notification` é outro processo e se fala com ele só por evento no backbone);
   `catalog → identity` (`UserApi.exists`, valida `creator_id`) e `catalog → reservation`
   (`EventCapacityApi`: `EventRepository.save` cria o `eventcap` na **mesma transação JDBC** do
   `event`, por isso a `Connection` aparece na interface; a hidratação lê a capacidade);
@@ -198,8 +262,8 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
 - **Decisões**: `SecurityConfig` fica em `identity/security` (conhece as rotas e o filtro JWT, não é
   infra pura — em `shared` violaria a regra); `SeedData` fica em `gateway` (é o corpo do
   `POST /bff/seed` e agrega `User`+`Event`+`EventWallet` de três módulos); o envio de e-mail saiu
-  de `EmailVerificationService` para `notification` (o cadastro em duas fases continua em
-  `identity`); as `*Api` são implementadas pelas classes que já existiam (`UserService implements
+  de `EmailVerificationService` para `notification` (#23) e, na #32, de dentro do monólito (o cadastro em duas fases continua em
+  `identity`, que agora só publica o evento); as `*Api` são implementadas pelas classes que já existiam (`UserService implements
   UserApi`, `EventCapRepository implements EventCapacityApi`...), sem classe nova de adaptação.
 - Módulo novo ou chamada entre módulos nova → exponha só o necessário em `<modulo>.api`.
 
@@ -285,6 +349,9 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
   testes e psql); com `carga/rpm` (`max_connections=300`) o pool vai para 245 sozinho (override + `subir-host-rpm.ps1`). Ou seja,
   o `too many clients` não vem mais do Hikari, e sim do pool do Supavisor + o resto passar do
   `max_connections`.
+- **Outros clientes do pooler** (#32): o serviço `notification` entra pelo mesmo tenant com Hikari 3 e não aumenta o pool real
+  (a conta está em "Serviço notification"). Todo serviço novo (a #33 `reservation`...) divide esses mesmos 45/245: documente o
+  Hikari dele e refaça a conta aqui antes de subir.
 - **Threads do Tomcat** (issue #124): `server.tomcat.threads.max` = 300 (env `SERVER_TOMCAT_THREADS_MAX`;
   o default do Spring Boot é 200). Na configuração de carga: Tomcat 300, Hikari 1000, pool do Supavisor
   245. Os testes de 2026-10-17 pelo pooler deram o mesmo teto de vazão com 200, 300 e 400 threads, mas 300
@@ -303,7 +370,10 @@ Infra genérica de CQRS + Event Sourcing em `shared/events` (sem domínio; a #28
 seguinte, e a #29 converte o lado wallet de `reservation`, só appendando eventos com o seu `streamType`). Broker: **Redpanda** (container
 `gerenciador-redpanda`, `redpanda:9092` na rede `gerenciador-net`, sem porta no host; imagem com tag fixa no compose;
 `docker exec gerenciador-redpanda rpk topic list` para inspecionar). Cliente: `spring-kafka` (versão do Boot).
-Tudo em `public` por ora (schema por serviço é a Fase 7).
+Tudo em `public` por ora (schema por serviço é a Fase 7: o `notification` da #32 já tem o seu, `notification`; o
+`event_store`/`event_outbox` seguem em `public`, do monólito). Streams hoje: `catalog.event`, `reservation.wallet` e
+`identity.notification` (#32, ver "Serviço notification": a única exceção à regra de não pôr dado pessoal no payload).
+Esta infra vive no módulo Maven `shared` (lib); os testes dela, em `monolito/src/test`.
 
 - **`EventStore.append(Connection, NovoEvento)`**: um único statement (`INSERT ... ON CONFLICT (stream_type, stream_id,
   version) DO NOTHING` + `INSERT` em `event_outbox` num CTE). Devolve `Optional<EventEnvelope>`: **vazio = a versão já
@@ -374,6 +444,78 @@ Tudo em `public` por ora (schema por serviço é a Fase 7).
   **`idIsGroup = false`** (por padrão o `id` do listener vira o `group.id` e o `spring.kafka.consumer.group-id` — logo o
   `EVENTS_CONSUMER_GROUP` do `run-tests.sh` — não valeria). Um único `group.id` por ambiente; `auto.offset.reset=earliest`
   fixo (um group novo não pula nada; o checkpoint por stream e a conferência do `eventId` descartam o que já foi aplicado).
+
+## Serviço notification — issue #32 (Fase 7: primeira extração)
+
+O envio de e-mail saiu do monólito e virou o módulo/serviço `notification` (`Backend/notification/`, README próprio): processo,
+imagem (`notification/Dockerfile`), container (`gerenciador-notification`) e schema (`notification`) próprios, sem porta HTTP.
+O `gateway` e o contrato `/bff/**` não mudaram.
+
+- **Fluxo**: `identity` (monólito) NÃO fala com SMTP. `EmailVerificationService.requestEmailVerification`/`resendVerificationCode`
+  e `UserService.requestPasswordResetMfa` gravam o código (`pending_verifications` / `users.password_reset_mfa_code`) e, **na MESMA
+  transação JDBC**, appendam um evento em `event_store` + `event_outbox` (`IdentityNotifications`, que usa o `EventStore` da
+  `shared`). O relay (já ligado no compose) publica no tópico `identity.notification`; o `notification` consome e envia.
+  Cadastro e login **não dependem** do serviço: parado, o evento espera no outbox/tópico e o e-mail sai quando ele volta
+  (coberto por `IdentityNotificationEventsTest` e `NotificationConsumerTest`).
+- **Contrato** (`shared.events.NotificationEvents`): `streamType` = `identity.notification` (= nome do tópico, 1 partição);
+  cada notificação é **um stream novo de uma versão só** (`streamId` = UUID, `version` 1, chave da mensagem = o `streamId`).
+  `eventType`: `VerificationCodeRequested` e `PasswordResetMfaRequested`, ambos com payload `email`, `userName`, `code`,
+  `expirationMinutes` e `expiresAt` (ISO-8601, quando o código vence), `schemaVersion` 1, no envelope JSON da ADR do backbone. A
+  validade vem das constantes que já existem (`verification.code.expiration.minutes` no cadastro; `NotificationEvents.MFA_VALIDADE`
+  no MFA, usada também no SQL de `users.password_reset_mfa_expiration`): nada de número duplicado. Tipo novo: constante em
+  `NotificationEvents` + `if` no consumer; mudança incompatível de payload incrementa `schemaVersion`.
+- **Exceção deliberada à regra "sem dado pessoal no payload" — decisão do usuário (2026-10-21)** (ADR do backbone, seção 3): o
+  e-mail só pode ser montado com destinatário e código, então estes eventos levam `email`, `userName` e o código de uso único.
+  A senha e o hash NUNCA entram. **Retenção do dado pessoal = validade do código + 30 s** (`NotificationEvents.CARENCIA`), nas
+  três cópias: (1) **`event_store`**: `identity/NotificationEventRetentionService` (`@Scheduled` a cada
+  `notification.events.retention.scan.ms`, default 30 s, env `NOTIFICATION_EVENTS_RETENTION_SCAN_MS`; `run-tests.sh` estica para
+  1 h) apaga, em lotes de 1000, as linhas do stream cujo `payload.expiresAt` venceu há mais de 30 s e que **já saíram do
+  `event_outbox`** (cadastro: 5 min 30 s; MFA: 15 min 30 s; evento sem `expiresAt` conta como vencido em `occurred_at`); o
+  stream tem 1 versão por stream e nunca passa por replay/projeção, e a "imutabilidade" do `event_store` é convenção (a tabela
+  não tem trigger nem REVOKE), então nada quebra; (2) **tópico `identity.notification` e `.DLT`**: `retention.ms` = maior
+  validade + 30 s = 15 min 30 s (`NotificationEvents.RETENCAO_TOPICO`, declarado por `NotificationEvents.topic()` /
+  `deadLetterTopic()` nos DOIS lados, com `spring.kafka.admin.modify-topic-configs=true` para valer também no tópico que já
+  existe) e `segment.ms` = 5 min (o broker só apaga segmento FECHADO; sem isso o `retention.ms` não teria efeito, então o dado
+  some em até ~20 min, não em 15 min 30 s exatos). A validade do cadastro tem de ser `<=` a do MFA; (3) **consumer**: descarta, com
+  log e sem enviar, evento cujo código já venceu (e-mail com código vencido é inútil). O `.DLT` guarda a mensagem original (e
+  headers de exceção que podem trazer o endereço), por isso a mesma retenção curta.
+- **Consumer** (`NotificationConsumer`): `@KafkaListener` com `idIsGroup = false`, group próprio `notification`
+  (`NOTIFICATION_CONSUMER_GROUP`), ack manual. Por mensagem, numa transação de banco: `INSERT INTO notification.processed_event
+  (event_id, ...) ON CONFLICT DO NOTHING` (rowcount 0 = reentrega, descarta) → envia o e-mail → commit → ack. Envio que falha
+  desfaz a transação (sem checkpoint) e a mensagem volta. **Não usa o `IdempotentConsumer` da `shared`**: ele confere o
+  `event_id` contra `public.event_store` e preenche buraco relendo o log, ou seja, depende de tabelas do monólito; o serviço
+  extraído não lê o banco de ninguém. Reusa da `shared` o envelope, o `DatabaseConnection` e a política de erro/DLT
+  (`EventsKafkaConfig`, importada por `@Import`).
+- **Política de erro**: SMTP fora/banco fora = transitório, retry exponencial sem limite e sem DLT (loga ERROR a partir da 10ª
+  tentativa). Payload inválido e **destinatário recusado de vez pelo SMTP** (`SendFailedException` com `invalidAddresses`, ou
+  `MailParseException`) = `identity.notification.DLT` direto, sem retry — senão um e-mail digitado errado travaria todos os
+  seguintes (tópico de 1 partição). **Exceção:** recusa por culpa do REMETENTE (quota diária do Gmail `550 5.4.5`, limite de taxa:
+  o texto casa `NotificationConsumer.CAUSA_DO_REMETENTE`: "sending quota/limit", rate limit, `5.4.5`) também chega em
+  `invalidAddresses`, mas passa quando a quota volta, então continua reentregue; já "over quota" (`552 5.2.2`) é a caixa do
+  DESTINATÁRIO cheia e continua permanente. Tipo de evento desconhecido: aviso no log e ack, sem enviar. Código vencido: aviso no log e ack, sem enviar.
+  Evento sem `expiresAt`/`expirationMinutes` válidos: `.DLT`. **Poll**: `max-poll-records=10` e `ack-mode=manual_immediate`
+  (cada e-mail leva 1 a 3 s, até ~15 s com timeout; com os 500 do default um backlog grande estouraria o `max.poll.interval.ms` de
+  5 min e giraria em rebalance).
+- **Pool Hikari do serviço — a conta**: `maximum-pool-size` **3** / `minimum-idle` 1 (`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`
+  no compose; o default do `application.properties` do módulo também é 3). Tópico de 1 partição + 1 thread no listener ⇒ no máximo
+  **1** transação aberta por vez (ela segura a conexão durante o envio SMTP, timeouts de 5 s); 3 dá folga para reconexão. O
+  serviço usa o **mesmo tenant e o mesmo usuário do Supavisor** (`${POSTGRES_USER}.gerenciador-eventos`), então consome **de
+  dentro** do pool real de conexões ao Postgres (`POOLER_DEFAULT_POOL_SIZE` = 45 no compose padrão, 245 na configuração de
+  carga) que o monólito já usa: o teto **não cresce** (nem consome a folga do `max_connections`, que é para superuser, Supavisor,
+  suíte e `psql`). No transaction mode as 3 conexões de cliente só pegam uma conexão real durante a transação (1 em regime, segurada
+  durante o SMTP; 3 no pior caso) e a devolvem no commit; ou seja, no máximo 1 dos 245 fica ocupado por ele de cada vez, o que
+  tira uma conexão do monólito só enquanto o e-mail sai. O `POOLER_MAX_CLIENT_CONN` (1500) cobre 1000 (monólito) + 3.
+  **Não aumente** esse Hikari sem refazer a conta: ele divide o pool com o monólito, que é o que a carga mede.
+- **Config do serviço** (todas por env var, mesmos nomes do monólito; valores reais em `Projeto/.env`, nunca imprimir):
+  `SPRING_DATASOURCE_URL`/`_USERNAME`/`_PASSWORD`, `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`/`_MINIMUM_IDLE`,
+  `MAIL_USERNAME`/`MAIL_PASSWORD` (SMTP Gmail, `spring.mail.*` igual ao do monólito antigo), `SPRING_KAFKA_BOOTSTRAP_SERVERS`,
+  `NOTIFICATION_CONSUMER_GROUP` (default `notification`), `EVENTS_CONSUMER_RETRY_*`. O compose passa só esses nomes (interpolados do
+  `.env`; **sem `env_file`**, para o serviço não receber `JWT_SECRET`/reCAPTCHA). O monólito não lê mais `MAIL_*`.
+- **Pendências conhecidas**: (a) `notification.processed_event` cresce sem limpeza (com a retenção de 15 min 30 s do tópico, linhas
+  mais velhas que isso nunca mais serão reentregues e poderiam ser apagadas; `processed_event` não tem dado pessoal, só id e tipo);
+  (b) sem healthcheck no compose (o serviço não tem HTTP; `docker logs gerenciador-notification` e o lag do group `rpk group
+  describe notification` mostram a saúde); (c) o `backend` do compose recebe `MAIL_USERNAME`/`MAIL_PASSWORD` vazios (sobrepostos,
+  porque o `env_file` entrega o `.env` inteiro).
 
 ## Catalog em CQRS + Event Sourcing — issue #28
 
@@ -674,8 +816,11 @@ Rodada 1 (`docs/carga/resultados-*`) foram medidos com o refresh e ficam como hi
 1. `POST /bff/users/request-verification` grava em `pending_verifications` (hash da senha +
    código de 6 dígitos, expira em 5 min — ver `application.properties`).
 2. `POST /bff/users/verify-email` confere o código e só então insere em `users`.
-3. `identity/EmailVerificationService` pede o envio ao módulo `notification` (`EmailNotificationApi`), que manda o código via SMTP Gmail (`spring-boot-starter-mail`),
-   templates em `notification/EmailTemplates`.
+3. `identity/EmailVerificationService` grava o código e, na mesma transação, appenda o evento `VerificationCodeRequested`
+   (`IdentityNotifications`); o **serviço `notification`** (processo à parte, #32) consome o tópico e manda o código via SMTP
+   Gmail (`spring-boot-starter-mail` só nele), templates em `notification/EmailTemplates`. O monólito não envia e-mail. O
+   `POST /bff/users/request-verification` responde igual; o e-mail chega de forma assíncrona (com o serviço fora, só depois que
+   ele voltar). O MFA do reset de senha segue o mesmo caminho (`PasswordResetMfaRequested`).
 4. reCAPTCHA v3: `POST /bff/users/verify-recaptcha` (em `gateway/BffUserController`) valida o
    token com a Google usando `RECAPTCHA_SECRET_KEY`.
 
@@ -683,11 +828,13 @@ Rodada 1 (`docs/carga/resultados-*`) foram medidos com o refresh e ficam como hi
 
 - `application.properties` lê tudo de env var com default de dev:
   `SPRING_DATASOURCE_*` (inclui `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` e
-  `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`), `JWT_SECRET`, `JWT_EXPIRATION_SECONDS`, `MAIL_*`,
-  `RECAPTCHA_*`, `SERVER_TOMCAT_THREADS_MAX` (default `300`),
+  `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`), `JWT_SECRET`, `JWT_EXPIRATION_SECONDS`,
+  `RECAPTCHA_*` (`MAIL_*` saiu do monólito na #32: é do serviço `notification`), `SERVER_TOMCAT_THREADS_MAX` (default `300`),
   `RESERVATION_READPATH` (default `cas`; `naive` = braço de controle do experimento),
   `IDEMPOTENCY_RETENTION_HOURS` (default `24`; prazo de retenção das chaves de idempotência),
   `IDEMPOTENCY_RETENTION_SCAN_MS` (default `600000` = 10 min; intervalo do job de limpeza, issue #130),
+  `NOTIFICATION_EVENTS_RETENTION_SCAN_MS` (default `30000`; intervalo do job que apaga do `event_store` os pedidos de e-mail
+  vencidos há mais de 30 s, #32),
   `SPRING_TASK_SCHEDULING_POOL_SIZE` (default `3`; threads do scheduler dos `@Scheduled`. O default do Boot é
   **1**, compartilhada pelo `OutboxRelay`, `ReservationExpiryService` e
   `IdempotencyKeyRetentionService`: um purge em massa seguraria o relay e falsearia o lag medido do braço `naive`).
@@ -707,8 +854,8 @@ Rodada 1 (`docs/carga/resultados-*`) foram medidos com o refresh e ficam como hi
   rodando (`docker stop gerenciador-backend` antes).
 - Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto
   (`management.endpoints.web.exposure.include=health`); `GET /actuator/health` público devolve
-  `{"status":"UP"}` (depende do Postgres). `management.health.mail.enabled=false` — o health do
-  SMTP derrubaria o status por falha de rede/credencial do Gmail. Cobertura em `HttpContractTest`.
+  `{"status":"UP"}` (depende do Postgres). O health do mail deixou de existir com o `spring-boot-starter-mail` (#32).
+  Cobertura em `HttpContractTest`.
 - `spring.jpa.show-sql=true` e log de SQL em DEBUG: saída verbosa é esperada em dev.
 
 ## Ao mexer aqui

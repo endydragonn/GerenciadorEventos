@@ -85,6 +85,7 @@ como `supabase_admin` (um `psql` por arquivo, ordem lexical, no `POSTGRES_DB`). 
 | `09-event-availability.sql` | tabela `event_availability` — projeção assíncrona (`ativos` por evento) lida pelo braço `naive` (não é fonte de verdade) |
 | `10-idempotency-key.sql` | tabela `idempotency_key` — chaves de idempotência do `POST /bff/event-wallets` (sem FK) |
 | `11-event-store.sql` | `event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint` — infra de event sourcing da Fase 6 (#27), sem FK |
+| `12-notification.sql` | schema **`notification`** (dono `admin`) + `notification.processed_event` — checkpoint de idempotência do serviço `notification` (#32, Fase 7) |
 | `99-tests.sql` | suíte de sanidade em `DO $$ ... $$` (trigger, CAS, CHECK, N:N, cascata, projeção de disponibilidade, `walletevent.version`, event store/outbox/checkpoint, TRUNCATE) |
 
 `db/migrations/` guarda scripts de migração idempotentes para bancos já existentes
@@ -198,6 +199,15 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   de `created_at`, `CREATE INDEX IF NOT EXISTS`; independe da `20261019-...`; pré-requisito: a tabela existir). Coberta por `SchemaValidationTest`,
   `IdempotencyKeyTest`, `IdempotencyRetentionTest` e o passo 8b do `99-tests.sql`.
 
+- **Schema `notification`** (issue #32, Fase 7 — o primeiro schema por serviço; o `notification` não lê nenhuma tabela de
+  `public`) — `notification.processed_event`: PK `event_id` (uuid, o `eventId` do envelope), `event_type`, `processed_at`
+  (`timestamptz`, `clock_timestamp()`). Uma linha por e-mail JÁ enviado; o consumer faz `INSERT ... ON CONFLICT DO NOTHING` na
+  mesma transação do envio (rowcount 0 = reentrega). Sem dado pessoal. Sem limpeza ainda (pendência no `Backend/CLAUDE.md`). A role
+  `admin` (dona do banco) cria o schema; o `OWNER TO admin` explícito é para a migração a quente, que roda como `supabase_admin`:
+  `db/migrations/20261024-notification-schema.sql` (idempotente; `docker exec -i gerenciador-db psql -h localhost -U supabase_admin
+  -d meu_banco < ...`). Coberta por `SchemaValidationTest`, `TestSchemasTest` (o default do harness agora é `public,notification`)
+  e `NotificationConsumerTest`. O harness de migração `verify-20260901-migration.sh` aplica só os scripts `01`–`11` (não toca no
+  `notification`). Qualificar sempre com `notification.` nas queries (não há `search_path`, o Supavisor em transaction mode proíbe).
 - **Event sourcing (issue #27; ADR "Event-Backbone-Event-Store")** — infra genérica, sem domínio, sem FK (as #28/#29
   só appendam eventos com o seu `stream_type`; a #28 usa `catalog.event`). Código em `Backend/.../shared/events` (ver `Backend/CLAUDE.md`,
   "Event store e backbone de eventos"). Migração a quente: `db/migrations/20261021-event-store.sql` (idempotente; roda como
@@ -209,7 +219,9 @@ docker compose -f Projeto/docker-compose.yml up -d --build
     rowcount 0 = outra transação gravou a versão), `CHECK (version >= 1)`. Colunas do envelope: `event_id` (uuid),
     `stream_type`, `stream_id`, `version`, `event_type`, `schema_version`, `occurred_at` (`timestamptz`, default
     `clock_timestamp()`: instante do append, não o início da transação), `payload`/`metadata` (`jsonb`; **sem dado
-    pessoal**: a tabela é imutável) e `partition_key` (chave da mensagem no tópico: o id do evento de domínio).
+    pessoal**: a tabela é imutável por convenção. Única exceção, decisão do usuário de 2026-10-21 (#32): o stream
+    `identity.notification` leva e-mail e código, e o `NotificationEventRetentionService` do monólito apaga essas linhas
+    quando o código venceu há mais de 30 s e a linha já saiu do `event_outbox`) e `partition_key` (chave da mensagem no tópico: o id do evento de domínio).
   - **`event_outbox`** — só `global_position` (PK), sem FK de propósito. Inserida na mesma transação do append e **apagada**
     pelo relay depois do ack do broker. `INSERT`+`DELETE` contínuo = tuplas mortas, por isso
     `autovacuum_vacuum_scale_factor = 0.01` e `autovacuum_vacuum_threshold = 100`.

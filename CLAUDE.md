@@ -97,7 +97,13 @@ commitar ou registrar em log.
   os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`, e Redpanda real; o script aborta com mensagem
   clara se faltar um deles). **Pare o `gerenciador-backend` antes** (`docker stop gerenciador-backend`): desde a #28/#29 o
   relay e o consumer dele compartilham o `meu_banco` e drenam o `event_outbox` dos testes; o script aborta com
-  mensagem clara se o container estiver rodando.
+  mensagem clara se o container estiver rodando. Desde a #32 o script roda o **reactor Maven inteiro** (`shared`, `monolito`,
+  `notification`) e também aborta se o `gerenciador-notification` estiver rodando (`docker stop gerenciador-notification`:
+  ele consumiria o tópico dos testes e mandaria e-mail de verdade); ao fim o script também move o group `notification` para o
+  fim do tópico (`rpk group seek`), para os eventos de teste nunca virarem e-mail quando o serviço subir (um e-mail real pendente
+  antes da rodada é pulado). Banco já existente precisa do schema novo: aplicar
+  `Projeto/Backend/db/migrations/20261024-notification-schema.sql` (idempotente; bancos novos já nascem com ele).
+- O serviço `notification` sobe junto com `up -d --build` (container `gerenciador-notification`); o `backend` não depende dele.
 - Relate o resultado real dos testes; se algo falhou ou foi pulado, diga.
 
 ## Documentação de arquitetura (vault Obsidian)
@@ -148,7 +154,16 @@ passou a ser medido (pré-requisito da Rodada 2, #31). O compose liga o relay (d
 ponta a ponta do braço `naive` lendo a projeção real (`EventAvailabilityProjectionTest`). Diagrama command / evento /
 projeção / replay em [`docs/arquitetura/fase6-cqrs-es.md`](docs/arquitetura/fase6-cqrs-es.md). A Rodada 2 (#31) mede o resultado.
 
-**Decidido, não implementado:** extrair os módulos como microsserviços (Opção B — `gateway`, `identity`,
-`catalog`, `reservation`, `notification`, `admission`; a Fase 5 só os separou dentro do monólito);
+**Implementado (Fase 7, issue #32):** primeira extração de microsserviço, o `notification`. O backend virou **Maven
+multi-módulo** (`Projeto/Backend/pom.xml` agregador; módulos `shared` = lib, `monolito` = o app de antes, `notification`), com
+**Dockerfile e imagem por serviço** (`monolito/Dockerfile`, `notification/Dockerfile`) e container próprio no compose
+(`gerenciador-notification`, sem porta). O monólito **deixou de enviar e-mail**: `identity` appenda um evento no stream
+`identity.notification` (event_store + outbox, na mesma transação do cadastro/código) e o serviço, consumer idempotente do
+tópico com schema próprio (`notification.processed_event`), monta e manda o e-mail por SMTP. Queda do `notification` não afeta
+cadastro/login (o e-mail sai quando ele volta). `/bff/**` inalterado. Detalhes e a conta do pool Hikari/Supavisor no
+`Projeto/Backend/CLAUDE.md`, "Serviço notification"; layout em "Layout multi-módulo Maven".
+
+**Decidido, não implementado:** extrair os demais módulos como microsserviços (Opção B — `gateway`, `identity`,
+`catalog`, `reservation`, `admission`; o `notification` já saiu, na #32);
 camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
 `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.

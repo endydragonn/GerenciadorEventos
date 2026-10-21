@@ -23,7 +23,7 @@
 #  automaticamente por:
 #    - EventWalletTest.testEventoLotado
 #    - EventWalletTest.testRemoveLinkConcorrenteNaoCausaOverselling (CyclicBarrier)
-#  (Projeto/Backend/src/test/java/com/gerenciador/eventos/EventWalletTest.java)
+#  (Projeto/Backend/monolito/src/test/java/com/gerenciador/eventos/EventWalletTest.java)
 #
 #  Pre-requisito: a stack no ar (db + backend).
 #    docker compose -f Projeto/docker-compose.yml up -d --build db backend
