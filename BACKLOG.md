@@ -34,7 +34,7 @@ Labels sugeridas: `fase/0`…`fase/11`, `area/backend`, `area/banco`, `area/infr
 
 ---
 
-## Estado (2026-10-19)
+## Estado (2026-10-21)
 
 Snapshot do GitHub (`gh issue list` / `gh pr list`). A definição de cada item continua sendo o
 texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
@@ -69,7 +69,9 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 28 | #29 | fechada — lado wallet de `reservation` em ES (híbrido com o CAS); disponibilidade do braço naive como projeção assíncrona com lag real | #143 |
 | 29 | #30 | fechada — checkpoint ES-native ponta a ponta; diagrama `docs/arquitetura/fase6-cqrs-es.md` | #144 |
 | 30 | #31 | fechada — Rodada 2 em `Projeto/carga/results/04-fase6-es`, ponto 2 em `docs/artigo/experimento-monolito.md` | #148 |
-| 31–46 | #32–#47 | abertas | — |
+| 31 | #32 | fechada — `notification` como serviço (Maven multi-módulo, Dockerfile por serviço); e-mail por evento `identity.notification`, dado pessoal com retenção = validade do código + 30 s | #152 |
+| 32 | #33 | fechada — `reservation` como serviço atrás do `gateway` (schema e event store próprios, API `/internal/**` com token de serviço); naive em 2 chamadas HTTP, CAS em 1; `eventcap` por chamada síncrona | #153 |
+| 33–46 | #34–#47 | abertas — a próxima é a #34 (Rodada 3, ponto 3) | — |
 | 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
 
 Branch de integração da Fase 2: `Fase_2` (a #11 entrou pelo PR #104; as #12–#15 foram
@@ -89,7 +91,8 @@ fechadas na `Fase_6`; #133 (CORS `*` com credenciais) aberta. #146 (consumer da 
 
 Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feitas (marco de banca atingido); Fase 4: #17 → #18
 → #19/#20/#21 → #22 feitas (ponto 1 da série; PR #122); Fase 5: #23 → #24/#25 feitas (PR #134); Fase 6: #26 → #27 → #28/#29 → #30 feitas (na `Fase_6`);
-Rodada 2 (#31, ponto 2 da série) feita em 2026-10-19 (PR #148).
+Rodada 2 (#31, ponto 2 da série) feita em 2026-10-19 (PR #148). Fase 7: #32 → #33 feitas em 2026-10-21 na branch de integração
+`Fase_7` (PRs #152 e #153; PR final `Fase_7` → `main`, merge do usuário); a #34 (Rodada 3) é manual, com o gerador.
 
 ## Fase 0 — Desbloqueio de ambiente
 
