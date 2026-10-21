@@ -9,6 +9,9 @@
 #  - no Git Bash o binário do Docker é nativo do Windows e não entende "/e/...",
 #    então usamos "pwd -W" (-> "E:/...") e desligamos a conversão de path do MSYS.
 #
+# Roda o REACTOR inteiro (issue #32, Fase 7): shared + monolito + notification, um `mvn clean test` na raiz do Backend/.
+# Os relatórios Surefire de todos os módulos são copiados para Backend/target/surefire-reports (nomes de classe únicos).
+#
 # Pré-requisito: a stack no ar pra existir a rede, o banco e o broker (Redpanda; os testes do backbone de
 # eventos, issue #27, publicam e consomem nele de verdade)
 #   docker compose -f Projeto/docker-compose.yml up -d db redpanda
@@ -72,6 +75,15 @@ if [ -n "$(docker ps -q -f name=^gerenciador-backend$)" ]; then
     exit 1
 fi
 
+# O serviço notification (#32) consome o tópico identity.notification: o relay dos testes do monólito publica lá, e um
+# notification vivo mandaria e-mail de verdade (SMTP real) para os endereços de teste. Falha cedo, como no backend.
+if [ -n "$(docker ps -q -f name=^gerenciador-notification$)" ]; then
+    echo "❌ O container gerenciador-notification está rodando: ele consumiria o tópico identity.notification dos testes e mandaria e-mail de verdade."
+    echo "   Pare-o antes: docker stop gerenciador-notification"
+    echo ""
+    exit 1
+fi
+
 REPORTS_DIR="$SCRIPT_DIR/target/surefire-reports"
 
 # Apaga só os relatórios antigos (não o target/ inteiro): o container copia os XMLs novos por
@@ -92,6 +104,9 @@ mkdir -p "$SCRIPT_DIR/target"
 # IDEMPOTENCY_RETENTION_SCAN_MS=3600000: mesma razão para o job IdempotencyKeyRetentionService (#130) —
 # um contexto em cache apagando chaves vencidas concorreria com os testes que envelhecem linhas na mão.
 #
+# NOTIFICATION_EVENTS_RETENTION_SCAN_MS=3600000: idem para o job que apaga notificações vencidas do event_store (#32) — os testes
+# dele chamam purgeExpired() na mão, e um contexto em cache apagando por timer concorreria com eles.
+#
 # RESERVATION_READPATH=cas: pina o caminho de reserva no default previsível para a suíte
 # inteira, mesmo que o Projeto/.env tenha sido setado para "naive" (experimento #11/#12) —
 # senão os testes CAS (ex.: EventWalletTest.testEventoLotado) quebrariam.
@@ -103,6 +118,7 @@ mkdir -p "$SCRIPT_DIR/target"
 docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
   "${PLATFORM_ARGS[@]}" \
   -e IDEMPOTENCY_RETENTION_SCAN_MS=3600000 \
+  -e NOTIFICATION_EVENTS_RETENTION_SCAN_MS=3600000 \
   -e RESERVATION_READPATH=cas \
   -e SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092 \
   -e EVENTS_CONSUMER_GROUP=gerenciador-eventos-test \
@@ -117,17 +133,29 @@ docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
     cd /tmp/build
 
     # Executar testes (todo download fica no volume de cache do m2)
-    mvn -q -Dmaven.repo.local="$MVN_REPO" clean test
+    mvn -q -fae -Dmaven.repo.local="$MVN_REPO" clean test
     TEST_CODE=$?
 
-    # Copiar apenas relatórios para o volume de saída
+    # Copiar apenas relatórios (de todos os módulos) para o volume de saída
     mkdir -p /workspace-output/surefire-reports
-    cp -r target/surefire-reports/* /workspace-output/surefire-reports/ 2>/dev/null || true
+    find . -path "*/target/surefire-reports/TEST-*.xml" -exec cp {} /workspace-output/surefire-reports/ \; 2>/dev/null
 
     exit $TEST_CODE
   '
 
 TEST_EXIT_CODE=$?
+
+# Os testes publicam em identity.notification (NotificationConsumerTest direto, os do monólito pelo relay) e o group `notification`
+# do serviço vivo tem offset atrás ou nem existe (e começa em earliest): sem isto, o próximo `up` do notification mandaria e-mail
+# REAL para cada endereço de teste. Move o group para o FIM do tópico, rodando SEMPRE (testes verdes ou não). A guarda acima
+# garante que o group está sem membros. Trade-off: um e-mail real que estivesse pendente antes da rodada é pulado (aceitável em
+# dev: o backend precisa estar parado para testar). --allow-new-topics cobre o group que ainda não existe.
+if docker exec gerenciador-redpanda rpk group seek notification --to end --topics identity.notification --allow-new-topics >/dev/null 2>&1; then
+    echo "✅ Group notification movido para o fim de identity.notification (eventos de teste não viram e-mail)."
+else
+    echo "⚠️  Não consegui mover o group notification para o fim do tópico. ANTES de subir o notification, rode:"
+    echo "   docker exec gerenciador-redpanda rpk group seek notification --to end --topics identity.notification --allow-new-topics"
+fi
 
 echo ""
 echo "=================================================="

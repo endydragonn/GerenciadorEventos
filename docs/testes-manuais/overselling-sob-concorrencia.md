@@ -38,7 +38,7 @@ transporte HTTP, complementar, não substituta:
 - `EventWalletTest.testRemoveLinkConcorrenteNaoCausaOverselling` — duas remoções
   concorrentes do mesmo vínculo (barreira real) devolvem no máximo 1 vaga.
 
-Arquivo: `Projeto/Backend/src/test/java/com/gerenciador/eventos/EventWalletTest.java`.
+Arquivo: `Projeto/Backend/monolito/src/test/java/com/gerenciador/eventos/EventWalletTest.java`.
 
 ## Pré-requisitos
 

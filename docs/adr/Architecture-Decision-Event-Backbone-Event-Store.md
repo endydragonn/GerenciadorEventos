@@ -207,6 +207,19 @@ Envelope JSON, igual nas colunas do `event_store` e na mensagem do tópico:
 - **Sem dado pessoal no `payload`:** o `event_store` é imutável e não dá para apagar o que entra nele.
   Eventos levam ids (`userId`, `event_id`) e dados do domínio do evento, nunca e-mail, telefone,
   senha ou documento. Por isso `identity` não é event-sourced (ver a ADR de microsserviços).
+  **Exceção — decisão do usuário, 2026-10-21 (issue #32, Fase 7):** o stream `identity.notification`, que pede e-mail ao
+  serviço `notification`, leva `email`, `userName` e um código de uso único (`payload.expiresAt` diz quando vence), porque o
+  e-mail não se monta sem destinatário e código. É um stream de "pedido de envio" (uma versão por notificação), não um
+  agregado; senha e hash nunca entram. **O dado pessoal vive só o tempo de validade do código + 30 s** (cadastro: 5 min →
+  5 min 30 s; MFA do reset de senha: 15 min → 15 min 30 s), em todas as cópias:
+  - **`event_store`:** um job `@Scheduled` do monólito apaga as linhas desse stream vencidas há mais de 30 s e que já saíram
+    do `event_outbox`. O stream tem 1 versão e nunca passa por replay nem projeção; a imutabilidade do `event_store` é
+    convenção da aplicação (sem trigger nem REVOKE), e esta é a única exceção, restrita a este `stream_type`;
+  - **tópico `identity.notification` e seu `.DLT`:** `retention.ms` = maior validade + 30 s (15 min 30 s), com `segment.ms`
+    curto para o broker fechar segmentos (ele só apaga segmento fechado);
+  - **consumer:** descarta, sem enviar, evento cujo código já venceu.
+
+  O prazo vem do próprio evento (`expiresAt`, calculado das constantes de validade), não de um número repetido nos jobs.
 
 ### 4. Medição de lag (para a Rodada 2)
 
