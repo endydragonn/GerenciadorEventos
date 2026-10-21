@@ -16,8 +16,7 @@ import com.gerenciador.eventos.catalog.api.Event;
 import com.gerenciador.eventos.catalog.api.EventApi;
 import com.gerenciador.eventos.identity.api.User;
 import com.gerenciador.eventos.identity.api.UserApi;
-import com.gerenciador.eventos.reservation.api.EventWallet;
-import com.gerenciador.eventos.reservation.api.EventWalletApi;
+import com.gerenciador.eventos.reservationclient.api.EventWallet;
 
 /**
  * Popula o banco com dados de exemplo (uso em dev). Garante que senhas sejam
@@ -30,10 +29,10 @@ public class BffSeedController {
 
     private final UserApi userService;
     private final EventApi eventService;
-    private final EventWalletApi eventWalletService;
+    private final EventWalletGateway eventWalletService;
 
     public BffSeedController(UserApi userService, EventApi eventService,
-                              EventWalletApi eventWalletService) {
+                              EventWalletGateway eventWalletService) {
         this.userService = userService;
         this.eventService = eventService;
         this.eventWalletService = eventWalletService;
@@ -118,7 +117,7 @@ public class BffSeedController {
             for (EventWallet enrollment : seedData.getEnrollments()) {
                 try {
                     // seed cria inscrições já confirmadas (reserva + confirmação)
-                    eventWalletService.addLink(enrollment);
+                    eventWalletService.addLink(enrollment, null);
                     eventWalletService.confirm(enrollment.getUserId(), enrollment.getEventId());
                     enrollmentsCreated++;
                 } catch (IllegalArgumentException e) {

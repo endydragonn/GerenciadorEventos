@@ -32,7 +32,7 @@ final class EventPayloads {
         return p;
     }
 
-    /** {@code EventCreated}: metadados + capacidade/janela de venda iniciais (o {@code eventcap} nasce na mesma transação). */
+    /** {@code EventCreated}: metadados + capacidade/janela de venda iniciais (o {@code eventcap} nasce logo depois do commit, por chamada ao reservation; o reservation o reconcilia por este evento). */
     static ObjectNode criado(long id, Event e) {
         ObjectNode p = evento(id, e);
         p.put("capacity", e.getLot_quantity());

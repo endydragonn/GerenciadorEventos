@@ -10,6 +10,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import java.util.regex.Pattern;
+
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -26,20 +29,42 @@ public class EventStore {
     static final String COLUNAS = "global_position, event_id, stream_type, stream_id, version, event_type, "
             + "schema_version, occurred_at, payload::text, metadata::text";
 
-    // Uma ida ao banco: o INSERT (ON CONFLICT DO NOTHING) e o do outbox só acontecem se o primeiro gravou a linha.
-    // Sem linha de volta = conflito de versão. O CTE do outbox roda mesmo sem ser referenciado no SELECT final.
-    private static final String APPEND = "WITH ins AS ("
-            + "INSERT INTO public.event_store (event_id, stream_type, stream_id, version, event_type, "
-            + "schema_version, payload, metadata, partition_key) VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?) "
-            + "ON CONFLICT (stream_type, stream_id, version) DO NOTHING "
-            + "RETURNING global_position, occurred_at), "
-            + "ob AS (INSERT INTO public.event_outbox (global_position) SELECT global_position FROM ins) "
-            + "SELECT global_position, occurred_at FROM ins";
+    private static final Pattern SCHEMA_VALIDO = Pattern.compile("[a-z_][a-z0-9_]*");
 
     private final ObjectMapper json;
+    private final String schema;
+    private final String append;
 
-    public EventStore(ObjectMapper json) {
+    /**
+     * @param schema schema DESTE serviço no banco ({@code events.schema}, default {@code public}): nele moram o
+     *               {@code event_store}, o {@code event_outbox}, o {@code event_snapshot}, o {@code projection_checkpoint} e as
+     *               projeções vivas. Cada serviço tem o seu (Fase 7): nenhum serviço lê a tabela de outro.
+     */
+    public EventStore(ObjectMapper json, @Value("${events.schema:public}") String schema) {
+        if (!SCHEMA_VALIDO.matcher(schema).matches()) {
+            throw new IllegalArgumentException("events.schema inválido: '" + schema + "'");
+        }
         this.json = json;
+        this.schema = schema;
+        // Uma ida ao banco: o INSERT (ON CONFLICT DO NOTHING) e o do outbox só acontecem se o primeiro gravou a linha.
+        // Sem linha de volta = conflito de versão. O CTE do outbox roda mesmo sem ser referenciado no SELECT final.
+        this.append = "WITH ins AS ("
+                + "INSERT INTO " + tabela("event_store") + " (event_id, stream_type, stream_id, version, event_type, "
+                + "schema_version, payload, metadata, partition_key) VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?) "
+                + "ON CONFLICT (stream_type, stream_id, version) DO NOTHING "
+                + "RETURNING global_position, occurred_at), "
+                + "ob AS (INSERT INTO " + tabela("event_outbox") + " (global_position) SELECT global_position FROM ins) "
+                + "SELECT global_position, occurred_at FROM ins";
+    }
+
+    /** Schema do serviço (ver o construtor). */
+    public String schema() {
+        return schema;
+    }
+
+    /** Nome qualificado de uma tabela do schema do serviço (o Supavisor em transaction mode proíbe {@code search_path}). */
+    public String tabela(String nome) {
+        return schema + "." + nome;
     }
 
     /**
@@ -48,7 +73,7 @@ public class EventStore {
      * chamador segue utilizável e ele decide (rollback + resposta da corrida, ou repetir o command).
      */
     public Optional<EventEnvelope> append(Connection conn, NovoEvento e) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement(APPEND)) {
+        try (PreparedStatement ps = conn.prepareStatement(append)) {
             ps.setObject(1, e.eventId());
             ps.setString(2, e.streamType());
             ps.setString(3, e.streamId());
@@ -78,7 +103,7 @@ public class EventStore {
     /** Eventos do stream com {@code fromVersion <= version <= toVersion}, em ordem de {@code version}. */
     List<EventEnvelope> readRange(Connection conn, String streamType, String streamId, int fromVersion,
             int toVersion) throws SQLException {
-        String sql = "SELECT " + COLUNAS + " FROM public.event_store "
+        String sql = "SELECT " + COLUNAS + " FROM " + tabela("event_store") + " "
                 + "WHERE stream_type = ? AND stream_id = ? AND version >= ? AND version <= ? ORDER BY version";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, streamType);

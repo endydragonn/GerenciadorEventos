@@ -11,8 +11,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.gerenciador.eventos.reservation.api.MyWallet;
-import com.gerenciador.eventos.reservation.api.MyWalletApi;
+import com.gerenciador.eventos.identity.api.MyWallet;
+import com.gerenciador.eventos.identity.api.MyWalletApi;
 
 /**
  * Camada BFF única para a carteira do usuário (my-wallet): validate, getByUser, ensure.

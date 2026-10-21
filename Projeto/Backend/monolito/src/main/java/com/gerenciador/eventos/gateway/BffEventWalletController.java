@@ -15,9 +15,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.gerenciador.eventos.reservation.api.EventWallet;
-import com.gerenciador.eventos.reservation.api.EventWalletApi;
-import com.gerenciador.eventos.reservation.api.IdempotencyConflictException;
+import com.gerenciador.eventos.reservationclient.api.EventWallet;
+import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictException;
 
 /**
  * Camada BFF única para inscrição em evento (event-wallet): addLink, confirm, validate,
@@ -27,14 +26,17 @@ import com.gerenciador.eventos.reservation.api.IdempotencyConflictException;
  * (sem chamador no frontend). Desde o PR #79 (issue #78), {@code /bff/event-wallets/**} exige
  * autenticação (deny-by-default); segue tirando {@code userId} do corpo/query sem validar
  * contra o usuário autenticado (IDOR — issue #57 trata isso, ainda não resolvido).
+ *
+ * <p>Desde a #33 a reserva é do serviço {@code reservation}: o {@link EventWalletGateway} confere carteira/evento e chama
+ * a API interna dele por HTTP; o contrato deste controller não mudou.</p>
  */
 @RestController
 @RequestMapping("/bff/event-wallets")
 public class BffEventWalletController {
 
-    private final EventWalletApi eventWalletService;
+    private final EventWalletGateway eventWalletService;
 
-    public BffEventWalletController(EventWalletApi eventWalletService) {
+    public BffEventWalletController(EventWalletGateway eventWalletService) {
         this.eventWalletService = eventWalletService;
     }
 

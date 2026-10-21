@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.example.demo</groupId>
+        <artifactId>backend</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+    <artifactId>reservation</artifactId>
+    <name>reservation</name>
+    <description>Serviço reservation (issue 33): eventcap (CAS) + walletevent (event sourcing), API interna HTTP chamada pelo gateway</description>
+    <dependencies>
+        <!-- Lib comum: DatabaseConnection e a infra de event sourcing (event store, relay, consumer idempotente, replay) -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>shared</artifactId>
+        </dependency>
+        <!-- Contrato HTTP: os DTOs (EventWallet, EventCap) e a exceção são o corpo da API interna. Os testes ponta a ponta
+             usam também o ReservationClient real contra este serviço. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>reservation-client</artifactId>
+        </dependency>
+        <!-- API interna HTTP (sem Spring Security: o serviço só é alcançável na rede gerenciador-net, sem porta no host) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.gerenciador.eventos.reservation.ReservationApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

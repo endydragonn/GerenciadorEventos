@@ -5,7 +5,6 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -18,15 +17,15 @@ import org.springframework.stereotype.Repository;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.gerenciador.eventos.catalog.api.Event;
-import com.gerenciador.eventos.reservation.api.EventCap;
-import com.gerenciador.eventos.reservation.api.EventCapacityApi;
+import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.reservationclient.api.EventCapacityApi;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**
  * Repository para entidade Event usando JDBC cru via DatabaseConnection.
  *
  * <p>A tabela {@code public.event} guarda só metadados. Capacidade/vagas/janela de venda
- * ficam no agregado isolado {@code public.eventcap} ({@link EventCapacityApi}); a lista de
+ * ficam no agregado isolado {@code reservation.eventcap}, do SERVIÇO reservation ({@link EventCapacityApi}, HTTP); a lista de
  * apresentadores fica em {@code public.eventpresenter} ({@link EventPresenterRepository}).
  * O POJO {@link Event} continua carregando {@code lot_quantity}/{@code quantity}/
  * {@code buy_time_limit}/{@code presenters} como campos de transporte da API — este
@@ -46,13 +45,11 @@ public class EventRepository {
     private DatabaseConnection databaseConnection;
 
     @Autowired
-    private EventCapacityApi eventCapacityApi;
-
-    @Autowired
     private CatalogEventWriter writer;
 
     /**
-     * Insere evento + agregado de capacidade + apresentadores numa única transação.
+     * Insere evento + apresentadores numa única transação (o {@code eventcap} NÃO entra: é do serviço reservation e
+     * nasce por chamada síncrona DEPOIS deste commit, em {@link EventService#createEvent}).
      * {@code lot_quantity} do POJO vira {@code eventcap.capacity}, e {@code quant} nasce
      * igual à capacidade (todas as vagas disponíveis).
      */
@@ -72,7 +69,8 @@ public class EventRepository {
         }
 
         try {
-            // Uma transação: EventCreated (v1) no event_store + projeção inline (event, eventpresenter) + eventcap.
+            // Uma transação: EventCreated (v1) no event_store + projeção inline (event, eventpresenter). O EventCreated leva
+            // capacity/buyTimeLimit: é o que o reservation usa para reconciliar o eventcap se a chamada síncrona falhar.
             // O id vem da sequence ANTES do append (é o streamId); a projeção insere a linha com ele.
             e.setEvent_id(writer.executar(tx -> {
                 long id = tx.novoStream();
@@ -83,9 +81,6 @@ public class EventRepository {
                 if (e.getImage_data() != null) { // blob fora do ES: direto na tabela viva
                     gravarImagem(tx.conn(), id, e.getImage_data());
                 }
-                LocalDateTime buyLimit = (e.getBuy_time_limit() != null) ? e.getBuy_time_limit() : e.getEvent_date();
-                eventCapacityApi.create(tx.conn(),
-                        new EventCap(id, e.getLot_quantity(), e.getLot_quantity(), buyLimit));
                 return id;
             }));
         } catch (SQLException ex) {
@@ -209,8 +204,10 @@ public class EventRepository {
     }
 
     /**
-     * Remover evento: appenda {@code EventCancelled} e a projeção faz o mesmo {@code DELETE} de antes (eventcap e
-     * eventpresenter caem por ON DELETE CASCADE) na mesma transação; o stream fica no event_store como auditoria.
+     * Remover evento: appenda {@code EventCancelled} e a projeção faz o mesmo {@code DELETE} de antes (eventpresenter cai
+     * por ON DELETE CASCADE) na mesma transação; o stream fica no event_store como auditoria. O {@code eventcap} é do
+     * serviço reservation (sem FK cross-schema) e é removido por {@code EventService.delete} ANTES desta transação (a
+     * recusa 409 de evento com reserva acontece lá; esta transação não faz chamada de rede).
      * Evento inexistente = no-op, como antes.
      */
     public void delete(Long id) {

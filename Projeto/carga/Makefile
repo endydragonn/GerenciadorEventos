@@ -30,7 +30,7 @@ PGUSER         ?= admin
 PGDATABASE     ?= meu_banco
 GERADOR_IP     ?=
 # escada de carga (test-degraus, issue #14). POOL_HIKARI/MAX_CONN so REGISTRAM no CSV o que o host roda (o padrao do
-# pool do backend e 1000: se o host usar outro, informe). DEG_DURACAO: >= 60 e multiplo de 30. MAX_VUS = VUs do k6
+# pool do SERVICO reservation, o caminho quente desde a #33, e 1000: se o host usar outro, informe). DEG_DURACAO: >= 60 e multiplo de 30. MAX_VUS = VUs do k6
 # todos PRE-alocados (~1-2 MB cada): dimensione pela RAM do gerador.
 DEG_INICIO     ?= 12000
 DEG_PASSO      ?= 4000

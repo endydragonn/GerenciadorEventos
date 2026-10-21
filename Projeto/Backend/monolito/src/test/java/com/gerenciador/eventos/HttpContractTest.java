@@ -32,8 +32,8 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
 import com.gerenciador.eventos.catalog.api.Event;
-import com.gerenciador.eventos.reservation.api.EventWallet;
-import com.gerenciador.eventos.reservation.api.MyWallet;
+import com.gerenciador.eventos.reservationclient.api.EventWallet;
+import com.gerenciador.eventos.identity.api.MyWallet;
 import com.gerenciador.eventos.identity.PendingVerification;
 import com.gerenciador.eventos.identity.api.User;
 import com.gerenciador.eventos.identity.PendingVerificationRepository;

@@ -5,7 +5,7 @@ import java.util.List;
 
 import com.gerenciador.eventos.catalog.api.Event;
 import com.gerenciador.eventos.identity.api.User;
-import com.gerenciador.eventos.reservation.api.EventWallet;
+import com.gerenciador.eventos.reservationclient.api.EventWallet;
 
 /**
  * POJO para receber dados de seed via API

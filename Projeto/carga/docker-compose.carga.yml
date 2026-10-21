@@ -2,22 +2,31 @@
 # Uso (feito pelo setup-host.ps1):
 #   docker compose -f docker-compose.yml -f carga/docker-compose.carga.yml up -d --build
 #
-# - RESERVATION_READPATH: cas (default, nunca oversella) ou naive (braco de controle).
+# Desde a #33 (Fase 7) a reserva e um SERVICO separado (container gerenciador-reservation). Cada servico tem a sua config:
+#
+# - backend (monolito/gateway): RESERVATION_READPATH decide o fluxo: cas (default, 1 chamada ao reservation, nunca oversella)
+#   ou naive (braco de controle, 2 chamadas: GET da disponibilidade + POST da reserva). Lido na subida do backend.
+#   Hikari 350 (suficiente para as pre-checagens curtas; NAO e o caminho quente) e Tomcat 300 (compose/application.properties).
+# - reservation: o CAMINHO QUENTE. Hikari 1000, Tomcat 300 e virtual threads desligadas, como o monolito no ponto 2
+#   (SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE / _MINIMUM_IDLE chegam aqui, issue #96). Relay e consumer ligados no compose.
 # - O lag do caminho naive deixou de ser um knob (issue #29): e o lag REAL do consumer da projecao
 #   (relay + consumer do Redpanda), medido, nao configurado. Ver carga/README.md.
-# - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE / _MINIMUM_IDLE: pool do backend (issue #96).
-# - Lag por evento (relay_ms / consumer_ms / total_ms) no logger events.lag: DESLIGADO por padrao (um log por evento
-#   no thread do unico consumer infla o consumer_ms medido). Para ligar SO na rodada que mede o lag, descomente
-#   a linha LOGGING_LEVEL_EVENTS_LAG abaixo (e confira tambem o offset lag: rpk group describe gerenciador-eventos).
-# - SQL/Hibernate em INFO: o application.properties liga log DEBUG de SQL, que distorce
-#   latencia sob carga. Aqui so no ambiente de teste.
+# - Lag por evento (relay_ms / consumer_ms / total_ms) no logger events.lag do RESERVATION: DESLIGADO por padrao (um log por
+#   evento no thread do unico consumer infla o consumer_ms medido). Para ligar SO na rodada que mede o lag, descomente
+#   a linha LOGGING_LEVEL_EVENTS_LAG do reservation abaixo (e confira tambem o offset lag: rpk group describe reservation).
+# - SQL/Hibernate em INFO no backend: o application.properties liga log DEBUG de SQL, que distorce
+#   latencia sob carga. Aqui so no ambiente de teste. (O reservation nao usa Hibernate.)
 services:
   backend:
     environment:
       RESERVATION_READPATH: ${RESERVATION_READPATH:-cas}
-      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-1000}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${BACKEND_HIKARI_MAXIMUM_POOL_SIZE:-350}
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-5}
       SPRING_JPA_SHOW_SQL: "false"
       LOGGING_LEVEL_ORG_HIBERNATE_SQL: "INFO"
       LOGGING_LEVEL_ORG_HIBERNATE_TYPE_DESCRIPTOR_SQL_BASICBINDER: "INFO"
+  reservation:
+    environment:
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-1000}
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-5}
       # LOGGING_LEVEL_EVENTS_LAG: "DEBUG"

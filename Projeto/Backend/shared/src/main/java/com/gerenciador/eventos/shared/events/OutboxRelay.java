@@ -42,7 +42,7 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 @ConditionalOnProperty(name = "events.relay.enabled", havingValue = "true")
 public class OutboxRelay {
 
-    /** Chave do advisory lock do relay (constante arbitrária, só este código usa). */
+    /** Chave do advisory lock do relay do schema {@code public} (constante arbitrária, só este código usa). */
     public static final long LOCK_KEY = 2_700_001L;
 
     private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
@@ -53,6 +53,7 @@ public class OutboxRelay {
     private final ObjectMapper json;
     private final KafkaTemplate<String, String> template;
     private final int batchSize;
+    private final long lockKey;
 
     public OutboxRelay(DatabaseConnection db, EventStore eventStore, ObjectMapper json,
             KafkaTemplate<String, String> template, @Value("${events.relay.batch-size:200}") int batchSize) {
@@ -61,6 +62,16 @@ public class OutboxRelay {
         this.json = json;
         this.template = template;
         this.batchSize = batchSize;
+        this.lockKey = lockKey(eventStore.schema());
+    }
+
+    /**
+     * Chave do advisory lock por schema: o lock é do BANCO, então os relays de serviços diferentes (cada um drena o
+     * outbox do seu schema) não podem disputar a mesma chave, senão um esperaria o outro e inflaria o lag medido.
+     * {@code public} mantém {@link #LOCK_KEY}.
+     */
+    static long lockKey(String schema) {
+        return "public".equals(schema) ? LOCK_KEY : LOCK_KEY + 1 + (schema.hashCode() & 0xFFFF);
     }
 
     @Scheduled(fixedDelayString = "${events.relay.interval-ms:50}", initialDelayString = "${events.relay.interval-ms:50}")
@@ -111,7 +122,7 @@ public class OutboxRelay {
 
     private boolean tryLock(Connection conn) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement("SELECT pg_try_advisory_xact_lock(?)")) {
-            ps.setLong(1, LOCK_KEY);
+            ps.setLong(1, lockKey);
             try (ResultSet rs = ps.executeQuery()) {
                 rs.next();
                 return rs.getBoolean(1);
@@ -120,8 +131,9 @@ public class OutboxRelay {
     }
 
     private List<Pendente> ler(Connection conn) throws SQLException {
-        String sql = "SELECT " + EventStore.COLUNAS + ", partition_key FROM public.event_outbox "
-                + "JOIN public.event_store USING (global_position) ORDER BY global_position LIMIT ?";
+        String sql = "SELECT " + EventStore.COLUNAS + ", partition_key FROM "
+                + eventStore.tabela("event_outbox") + " JOIN " + eventStore.tabela("event_store")
+                + " USING (global_position) ORDER BY global_position LIMIT ?";
         List<Pendente> lote = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setInt(1, batchSize);
@@ -151,7 +163,8 @@ public class OutboxRelay {
 
     private void apagar(Connection conn, List<Pendente> lote) throws SQLException {
         Long[] posicoes = lote.stream().map(p -> p.envelope().globalPosition()).toArray(Long[]::new);
-        try (PreparedStatement ps = conn.prepareStatement("DELETE FROM public.event_outbox WHERE global_position = ANY(?)")) {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "DELETE FROM " + eventStore.tabela("event_outbox") + " WHERE global_position = ANY(?)")) {
             ps.setArray(1, conn.createArrayOf("bigint", posicoes));
             ps.executeUpdate();
         }

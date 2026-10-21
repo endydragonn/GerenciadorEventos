@@ -230,13 +230,14 @@ public class IdempotentConsumer {
             if (!avancar(conn, projection.name(), e)) {
                 return null;
             }
-            projection.apply(conn, e, "public");
+            projection.apply(conn, e, eventStore.schema());
         }
         return true;
     }
 
     private boolean eventIdConfere(Connection conn, EventEnvelope msg) throws SQLException {
-        String sql = "SELECT event_id FROM public.event_store WHERE stream_type = ? AND stream_id = ? AND version = ?";
+        String sql = "SELECT event_id FROM " + eventStore.tabela("event_store")
+                + " WHERE stream_type = ? AND stream_id = ? AND version = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, msg.streamType());
             ps.setString(2, msg.streamId());
@@ -248,7 +249,7 @@ public class IdempotentConsumer {
     }
 
     private int checkpoint(Connection conn, String projecao, EventEnvelope msg) throws SQLException {
-        String sql = "SELECT version FROM public.projection_checkpoint "
+        String sql = "SELECT version FROM " + eventStore.tabela("projection_checkpoint") + " "
                 + "WHERE projecao = ? AND stream_type = ? AND stream_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, projecao);
@@ -263,9 +264,9 @@ public class IdempotentConsumer {
     /** CAS do checkpoint: rowcount 1 = esta transação é quem aplica a versão. */
     private boolean avancar(Connection conn, String projecao, EventEnvelope e) throws SQLException {
         String sql = e.version() == 1
-                ? "INSERT INTO public.projection_checkpoint (projecao, stream_type, stream_id, version) "
+                ? "INSERT INTO " + eventStore.tabela("projection_checkpoint") + " (projecao, stream_type, stream_id, version) "
                         + "VALUES (?, ?, ?, 1) ON CONFLICT DO NOTHING"
-                : "UPDATE public.projection_checkpoint SET version = ?, updated_at = clock_timestamp() "
+                : "UPDATE " + eventStore.tabela("projection_checkpoint") + " SET version = ?, updated_at = clock_timestamp() "
                         + "WHERE projecao = ? AND stream_type = ? AND stream_id = ? AND version = ? - 1";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             int i = 1;

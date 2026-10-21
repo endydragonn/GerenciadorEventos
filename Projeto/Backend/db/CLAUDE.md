@@ -40,8 +40,8 @@ não há migração via ORM. Leia também o CLAUDE.md da raiz e o de `Backend/`.
 ## Inspeção visual (Supabase Studio)
 
 Com a stack no ar, o Studio fica em `http://localhost:8000` (via Kong; login com `DASHBOARD_USERNAME` e
-`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`). Table Editor → schema `public` mostra `eventcap`,
-`walletevent` etc.; o SQL Editor roda consultas em `meu_banco`. Studio e `meta` conectam como
+`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`). Table Editor → schemas `public` (`users`, `event`...) e `reservation` (`eventcap`,
+`walletevent`...) mostram as tabelas do app; o SQL Editor roda consultas em `meu_banco`. Studio e `meta` conectam como
 `supabase_admin`, não como `admin`: é leitura/edição manual de apoio, o backend continua usando só JDBC.
 Detalhes e limites (sem GoTrue/PostgREST/Realtime/Storage/functions) em `Projeto/supabase/README.md`.
 
@@ -77,16 +77,13 @@ como `supabase_admin` (um `psql` por arquivo, ordem lexical, no `POSTGRES_DB`). 
 | `01-functions.sql` | `create_wallet_for_user()` (usada pelo trigger de `users`) |
 | `02-users.sql` | tabela `users` + trigger `trigger_create_wallet` |
 | `03-event.sql` | tabela `event` — só metadados + `version` (FK `creator_id → users`); projeção inline do stream `catalog.event` (#28) |
-| `04-eventcap.sql` | tabela `eventcap` — capacidade/vagas isoladas (CHECK `0<=quant<=capacity`) |
 | `05-eventpresenter.sql` | tabela `eventpresenter` — apresentadores (0..N por evento) |
 | `06-mywallet.sql` | tabela `mywallet` (FK `user_id → users`, `ON DELETE CASCADE`) |
-| `07-walletevent.sql` | tabela `walletevent` (PK composta, `status`, `expires_at`, `version` do stream `reservation.wallet`) |
 | `08-pending-verifications.sql` | tabela + funções/trigger de limpeza de códigos expirados |
-| `09-event-availability.sql` | tabela `event_availability` — projeção assíncrona (`ativos` por evento) lida pelo braço `naive` (não é fonte de verdade) |
-| `10-idempotency-key.sql` | tabela `idempotency_key` — chaves de idempotência do `POST /bff/event-wallets` (sem FK) |
 | `11-event-store.sql` | `event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint` — infra de event sourcing da Fase 6 (#27), sem FK |
+| `13-reservation.sql` | schema **`reservation`** (dono `admin`; #33, Fase 7) — `eventcap` (CHECK `0<=quant<=capacity`), `walletevent` (PK composta, `status`, `expires_at`, `version` do stream `reservation.wallet`), `event_availability` (projeção assíncrona, `ativos` por evento, lida pelo braço `naive`), `idempotency_key` e o event store do serviço (`event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint`). **Sem nenhuma FK.** Substituiu os antigos `04-eventcap`, `07-walletevent`, `09-event-availability` e `10-idempotency-key` (no histórico do git) |
 | `12-notification.sql` | schema **`notification`** (dono `admin`) + `notification.processed_event` — checkpoint de idempotência do serviço `notification` (#32, Fase 7) |
-| `99-tests.sql` | suíte de sanidade em `DO $$ ... $$` (trigger, CAS, CHECK, N:N, cascata, projeção de disponibilidade, `walletevent.version`, event store/outbox/checkpoint, TRUNCATE) |
+| `99-tests.sql` | suíte de sanidade em `DO $$ ... $$` (trigger, CAS, CHECK, N:N, cascata de `eventpresenter`, projeção de disponibilidade, `walletevent.version`, event store/outbox/checkpoint, TRUNCATE; as tabelas de reserva em `reservation.*`) |
 
 `db/migrations/` guarda scripts de migração idempotentes para bancos já existentes
 (ex.: `20260901-eventcap-isolation.sql`), aplicáveis a quente via `psql` sem recriar o volume.
@@ -98,8 +95,9 @@ e, ponta a ponta, pelo harness `migrations/verify-20260901-migration.sh`.
 
 `migrations/verify-20260901-migration.sh` (harness da issue #6, cross-platform como
 `run-tests.sh`): cria um banco **descartável** `eventcap_mig_check` no container, aplica os
-init-scripts `01`–`11`, roda `99-tests.sql`, depois roda o harness SQL
-`verify-20260901-migration.sql` — que reconstrói o schema ANTIGO **com dados**, aplica a
+init-scripts do schema novo (`01`–`03`, `05`, `06`, `08`, `11`, `13`), roda `99-tests.sql`, depois roda o harness SQL
+`verify-20260901-migration.sql` — que reconstrói o schema ANTIGO **com dados** (desde a #33 inclui recriar a `public.walletevent` legada
+e apagá-la no fim, e afastar o nome da constraint de `reservation.walletevent`), aplica a
 migração **2×** (idempotência) e checa colunas removidas/criadas, constraints, índice parcial,
 conversão de `quant` (limitado / esgotado-piso-0 / ilimitado) e **preservação dos dados**
 (contagem + identidade das linhas). Não toca em `meu_banco`. Exit `!= 0` se algo falhar.
@@ -140,8 +138,24 @@ docker compose -f Projeto/docker-compose.yml up -d --build
     `version = 1`). **O backend recusa alterar/cancelar evento com `version = 0`** (erro "é pré-ES"): depois de carregar o
     `seed-data.sql`, que insere em `event` direto (aviso no topo do arquivo), reaplique a migração. Coberta por `SchemaValidationTest`,
     `CatalogEventSourcingTest` e o passo 8d do `99-tests.sql`.
-- **`eventcap`** — agregado ISOLADO de capacidade. PK `event_id`, FK `→ event` `ON DELETE
-  CASCADE`. `capacity` (`NOT NULL`), `quant` = vagas disponíveis (`NOT NULL`), `buy_time_limit`
+- **Schema `reservation`** (issue #33, Fase 7 — o segundo schema por serviço): `eventcap`, `walletevent`, `event_availability`,
+  `idempotency_key` e o event store do serviço (`reservation.event_store`/`event_outbox`/`event_snapshot`/`projection_checkpoint`, mesmo
+  desenho de `public`) moram aqui e são lidos e escritos SÓ pelo serviço `reservation`. **Nenhuma FK cross-schema — e nenhuma FK nas tabelas
+  do schema** (nem para `users` nem para `event`): o que `ON DELETE CASCADE` (eventcap) e `ON DELETE RESTRICT` (walletevent) garantiam virou
+  chamada: o catalog remove o `eventcap` por `DELETE /internal/eventcaps/{id}`, que recusa (409) se existe `walletevent` do evento; e o gateway
+  confere carteira/evento antes de reservar. `mywallet` NÃO veio (extensão 1:1 de `users`, trigger): fica em `public`. `event_store` e
+  cia. existem nos dois schemas: `public.*` guarda `catalog.event` e `identity.notification`; `reservation.*` guarda `reservation.wallet`.
+  Migração a quente: `db/migrations/20261025-reservation-schema.sql` (idempotente; `docker exec -i gerenciador-db psql -h localhost -U
+  supabase_admin -d meu_banco < ...`; **pare o backend e o reservation**: `lock_timeout` de 5 s no `SET SCHEMA`) — move as quatro tabelas
+  (dados e índices), derruba as FKs, cria o event store do serviço e **move para ele os streams `reservation.wallet`** que estavam no
+  `public.event_store` (event_store com a `global_position` preservada, outbox pendente, checkpoint, snapshot) e reposiciona a sequence. Coberta
+  por `SchemaValidationTest` (nos dois módulos), `TestSchemasTest` (o default do harness agora é `public,notification,reservation`) e o
+  passo 9 do `99-tests.sql` (apagar o evento não mexe no `eventcap`). Qualificar sempre com `reservation.` nas queries. A migração
+  `20261022-catalog-event-version.sql` (já aplicada em bancos existentes, **editada na #33**) passou a ler a capacidade de
+  `reservation.eventcap` quando existe e senão de `public.eventcap` (SQL dinâmico): o comportamento depende do estado do banco, e continua
+  idempotente nos dois (o fluxo "carregar o `seed-data.sql` e reaplicar" segue valendo).
+- **`eventcap`** — (schema `reservation`) agregado ISOLADO de capacidade. PK `event_id`, **sem FK** (antes `→ event ON DELETE
+  CASCADE`, até a #33). `capacity` (`NOT NULL`), `quant` = vagas disponíveis (`NOT NULL`), `buy_time_limit`
   (nullable), `max_time_in_line` (segundos, default 120).
   - **`capacity = -1` ⇒ sem limite de vendas** (evento ilimitado); nesse caso `quant = -1`
     também, o CHECK `eventcap_quant_bounds` (`capacity = -1 OR 0 <= quant <= capacity`) não
@@ -152,8 +166,8 @@ docker compose -f Projeto/docker-compose.yml up -d --build
 - **`eventpresenter`** — apresentadores por evento. PK composta `(event_id, presenter_name)`,
   FK `→ event` `ON DELETE CASCADE`. Substitui o antigo campo único `presenters`.
 - **`mywallet`** — PK `user_id`, FK `→ users` `ON DELETE CASCADE`.
-- **`walletevent`** — inscrição/reserva N:N. PK composta `(user_id, event_id)`. FKs para
-  `users`/`event` são `ON DELETE RESTRICT`. `status` (`confirmed`|`pending`|`expired`|
+- **`walletevent`** — (schema `reservation`) inscrição/reserva N:N. PK composta `(user_id, event_id)`. **Sem FK** (antes para
+  `users`/`event`, `ON DELETE RESTRICT`, até a #33). `status` (`confirmed`|`pending`|`expired`|
   `cancelled`, default `confirmed`, CHECK) + `expires_at` (só quando `pending`). Índice parcial
   `idx_walletevent_pending_expires` para o job de expiração. **`version`** (issue #29; `integer NOT NULL DEFAULT 0`):
   projeção inline do stream `reservation.wallet`; a versão do evento sai da própria guarda
@@ -165,7 +179,7 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   `verification_code`, `expires_at`, `attempts`/`max_attempts`). Trigger
   `trigger_cleanup_on_create_verification` + função `cleanup_expired_verifications()`
   removem expirados a cada INSERT e no startup.
-- **`event_availability`** — **projeção assíncrona** (issue #29; ADR "Event-Backbone-Event-Store") alimentada pelo consumer
+- **`event_availability`** — (schema `reservation`) **projeção assíncrona** (issue #29; ADR "Event-Backbone-Event-Store") alimentada pelo consumer
   do tópico `reservation.wallet`; lida só pelo "caminho ingênuo" de reserva (`reservation.readpath=naive`), braço de
   controle do experimento. **NÃO é fonte de verdade** (`eventcap` + CAS continuam sendo). Colunas: PK `event_id`,
   `ativos` (nº de reservas ativas: `SlotReserved` +1; `ReservationExpired`/`ReservationCancelled` −1; `ReservationConfirmed` 0),
@@ -178,12 +192,12 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   partição; `ativos` pode ficar negativo (um `Cancelled` sem `SlotReserved`, de uma linha anterior ao ES) e a leitura trata
   `ativos` negativo como 0 (`GREATEST(ativos, 0)`; sem isso a disponibilidade passaria da capacidade). O schema antigo (`available`, `refreshed_at`, `created_at`, FK com `CASCADE`, refresh por timer) saiu.
   Usa `timestamptz` de propósito (código novo não propaga a dívida que a issue #58 corrige).
-  Migração a quente: `db/migrations/20261023-wallet-es-projecao.sql` (idempotente: cria `walletevent.version` e, **só se a
+  Migração a quente (histórica; roda ANTES da `20261025`, quando as tabelas ainda estão em `public`): `db/migrations/20261023-wallet-es-projecao.sql` (idempotente: cria `walletevent.version` e, **só se a
   tabela ainda tem o schema antigo**, derruba e recria `event_availability` com o baseline de `ativos` = reservas ativas que
   já existem em `walletevent`; roda como `supabase_admin`; pare o `gerenciador-backend` antes de migrar (a imagem antiga ainda faz `INSERT` nas colunas que a migração derruba; o `ALTER TABLE walletevent` tem `lock_timeout` de 5 s); a antiga `20260903-event-availability.sql` fica como histórico (superada: aplicada depois desta, falha, pois a tabela já não tem `available`). Coberta por
   `SchemaValidationTest`, `EventWalletNaivePathTest`, `EventAvailabilityProjectionTest`, `ReservationReplayTest` e os passos
   6b/6c do `99-tests.sql`. **Replay:** vale para streams nascidos depois da migração.
-- **`idempotency_key`** (issue #24) — PK composta `(user_id, idempotency_key)` (a chave tem escopo por
+- **`idempotency_key`** (issue #24; schema `reservation` desde a #33) — PK composta `(user_id, idempotency_key)` (a chave tem escopo por
   usuário, issue #129; `idempotency_key` é text, até 255 caracteres validado no backend),
   `event_id` (**sem FK** para `users`/`event`, de propósito: fronteira de módulo, schema por
   serviço é Fase 7), `expires_at` (o da reserva original, devolvido na repetição), `created_at`
@@ -208,7 +222,8 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   -d meu_banco < ...`). Coberta por `SchemaValidationTest`, `TestSchemasTest` (o default do harness agora é `public,notification`)
   e `NotificationConsumerTest`. O harness de migração `verify-20260901-migration.sh` aplica só os scripts `01`–`11` (não toca no
   `notification`). Qualificar sempre com `notification.` nas queries (não há `search_path`, o Supavisor em transaction mode proíbe).
-- **Event sourcing (issue #27; ADR "Event-Backbone-Event-Store")** — infra genérica, sem domínio, sem FK (as #28/#29
+- **Event sourcing (issue #27; ADR "Event-Backbone-Event-Store")** — infra genérica, sem domínio, sem FK (um conjunto por schema de serviço desde a #33:
+  `public.*` e `reservation.*`; o texto abaixo descreve o de `public`, o de `reservation` é igual) (as #28/#29
   só appendam eventos com o seu `stream_type`; a #28 usa `catalog.event`). Código em `Backend/.../shared/events` (ver `Backend/CLAUDE.md`,
   "Event store e backbone de eventos"). Migração a quente: `db/migrations/20261021-event-store.sql` (idempotente; roda como
   `supabase_admin`, por isso o `OWNER TO admin` explícito). Cobertas por `SchemaValidationTest`, pelos testes de

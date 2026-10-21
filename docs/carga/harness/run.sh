@@ -128,7 +128,7 @@ limpar() {
     echo "==> Limpeza da fixture (sufixo $SUFIXO_FIXTURE)"
     dexec exec -i "$CONTAINER_DB" sh -c \
         'psql -v ON_ERROR_STOP=1 -t -A -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' \
-        sh "DELETE FROM walletevent WHERE event_id IN (SELECT event_id FROM event WHERE event_name LIKE 'Evento Carga %${SUFIXO_FIXTURE}'); DELETE FROM event WHERE event_name LIKE 'Evento Carga %${SUFIXO_FIXTURE}'; DELETE FROM users WHERE email LIKE 'carga-%-${SUFIXO_FIXTURE}@example.com';" \
+        sh "DELETE FROM reservation.walletevent WHERE event_id IN (SELECT event_id FROM event WHERE event_name LIKE 'Evento Carga %${SUFIXO_FIXTURE}'); DELETE FROM event WHERE event_name LIKE 'Evento Carga %${SUFIXO_FIXTURE}'; DELETE FROM users WHERE email LIKE 'carga-%-${SUFIXO_FIXTURE}@example.com';" \
         >/dev/null 2>&1 || true
     echo "    dados do sufixo $SUFIXO_FIXTURE removidos"
 }

@@ -9,20 +9,25 @@ import org.springframework.stereotype.Service;
 
 import com.gerenciador.eventos.catalog.api.Event;
 import com.gerenciador.eventos.catalog.api.EventApi;
-import com.gerenciador.eventos.reservation.api.EventCap;
-import com.gerenciador.eventos.reservation.api.EventCapacityApi;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.reservationclient.api.EventCapacityApi;
 import com.gerenciador.eventos.identity.api.UserApi;
 
 /**
  * Service - regras de negócio e validações para Event.
  *
- * <p>Capacidade/vagas/janela de venda vivem no agregado isolado {@code eventcap}
- * ({@link EventCapacityApi}); apresentadores em {@code eventpresenter}
+ * <p>Capacidade/vagas/janela de venda vivem no agregado isolado {@code eventcap}, do SERVIÇO reservation
+ * ({@link EventCapacityApi}, chamadas HTTP síncronas); apresentadores em {@code eventpresenter}
  * ({@link EventPresenterRepository}). O POJO {@link Event} é hidratado com esses dados
  * ({@link #hydrate}) antes de sair do service.</p>
  */
 @Service
 public class EventService implements EventApi {
+
+    private static final Logger log = LoggerFactory.getLogger(EventService.class);
 
     @Autowired
     private EventRepository eventRepository;
@@ -44,8 +49,30 @@ public class EventService implements EventApi {
         validateRequired(e);
         validateRules(e);
         validateDuplicatesOnCreate(e);
-        Event saved = eventRepository.save(e); // EventCreated + event + eventpresenter + eventcap, numa transação
-        return hydrate(saved);
+        Event saved = eventRepository.save(e); // EventCreated + event + eventpresenter, numa transação
+        EventCap cap = new EventCap(saved.getEvent_id(), saved.getLot_quantity(), saved.getLot_quantity(),
+                saved.getBuy_time_limit());
+        // Criada: relê do serviço (os valores gravados, com a precisão do banco). Falhou: responde com os da requisição.
+        return criarCapacidade(cap) ? hydrate(saved) : hydrate(saved, cap);
+    }
+
+    /**
+     * Cria o {@code eventcap} no serviço reservation, por chamada síncrona DEPOIS do commit do evento (read-your-writes:
+     * quem reserva logo depois encontra a vaga). Idempotente por {@code event_id}. NÃO há atomicidade com o commit do
+     * evento: se a chamada falhar (serviço fora, rede), o evento JÁ existe sem capacidade, a criação responde normalmente com
+     * os valores da requisição, e o reservation cria o {@code eventcap} sozinho a partir do {@code EventCreated} do tópico
+     * {@code catalog.event} quando estiver de pé (reservar nesse intervalo falha com "Capacidade do evento não configurada").
+     * @return {@code true} se criou (ou já existia); {@code false} se a chamada falhou
+     */
+    private boolean criarCapacidade(EventCap cap) {
+        try {
+            eventCapacityApi.create(cap);
+            return true;
+        } catch (RuntimeException ex) {
+            log.error("[EventService] evento {} criado, mas o eventcap NÃO foi criado no reservation ({}): a reconciliação pelo "
+                    + "EventCreated de catalog.event cria quando o serviço voltar", cap.getEventId(), ex.toString());
+            return false;
+        }
     }
 
     public Event updateEvent(Event e) {
@@ -62,10 +89,14 @@ public class EventService implements EventApi {
 
         Event updated = eventRepository.update(e); // transação 1: EventUpdated + event (só metadados)
 
-        // Transação 2: updatePolicy (reservation.api, conexão própria; o EventUpdated já levou capacity/buyTimeLimit).
+        // Transação 2: updatePolicy (chamada HTTP ao serviço reservation; o EventUpdated não leva capacity/buyTimeLimit).
         // Transação 3: PresenterAdded/PresenterRemoved + eventpresenter. As 3 seguem separadas como antes (issue #60).
-        if (e.getLot_quantity() != null) {
-            eventCapacityApi.updatePolicy(e.getEvent_id(), e.getLot_quantity(), e.getBuy_time_limit());
+        if (e.getLot_quantity() != null
+                && !eventCapacityApi.updatePolicy(e.getEvent_id(), e.getLot_quantity(), e.getBuy_time_limit())) {
+            // o evento está sem eventcap (a criação síncrona falhou e a reconciliação ainda não rodou): cria-o JÁ com os
+            // valores novos (idempotente por event_id) em vez de perder a edição; a reconciliação, se vier depois, é no-op
+            eventCapacityApi.create(new EventCap(e.getEvent_id(), e.getLot_quantity(), e.getLot_quantity(),
+                    e.getBuy_time_limit()));
         }
         if (e.getPresenters() != null) {
             eventWriter.trocarApresentadores(e.getEvent_id(), e.getPresenters());
@@ -90,8 +121,17 @@ public class EventService implements EventApi {
         return hydrate(e);
     }
 
+    /**
+     * Cancela o evento. A capacidade é removida no reservation ANTES da transação do catalog, fora dela: a chamada HTTP não segura
+     * conexão do pool nem o lock da linha de {@code event} durante o salto de rede, e a recusa (409, há reserva do evento em
+     * qualquer status: o antigo {@code ON DELETE RESTRICT} de {@code walletevent}) acontece antes de qualquer escrita, com o evento
+     * intacto. (Depois do commit não daria: o evento já teria sumido do catálogo com as reservas ainda de pé.) Janela de falha
+     * documentada: se o reservation apagou o {@code eventcap} e a transação do catalog falha em seguida, o evento fica sem
+     * {@code eventcap} (reservar nele falha com "Capacidade do evento não configurada"). Evento inexistente: no-op.
+     */
     public void delete(Long id) {
-        eventRepository.delete(id); // EventCancelled + remoção; eventcap/eventpresenter caem por ON DELETE CASCADE
+        eventCapacityApi.delete(id);
+        eventRepository.delete(id); // EventCancelled + remoção (eventpresenter cai por CASCADE)
     }
 
     public boolean canBeCreated(Event e) {
@@ -189,17 +229,20 @@ public class EventService implements EventApi {
         List<Event> result = new ArrayList<>();
         for (Event e : eventRepository.findAll()) {
             if (e.getCreator_id() != null && e.getCreator_id().equals(creatorId)) {
-                result.add(hydrate(e));
+                result.add(e);
             }
         }
-        return result;
+        return hydrateAll(result); // UMA chamada em lote ao reservation (não uma por evento)
     }
 
     /** Preenche capacity ({@code lot_quantity}), quant ({@code quantity}), buy_time_limit e
      *  presenters do POJO a partir dos agregados eventcap / eventpresenter. */
     public Event hydrate(Event e) {
         if (e == null || e.getEvent_id() == null) return e;
-        EventCap cap = eventCapacityApi.findByEventId(e.getEvent_id());
+        return hydrate(e, eventCapacityApi.findByEventId(e.getEvent_id()));
+    }
+
+    private Event hydrate(Event e, EventCap cap) {
         if (cap != null) {
             e.setLot_quantity(cap.getCapacity());
             e.setQuantity(cap.getQuant() != null ? cap.getQuant() : 0);

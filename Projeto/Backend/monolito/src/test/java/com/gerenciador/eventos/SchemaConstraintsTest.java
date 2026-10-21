@@ -18,15 +18,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
-import com.gerenciador.eventos.catalog.api.Event;
-import com.gerenciador.eventos.identity.api.User;
-import com.gerenciador.eventos.catalog.EventService;
-import com.gerenciador.eventos.reservation.MyWalletService;
-import com.gerenciador.eventos.identity.UserService;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 
-import java.time.LocalDateTime;
 
 /**
  * Trava em teste, contra o Postgres real, os invariantes de constraint do schema criados
@@ -36,12 +30,11 @@ import java.time.LocalDateTime;
  *   <li><b>A)</b> UNIQUE em {@code users(email)}, {@code users(fone)} e {@code event(event_name)}
  *       — conjunto EXATO de colunas restringidas, consultado no catálogo ({@code pg_constraint}),
  *       não subconjunto;</li>
- *   <li><b>B)</b> índice parcial {@code idx_walletevent_pending_expires} — existe <b>e</b> é de
- *       fato parcial ({@code pg_index.indpred IS NOT NULL}) com predicado sobre {@code pending}
- *       e chave {@code expires_at};</li>
- *   <li><b>C)</b> {@code walletevent_status_check} — aceita exatamente
- *       {@code confirmed/pending/expired/cancelled} e rejeita um 5º valor ({@code check_violation}).</li>
  * </ul>
+ *
+ * <p>Os itens B (índice parcial {@code idx_walletevent_pending_expires}) e C ({@code walletevent_status_check}) eram sobre
+ * {@code walletevent}, que saiu para o schema {@code reservation} na #33: agora são do
+ * {@code ReservationSchemaConstraintsTest}, no módulo {@code reservation}.</p>
  *
  * <p>Não estende {@code SchemaValidationTest.assertColumns} de propósito: aquele helper faz
  * verificação de subconjunto ({@code containsAll}), que é justamente o defeito apontado pela
@@ -53,9 +46,6 @@ import java.time.LocalDateTime;
 public class SchemaConstraintsTest {
 
     @Autowired private DatabaseConnection databaseConnection;
-    @Autowired private UserService userService;
-    @Autowired private EventService eventService;
-    @Autowired private MyWalletService myWalletService;
 
     // ===================== A) constraints UNIQUE =====================
 
@@ -104,81 +94,6 @@ public class SchemaConstraintsTest {
                     inserirEventoCru(conn, criadorId, "Evento SC7 Nome Duplicado"));
             assertEquals("23505", erro.getSQLState(),
                     "event_name duplicado deveria violar Event_event_name_key (unique_violation 23505), veio: "
-                            + erro.getSQLState() + " / " + erro.getMessage());
-        }
-    }
-
-    // ===================== B) índice parcial =====================
-
-    @Test
-    void indiceWalleteventPendingExpiresExisteEhParcialEChaveiaExpiresAt() throws Exception {
-        // colunas-chave EXATAS: unnest de i.indkey (ordinal) -> pg_attribute; asserção de lista,
-        // não de substring em indexdef (que passaria com expires_at só no predicado — o defeito #59).
-        String sql =
-            "SELECT i.indpred IS NOT NULL AS parcial, "
-          + "       pg_get_expr(i.indpred, i.indrelid) AS predicado, "
-          + "       (SELECT array_agg(a.attname ORDER BY k.ord) "
-          + "          FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord) "
-          + "          JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum "
-          + "       ) AS colunas_chave "
-          + "FROM pg_index i "
-          + "JOIN pg_class c ON c.oid = i.indexrelid "
-          + "WHERE c.relname = 'idx_walletevent_pending_expires'";
-        try (Connection conn = databaseConnection.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
-            assertTrue(rs.next(), "índice idx_walletevent_pending_expires não existe");
-            assertTrue(rs.getBoolean("parcial"),
-                    "índice existe mas NÃO é parcial (indpred IS NULL)");
-            String predicado = rs.getString("predicado");
-            assertNotNull(predicado, "predicado do índice parcial ausente");
-            assertTrue(predicado.contains("pending"),
-                    "predicado do índice parcial não filtra status = 'pending': " + predicado);
-            java.sql.Array arr = rs.getArray("colunas_chave");
-            assertNotNull(arr, "índice não tem colunas-chave");
-            java.util.List<String> colunasChave = java.util.Arrays.asList((String[]) arr.getArray());
-            assertEquals(java.util.List.of("expires_at"), colunasChave,
-                    "chave do índice deveria ser exatamente [expires_at], veio: " + colunasChave);
-        }
-    }
-
-    // ===================== C) walletevent_status_check =====================
-
-    @Test
-    void statusCheckAceitaOsQuatroValoresERejeitaUmQuinto() throws Exception {
-        User criador = criarUsuario("sc7-status-creator@example.com", "sc7-fone-31");
-        User inscrito = criarUsuario("sc7-status-user@example.com", "sc7-fone-32");
-        Event evento = criarEvento(criador.getId(), "Evento SC7 Status Check");
-
-        try (Connection conn = databaseConnection.getConnection()) {
-            // insere UMA linha (PK composta user_id,event_id) e transita entre os status válidos
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "INSERT INTO walletevent (user_id, event_id, status) VALUES (?, ?, 'pending')")) {
-                ps.setLong(1, inscrito.getId());
-                ps.setLong(2, evento.getEvent_id());
-                ps.executeUpdate();
-            }
-            for (String valido : new String[] { "confirmed", "pending", "expired", "cancelled" }) {
-                try (PreparedStatement ps = conn.prepareStatement(
-                        "UPDATE walletevent SET status = ? WHERE user_id = ? AND event_id = ?")) {
-                    ps.setString(1, valido);
-                    ps.setLong(2, inscrito.getId());
-                    ps.setLong(3, evento.getEvent_id());
-                    assertEquals(1, ps.executeUpdate(),
-                            "status válido '" + valido + "' deveria ser aceito");
-                }
-            }
-            // 5º valor => check_violation (SQLState 23514), sem colidir com FK (parents existem)
-            SQLException erro = assertThrows(SQLException.class, () -> {
-                try (PreparedStatement ps = conn.prepareStatement(
-                        "UPDATE walletevent SET status = 'foo' WHERE user_id = ? AND event_id = ?")) {
-                    ps.setLong(1, inscrito.getId());
-                    ps.setLong(2, evento.getEvent_id());
-                    ps.executeUpdate();
-                }
-            });
-            assertEquals("23514", erro.getSQLState(),
-                    "status inválido deveria violar walletevent_status_check (23514), veio: "
                             + erro.getSQLState() + " / " + erro.getMessage());
         }
     }
@@ -234,32 +149,6 @@ public class SchemaConstraintsTest {
                         "coluna " + regclass + "." + coluna + " deveria ser NOT NULL no schema real");
             }
         }
-    }
-
-    private User novoUsuarioPojo(String email, String fone) {
-        User u = new User();
-        u.setName("SC7 " + email);
-        u.setEmail(email);
-        u.setFone(fone);
-        return u;
-    }
-
-    private User criarUsuario(String email, String fone) {
-        User u = userService.createUser(novoUsuarioPojo(email, fone));
-        myWalletService.ensureExists(u.getId());
-        return u;
-    }
-
-    private Event criarEvento(Long criadorId, String nome) {
-        Event e = new Event();
-        e.setCreator_id(criadorId);
-        e.setEvent_name(nome);
-        e.setIs_EAD(true);
-        e.setEvent_date(LocalDateTime.now().plusDays(10));
-        e.setBuy_time_limit(null);
-        e.setLot_quantity(5);
-        e.setDescription("desc");
-        return eventService.createEvent(e);
     }
 
     /** INSERT cru em public.users (contorna o pré-check de duplicidade do UserService). */

@@ -1,4 +1,4 @@
-# Contexto de build dos Dockerfiles por serviço (monolito/ e notification/): só o que o Maven precisa.
+# Contexto de build dos Dockerfiles por serviço (monolito/, notification/ e reservation/): só o que o Maven precisa.
 **/target
 db
 *.md

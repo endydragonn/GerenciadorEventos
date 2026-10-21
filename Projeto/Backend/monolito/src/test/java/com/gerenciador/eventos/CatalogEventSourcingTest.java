@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.AfterEach;
@@ -30,6 +31,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gerenciador.eventos.TestSupport.FakeReservationServer;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.catalog.CatalogEventProjection;
 import com.gerenciador.eventos.catalog.CatalogEventWriter;
@@ -37,6 +39,8 @@ import com.gerenciador.eventos.catalog.EventService;
 import com.gerenciador.eventos.catalog.api.Event;
 import com.gerenciador.eventos.identity.UserService;
 import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.reservationclient.api.EventWallet;
+import com.gerenciador.eventos.reservationclient.api.EventWalletApi;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 import com.gerenciador.eventos.shared.events.EventReplay;
 import com.gerenciador.eventos.shared.events.EventStore;
@@ -59,6 +63,7 @@ public class CatalogEventSourcingTest {
 
     @Autowired private UserService userService;
     @Autowired private EventService eventService;
+    @Autowired private EventWalletApi reservation;
     @Autowired private DatabaseConnection db;
     @Autowired private EventStore eventStore;
     @Autowired private EventReplay replay;
@@ -155,7 +160,8 @@ public class CatalogEventSourcingTest {
                 "a versão da projeção é a do último evento do stream");
         assertEquals(0, consultar("SELECT count(*) FROM public.event WHERE event_id = " + e4.getEvent_id()),
                 "cancelado = linha removida (mesma remoção de antes)");
-        assertEquals(0, consultar("SELECT count(*) FROM public.eventcap WHERE event_id = " + e4.getEvent_id()));
+        assertNull(FakeReservationServer.get().capacidade(e4.getEvent_id()),
+                "o eventcap do cancelado foi removido do serviço reservation (chamada síncrona, sem CASCADE)");
 
         replay.rebuild(projection, CatalogEventProjection.STREAM_TYPE, SOMBRA);
 
@@ -272,12 +278,15 @@ public class CatalogEventSourcingTest {
         assertEquals(List.of(), replay.divergentTables(projection, SOMBRA, COMPARAVEIS));
     }
 
+    /**
+     * O antigo {@code ON DELETE RESTRICT} de {@code walletevent}: as tabelas ficaram em schemas diferentes (sem FK), então
+     * quem recusa apagar o evento com reserva é o serviço reservation (409), chamado como ÚLTIMO passo da transação do
+     * catalog, antes do commit.
+     */
     @Test
-    void deleteQueFalhaPorFkDesfazOEventCancelled() throws Exception {
+    void deleteQueOReservationRecusaDesfazOEventCancelled() throws Exception {
         Event e = eventService.createEvent(novo("ES com reserva", 4));
-        try (Connection c = db.getConnection(); Statement st = c.createStatement()) {
-            st.execute("INSERT INTO public.walletevent (user_id, event_id) VALUES (" + creatorId + ", " + e.getEvent_id() + ")");
-        }
+        reservation.addLink(new EventWallet(creatorId, e.getEvent_id()), null, false);
 
         assertThrows(RuntimeException.class, () -> eventService.delete(e.getEvent_id()));
 
