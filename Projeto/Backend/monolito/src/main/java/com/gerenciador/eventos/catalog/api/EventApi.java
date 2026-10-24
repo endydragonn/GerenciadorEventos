@@ -24,4 +24,10 @@ public interface EventApi {
 
     /** Existe evento com esse id? Não lança se não existir (diferente de {@link #findById}). */
     boolean exists(Long eventId);
+
+    /** Bytes da imagem do evento, ou {@code null} se ele não existe ou não tem imagem (issue #35). */
+    byte[] findImage(Long id);
+
+    /** Grava a imagem do evento (fora de {@link #updateEvent}). Lança "Evento não encontrado" se ele não existe. */
+    void saveImage(Long id, byte[] imageData);
 }

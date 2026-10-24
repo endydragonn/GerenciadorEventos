@@ -41,6 +41,10 @@ public class EventRepository {
 
     private static final Logger log = LoggerFactory.getLogger(EventRepository.class);
 
+    /** Colunas das LISTAS: sem {@code image_data} (o blob só sai em {@link #findById} e {@link #findImage}, issue #35). */
+    private static final String COLUNAS_LISTA =
+            "event_id, creator_id, event_name, ead, address, event_date, description, created_at, updated_at";
+
     @Autowired
     private DatabaseConnection databaseConnection;
 
@@ -139,48 +143,88 @@ public class EventRepository {
         }
     }
 
-    /** Listar todos os eventos */
-    public List<Event> findAll() {
-        String sql = "SELECT * FROM event ORDER BY event_id";
-        List<Event> list = new ArrayList<>();
+    /** Existe evento com esse id? {@code SELECT 1}, sem ler a linha (caminho quente da reserva, issue #35). */
+    public boolean existsById(Long id) {
         try (Connection conn = databaseConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-            ResultSet rs = stmt.executeQuery();
-            while (rs.next()) {
-                list.add(map(rs));
+             PreparedStatement stmt = conn.prepareStatement("SELECT 1 FROM event WHERE event_id = ?")) {
+            stmt.setLong(1, id);
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next();
             }
-            return list;
         } catch (SQLException ex) {
-            throw new RuntimeException("Erro ao listar eventos: " + ex.getMessage(), ex);
+            throw new RuntimeException("Erro ao verificar evento: " + ex.getMessage(), ex);
         }
+    }
+
+    /** Listar todos os eventos (sem {@code image_data}). */
+    public List<Event> findAll() {
+        return listar("SELECT " + COLUNAS_LISTA + " FROM event ORDER BY event_id", null, "Erro ao listar eventos");
+    }
+
+    /** Eventos de um criador, filtrados no banco (índice em {@code creator_id}), sem {@code image_data}. */
+    public List<Event> findByCreatorId(Long creatorId) {
+        return listar("SELECT " + COLUNAS_LISTA + " FROM event WHERE creator_id = ? ORDER BY event_id",
+                stmt -> stmt.setLong(1, creatorId), "Erro ao listar eventos do criador");
     }
 
     /**
      * Busca por nome no banco (substring, case-insensitive), mesma ordem do {@link #findAll()}.
      * {@code %}, {@code _} e {@code \} do termo são tratados literalmente. Termo nulo/em branco
-     * devolve todos os eventos.
+     * devolve todos os eventos. Sem {@code image_data}.
      */
     public List<Event> searchByName(String term) {
         if (term == null || term.isBlank()) return findAll();
-        String sql = "SELECT * FROM event WHERE lower(event_name) LIKE lower(?) ESCAPE '\\' ORDER BY event_id";
         String pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+        return listar("SELECT " + COLUNAS_LISTA + " FROM event WHERE lower(event_name) LIKE lower(?) ESCAPE '\\' "
+                + "ORDER BY event_id", stmt -> stmt.setString(1, pattern), "Erro ao buscar eventos por nome");
+    }
+
+    /** Bytes da imagem, ou {@code null} se o evento não existe ou não tem imagem. */
+    public byte[] findImage(Long id) {
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement("SELECT image_data FROM event WHERE event_id = ?")) {
+            stmt.setLong(1, id);
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next() ? rs.getBytes(1) : null;
+            }
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao buscar imagem do evento: " + ex.getMessage(), ex);
+        }
+    }
+
+    /** Grava a imagem (blob fora do ES: direto na linha viva, sem evento no stream). {@code false} = evento inexistente. */
+    public boolean saveImage(Long id, byte[] imageData) {
+        try (Connection conn = databaseConnection.getConnection()) {
+            return gravarImagem(conn, id, imageData) == 1;
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao gravar imagem do evento: " + ex.getMessage(), ex);
+        }
+    }
+
+    private interface Parametros {
+        void aplicar(PreparedStatement stmt) throws SQLException;
+    }
+
+    private List<Event> listar(String sql, Parametros parametros, String erro) {
         List<Event> list = new ArrayList<>();
         try (Connection conn = databaseConnection.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setString(1, pattern);
-            ResultSet rs = stmt.executeQuery();
-            while (rs.next()) {
-                list.add(map(rs));
+            if (parametros != null) parametros.aplicar(stmt);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    list.add(map(rs, false));
+                }
             }
             return list;
         } catch (SQLException ex) {
-            throw new RuntimeException("Erro ao buscar eventos por nome: " + ex.getMessage(), ex);
+            throw new RuntimeException(erro + ": " + ex.getMessage(), ex);
         }
     }
 
     /**
      * Atualizar os metadados do evento (capacidade/janela de venda vão pelo EventCapacityApi): appenda
-     * {@code EventUpdated} e aplica a projeção na mesma transação. {@code image_data} (fora do ES) é gravada direto.
+     * {@code EventUpdated} e aplica a projeção na mesma transação. {@code image_data} NÃO é tocada aqui (issue #35: a
+     * imagem tem método próprio, {@link #saveImage}; antes um update sem imagem a apagava).
      */
     public Event update(Event e) {
         if (e.getEvent_id() == null) {
@@ -193,7 +237,6 @@ public class EventRepository {
                     throw new RuntimeException("Evento não encontrado: id=" + id);
                 }
                 tx.append("EventUpdated", EventPayloads.evento(id, e));
-                gravarImagem(tx.conn(), id, e.getImage_data());
                 return null;
             });
             fetchTimestamps(e);
@@ -225,7 +268,7 @@ public class EventRepository {
 
     // ===== Helpers =====
     /** Blob fora do event sourcing: escrito direto na linha viva (o replay e a comparação ignoram a coluna). */
-    private void gravarImagem(Connection conn, long id, byte[] imageData) throws SQLException {
+    private int gravarImagem(Connection conn, long id, byte[] imageData) throws SQLException {
         try (PreparedStatement stmt = conn.prepareStatement("UPDATE event SET image_data = ? WHERE event_id = ?")) {
             if (imageData != null) {
                 stmt.setBytes(1, imageData);
@@ -233,7 +276,7 @@ public class EventRepository {
                 stmt.setNull(1, java.sql.Types.BINARY);
             }
             stmt.setLong(2, id);
-            stmt.executeUpdate();
+            return stmt.executeUpdate();
         }
     }
 
@@ -256,6 +299,10 @@ public class EventRepository {
     }
 
     private Event map(ResultSet rs) throws SQLException {
+        return map(rs, true);
+    }
+
+    private Event map(ResultSet rs, boolean comImagem) throws SQLException {
         Event e = new Event();
         e.setEvent_id(rs.getLong("event_id"));
         e.setCreator_id(rs.getLong("creator_id"));
@@ -265,8 +312,7 @@ public class EventRepository {
         Timestamp ed = rs.getTimestamp("event_date");
         if (ed != null) e.setEvent_date(ed.toLocalDateTime());
         e.setDescription(rs.getString("description"));
-        byte[] imageData = rs.getBytes("image_data");
-        if (imageData != null) e.setImage_data(imageData);
+        if (comImagem) e.setImage_data(rs.getBytes("image_data"));
         Timestamp createdAt = rs.getTimestamp("created_at");
         if (createdAt != null) e.setCreatedAt(createdAt.toLocalDateTime());
         Timestamp updatedAt = rs.getTimestamp("updated_at");

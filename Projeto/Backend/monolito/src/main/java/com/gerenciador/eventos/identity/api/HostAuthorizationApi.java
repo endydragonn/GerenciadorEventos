@@ -5,4 +5,7 @@ public interface HostAuthorizationApi {
 
     /** @throws IllegalArgumentException se não há usuário autenticado ou ele não é host. */
     void ensureUserIsHost();
+
+    /** Id do usuário do token (issue #35: dono do evento). @throws IllegalArgumentException se não há usuário autenticado. */
+    Long currentUserId();
 }

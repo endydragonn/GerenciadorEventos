@@ -104,6 +104,11 @@ public class UserService implements UserApi {
         return userRepository.findById(userId) != null;
     }
 
+    @Override
+    public java.util.Map<Long, String> findNames(java.util.Collection<Long> ids) {
+        return ids == null || ids.isEmpty() ? java.util.Map.of() : userRepository.findActiveNames(ids);
+    }
+
     /**
      * Buscar usuário por email
      */

@@ -102,6 +102,11 @@ public class BffSeedController {
         if (seedData.getEvents() != null) {
             for (Event event : seedData.getEvents()) {
                 try {
+                    // o criador é do identity: conferido aqui (o catalog só guarda o id). Ferramenta de dev: o creator_id do
+                    // corpo é aceito (issue #35); a flag SEED_ENABLED vem na fatia 3.
+                    if (event.getCreator_id() != null && !userService.exists(event.getCreator_id())) {
+                        throw new IllegalArgumentException("creator_id não existe");
+                    }
                     eventService.createEvent(event);
                     eventsCreated++;
                 } catch (IllegalArgumentException e) {

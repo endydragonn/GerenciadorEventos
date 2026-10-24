@@ -168,6 +168,24 @@ public class UserRepository {
         }
     }
 
+    /** Nomes dos usuários ativos entre os ids, numa consulta ({@code user_id = ANY(?)}). */
+    public java.util.Map<Long, String> findActiveNames(java.util.Collection<Long> ids) {
+        String sql = "SELECT user_id, user_name FROM users WHERE user_id = ANY(?) AND isactive";
+        java.util.Map<Long, String> nomes = new java.util.HashMap<>();
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setArray(1, conn.createArrayOf("bigint", ids.toArray()));
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    nomes.put(rs.getLong(1), rs.getString(2));
+                }
+            }
+            return nomes;
+        } catch (SQLException e) {
+            throw new RuntimeException("Erro ao buscar nomes de usuários: " + e.getMessage(), e);
+        }
+    }
+
     /**
      * Buscar usuário por email
      */

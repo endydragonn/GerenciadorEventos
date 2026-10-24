@@ -14,7 +14,6 @@ import org.slf4j.LoggerFactory;
 
 import com.gerenciador.eventos.reservationclient.api.EventCap;
 import com.gerenciador.eventos.reservationclient.api.EventCapacityApi;
-import com.gerenciador.eventos.identity.api.UserApi;
 
 /**
  * Service - regras de negócio e validações para Event.
@@ -31,9 +30,6 @@ public class EventService implements EventApi {
 
     @Autowired
     private EventRepository eventRepository;
-
-    @Autowired
-    private UserApi userApi;
 
     @Autowired
     private EventCapacityApi eventCapacityApi;
@@ -106,7 +102,19 @@ public class EventService implements EventApi {
 
     @Override
     public boolean exists(Long eventId) {
-        return eventRepository.findById(eventId) != null;
+        return eventRepository.existsById(eventId); // SELECT 1, sem hidratar (caminho quente da reserva)
+    }
+
+    @Override
+    public byte[] findImage(Long id) {
+        return eventRepository.findImage(id);
+    }
+
+    @Override
+    public void saveImage(Long id, byte[] imageData) {
+        if (!eventRepository.saveImage(id, imageData)) {
+            throw new RuntimeException("Evento não encontrado: id=" + id);
+        }
     }
 
     public Event findById(Long id) {
@@ -163,10 +171,7 @@ public class EventService implements EventApi {
         if (e.getEvent_name() != null && !e.getEvent_name().isBlank() && eventRepository.nameExists(e.getEvent_name())) {
             sb.append("Nome de evento já existente: ").append(e.getEvent_name()).append(". ");
         }
-        if (e.getCreator_id() != null) {
-            boolean criadorExiste = userApi.exists(e.getCreator_id());
-            if (!criadorExiste) sb.append("creator_id não existe em users. ");
-        }
+        // a existência do criador é conferida pelo gateway (UserApi, issue #35): o catalog só guarda o id
         return sb.toString().trim();
     }
 
@@ -186,10 +191,6 @@ public class EventService implements EventApi {
             throw new IllegalArgumentException("buy_time_limit não pode ser após event_date");
         if (!isValidCapacity(e.getLot_quantity()))
             throw new IllegalArgumentException("capacity (lot_quantity) é obrigatória: >= 1, ou -1 para ilimitado");
-        if (e.getCreator_id() != null) {
-            boolean criadorExiste = userApi.exists(e.getCreator_id());
-            if (!criadorExiste) throw new IllegalArgumentException("creator_id não existe");
-        }
     }
 
     /** Capacidade válida: >= 1 (limitado) ou == -1 (ilimitado). */
@@ -226,13 +227,8 @@ public class EventService implements EventApi {
         if (creatorId == null) {
             return new ArrayList<>();
         }
-        List<Event> result = new ArrayList<>();
-        for (Event e : eventRepository.findAll()) {
-            if (e.getCreator_id() != null && e.getCreator_id().equals(creatorId)) {
-                result.add(e);
-            }
-        }
-        return hydrateAll(result); // UMA chamada em lote ao reservation (não uma por evento)
+        // filtro no banco (WHERE creator_id = ?) + UMA chamada em lote ao reservation (não uma por evento)
+        return hydrateAll(eventRepository.findByCreatorId(creatorId));
     }
 
     /** Preenche capacity ({@code lot_quantity}), quant ({@code quantity}), buy_time_limit e

@@ -77,6 +77,11 @@
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
         </dependency>
+        <!-- Cache em memória do gateway (issue #35): creator_name e exists(eventId). Versão gerenciada pelo Spring Boot. -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
         <!-- LauncherSessionListener (TestSupport/ReservationFakeSession): sobe o servidor falso do reservation antes de
              qualquer contexto Spring dos testes (versão do BOM do Spring Boot). -->
         <dependency>

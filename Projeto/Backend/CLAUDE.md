@@ -293,7 +293,7 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
 - **Grafo de dependências** (sempre via `api`):
   `gateway → identity, catalog` e, por **HTTP** (`reservationclient`), o serviço `reservation`;
   (`identity → notification` acabou na #32: o `notification` é outro processo e se fala com ele só por evento no backbone);
-  `catalog → identity` (`UserApi.exists`, valida `creator_id`) e `catalog → reservation` por **HTTP**
+  `catalog → identity` acabou na #35 (fatia 1: quem valida o `creator_id` com `UserApi.exists` é o `gateway`) e `catalog → reservation` por **HTTP**
   (`EventCapacityApi` da lib `reservation-client`: criar a capacidade DEPOIS do commit do evento, `updatePolicy`, hidratar
   `lot_quantity`/`quantity` — `findByCreatorId` e a busca em UMA chamada em lote —, remover no cancelamento). O ciclo `catalog ↔ reservation` acabou na #33: o `reservation` não enxerga o
   catálogo (a existência do evento é o `eventcap` dele, mais a conferência do gateway), só recebe o `EventCreated` do tópico.
@@ -347,8 +347,8 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
   termo escapados; termo em branco = todos, ordem `event_id`) e hidrata em lote
   (`EventService.hydrateAll` → `EventCapacityApi.findByEventIds` (UMA chamada HTTP ao reservation, `ids=1,2,3`) /
   `EventPresenterRepository.findByEventIds`, `event_id = ANY(?)`): 2 consultas + 1 chamada no total,
-  independente do nº de eventos. `hydrate` (1 evento) segue igual; `findByCreatorId` ainda faz N+1
-  (#61). Coberto por `EventSearchTest`.
+  independente do nº de eventos. `hydrate` (1 evento) segue igual; `findByCreatorId` filtra no banco
+  (`WHERE creator_id = ?`, índice `idx_event_creator_id`, issue #35) e hidrata em lote. Coberto por `EventSearchTest` e `EventTest`.
 - **Agregado `eventcap` isolado.** `EventCapRepository` faz a reserva de vaga por `UPDATE`
   condicional atômico (`tryReserve` → `false` = lotado) e a devolução (`release`). Os métodos
   que precisam ser atômicos com `walletevent` recebem a `Connection` da transação do service. (Desde a #33 isso é do **serviço reservation**, schema `reservation`.)
@@ -702,6 +702,18 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
   `update` não persistem `host`, só o leem, pra não abrir auto-promoção via
   `PUT /bff/users/{id}`); hoje só existe host via SQL direto/seed manual. Promover host por
   um fluxo de produto (ex.: endpoint de admin) é gap conhecido, não resolvido nesta issue.
+- **Dono do evento (issue #35, fatia 1)**: o `creator_id` é amarrado ao token no `gateway` (`HostAuthorizationApi.currentUserId()`).
+  `POST /bff/events` grava o usuário do token (o `creator_id` do corpo é ignorado); `PUT` ignora o do corpo e usa o gravado;
+  `PUT`, `DELETE` e `POST /{id}/image` exigem o dono (`creator_id` do evento == usuário do token) → **403**; id inexistente → **404**
+  (o `DELETE` dava 204). **Sem exceção de admin**: nenhum gate usa `users.admin` (gravável pelo próprio usuário em
+  `PUT /bff/users/{id}`). O upload de imagem exige dono, não host. A existência do criador (`UserApi.exists`) é conferida pelo
+  gateway (`/validate`, mesma mensagem; `POST /bff/seed`, que aceita o `creator_id` do corpo), não mais pelo `catalog`.
+- **Resposta de `Event` (issue #35)**: ganha `creator_name` (somente-leitura no DTO; composto no gateway por `gateway/CreatorNames`:
+  `UserApi.findNames(ids)` em lote, só `isactive = true` → conta desativada = `creator_name` nulo; Caffeine com TTL 45 s ±20% por
+  entrada, ~10k entradas, sem cache negativo). As listas (`/search`, `?creator_id=`) **não trazem `image_data`** (o SQL nem lê a
+  coluna); ela continua no `GET /{id}` e em `/{id}/image`. A imagem tem métodos próprios (`EventApi.findImage`/`saveImage`): o
+  `updateEvent` não toca mais nela (antes um `PUT` sem `image_data` apagava a imagem). `exists(eventId)` é `SELECT 1` e o
+  `EventWalletGateway` guarda o positivo por 30 s (Caffeine; negativo e falha nunca entram no cache).
 - Senhas: `BCryptPasswordEncoder` (bean em `SecurityConfig`). Nunca gravar senha em claro
   (o seed SQL grava em claro só para dados de teste — não replicar em código de produção).
 - CORS está definido **duas vezes** (`shared.CorsConfig` e o bean em `SecurityConfig`, este

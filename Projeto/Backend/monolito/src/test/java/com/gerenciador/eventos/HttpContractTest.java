@@ -31,6 +31,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
+import com.gerenciador.eventos.catalog.EventService;
 import com.gerenciador.eventos.catalog.api.Event;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.identity.api.MyWallet;
@@ -83,6 +84,9 @@ public class HttpContractTest {
 
     @Autowired
     private DatabaseConnection databaseConnection;
+
+    @Autowired
+    private EventService eventService;
 
     private String url(String path) {
         return "http://localhost:" + port + path;
@@ -523,6 +527,167 @@ public class HttpContractTest {
         assertEquals(HttpStatus.NO_CONTENT, resp.getStatusCode());
     }
 
+    // ======================= /bff/events: dono, creator_id e creator_name (issue #35, fatia 1) =======================
+
+    /** GET cru (Map): {@code creator_name} é somente-leitura no DTO e não volta num {@code Event} desserializado. */
+    private Map<String, Object> getEventJson(Long eventId) {
+        ResponseEntity<Map> resp = restTemplate.getForEntity(url("/bff/events/" + eventId), Map.class);
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        return resp.getBody();
+    }
+
+    /** Caso 1 do spec: host B (não dono) se autopromove a admin e mesmo assim não edita o evento de A (sem exceção de admin). */
+    @Test
+    public void updateEvent_hostNaoDono_mesmoComIsAdmin_returns403() {
+        User a = createHostUser("owner-a-case1");
+        String tokenA = loginAndGetToken(a.getEmail(), "senha123");
+        Event doA = createEvent(a.getId(), "Evento de A caso1 " + System.nanoTime(), 5, tokenA);
+        User b = createHostUser("intruso-b-case1");
+        String tokenB = loginAndGetToken(b.getEmail(), "senha123");
+
+        b.setIsAdmin(true);
+        b.setPassword(null); // preserva a senha gravada
+        ResponseEntity<User> promovido = restTemplate.exchange(url("/bff/users/" + b.getId()), HttpMethod.PUT,
+                new HttpEntity<>(b, authHeaders(tokenB)), User.class);
+        assertEquals(HttpStatus.OK, promovido.getStatusCode());
+
+        doA.setDescription("editado por B");
+        ResponseEntity<String> resp = restTemplate.exchange(url("/bff/events/" + doA.getEvent_id()), HttpMethod.PUT,
+                new HttpEntity<>(doA, authHeaders(tokenB)), String.class);
+        assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
+        assertEquals("desc", getEventJson(doA.getEvent_id()).get("description"), "nada foi gravado");
+    }
+
+    /** Caso 2 do spec: o dono manda creator_id de outro no PUT; o creator_id do corpo é ignorado (vale o gravado). */
+    @Test
+    public void updateEvent_donoComCreatorIdDeOutro_mantemOGravado() {
+        User a = createHostUser("owner-a-case2");
+        String tokenA = loginAndGetToken(a.getEmail(), "senha123");
+        User b = createUser("outro-b-case2");
+        Event e = createEvent(a.getId(), "Evento caso2 " + System.nanoTime(), 5, tokenA);
+
+        e.setCreator_id(b.getId());
+        e.setDescription("dono editou");
+        ResponseEntity<Map> resp = restTemplate.exchange(url("/bff/events/" + e.getEvent_id()), HttpMethod.PUT,
+                new HttpEntity<>(e, authHeaders(tokenA)), Map.class);
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+
+        Map<String, Object> lido = getEventJson(e.getEvent_id());
+        assertEquals(a.getId(), ((Number) lido.get("creator_id")).longValue());
+        assertEquals("dono editou", lido.get("description"));
+    }
+
+    /** Caso 3 do spec: POST com creator_id de outro usuário -> o evento nasce com o creator_id do token. */
+    @Test
+    public void createEvent_creatorIdDeOutro_nasceComODoToken() {
+        User host = createHostUser("host-case3");
+        String token = loginAndGetToken(host.getEmail(), "senha123");
+        User outro = createUser("outro-case3");
+
+        Event criado = createEvent(outro.getId(), "Evento caso3 " + System.nanoTime(), 5, token);
+
+        assertEquals(host.getId(), criado.getCreator_id());
+        Map<String, Object> lido = getEventJson(criado.getEvent_id());
+        assertEquals(host.getId(), ((Number) lido.get("creator_id")).longValue());
+        assertEquals(host.getName(), lido.get("creator_name"), "creator_name composto no gateway");
+    }
+
+    /** Caso 5 do spec: conta do criador desativada -> creator_name nulo (findNames só devolve isactive=true). */
+    @Test
+    public void getEvent_criadorDesativado_creatorNameNulo() {
+        User criador = createHostUser("desativado-case5");
+        Event e = new Event();
+        e.setCreator_id(criador.getId());
+        e.setEvent_name("Evento caso5 " + System.nanoTime());
+        e.setIs_EAD(true);
+        e.setEvent_date(LocalDateTime.now().plusDays(30).truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+        e.setLot_quantity(5);
+        e.setDescription("desc");
+        // direto pelo service: nenhuma resposta do gateway compôs (nem cacheou) o nome antes da desativação
+        Event criado = eventService.createEvent(e);
+        userService.deactivateUser(criador.getId());
+
+        Map<String, Object> lido = getEventJson(criado.getEvent_id());
+        assertTrue(lido.containsKey("creator_name"), "o campo existe no contrato");
+        assertEquals(null, lido.get("creator_name"));
+        assertEquals(criador.getId(), ((Number) lido.get("creator_id")).longValue());
+
+        // sem cache negativo: reativada a conta, o próximo GET já traz o nome
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement("UPDATE users SET isactive = true WHERE user_id = ?")) {
+            stmt.setLong(1, criador.getId());
+            stmt.executeUpdate();
+        } catch (SQLException ex) {
+            throw new RuntimeException(ex);
+        }
+        assertEquals(criador.getName(), getEventJson(criado.getEvent_id()).get("creator_name"));
+    }
+
+    /** Caso 6 (parte da fatia 1) do spec: DELETE de id inexistente como host -> 404 (era 204). */
+    @Test
+    public void deleteEvent_idInexistente_returns404() {
+        User host = createHostUser("host-delete-404");
+        String token = loginAndGetToken(host.getEmail(), "senha123");
+        ResponseEntity<String> resp = restTemplate.exchange(url("/bff/events/999999"), HttpMethod.DELETE,
+                new HttpEntity<>(authHeaders(token)), String.class);
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+    }
+
+    /** DELETE e upload de imagem também exigem dono: outro host -> 403, e o evento continua lá. */
+    @Test
+    public void deleteEUploadImagem_naoDono_returns403() {
+        User a = createHostUser("owner-a-del403");
+        String tokenA = loginAndGetToken(a.getEmail(), "senha123");
+        Event e = createEvent(a.getId(), "Evento del403 " + System.nanoTime(), 5, tokenA);
+        User b = createHostUser("intruso-b-del403");
+        String tokenB = loginAndGetToken(b.getEmail(), "senha123");
+
+        ResponseEntity<String> del = restTemplate.exchange(url("/bff/events/" + e.getEvent_id()), HttpMethod.DELETE,
+                new HttpEntity<>(authHeaders(tokenB)), String.class);
+        assertEquals(HttpStatus.FORBIDDEN, del.getStatusCode());
+
+        MultiValueMap<String, Object> multipart = new LinkedMultiValueMap<>();
+        multipart.add("image", new org.springframework.core.io.ByteArrayResource(new byte[] {1, 2, 3}) {
+            @Override
+            public String getFilename() {
+                return "foto.png";
+            }
+        });
+        HttpHeaders headers = authHeaders(tokenB);
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        ResponseEntity<String> upload = restTemplate.postForEntity(url("/bff/events/" + e.getEvent_id() + "/image"),
+                new HttpEntity<>(multipart, headers), String.class);
+        assertEquals(HttpStatus.FORBIDDEN, upload.getStatusCode());
+
+        assertEquals(HttpStatus.OK, restTemplate.getForEntity(url("/bff/events/" + e.getEvent_id()), String.class)
+                .getStatusCode());
+    }
+
+    /** image_data sai das listas (busca e por criador); continua no detalhe e em /image. */
+    @Test
+    public void listasSemImageData_imagemSoNoDetalheENoEndpointDaImagem() {
+        User host = createHostUser("host-img-listas");
+        String token = loginAndGetToken(host.getEmail(), "senha123");
+        Event e = createEvent(host.getId(), "Evento ImgListas " + System.nanoTime(), 5, token);
+        eventService.saveImage(e.getEvent_id(), new byte[] {7, 7, 7});
+
+        ResponseEntity<Map[]> busca = restTemplate.getForEntity(
+                url("/bff/events/search?term=" + e.getEvent_name()), Map[].class);
+        assertEquals(1, busca.getBody().length);
+        assertEquals(null, busca.getBody()[0].get("image_data"), "busca sem image_data");
+        assertEquals(host.getName(), busca.getBody()[0].get("creator_name"));
+        ResponseEntity<Map[]> doCriador = restTemplate.getForEntity(
+                url("/bff/events?creator_id=" + host.getId()), Map[].class);
+        assertEquals(1, doCriador.getBody().length);
+        assertEquals(null, doCriador.getBody()[0].get("image_data"), "lista do criador sem image_data");
+
+        assertNotNull(getEventJson(e.getEvent_id()).get("image_data"), "o detalhe continua com a imagem");
+        ResponseEntity<byte[]> imagem = restTemplate.getForEntity(
+                url("/bff/events/" + e.getEvent_id() + "/image"), byte[].class);
+        assertEquals(HttpStatus.OK, imagem.getStatusCode());
+        assertEquals(3, imagem.getBody().length);
+    }
+
     @Test
     public void updateEvent_nonExistentId_returns404() {
         // Issue #86: PUT num event_id inexistente hoje devolve 200 (falso-positivo) porque
@@ -764,6 +929,42 @@ public class HttpContractTest {
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertEquals("success", resp.getBody().get("status"));
         assertEquals(0, ((Number) resp.getBody().get("usersCreated")).intValue());
+    }
+
+    /** O gateway valida o criador (UserApi.exists): no seed, creator_id inexistente vira aviso (200), não erro (207). */
+    @Test
+    public void seed_eventoComCreatorInexistente_viraAvisoENaoCria() {
+        Map<String, Object> evento = new HashMap<>();
+        evento.put("creator_id", 987_654_321L);
+        evento.put("event_name", "Seed criador inexistente " + System.nanoTime());
+        evento.put("is_EAD", true);
+        evento.put("event_date", LocalDateTime.now().plusDays(5).toString());
+        evento.put("lot_quantity", 5);
+        evento.put("description", "desc");
+        ResponseEntity<Map> resp = restTemplate.postForEntity(url("/bff/seed"),
+                Map.of("events", java.util.List.of(evento)), Map.class);
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals(0, ((Number) resp.getBody().get("eventsCreated")).intValue());
+        assertTrue(resp.getBody().get("warnings").toString().contains("creator_id não existe"),
+                "veio: " + resp.getBody());
+    }
+
+    /** /validate: a checagem de existência do criador agora é do gateway, com a mesma mensagem de antes. */
+    @Test
+    public void validateEvent_creatorInexistente_returns400ComAMensagemDeAntes() {
+        User caller = createUser("validate-creator-404");
+        String token = loginAndGetToken(caller.getEmail(), "senha123");
+        Event e = new Event();
+        e.setCreator_id(987_654_321L);
+        e.setEvent_name("Evento validate criador " + System.nanoTime());
+        e.setIs_EAD(true);
+        e.setEvent_date(LocalDateTime.now().plusDays(5));
+        e.setLot_quantity(5);
+        e.setPresenters(new ArrayList<>());
+        ResponseEntity<String> resp = restTemplate.exchange(url("/bff/events/validate"), HttpMethod.POST,
+                new HttpEntity<>(e, authHeaders(token)), String.class);
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertTrue(resp.getBody().contains("creator_id não existe em users."), "veio: " + resp.getBody());
     }
 
     // ======================= gate público / superfície antiga removida =======================

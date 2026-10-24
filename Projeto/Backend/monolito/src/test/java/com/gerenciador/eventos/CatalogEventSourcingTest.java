@@ -146,8 +146,8 @@ public class CatalogEventSourcingTest {
         e1.setLot_quantity(12);
         e1.setEvent_name("ES um renomeado");
         eventService.updateEvent(e1);                              // EventUpdated (nome + capacidade), sem mexer em apresentadores
-        e2.setImage_data(new byte[] {1, 2, 3});                    // imagem: blob fora do ES
         eventService.updateEvent(e2);
+        eventService.saveImage(e2.getEvent_id(), new byte[] {1, 2, 3}); // imagem: blob fora do ES, método próprio (#35)
         atualizar(e3, "ilimitado editado", "Dani", "Fábio");
         eventService.delete(e4.getEvent_id());                     // EventCancelled
 

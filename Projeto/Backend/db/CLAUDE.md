@@ -76,7 +76,7 @@ como `supabase_admin` (um `psql` por arquivo, ordem lexical, no `POSTGRES_DB`). 
 |---|---|
 | `01-functions.sql` | `create_wallet_for_user()` (usada pelo trigger de `users`) |
 | `02-users.sql` | tabela `users` + trigger `trigger_create_wallet` |
-| `03-event.sql` | tabela `event` — só metadados + `version` (FK `creator_id → users`); projeção inline do stream `catalog.event` (#28) |
+| `03-event.sql` | tabela `event` — só metadados + `version` (FK `creator_id → users`); projeção inline do stream `catalog.event` (#28); índice `idx_event_creator_id` (#35; num banco existente, opcional: `CREATE INDEX IF NOT EXISTS idx_event_creator_id ON public.event (creator_id);` — só desempenho) |
 | `05-eventpresenter.sql` | tabela `eventpresenter` — apresentadores (0..N por evento) |
 | `06-mywallet.sql` | tabela `mywallet` (FK `user_id → users`, `ON DELETE CASCADE`) |
 | `08-pending-verifications.sql` | tabela + funções/trigger de limpeza de códigos expirados |

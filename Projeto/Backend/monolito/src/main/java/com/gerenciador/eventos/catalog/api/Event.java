@@ -4,10 +4,16 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 public class Event {
     // Atributos básicos (POJO simples)
     private Long event_id;              // fazer ser preenchido automaticamente
     private Long creator_id;            // fazer ser preenchido automaticamente
+    /** Nome do criador, composto pelo gateway (issue #35); somente-leitura: o corpo da requisição não o define.
+     *  Nulo se a conta do criador está desativada. Não é coluna de {@code event}. */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    private String creator_name;
     private String event_name;
     private Boolean is_EAD;
     private String address;
@@ -62,6 +68,8 @@ public class Event {
 
     public Long getCreator_id() {return creator_id;}
 
+    public String getCreator_name() {return creator_name;}
+
     public String getEvent_name() {return event_name;}
 
     public Boolean getIs_EAD() {return is_EAD;}
@@ -88,6 +96,8 @@ public class Event {
     public void setEvent_id(Long event_id) {this.event_id = event_id;}
 
     public void setCreator_id(Long creator_id) { this.creator_id = creator_id; }
+
+    public void setCreator_name(String creator_name) { this.creator_name = creator_name; }
 
     public void setEvent_name(String event_name) { this.event_name = event_name; }
 

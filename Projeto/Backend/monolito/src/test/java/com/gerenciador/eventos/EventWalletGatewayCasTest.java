@@ -144,6 +144,26 @@ public class EventWalletGatewayCasTest {
         assertEquals(List.of("POST /internal/eventcaps/batch"), reservation.chamadas());
     }
 
+    /**
+     * Issue #35: o gateway guarda o {@code exists(eventId)} positivo por ~30 s (o catalog vira salto de rede). Apagado o evento,
+     * a conferência do gateway ainda o vê dentro da janela (o reservation recusa a reserva depois, sem {@code eventcap}); o
+     * negativo nunca é guardado.
+     */
+    @Test
+    void existsDoEventoTemCachePositivo() {
+        User u = usuario("gw-cas-8");
+        Event e = evento(u.getId(), "GW CAS cache exists", 2);
+        assertEquals("", gateway.getValidationErrors(new EventWallet(u.getId(), e.getEvent_id())));
+
+        eventService.delete(e.getEvent_id());
+
+        assertEquals(false, eventService.exists(e.getEvent_id()), "o catalog já não tem o evento");
+        assertEquals("", gateway.getValidationErrors(new EventWallet(u.getId(), e.getEvent_id())),
+                "positivo em cache: o gateway não reconsulta o catalog dentro da janela");
+        assertEquals("Carteira não encontrada. Evento não encontrado.",
+                gateway.getValidationErrors(new EventWallet(987_654L, 987_655L)), "negativo não vai para o cache");
+    }
+
     private User usuario(String prefixo) {
         User u = new User();
         u.setName(prefixo);

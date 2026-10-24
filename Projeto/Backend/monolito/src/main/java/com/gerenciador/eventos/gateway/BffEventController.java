@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.gerenciador.eventos.catalog.api.Event;
 import com.gerenciador.eventos.catalog.api.EventApi;
 import com.gerenciador.eventos.identity.api.HostAuthorizationApi;
+import com.gerenciador.eventos.identity.api.UserApi;
 
 /**
  * Camada BFF única para eventos: CRUD, validate, search e upload/serve de imagem.
@@ -30,6 +31,12 @@ import com.gerenciador.eventos.identity.api.HostAuthorizationApi;
  * <p>PR #79 (issue #78): criar/editar/excluir evento agora exige que o usuário autenticado seja host
  * ({@link HostAuthorizationApi#ensureUserIsHost()}) — antes qualquer usuário logado podia.
  * Leitura (get/search/list/validate) e a imagem (upload/get) não ganham esse gate.</p>
+ *
+ * <p>Issue #35 (fatia 1): o {@code creator_id} é amarrado ao token. No POST ele é o usuário do token (o do corpo é
+ * ignorado); no PUT vale o gravado; PUT, DELETE e upload de imagem exigem o dono ({@code creator_id} do evento == usuário do
+ * token), senão 403, e id inexistente dá 404 (o DELETE dava 204). <b>Sem exceção de admin</b>: {@code users.admin} é
+ * gravável pelo próprio usuário. Toda resposta de {@link Event} ganha {@code creator_name} ({@link CreatorNames}); as listas
+ * não trazem {@code image_data} (continua no GET por id e em {@code /image}).</p>
  */
 @RestController
 @RequestMapping("/bff/events")
@@ -39,16 +46,23 @@ public class BffEventController {
 
     private final EventApi eventService;
     private final HostAuthorizationApi authorizationUtil;
+    private final UserApi userApi;
+    private final CreatorNames creatorNames;
 
-    public BffEventController(EventApi eventService, HostAuthorizationApi authorizationUtil) {
+    public BffEventController(EventApi eventService, HostAuthorizationApi authorizationUtil, UserApi userApi,
+            CreatorNames creatorNames) {
         this.eventService = eventService;
         this.authorizationUtil = authorizationUtil;
+        this.userApi = userApi;
+        this.creatorNames = creatorNames;
     }
 
     @PostMapping
     public ResponseEntity<?> createEvent(@RequestBody Event event) {
         try {
             authorizationUtil.ensureUserIsHost();
+            // o criador é o usuário do token (existe por construção); o creator_id do corpo é ignorado
+            event.setCreator_id(authorizationUtil.currentUserId());
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
         }
@@ -58,7 +72,7 @@ public class BffEventController {
         }
         try {
             Event saved = eventService.createEvent(event);
-            return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+            return ResponseEntity.status(HttpStatus.CREATED).body(creatorNames.preencher(saved));
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
         } catch (RuntimeException ex) {
@@ -70,6 +84,10 @@ public class BffEventController {
     public ResponseEntity<?> validateEvent(@RequestBody Event event) {
         List<String> errors = validateEventBasic(event);
         String serviceErrors = eventService.getValidationErrors(event);
+        // o criador é do identity: conferido aqui (o catalog só vê o id), com a mesma mensagem de antes
+        if (event.getCreator_id() != null && !userApi.exists(event.getCreator_id())) {
+            serviceErrors = (serviceErrors + " creator_id não existe em users.").trim();
+        }
         if (!serviceErrors.isBlank()) {
             errors.add(serviceErrors);
         }
@@ -83,7 +101,7 @@ public class BffEventController {
     public ResponseEntity<?> getEventById(@PathVariable Long id) {
         try {
             Event event = eventService.findById(id);
-            return ResponseEntity.ok(event);
+            return ResponseEntity.ok(creatorNames.preencher(event));
         } catch (RuntimeException ex) {
             return ResponseEntity.notFound().build();
         }
@@ -91,8 +109,10 @@ public class BffEventController {
 
     @PutMapping("/{id}")
     public ResponseEntity<?> updateEvent(@PathVariable Long id, @RequestBody Event event) {
+        Long usuario;
         try {
             authorizationUtil.ensureUserIsHost();
+            usuario = authorizationUtil.currentUserId();
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
         }
@@ -101,13 +121,19 @@ public class BffEventController {
         } else if (!id.equals(event.getEvent_id())) {
             return ResponseEntity.badRequest().body("ID do path difere do body");
         }
-        List<String> basicErrors = validateEventBasic(event);
-        if (!basicErrors.isEmpty()) {
-            return ResponseEntity.badRequest().body(String.join("; ", basicErrors));
-        }
         try {
+            Event gravado = buscarOuNull(id);
+            ResponseEntity<?> negado = negarSeNaoDono(gravado, usuario);
+            if (negado != null) {
+                return negado;
+            }
+            event.setCreator_id(gravado.getCreator_id()); // o creator_id do corpo é ignorado: vale o gravado
+            List<String> basicErrors = validateEventBasic(event);
+            if (!basicErrors.isEmpty()) {
+                return ResponseEntity.badRequest().body(String.join("; ", basicErrors));
+            }
             Event updated = eventService.updateEvent(event);
-            return ResponseEntity.ok(updated);
+            return ResponseEntity.ok(creatorNames.preencher(updated));
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
         } catch (RuntimeException ex) {
@@ -125,12 +151,18 @@ public class BffEventController {
 
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteEvent(@PathVariable Long id) {
+        Long usuario;
         try {
             authorizationUtil.ensureUserIsHost();
+            usuario = authorizationUtil.currentUserId();
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
         }
         try {
+            ResponseEntity<?> negado = negarSeNaoDono(buscarOuNull(id), usuario); // inexistente: 404 (era 204)
+            if (negado != null) {
+                return negado;
+            }
             eventService.delete(id);
             return ResponseEntity.noContent().build();
         } catch (RuntimeException ex) {
@@ -140,7 +172,7 @@ public class BffEventController {
 
     @GetMapping("/search")
     public ResponseEntity<List<Event>> searchEvents(@RequestParam String term) {
-        return ResponseEntity.ok(eventService.searchEvents(term));
+        return ResponseEntity.ok(creatorNames.preencher(eventService.searchEvents(term)));
     }
 
     @GetMapping
@@ -150,7 +182,7 @@ public class BffEventController {
         }
         try {
             List<Event> events = eventService.findByCreatorId(creator_id);
-            return ResponseEntity.ok(events);
+            return ResponseEntity.ok(creatorNames.preencher(events));
         } catch (RuntimeException ex) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
         }
@@ -161,6 +193,12 @@ public class BffEventController {
             @PathVariable Long id,
             @RequestParam("image") org.springframework.web.multipart.MultipartFile file) {
         try {
+            // Só o dono troca a imagem (não exige host): inexistente 404, outro usuário 403
+            ResponseEntity<?> negado = negarSeNaoDono(buscarOuNull(id), authorizationUtil.currentUserId());
+            if (negado != null) {
+                return negado;
+            }
+
             // Validar tamanho do arquivo (max 5MB)
             if (file.getSize() > 5 * 1024 * 1024) {
                 return ResponseEntity.badRequest().body("Imagem muito grande. Tamanho máximo: 5MB");
@@ -178,10 +216,7 @@ public class BffEventController {
             // Ler e converter para JPG
             byte[] imageBytes = convertToJpg(file.getBytes());
 
-            // Buscar evento e atualizar imagem
-            Event event = eventService.findById(id);
-            event.setImage_data(imageBytes);
-            eventService.updateEvent(event);
+            eventService.saveImage(id, imageBytes); // método próprio, fora do updateEvent (issue #35)
 
             return ResponseEntity.ok("Imagem carregada com sucesso");
         } catch (RuntimeException ex) {
@@ -195,8 +230,7 @@ public class BffEventController {
     @GetMapping("/{id}/image")
     public ResponseEntity<byte[]> getEventImage(@PathVariable Long id) {
         try {
-            Event event = eventService.findById(id);
-            byte[] imageData = event.getImage_data();
+            byte[] imageData = eventService.findImage(id); // só o blob, sem hidratar o evento
 
             if (imageData == null || imageData.length == 0) {
                 return ResponseEntity.notFound().build();
@@ -209,6 +243,29 @@ public class BffEventController {
         } catch (RuntimeException ex) {
             return ResponseEntity.notFound().build();
         }
+    }
+
+    /** Evento gravado, ou {@code null} se não existe; outro erro (banco, reservation) propaga. */
+    private Event buscarOuNull(Long id) {
+        try {
+            return eventService.findById(id);
+        } catch (RuntimeException ex) {
+            if (ex.getMessage() != null && ex.getMessage().startsWith("Evento não encontrado")) {
+                return null;
+            }
+            throw ex;
+        }
+    }
+
+    /** 404 se o evento não existe, 403 se o usuário do token não é o criador; {@code null} = é o dono, pode seguir. */
+    private static ResponseEntity<?> negarSeNaoDono(Event gravado, Long usuario) {
+        if (gravado == null) {
+            return ResponseEntity.notFound().build();
+        }
+        if (!gravado.getCreator_id().equals(usuario)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Apenas o criador do evento pode alterá-lo");
+        }
+        return null;
     }
 
     private byte[] convertToJpg(byte[] inputBytes) throws Exception {

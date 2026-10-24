@@ -40,3 +40,6 @@ TABLESPACE pg_default;
 
 ALTER TABLE IF EXISTS public.event
     OWNER to admin;
+
+-- "Meus eventos" (GET /bff/events?creator_id=) filtra no banco: WHERE creator_id = ? (issue #35). A FK não cria índice.
+CREATE INDEX IF NOT EXISTS idx_event_creator_id ON public.event (creator_id);
