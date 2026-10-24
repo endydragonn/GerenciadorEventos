@@ -76,5 +76,5 @@
 ## Telemetria do host
 
 `host-telemetria/telemetria-host-r3-*.csv`: CPU, frequência e RAM do host a cada 1 s (epoch em ms, UTC). `r3-matriz-naive-*`
-cobre a 1ª tentativa e a rodada da matriz naive; `r3-escada-*`, a escada grossa e o início do refino; `r3-aleatorio-*`, o
+cobre a 1ª tentativa e a rodada da matriz naive; `r3-escada-*`, a escada grossa e o início do refino; `r3-aleatorio-*` (2256 amostras, ~37 dos 45 min), o
 aleatório. O refino 50k–58k e a matriz CAS rodaram em janelas sem arquivo próprio (a telemetria de 50–75 min não cobriu todos).
