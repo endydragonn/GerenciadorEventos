@@ -74,6 +74,7 @@ catch { Fail "Backend inacessivel em $Base." }
 
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib-seed.ps1')   # Invoke-Seed (seed unico: docs\carga\harness\setup.sh)
 . (Join-Path $PSScriptRoot 'lib-degraus.ps1')                      # plano da escada e linha do CSV
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib-telemetria.ps1')   # CPU/RAM do gerador durante a escada
 
 try { $plano = Get-PlanoEscada -RpmInicio $RpmInicio -RpmPasso $RpmPasso -RpmMax $RpmMax -DuracaoS $Duracao -Usuarios $Usuarios }
 catch { Fail $_.Exception.Message }
@@ -99,6 +100,8 @@ $sf = (Join-Path $Results "summary-$tag.json").Replace('\', '/')
 $Csv = Join-Path $Results "$tag.csv"
 foreach ($f in $sf, $Csv) { if (Test-Path $f) { Fail "Ja existe $f (runId repetido); nao sobrescrevo. Renomeie o arquivo antigo e rode de novo." } }
 
+$TelCsv = Join-Path $Results "telemetria-gerador-$tag.csv"
+$tel = $null
 $totalS = $n * ($Duracao + 31) - 31
 Info ("Escada: {0} degraus de {1} s ({2}), ~{3} min no k6 + seed." -f $n, $Duracao, ($plano.Rpms -join ', '), [math]::Ceiling($totalS / 60.0))
 Info "Pares: $($plano.TotalPares) (soma das cotas ceil(RPM*$Duracao/60)+1); $Usuarios usuarios x $eventos eventos = $($Usuarios * $eventos) (capacidade $Capacidade/evento)."
@@ -116,6 +119,7 @@ try {
     $env:BASE_URL = $Base; $env:RPMS = ($plano.Rpms -join ','); $env:DURACAO_S = "$Duracao"
     $env:USERS_FILE = $uf; $env:EVENTS_FILE = $ef; $env:SUMMARY_FILE = $sf
     $env:PCT_CONFIRMA = "$PctConfirma"; $env:MAX_VUS = "$MaxVus"
+    $tel = Start-Telemetria -Saida $TelCsv
     Info 'Disparando k6...'
     k6 run --quiet (Join-Path $PSScriptRoot 'carga-degraus.js')
     # Os thresholds do carga-degraus.js sao so declarativos (sempre verdadeiros, so materializam submetricas): qualquer
@@ -142,6 +146,7 @@ try {
     # UTF-8 sem BOM e LF: o report em bash le sem saneamento
     [System.IO.File]::WriteAllText($Csv, ($DegrausCabecalho + "`n" + ($linhas -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
 } finally {
+    Stop-Telemetria $tel
     # credenciais de teste: apagadas mesmo se o k6 falhar ou o script for interrompido (Ctrl+C)
     Remove-Item $uf, $ef -ErrorAction SilentlyContinue
 }
@@ -166,6 +171,8 @@ if ($ap -gt 0) { Warn "$ap iteracoes alem da cota de pares nao foram enviadas (R
 if ($ou -gt 0) { Warn "$ou respostas inesperadas ou falhas de conexao (outros): nao entram no criterio de X, mas confira." }
 if ($c5 -gt 0) { Warn "$c5 respostas 5xx na confirmacao (erros_5xx_confirma): nao entram no criterio de X (so os 5xx da reserva), mas confira." }
 if ($ds -gt 0) { Warn 'k6 descartou iteracoes: o alvo nao foi atingido em algum degrau (gerador ou host saturado); o report trata como saturacao do gerador.' }
+Info ('Gerador durante a escada: ' + (Get-ResumoTelemetria $TelCsv))
+Info "  telemetria bruta: $TelCsv   (host: make telemetria-host, ligado ANTES da escada)"
 Write-Host "CSV da escada: $Csv"
 Write-Host "  gerar o grafico e o limiar X ... make report-degraus CSV=results\$tag.csv" -ForegroundColor Yellow
 Write-Host "  conferir no HOST ................ .\rpm\subir-host-rpm.ps1 -Verificar -Prefixo $escada" -ForegroundColor Yellow

@@ -57,6 +57,21 @@ make setup-gerador HOST_IP=<ip>    # ou: .\setup-gerador.ps1 -HostIp <ip>
 Instala o k6, testa a conexão e salva a latência base de rede em `results\baseline-*.txt`
 (o valor a descontar das medições). Registre também em `docs/carga/setup.md`, seção 5.
 
+## Telemetria das máquinas
+
+Cada rodada precisa provar que o **gerador não saturou** e que o **host não sofreu throttling**, com dado e não com
+observação do operador. Uma amostra por ~1,5 s (CPU, frequência, RAM livre e, se a máquina expuser, temperatura
+ACPI) em CSV com `epoch_ms` UTC, para cruzar com os CSVs do k6 (colunas em `lib-telemetria.ps1`):
+
+- **Gerador: automático.** `rodar-degraus.ps1` grava `results\telemetria-gerador-degraus-<id>.csv` e `rodar-matriz.ps1`
+  grava `results\telemetria-gerador-matriz-<data>.csv`; o pior caso sai numa linha ao fim da rodada.
+- **Host: ligue você, ANTES de disparar o teste no gerador** (`make telemetria-host ROTULO=<nome>`; Ctrl+C ao fim).
+  Gera `results\telemetria-host-<rótulo>-<data>.csv`. Mantenha os relógios das duas máquinas sincronizados (`w32tm /resync`).
+- **Temperatura:** muitos desktops não expõem a zona térmica ACPI e a coluna `temp_c` fica vazia. Nesse caso, leia a
+  temperatura da CPU com os sensores do RESET EXPLODE (ou HWiNFO) **antes e depois** da rodada, não durante: eles também
+  consomem CPU. Em `pct_freq_max` uma queda sustentada sob carga já indica throttling de energia ou térmico.
+- Registre o pior caso de cada máquina junto do resultado (substitui o "CPU ≤ 73%" de observação do operador).
+
 ## Matriz do experimento (runner oficial)
 
 Para **um** braço por vez, roda a disputa de vagas (teste 1, `PCT_CONFIRMA=100`) para

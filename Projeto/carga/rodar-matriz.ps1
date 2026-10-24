@@ -90,6 +90,7 @@ function Fail($m) { Write-Host "[erro] $m" -ForegroundColor Red; exit 1 }
 
 . (Join-Path $PSScriptRoot 'lib-seed.ps1')     # Invoke-Seed (seed unico: docs\carga\harness\setup.sh)
 . (Join-Path $PSScriptRoot 'lib-matriz.ps1')   # linha do CSV, lag da rajada, Find-Psql
+. (Join-Path $PSScriptRoot 'lib-telemetria.ps1') # CPU/RAM do gerador durante a matriz
 
 # ---------------------------------------------------------------- pre-requisitos
 $K6 = (Get-Command k6 -ErrorAction SilentlyContinue).Source
@@ -223,8 +224,11 @@ $invalidas = @()
 $falhasCas = @()
 $codigoSaida = 0
 $script:CodigoK6 = 0
+$TelCsv = Join-Path $Results ("telemetria-gerador-matriz-{0:yyyyMMdd-HHmmss}.csv" -f (Get-Date))
+$tel = $null
 
 try {
+    $tel = Start-Telemetria -Saida $TelCsv
     Info "Conferindo o Postgres do host (${HostIp}:$PgPorta, usuario $PgUsuario, banco $PgBanco)..."
     Invoke-Psql 'SELECT 1;' | Out-Null
     Ok 'psql remoto respondeu.'
@@ -337,8 +341,11 @@ try {
         }
         $codigoSaida = 3   # prevalece sobre 2: a falha do CAS e o achado; o 'incompleta' ja foi listado acima
     }
+    Stop-Telemetria $tel; $tel = $null
+    Info ('Gerador durante a matriz: ' + (Get-ResumoTelemetria $TelCsv) + "  [$TelCsv; host: make telemetria-host]")
     Write-Host 'Grafico: make report-matriz   (gera results\matriz.html)'
 } finally {
+    Stop-Telemetria $tel
     Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue   # inclui os users-*.json (credenciais de teste)
     foreach ($v in $envAnterior.Keys) { [Environment]::SetEnvironmentVariable($v, $envAnterior[$v]) }
     foreach ($v in 'BASE_URL', 'EVENT_ID', 'CAPACITY', 'PCT_CONFIRMA', 'USERS_FILE', 'SUMMARY_FILE') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
