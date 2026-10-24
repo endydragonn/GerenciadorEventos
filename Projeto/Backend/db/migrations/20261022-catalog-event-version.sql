@@ -3,7 +3,7 @@
 --   docker exec -i gerenciador-db psql -h localhost -U supabase_admin -d meu_banco \
 --     < Projeto/Backend/db/migrations/20261022-catalog-event-version.sql
 --
--- Pré-requisito: public.event_store e public.event_outbox existirem (migração 20261021-event-store.sql).
+-- Pré-requisito: public.event_store, public.event_outbox e o eventcap (public.eventcap, ou reservation.eventcap depois da #33) existirem (migração 20261021-event-store.sql).
 -- Para bancos NOVOS a coluna já vem do init-script 03-event.sql (e não há evento a preencher).
 --
 -- 1) ADD COLUMN IF NOT EXISTS: 'version' = versão do último evento do stream 'catalog.event' aplicado na linha
@@ -21,6 +21,16 @@ BEGIN;
 
 ALTER TABLE public.event ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 0;
 
+-- (Editada na #33, depois de já aplicada em bancos existentes, e por isso escrita para ser idempotente nos DOIS estados do banco:
+-- o eventcap saiu de public e o passo abaixo, que antes lia public.eventcap, passou a escolher a tabela na hora.)
+-- A capacidade vem do eventcap: em public até a #33 e em reservation.eventcap depois dela (Fase 7: o eventcap saiu do
+-- monólito). Esta migração continua valendo nos dois estados do banco (e depois de recarregar o seed-data.sql), então a
+-- tabela é escolhida na hora: reservation.eventcap quando existe, senão public.eventcap.
+DO $mig$
+DECLARE
+    eventcap regclass := COALESCE(to_regclass('reservation.eventcap'), to_regclass('public.eventcap'));
+BEGIN
+    EXECUTE format($sql$
 WITH novos AS (
     INSERT INTO public.event_store (event_id, stream_type, stream_id, version, event_type, payload, partition_key)
     SELECT gen_random_uuid(), 'catalog.event', e.event_id::text, 1, 'EventCreated',
@@ -38,7 +48,7 @@ WITH novos AS (
                                          FROM public.eventpresenter p WHERE p.event_id = e.event_id), '[]'::jsonb)),
            e.event_id::text
       FROM public.event e
-      LEFT JOIN public.eventcap c ON c.event_id = e.event_id
+      LEFT JOIN %s c ON c.event_id = e.event_id
      WHERE e.version = 0
     ON CONFLICT (stream_type, stream_id, version) DO NOTHING
     RETURNING global_position, stream_id
@@ -47,5 +57,8 @@ saida AS (
     INSERT INTO public.event_outbox (global_position) SELECT global_position FROM novos
 )
 UPDATE public.event e SET version = 1 FROM novos n WHERE e.event_id = n.stream_id::integer;
+    $sql$, eventcap);
+END
+$mig$;
 
 COMMIT;

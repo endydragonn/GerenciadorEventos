@@ -31,6 +31,34 @@ SET client_encoding = 'UTF8';
 DROP TABLE IF EXISTS public.eventpresenter;
 DROP TABLE IF EXISTS public.eventcap;
 
+-- Desde a #33 eventcap/walletevent moram no schema reservation, sem FK (init-script 13); a migração de 2026-09-01 só
+-- conhece o estado LEGADO em public. O harness reconstrói a walletevent legada (já com status/expires_at/version: o
+-- reshape abaixo os remove, como antes) e a derruba no fim, sem tocar no schema reservation.
+-- A migração de 2026-09-01 decide "já existe?" por pg_constraint.conname sem olhar o schema; o mesmo nome em
+-- reservation.walletevent a enganaria. O harness afasta o nome durante a rodada e devolve no fim.
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'walletevent_status_check'
+               AND conrelid = 'reservation.walletevent'::regclass) THEN
+        ALTER TABLE reservation.walletevent RENAME CONSTRAINT walletevent_status_check TO walletevent_status_check_res;
+    END IF;
+END $$;
+DROP TABLE IF EXISTS public.walletevent CASCADE;
+CREATE TABLE public.walletevent
+(
+    user_id integer NOT NULL,
+    event_id integer NOT NULL,
+    status text NOT NULL DEFAULT 'confirmed',
+    expires_at timestamp without time zone,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    version integer NOT NULL DEFAULT 0,
+    CONSTRAINT "WalletEvent_pkey" PRIMARY KEY (user_id, event_id),
+    CONSTRAINT walletevent_status_check CHECK (status IN ('confirmed', 'pending', 'expired', 'cancelled')),
+    CONSTRAINT "WalletEvent_event_id_fkey" FOREIGN KEY (event_id) REFERENCES public.event (event_id) ON DELETE RESTRICT,
+    CONSTRAINT "WalletEvent_user_id_fkey" FOREIGN KEY (user_id) REFERENCES public.users (user_id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_walletevent_pending_expires ON public.walletevent USING btree (expires_at) WHERE status = 'pending';
+
 TRUNCATE TABLE public.walletevent, public.event, public.mywallet, public.users
     RESTART IDENTITY CASCADE;
 
@@ -252,6 +280,15 @@ BEGIN
     END LOOP;
 
     RAISE NOTICE 'HARNESS OK: migracao idempotente sobre banco populado; dados preservados (contagem + identidade); conversao de quant correta';
+END $$;
+
+-- Limpeza: as tabelas legadas de public não existem no schema atual.
+DROP TABLE IF EXISTS public.eventcap CASCADE;
+DROP TABLE IF EXISTS public.walletevent CASCADE;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'walletevent_status_check_res') THEN
+        ALTER TABLE reservation.walletevent RENAME CONSTRAINT walletevent_status_check_res TO walletevent_status_check;
+    END IF;
 END $$;
 
 \echo '=== Harness de verificação da migração 20260901 — SUCESSO ==='

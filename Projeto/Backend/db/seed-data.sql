@@ -10,6 +10,10 @@
 --     < Projeto/Backend/db/migrations/20261022-catalog-event-version.sql
 -- ==========================================
 
+-- Desde a #33 (Fase 7) eventcap e walletevent são do schema `reservation` (serviço reservation, sem FK para users/event):
+-- este seed é script de OPERADOR (psql como admin) e por isso escreve nos dois schemas. Os eventos inseridos aqui não passam
+-- pelo serviço; o eventcap vem direto no INSERT abaixo.
+
 SET client_encoding = 'UTF8';
 
 -- Inserir usuários de exemplo
@@ -66,7 +70,7 @@ INSERT INTO event (creator_id, event_name, ead, address, event_date, description
 ON CONFLICT (event_name) DO NOTHING;
 
 -- Capacidade/vagas isoladas em eventcap (quant = vagas ainda disponíveis)
-INSERT INTO eventcap (event_id, capacity, quant, buy_time_limit)
+INSERT INTO reservation.eventcap (event_id, capacity, quant, buy_time_limit)
 SELECT e.event_id, v.capacity, v.quant, v.buy_time_limit
 FROM (VALUES
     ('Workshop de Java',      100, 98,  TIMESTAMP '2026-12-14 23:59:59'),
@@ -93,7 +97,7 @@ ON CONFLICT (event_id, presenter_name) DO NOTHING;
 -- quando um usuário é inserido, então não precisamos inserir aqui
 
 -- Inserir inscrições confirmadas (walletevent relaciona user_id com event_id)
-INSERT INTO walletevent (user_id, event_id, status) VALUES
+INSERT INTO reservation.walletevent (user_id, event_id, status) VALUES
     (
         (SELECT user_id FROM users WHERE email = 'maria.santos@email.com'),
         (SELECT event_id FROM event WHERE event_name = 'Workshop de Java'),
@@ -137,7 +141,7 @@ BEGIN
     SELECT COUNT(*) INTO v_users_count FROM users;
     SELECT COUNT(*) INTO v_events_count FROM event;
     SELECT COUNT(*) INTO v_wallets_count FROM mywallet;
-    SELECT COUNT(*) INTO v_transactions_count FROM walletevent;
+    SELECT COUNT(*) INTO v_transactions_count FROM reservation.walletevent;
 
     RAISE NOTICE '==========================================';
     RAISE NOTICE 'DADOS POPULADOS COM SUCESSO!';
@@ -165,7 +169,7 @@ SELECT e.event_id, e.event_name,
        c.capacity as capacidade,
        c.quant as vagas_disponiveis
 FROM event e
-LEFT JOIN eventcap c ON c.event_id = e.event_id
+LEFT JOIN reservation.eventcap c ON c.event_id = e.event_id
 ORDER BY e.event_date;
 
 \echo ''
@@ -178,7 +182,7 @@ ORDER BY w.user_id;
 \echo ''
 \echo '========== INSCRICOES =========='
 SELECT u.user_name as usuario, e.event_name as evento, we.status
-FROM walletevent we
+FROM reservation.walletevent we
 JOIN users u ON we.user_id = u.user_id
 JOIN event e ON we.event_id = e.event_id
 ORDER BY u.user_name, e.event_name;

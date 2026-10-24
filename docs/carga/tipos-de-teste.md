@@ -97,8 +97,8 @@ lag do read model, contra o CAS como referência.
 
 | Braço | N (clientes) | Repetições | Lags (ms) | Linhas no CSV |
 |---|---|---|---|---|
-| `cas` | 100, 200 | 5 | 0 (o lag não é mais configurado, #29; o CAS nem lê a projeção) | 10 |
-| `naive` | 100, 200 | 5 | 0 (idem; o lag real sai em `lag_obs_*`) | 10 |
+| `cas` | 100, 200 | 10 | 0 (o lag não é mais configurado, #29; o CAS nem lê a projeção) | 20 |
+| `naive` | 100, 200 | 10 | 0 (idem; o lag real sai em `lag_obs_*`) | 20 |
 
 ```powershell
 # braço CAS (host com READPATH=cas)

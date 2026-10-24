@@ -16,22 +16,22 @@
 
   ATENCAO: applied_at - last_occurred_at (lag_obs_*) e o lag do ULTIMO evento aplicado e so anda quando o consumer
   aplica algo: e um LIMITE INFERIOR do atraso (um consumer atrasado ou parado nao o atualiza). A metrica principal da
-  Rodada 2 (#31) e o log `events.lag` do backend (relay_ms / consumer_ms / total_ms por evento; ligue na rodada com
-  LOGGING_LEVEL_EVENTS_LAG=DEBUG no host) MAIS o offset lag do consumer group (`docker exec gerenciador-redpanda rpk
-  group describe gerenciador-eventos`, no host, durante a carga).
+  Rodada 2 (#31) e o log `events.lag` do container gerenciador-reservation (relay_ms / consumer_ms / total_ms por evento; ligue na rodada com
+  LOGGING_LEVEL_EVENTS_LAG=DEBUG no servico reservation do host) MAIS o offset lag do consumer group (`docker exec gerenciador-redpanda rpk
+  group describe reservation`, no host, durante a carga).
 
   Para cada N em -Vus:
     1. semeia N usuarios + -Repeticoes eventos novos, todos com a mesma -Capacidade (seed unico)
     2. antes da 1a rodada do script inteiro: AQUECIMENTO descartado (rajada pequena, evento
        proprio, sem linha no CSV)
-    3. para cada repeticao (um evento novo cada): espera o pipeline de eventos ficar quieto (event_outbox vazio e a
+    3. para cada repeticao (um evento novo cada): espera o pipeline de eventos do SERVICO reservation ficar quieto (reservation.event_outbox vazio e a
        projecao sem aplicar evento novo: o backlog de uma repeticao nao vaza para a seguinte), dispara o k6
        (PCT_CONFIRMA=100) e, enquanto ele roda, amostra a cada ~-PollMs, no Postgres do host, o lag REAL da
-       projecao de disponibilidade do evento: applied_at - last_occurred_at de event_availability (idade, no
+       projecao de disponibilidade do evento: applied_at - last_occurred_at de reservation.event_availability (idade, no
        relogio do Postgres, do ultimo evento aplicado pelo consumer: do append ao commit do consumer, relay
        incluido). Complemento por rodada (nao automatizado aqui): o offset lag do consumer group, com
-       `docker exec gerenciador-redpanda rpk group describe gerenciador-eventos`; e o lag por evento
-       (relay_ms / consumer_ms / total_ms) no log `events.lag` do backend. LIMITE da amostra: ela so anda quando o
+       `docker exec gerenciador-redpanda rpk group describe reservation`; e o lag por evento
+       (relay_ms / consumer_ms / total_ms) no log `events.lag` do container gerenciador-reservation. LIMITE da amostra: ela so anda quando o
        consumer aplica um evento; consumer parado nao a atualiza, entao confira tambem o offset lag.
     4. apos a rajada le confirmed/pending do evento no Postgres e acrescenta UMA linha ao CSV
 
@@ -90,6 +90,7 @@ function Fail($m) { Write-Host "[erro] $m" -ForegroundColor Red; exit 1 }
 
 . (Join-Path $PSScriptRoot 'lib-seed.ps1')     # Invoke-Seed (seed unico: docs\carga\harness\setup.sh)
 . (Join-Path $PSScriptRoot 'lib-matriz.ps1')   # linha do CSV, lag da rajada, Find-Psql
+. (Join-Path $PSScriptRoot 'lib-telemetria.ps1') # CPU/RAM do gerador durante a matriz
 
 # ---------------------------------------------------------------- pre-requisitos
 $K6 = (Get-Command k6 -ErrorAction SilentlyContinue).Source
@@ -147,7 +148,7 @@ function Invoke-Psql([string]$Sql, [switch]$Silencioso) {
 # ponto medio entre antes e depois da chamada.
 function Get-AmostraLag([int]$EventId) {
     $t0 = Get-EpochMs
-    $r = Invoke-Psql -Silencioso -Sql "SELECT (EXTRACT(EPOCH FROM (applied_at - last_occurred_at)) * 1000)::bigint FROM event_availability WHERE event_id = $EventId;"
+    $r = Invoke-Psql -Silencioso -Sql "SELECT (EXTRACT(EPOCH FROM (applied_at - last_occurred_at)) * 1000)::bigint FROM reservation.event_availability WHERE event_id = $EventId;"
     if ($null -eq $r) { return $null }
     $lag = -1
     if ($r -match '^\d+$') { $lag = [int]$r }
@@ -159,23 +160,24 @@ function Get-AmostraLag([int]$EventId) {
 function Wait-Evento([int]$EventId) {
     $limite = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $limite) {
-        if ((Invoke-Psql -Silencioso -Sql "SELECT 1 FROM eventcap WHERE event_id = $EventId;") -eq '1') { return }
+        if ((Invoke-Psql -Silencioso -Sql "SELECT 1 FROM reservation.eventcap WHERE event_id = $EventId;") -eq '1') { return }
         Start-Sleep -Milliseconds 250
     }
-    Fail "eventcap sem linha para o evento $EventId apos 30 s."
+    Fail "reservation.eventcap sem linha para o evento $EventId apos 30 s (o catalog cria o eventcap por chamada sincrona ao servico reservation; ele esta no ar?)."
 }
 
+# Desde a #33 o pipeline e o do servico reservation (relay/outbox/consumer no schema reservation; consumer group `reservation`).
 # Antes de cada rajada: o pipeline de eventos tem de estar QUIETO, senao o backlog da repeticao anterior vaza para esta
 # (o consumer ainda aplicando eventos antigos infla o lag e o oversell da rajada seguinte). Quieto = event_outbox vazio
-# (o relay publicou tudo) E o max(applied_at) da projecao parado entre duas leituras (o consumer parou de aplicar).
-# Limite: um consumer TRAVADO tambem parece quieto; confirme o offset lag (rpk group describe gerenciador-eventos).
+# (o relay do reservation publicou tudo) E o max(applied_at) da projecao parado entre duas leituras (o consumer parou de aplicar).
+# Limite: um consumer TRAVADO tambem parece quieto; confirme o offset lag (rpk group describe reservation).
 function Wait-Estavel([int]$EventId, [int]$TimeoutS = 120) {
     Wait-Evento $EventId
     $limite = (Get-Date).AddSeconds($TimeoutS)
     $anterior = $null
     while ((Get-Date) -lt $limite) {
-        $outbox = Invoke-Psql -Silencioso -Sql "SELECT count(*) FROM event_outbox;"
-        $aplicado = Invoke-Psql -Silencioso -Sql "SELECT COALESCE(max(applied_at)::text, 'nenhum') FROM event_availability;"
+        $outbox = Invoke-Psql -Silencioso -Sql "SELECT count(*) FROM reservation.event_outbox;"
+        $aplicado = Invoke-Psql -Silencioso -Sql "SELECT COALESCE(max(applied_at)::text, 'nenhum') FROM reservation.event_availability;"
         if ($outbox -eq '0' -and $aplicado -eq $anterior) { return }
         $anterior = $aplicado
         Start-Sleep -Milliseconds 1500
@@ -222,8 +224,11 @@ $invalidas = @()
 $falhasCas = @()
 $codigoSaida = 0
 $script:CodigoK6 = 0
+$TelCsv = Join-Path $Results ("telemetria-gerador-matriz-{0:yyyyMMdd-HHmmss}.csv" -f (Get-Date))
+$tel = $null
 
 try {
+    $tel = Start-Telemetria -Saida $TelCsv
     Info "Conferindo o Postgres do host (${HostIp}:$PgPorta, usuario $PgUsuario, banco $PgBanco)..."
     Invoke-Psql 'SELECT 1;' | Out-Null
     Ok 'psql remoto respondeu.'
@@ -274,7 +279,7 @@ try {
             # uma repeticao invalida, exit 2); no naive a invalida continua nao dependendo do psql.
             if ($Rotulo -eq 'cas' -or $motivos.Count -eq 0) {
                 $linhaDb = Invoke-Psql -Sql ("SELECT count(*) FILTER (WHERE status = 'confirmed'), count(*) FILTER (WHERE status = 'pending'), " +
-                    "(SELECT capacity FROM eventcap WHERE event_id = $eventId) FROM walletevent WHERE event_id = $eventId;")
+                    "(SELECT capacity FROM reservation.eventcap WHERE event_id = $eventId) FROM reservation.walletevent WHERE event_id = $eventId;")
                 $c = $linhaDb -split ','
                 if ($c.Count -ne 3) { Fail "Resposta inesperada do Postgres para o evento ${eventId}: '$linhaDb'" }
                 $confirmed = [int]$c[0]; $pending = [int]$c[1]
@@ -336,8 +341,11 @@ try {
         }
         $codigoSaida = 3   # prevalece sobre 2: a falha do CAS e o achado; o 'incompleta' ja foi listado acima
     }
+    Stop-Telemetria $tel; $tel = $null
+    Info ('Gerador durante a matriz: ' + (Get-ResumoTelemetria $TelCsv) + "  [$TelCsv; host: make telemetria-host]")
     Write-Host 'Grafico: make report-matriz   (gera results\matriz.html)'
 } finally {
+    Stop-Telemetria $tel
     Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue   # inclui os users-*.json (credenciais de teste)
     foreach ($v in $envAnterior.Keys) { [Environment]::SetEnvironmentVariable($v, $envAnterior[$v]) }
     foreach ($v in 'BASE_URL', 'EVENT_ID', 'CAPACITY', 'PCT_CONFIRMA', 'USERS_FILE', 'SUMMARY_FILE') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }

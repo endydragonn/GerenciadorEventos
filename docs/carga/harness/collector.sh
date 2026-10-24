@@ -77,7 +77,7 @@ trap parar TERM INT
 amostrar() {
     local agora lag
     agora="$(date +%s)"
-    lag="$(psql_db "SELECT COALESCE(EXTRACT(EPOCH FROM (applied_at - last_occurred_at)) * 1000, -1) FROM event_availability WHERE event_id = ${EVENT_ID};" 2>/dev/null | tr -d '[:space:]')"
+    lag="$(psql_db "SELECT COALESCE(EXTRACT(EPOCH FROM (applied_at - last_occurred_at)) * 1000, -1) FROM reservation.event_availability WHERE event_id = ${EVENT_ID};" 2>/dev/null | tr -d '[:space:]')"
     if [ -z "$lag" ]; then
         # linha ainda não existe (o consumer não aplicou nenhum evento deste evento) --
         # registra -1 (sentinela "sem leitura ainda"), não quebra a série.

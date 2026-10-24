@@ -4,6 +4,27 @@ Este kit é o **runner oficial do experimento** da Fase 2 (CAS × caminho ingên
 [matriz](#matriz-do-experimento-runner-oficial) (`make test-matriz`) gera o CSV e o gráfico dos
 resultados. O harness de `docs/carga/harness/` é só sanity local (stack no próprio host).
 
+> **Desde a issue #33 (Fase 7) a reserva é o serviço `reservation`** (container `gerenciador-reservation`, schema `reservation`), atrás do
+> `gateway` (container `gerenciador-backend`). O que mudou para este kit:
+>
+> - **Alvo HTTP igual**: o k6 continua em `http://<host>:8081/bff/**` (o `reservation` não tem porta no host); o contrato `/bff/**` não mudou.
+> - **`READPATH` / `RESERVATION_READPATH`** vai para o **backend** (o gateway decide o fluxo): `cas` = 1 chamada ao `reservation`; `naive` = 2
+>   (GET da disponibilidade e depois POST da reserva). A conferência é `docker exec gerenciador-backend printenv RESERVATION_READPATH`.
+> - **Relay, consumer, Hikari 1000 e Tomcat 300 do caminho quente estão no `reservation`** (`docker exec gerenciador-reservation printenv
+>   EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`); o backend tem Hikari 350. `POOL_HIKARI` do
+>   `make test-degraus` rotula o do **reservation**. O `LOGGING_LEVEL_EVENTS_LAG=DEBUG` também é do `reservation`.
+> - **Consultas de banco** (psql do gerador e verificações do host) leem `reservation.eventcap`, `reservation.walletevent`,
+>   `reservation.event_availability`, `reservation.event_outbox`. O consumer group da projeção é `reservation` (`docker exec
+>   gerenciador-redpanda rpk group describe reservation`), não mais `gerenciador-eventos`.
+> - **Limpeza do banco entre blocos** (`E:\TCC\carga-overrides\limpar-banco.sh`, fora do repo): precisa truncar o schema `reservation`, mover
+>   os groups `reservation` e `reservation-catalog` para o fim dos tópicos `reservation.wallet` / `catalog.event` e reiniciar
+>   `gerenciador-reservation` e `gerenciador-backend` (a lista exata está no relatório da #33).
+> - **Smoke antes de medir**: `docs/testes-manuais/smoke-reservation-servico-separado.sh` (stack no ar) prova overselling 0 no `cas` com o
+>   serviço separado e confere o banco lendo o schema `reservation`; ou `make test-matriz-cas HOST_IP=<ip> VUS=50 REPETICOES=2` (N pequeno).
+> - **`INTERNAL_API_TOKEN`** precisa estar no `Projeto/.env` do HOST (o compose o repassa ao `backend` e ao `reservation`, que não sobem sem
+>   ele). O gerador não precisa dele: o k6 só fala `/bff/**`.
+> - **Pool do Supavisor não cresce** (mesmo tenant e usuário dos três serviços); a soma dos Hikari de cliente é 1000 + 350 + 3 = 1353 <= 1500.
+
 Duas máquinas: o **host** (roda a stack, o alvo do teste) e o **gerador** (roda o k6).
 O k6 **nunca** roda no host: competiria por CPU/rede com o backend e invalidaria as latências.
 
@@ -35,6 +56,21 @@ make setup-gerador HOST_IP=<ip>    # ou: .\setup-gerador.ps1 -HostIp <ip>
 
 Instala o k6, testa a conexão e salva a latência base de rede em `results\baseline-*.txt`
 (o valor a descontar das medições). Registre também em `docs/carga/setup.md`, seção 5.
+
+## Telemetria das máquinas
+
+Cada rodada precisa provar que o **gerador não saturou** e que o **host não sofreu throttling**, com dado e não com
+observação do operador. Uma amostra por ~1,5 s (CPU, frequência, RAM livre e, se a máquina expuser, temperatura
+ACPI) em CSV com `epoch_ms` UTC, para cruzar com os CSVs do k6 (colunas em `lib-telemetria.ps1`):
+
+- **Gerador: automático.** `rodar-degraus.ps1` grava `results\telemetria-gerador-degraus-<id>.csv` e `rodar-matriz.ps1`
+  grava `results\telemetria-gerador-matriz-<data>.csv`; o pior caso sai numa linha ao fim da rodada.
+- **Host: ligue você, ANTES de disparar o teste no gerador** (`make telemetria-host ROTULO=<nome>`; Ctrl+C ao fim).
+  Gera `results\telemetria-host-<rótulo>-<data>.csv`. Mantenha os relógios das duas máquinas sincronizados (`w32tm /resync`).
+- **Temperatura:** muitos desktops não expõem a zona térmica ACPI e a coluna `temp_c` fica vazia. Nesse caso, leia a
+  temperatura da CPU com os sensores do RESET EXPLODE (ou HWiNFO) **antes e depois** da rodada, não durante: eles também
+  consomem CPU. Em `pct_freq_max` uma queda sustentada sob carga já indica throttling de energia ou térmico.
+- Registre o pior caso de cada máquina junto do resultado (substitui o "CPU ≤ 73%" de observação do operador).
 
 ## Matriz do experimento (runner oficial)
 
@@ -93,19 +129,19 @@ gravadas (ver abaixo).
 1. **Seed único por N**: `N` usuários + `REPETICOES` eventos novos, todos com a mesma `capacity`
    (um evento novo por repetição). Antes da 1ª repetição de todas, um **aquecimento descartado**
    (rajada pequena, `-VusAquecimento`, evento próprio, sem linha no CSV).
-2. Espera o pipeline de eventos ficar **quieto** (`event_outbox` vazio e o `max(applied_at)` da projeção parado entre duas
-   leituras), para o backlog de uma repetição não vazar para a seguinte (a disponibilidade do `naive` é `eventcap LEFT
+2. Espera o pipeline de eventos **do reservation** ficar **quieto** (`reservation.event_outbox` vazio e o `max(applied_at)` da projeção
+   parado entre duas leituras), para o backlog de uma repetição não vazar para a seguinte (a disponibilidade do `naive` é `eventcap LEFT
    JOIN` a projeção: não há mais "linha do read model" a esperar nem fase de timer a sortear). Limite: um consumer
    travado também parece quieto, confira o offset lag.
 3. Dispara o k6 (`carga.js`, confirmação 100% embutida) e, enquanto ele roda, consulta o Postgres
    do host por `psql` remoto (`:5433`) a cada ~`-PollMs` (padrão 250 ms):
-   `applied_at - last_occurred_at` de `event_availability` do evento: a idade, no relógio do Postgres, do último
+   `applied_at - last_occurred_at` de `reservation.event_availability` do evento: a idade, no relógio do Postgres, do último
    evento aplicado pelo consumer (do append ao commit do consumer, relay incluído); o instante da amostra é o do
    gerador, o mesmo do k6. **Limite:** é um **limite inferior** do atraso: a amostra só anda quando o consumer aplica um evento (consumer
    atrasado ou parado não a atualiza). A **métrica principal da #31** é o log `events.lag` (ligue na rodada com
    `LOGGING_LEVEL_EVENTS_LAG=DEBUG` no host; vem desligado) **mais** o offset lag. Confira também o **offset lag** do consumer group, no host:
-   `docker exec gerenciador-redpanda rpk group describe gerenciador-eventos`. O lag por evento, com relay e consumer
-   separados (`relay_ms` / `consumer_ms` / `total_ms`), sai no log `events.lag` do backend.
+   `docker exec gerenciador-redpanda rpk group describe reservation`. O lag por evento, com relay e consumer
+   separados (`relay_ms` / `consumer_ms` / `total_ms`), sai no log `events.lag` do container `gerenciador-reservation`.
 4. Depois da rajada lê `confirmed` e `pending` do evento no Postgres (fonte de verdade) e grava a linha
    — **só se a repetição for válida**: k6 com código 0, resumo com `disparo_ms`, nenhum usuário sem
    login, nenhuma resposta inesperada/5xx (reserva ou confirma) e toda reserva aceita confirmada
@@ -209,7 +245,8 @@ experimento: não misture no mesmo CSV; guarde o antigo em `results/` com outro 
 # host (PowerShell como Administrador): reinicia a stack com o braço ingênuo e max_connections=300 (N=200 estoura o
 # padrão 100). O compose já liga o relay e o consumer de eventos (EVENTS_RELAY_ENABLED / EVENTS_CONSUMER_ENABLED).
 make host-rpm MAX_CONN=300 READPATH=naive
-#    conferência: docker exec gerenciador-backend printenv RESERVATION_READPATH EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED
+#    conferência: docker exec gerenciador-backend printenv RESERVATION_READPATH
+#                 docker exec gerenciador-reservation printenv EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED
 
 # gerador (PGPASSWORD só no ambiente, como na 1a)
 make test-matriz-naive HOST_IP=<ip do host>
@@ -280,7 +317,7 @@ seed usam bcrypt, caro) geram milhares de reservas sem duplicidade.
 
 ### Por que `MAX_CONN` importa
 
-O backend usa pool HikariCP (`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`, default 1000; o pool
+O caminho quente (o serviço `reservation`) usa pool HikariCP (`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`, default 1000; o backend/gateway usa 350; o pool
 cresce só sob demanda a partir de `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, default 5). Com
 `MAX_CONN=100` (padrão do Postgres) o pool de 1000 pode pedir mais conexões do que o Postgres
 aceita → `too many clients` → HTTP 500; para esse caso reduza o pool por env (ex.: 50). Com
@@ -316,7 +353,8 @@ CSV); os de antes do pool (#96) estão invalidados (ver `results/02-hikari/ANALI
 # 1) host: stack com o max_connections e o pool HikariCP escolhidos (os dois vão para o CSV)
 $env:SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE = '1000'      # opcional (padrão do backend: 1000)
 make host-rpm MAX_CONN=300 READPATH=cas
-#    conferência: docker exec gerenciador-backend printenv SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE RESERVATION_READPATH
+#    conferência: docker exec gerenciador-reservation printenv SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE
+#                 docker exec gerenciador-backend printenv RESERVATION_READPATH
 
 # 2) gerador: a escada (MAX_CONN / POOL_HIKARI = o que o host roda; só rotulam o CSV)
 make test-degraus HOST_IP=<ip do host> MAX_CONN=300 POOL_HIKARI=1000

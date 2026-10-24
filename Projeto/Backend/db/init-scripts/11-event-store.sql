@@ -10,7 +10,9 @@
 --   (rowcount 0 = outra transação gravou essa versão antes).
 --   global_position é alocado na ordem do INSERT, NÃO na do commit: não serve de cursor de acompanhamento.
 --   occurred_at = clock_timestamp() (instante do append, não o início da transação).
---   Sem dado pessoal no payload (a tabela é imutável e não dá para apagar o que entra).
+--   Sem dado pessoal no payload (a tabela é imutável por convenção). Única exceção, decisão do usuário de 2026-10-21 (#32): o
+--   stream identity.notification leva e-mail e código, e o monólito apaga essas linhas (NotificationEventRetentionService)
+--   quando o código venceu há mais de 30 s e a linha já saiu do event_outbox.
 --
 -- event_outbox: só a global_position dos eventos ainda não publicados. Inserida na MESMA transação do append e
 --   apagada pelo relay depois do ack do broker; INSERT+DELETE contínuo gera tuplas mortas, por isso o autovacuum

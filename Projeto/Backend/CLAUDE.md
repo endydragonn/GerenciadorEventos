@@ -9,17 +9,89 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
   — porta `8081`, container `gerenciador-backend`. Sobe junto `db`, `supabase-pooler` e `redpanda` (o
   backend espera o broker ficar `healthy`); no Docker o backend fala **pelo pooler** (Supavisor), ver
   "Pooler" em Persistência, e com o broker em `redpanda:9092` (`SPRING_KAFKA_BOOTSTRAP_SERVERS`).
-- Local: `cd Projeto/Backend && mvn spring-boot:run` — precisa de um Postgres em
-  `localhost:5433`. `application.properties` tem defaults de dev para as vars do `.env`.
-- Entrypoint do jar: `com.gerenciador.eventos.Main` (fixado no `pom.xml` e no `Dockerfile`).
-- Build da imagem: multi-stage — compila com `maven:3.9.7-temurin-21`, roda em `temurin:25-jre`.
+- Serviço `notification` (issue #32): `docker compose -f Projeto/docker-compose.yml up -d --build notification`
+  — container `gerenciador-notification`, sem porta. Ver "Serviço notification". O `backend` NÃO depende dele.
+- Serviço `reservation` (issue #33): `docker compose -f Projeto/docker-compose.yml up -d --build reservation` — container
+  `gerenciador-reservation`, API interna na `:8082` **só na rede `gerenciador-net`** (sem porta no host). Ver "Serviço reservation".
+  O `backend` **depende dele** (`depends_on: reservation: service_healthy`): sem ele não há reserva (o resto do monólito sobe).
+- Local: `cd Projeto/Backend && mvn -pl monolito -am spring-boot:run` (ou `mvn -pl notification -am spring-boot:run`,
+  `mvn -pl reservation -am spring-boot:run`) — precisa de um Postgres em `localhost:5433` (e, para a reserva, do `reservation` em
+  `localhost:8082`, o default de `RESERVATION_SERVICE_URL`). `application.properties` de cada módulo tem defaults de dev para as vars do `.env`,
+  **exceto** `MAIL_USERNAME`/`MAIL_PASSWORD` do `notification` (sem default de propósito: não vai e-mail pessoal no código):
+  para rodar o serviço local, exporte as duas.
+- Entrypoint do jar do monólito: `com.gerenciador.eventos.Main` (fixado em `monolito/pom.xml` e `monolito/Dockerfile`); o do
+  `notification`: `com.gerenciador.eventos.notification.NotificationApplication`; o do `reservation`:
+  `com.gerenciador.eventos.reservation.ReservationApplication`.
+- Build da imagem: um Dockerfile por serviço (`monolito/Dockerfile`, `notification/Dockerfile`, `reservation/Dockerfile`), contexto = `Projeto/Backend/`
+  (a raiz do multi-módulo); multi-stage — compila com `maven:3.9.7-temurin-21` (`-pl <serviço> -am`), roda em `temurin:25-jre`.
+
+## Layout multi-módulo Maven — issue #32 (Fase 7)
+
+`Projeto/Backend/` deixou de ser um módulo só: o `pom.xml` da raiz é o **agregador** (`packaging=pom`, parent
+`spring-boot-starter-parent` 3.5.7, `dependencyManagement` de `shared`, compiler e Checkstyle herdados por todos). Cada
+serviço é um módulo com o próprio jar e Dockerfile; o que é comum é uma lib.
+
+```
+Backend/
+  pom.xml                agregador (módulos: shared, reservation-client, monolito, notification, reservation)
+  checkstyle*.xml        um só para todos os módulos (${maven.multiModuleProjectDirectory})
+  run-tests.sh           roda o reactor inteiro
+  shared/                LIB (jar simples, sem repackage): DatabaseConnection + shared.events (EventStore, relay, consumer,
+                         replay...) + NotificationEvents (contrato do stream identity.notification)
+  reservation-client/    LIB (#33): contrato HTTP do serviço reservation — DTOs (EventWallet, EventCap), IdempotencyConflictException,
+                         as interfaces EventWalletApi/EventCapacityApi e o ReservationClient (pool de conexões). Usada pelo monólito
+                         (inteira) e pelo reservation (DTOs + testes ponta a ponta)
+  monolito/              identity, catalog, gateway (/bff/**), CorsConfig/SchedulingConfig; src/, Dockerfile, pom.xml
+  notification/          serviço extraído (README.md próprio); src/, Dockerfile, pom.xml
+  reservation/           serviço extraído (README.md próprio): eventcap/CAS, walletevent/ES, API interna; src/, Dockerfile, pom.xml
+  db/                    schema (fora do Maven)
+```
+
+- **Fronteira física**: `notification` NÃO depende de `monolito` (só de `shared`) e não lê tabela do monólito; tem schema próprio
+  (`notification`) e processo/imagem próprios. `shared` só leva o que mais de um serviço usa de verdade; o pacote Java continua
+  `com.gerenciador.eventos.shared[.events]` (mesmos imports do monólito). **Módulo novo** (como a #33 `reservation`):
+  novo diretório com `pom.xml` (parent `backend`, dep em `shared`), uma linha em `<modules>` do agregador, um
+  `<serviço>/Dockerfile` copiado dos existentes (que passam a copiar também o `pom.xml` do módulo novo: o agregador exige o pom de
+  todos) e um serviço no compose. `reservation` NÃO depende de `monolito` e o monólito não tem o código do `reservation` no
+  classpath: a fronteira entre eles é o HTTP, e o que os dois compartilham é a lib `reservation-client` (contrato).
+- **Testes** de cada módulo ficam no próprio módulo. Os de `shared.events` (e o `TestSupport`) continuam em `monolito/src/test`,
+  porque sobem o contexto Spring do monólito (`Main`) para exercitar a lib com Postgres e Redpanda reais. O `reservation` tem uma
+  cópia enxuta do `TestSupport` (`GlobalDbTruncator`, `TestSchemas` com default `reservation`, `EventsTestSupport`) em `reservation/src/test`
+  e `ReservationTestSupport` (ids de usuário/evento sem tabela de outro serviço). Os testes do monólito que tocam a reserva falam
+  HTTP com o **servidor falso** `TestSupport/FakeReservationServer` (JDK `HttpServer`, estado em memória, sobe uma vez por JVM pelo
+  `LauncherSessionListener` `ReservationFakeSession`, URL na propriedade de sistema `reservation.service.url`); o contrato
+  cliente-servidor com o serviço REAL é o `ReservationApiE2ETest` do módulo `reservation`.
+- `Backend/.mvn/maven.config` existe para o Maven achar a raiz do multi-módulo (`${maven.multiModuleProjectDirectory}`, onde
+  moram `checkstyle*.xml`) mesmo rodando de dentro de `monolito/` ou `notification/` (IDE); sem a pasta `.mvn` o Maven usa o cwd e o
+  Checkstyle não acha a config.
+- Comandos: tudo na raiz de `Backend/`. `mvn -pl monolito -am test` (monólito + libs), `mvn -pl notification -am test`, `mvn -pl reservation -am test`,
+  `mvn -Dtest=ClasseTest -Dsurefire.failIfNoSpecifiedTests=false test` (uma classe, em qualquer módulo). `-pl X -am` compila
+  `shared` junto; sem `-am` o Maven procura `shared` no repositório local e falha.
 
 ## Testes
 
 `./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`
 (URL direta `db:5432`, **sem passar pelo pooler**),
-e roda `mvn clean test` (antes disso apaga `target/surefire-reports` sozinho, então o total do
-resumo reflete só os testes desta rodada — não precisa limpar na mão).
+e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `monolito`, `notification`, `reservation`;
+`-fae` = um módulo vermelho não esconde o resultado dos outros). Antes disso apaga `target/surefire-reports` sozinho, então o total do
+resumo reflete só os testes desta rodada — não precisa limpar na mão; os relatórios de todos os módulos são copiados para
+`Backend/target/surefire-reports` (nomes de classe únicos). **Pré-requisito do `notification` (#32):** o schema `notification`
+no banco (`db/migrations/20261024-notification-schema.sql`, num volume antigo; bancos novos já nascem com ele). **Pare também o
+`gerenciador-notification`** (`docker stop gerenciador-notification`): o relay dos testes do monólito publica em
+`identity.notification` e um notification vivo mandaria e-mail de verdade (SMTP real) para os endereços de teste; o script aborta
+com mensagem clara se ele estiver rodando. **Ao fim da rodada (verde ou vermelha) o script move o consumer group `notification` para o
+FIM do tópico** (`docker exec gerenciador-redpanda rpk group seek notification --to end --topics identity.notification
+--allow-new-topics`): os testes publicam ali (direto e pelo relay), e sem isso o próximo `up` do serviço (offset atrasado, ou group
+novo em `earliest`) mandaria e-mail REAL do Gmail para cada endereço de teste. **Trade-off:** um e-mail legítimo que estivesse
+pendente antes da rodada é pulado (aceitável em dev: o backend, e portanto o cadastro real, precisa estar parado para testar). Se o
+seek falhar, o script avisa e imprime o comando: rode-o ANTES de qualquer `up` do `notification`.
+**Pré-requisito do `reservation` (#33):** o schema `reservation` no banco (`db/migrations/20261025-reservation-schema.sql`, num volume
+antigo — move as tabelas de `public` e o stream `reservation.wallet` do event store; bancos novos já nascem com ele). **Pare também o
+`gerenciador-reservation`** (`docker stop gerenciador-reservation`): o relay, o consumer e a reconciliação dele disputariam o
+`reservation.event_outbox`, a projeção e o tópico `catalog.event` dos testes; o script aborta com mensagem clara se ele estiver rodando.
+**Ao fim da rodada o script também move para o FIM dos tópicos os groups do serviço**: `reservation` (projeção de disponibilidade, tópico
+`reservation.wallet`) e `reservation-catalog` (reconciliação do `eventcap`, tópico `catalog.event`) — a reconciliação, em particular,
+CRIARIA `eventcap` para ids de evento de teste (que se repetem depois de `TRUNCATE ... RESTART IDENTITY`).
 **Exige os containers `db` e `redpanda` no ar** (`docker compose -f Projeto/docker-compose.yml up -d db redpanda`;
 o script aborta com mensagem clara se faltar um): os testes batem num Postgres e num Redpanda reais.
 **Pare o `gerenciador-backend` antes** (`docker stop gerenciador-backend`): o relay e o consumer dele (ligados no compose desde a #28/#29)
@@ -28,18 +100,21 @@ naive); o script aborta com mensagem clara se o container estiver rodando. O scr
 passa `SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092` e `EVENTS_CONSUMER_GROUP=gerenciador-eventos-test` ao container
 de teste (group próprio: os testes nunca entram no group do backend vivo que consome do mesmo Redpanda).
 
-- `src/test/.../SchemaValidationTest` valida o schema real contra o esperado.
+- `monolito/src/test/.../SchemaValidationTest` valida o schema real contra o esperado (`public`, `notification.processed_event`, e que
+  `eventcap`/`walletevent`/`event_availability`/`idempotency_key` SAÍRAM de `public` sem FK cross-schema); o do módulo `reservation`
+  (`reservation/src/test/.../SchemaValidationTest`) valida o schema `reservation` (tabelas, colunas, chaves, sem FK, event store próprio).
 - `TestSupport/GlobalDbTruncator` dá `TRUNCATE` (início/fim da suíte) em **todas** as tabelas dos
   schemas configurados, descobertas por catálogo (`TestSupport/TestSchemas`) — não há mock de banco.
-  Schemas alvo: propriedade `test.db.schemas` (lista separada por vírgula, default `public`; vale
+  Schemas alvo: propriedade `test.db.schemas` (lista separada por vírgula, default `public,notification,reservation` no monólito desde a #33, só `reservation` no módulo dele; vale
   também via env `TEST_DB_SCHEMAS` ou `-Dtest.db.schemas=`), usada também por `SchemaValidationTest`
   (`table_schema = any(?)`). Nomes validados por `[a-z_][a-z0-9_]*` (identificador não é
-  parametrizável em SQL). **Mantenha o default `public`**: os schemas do Supabase (`auth`, `storage`,
-  `extensions`...) vivem no mesmo banco e não podem ser truncados nem validados. Fase 5
-  (schema por serviço): `test.db.schemas=catalog,reservation,...`. O `run-tests.sh` roda o mvn num
+  parametrizável em SQL). **O default só lista schemas do app** (`TestSchemas.DEFAULT`): os schemas do Supabase (`auth`, `storage`,
+  `extensions`...) vivem no mesmo banco e não podem ser truncados nem validados. Cada serviço extraído acrescenta o seu schema
+  ao default (Fase 7: `notification`, `reservation`). O `GlobalDbTruncator` do monólito também zera o estado do `FakeReservationServer`
+  (os ids de evento voltam a 1 com `RESTART IDENTITY`). O `run-tests.sh` roda o mvn num
   container com env fixo (`--env-file ../.env`): para mudar `test.db.schemas` por ali, passe
   `-e TEST_DB_SCHEMAS=...` no `docker run` do script. Coberto por `TestSchemasTest`.
-- `EventTest`, `UserTest`, `EventWalletTest`, `MyWalletTest` exercitam services + repositories.
+- `EventTest`, `UserTest`, `MyWalletTest` (monólito) e `EventWalletTest` (módulo `reservation`) exercitam services + repositories.
 - `CatalogEventSourcingTest` (issue #28; ver "Catalog em CQRS + Event Sourcing"): **teste de replay do agregado `Event`**
   (cria/edita/adiciona e remove apresentador/troca imagem/cancela vários eventos, reconstrói `event`/`eventpresenter` na
   sombra a partir do `event_store` e compara com a viva nas colunas comparáveis, sem `image_data` e sem carimbos; uma
@@ -89,11 +164,43 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   derrubada no `@AfterAll` de cada classe: não é schema do app e não sobra no banco compartilhado; nenhum outro teste
   depende dela). O `GlobalDbTruncator` trunca **todas** as tabelas de `public` descobertas por catálogo, `test_somatorio`
   inclusive quando existir; ela só não existe nessa hora. O `SchemaValidationTest` não a menciona. Helpers em `TestSupport/EventsTestSupport` (espera com timeout, leitura de tópico).
+- Extração do `notification` (issue #32; ver "Serviço notification"): `IdentityNotificationEventsTest` (monólito: pedido de
+  cadastro, reenvio e MFA appendam `VerificationCodeRequested`/`PasswordResetMfaRequested` em `identity.notification` com o
+  `event_outbox` na mesma transação e o mesmo código gravado em `pending_verifications`/`users`; falha no append desfaz o cadastro
+  pendente; **cadastro, verificação e login funcionam sem o serviço** e o evento sai pelo relay para o tópico) e, no módulo
+  `notification`, `NotificationConsumerTest` (Postgres e Redpanda reais + `JavaMailSender` fake via `@MockitoBean`: e-mail de
+  verificação e de MFA montados com código/nome/prazo, **mensagem publicada antes do contexto subir é enviada quando ele sobe**,
+  **reentrega do mesmo evento não manda dois e-mails**, falha transitória de SMTP reentrega até enviar sem duplicar e sem
+  checkpoint prematuro, rejeição permanente do destinatário e JSON inválido vão ao `.DLT` sem travar os próximos, **código já
+  vencido não é enviado**, evento sem `expiresAt` vai ao `.DLT`, tipo desconhecido não envia), `RejeicaoPermanenteTest` (unitário:
+  usuário inexistente = permanente; quota/limite de taxa do remetente, falta de conexão e autenticação = reentrega) e
+  `NotificationEventRetentionTest` (monólito, retenção do dado pessoal: vencido há mais de 30 s e já publicado some; dentro da
+  carência, ainda válido, ainda no outbox e outro stream ficam). O group do teste (`notification-test`) é próprio, nunca o do
+  serviço vivo.
+- Extração do `reservation` (issue #33; ver "Serviço reservation"). **Módulo `reservation`** (Postgres e Redpanda reais): os testes que
+  eram do monólito vieram com ele (`EventWalletTest`, `WalletEventStateMachineTest`, `IdempotencyKeyTest`, `IdempotencyRetentionTest`,
+  `ReservationEventSourcingTest`, `ReservationExpiryTest`, `ReservationReplayTest` — o **replay do wallet** —,
+  `EventAvailabilityProjectionTest` — o **ponta a ponta do naive**, agora pelo `ReservationClient` real por HTTP —,
+  `ReservationSchemaConstraintsTest`, `SchemaValidationTest`), adaptados a "usuário e evento são só ids" (`ReservationTestSupport`).
+  `EventWalletNaivePathTest` agora cobre o lado do SERVIÇO do naive (reserva sem CAS, sem checar disponibilidade; leitura separada).
+  Novos: `ReservationApiE2ETest` (**o cliente REAL contra o serviço REAL por HTTP**: CAS sob 40 threads com overselling 0; naive com
+  consumer parado oversella; **as duas chamadas HTTP do naive** — `disponibilidade` e DEPOIS `reservar`, por `InOrder` no controller —
+  e só uma no cas; "lotado" já na 1ª chamada; repetição com chave do cliente devolve o resultado salvo; mapeamento 400/422/409;
+  **criação do `eventcap` idempotente por `event_id`**; lote/inexistente; `updatePolicy`; apagar recusado com reserva),
+  `CatalogReconciliationTest` (**reconciliação pelo `EventCreated`** do tópico: cria o que faltava, repetição/reentrega não altera,
+  `eventcap` da chamada síncrona não é sobrescrito, tipos que não são `EventCreated` ignorados, payload inválido rejeitado) e
+  `ReservationConfigTest` (Tomcat 300, keep-alive, virtual threads off, Hikari 1000, `events.schema=reservation`). **Módulo
+  `monolito`**: `EventWalletGatewayCasTest` / `EventWalletGatewayNaiveTest` (o gateway decide o braço: cas = UMA chamada
+  `POST /internal/reservations`; naive = `GET .../availability` e DEPOIS `POST`, na ordem, sem a 2ª quando a disponibilidade é 0; carteira e
+  evento conferidos no monólito antes de qualquer chamada; validação compõe os erros na ordem de antes; criar evento com o reservation
+  fora NÃO quebra e o `eventcap` é idempotente), `EventsSchemaTest` (schema do event store e chave do advisory lock por serviço),
+  `ModuleBoundaryArchTest` (nada depende do pacote `reservation`; `reservationclient` só é lib) e o `CatalogEventSourcingTest`
+  (`eventcap` removido do serviço no cancelamento; o delete recusado pelo reservation, 409, desfaz o `EventCancelled`).
 - `HttpContractTest` (`webEnvironment = RANDOM_PORT` + `TestRestTemplate`) fixa path + método
   + forma de request/response de cada endpoint `/bff/**` que o Flutter consome — bate no
-  HTTP real (inclusive `SecurityConfig`), não MockMvc. `JavaMailSender` é mockado
-  (`@MockitoBean`) e `RECAPTCHA_SECRET_KEY` é forçada vazia via `@TestPropertySource` para
-  não depender de SMTP/Google reais.
+  HTTP real (inclusive `SecurityConfig`), não MockMvc. Desde a #32 não há mock de `JavaMailSender` (o monólito
+  não tem SMTP); `RECAPTCHA_SECRET_KEY` é forçada vazia via `@TestPropertySource` para não depender do Google real. **Sem mudança de
+  expectativa na #33**: as chamadas de reserva/capacidade vão ao `FakeReservationServer` (HTTP de verdade).
 - Não há testes unitários isolados; tudo é de integração com banco (exceto os mocks pontuais
   do `HttpContractTest` para dependências externas).
 - `LayerBoundaryArchTest` e `ModuleBoundaryArchTest` (ArchUnit) são a exceção: não usam Spring/banco, só analisam bytecode.
@@ -104,7 +211,7 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
 - `maven-checkstyle-plugin` roda no `mvn test`/`mvn clean test` (preso na fase `validate`,
   antes de compilar) — por isso `./run-tests.sh` já quebra se uma regra travar. Config em
   `checkstyle.xml`, baseline de violações antigas em `checkstyle-suppressions.xml` (ambos na
-  raiz de `Backend/`).
+  raiz de `Backend/`, valendo para todos os módulos; as `suppress` casam por nome de arquivo, não por caminho).
   - Rodar isolado (sem subir o resto da suíte): `mvn checkstyle:check` (ou `mvn validate`).
     Via Docker, sem precisar do container `db`:
     ```
@@ -126,13 +233,16 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
     violavam no dia em que a regra entrou ganham uma linha em `checkstyle-suppressions.xml`
     (não corrigidos por essa issue — é o próximo passo). Corrigiu um arquivo da baseline?
     Remova a linha dele do suppressions.
-- ArchUnit (`archunit-junit5`, em `src/test/java`), dois testes, sem baseline (zero violações):
+- ArchUnit (`archunit-junit5`, em `monolito/src/test/java`), dois testes, sem baseline (zero violações):
   - `LayerBoundaryArchTest` trava se o pacote `gateway` (controllers) depender direto de uma classe
     `@Repository` (DAO) ou de JDBC cru
     (`java.sql.Connection/PreparedStatement/Statement/ResultSet/DriverManager`) — acesso a dado
     deve passar por `Service`.
-  - `ModuleBoundaryArchTest` (issue #23) trava: (a) `identity`/`catalog`/`reservation`/
-    `notification`/`gateway` só dependem de outro módulo por `<modulo>.api` (nenhum módulo importa `gateway.*`);
+  - `ModuleBoundaryArchTest` (issue #23) trava: (a) `identity`/`catalog`/
+    `gateway` só dependem de outro módulo por `<modulo>.api` (nenhum módulo importa `gateway.*`; `notification` saiu do
+    monólito na #32 e o `reservation` na #33: nada depende do pacote `com.gerenciador.eventos.reservation`, e o `reservationclient`
+    — a lib de contrato — não depende de módulo do monólito); (f) `monolito_nao_envia_email` (#32): nada do monólito depende de
+    `org.springframework.mail..`/`jakarta.mail..` — o e-mail é do serviço `notification`;
     (b) `shared` não depende de módulo de domínio; (c) todo código de produção mora num módulo (nada volta para
     `POJO/Repository/Service`); (d) `<modulo>.api` não depende de classe interna de módulo nenhum
     (só de outros `*.api`, `shared` e libs); (e) `@RestController`/`@Controller` só no `gateway`
@@ -143,34 +253,37 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
 
 ## Módulos (pacote `com.gerenciador.eventos`) — issues #23 e #25
 
-Pacotes-por-serviço, ainda no mesmo processo/deploy/banco (schema `public`): é a preparação da
-Fase 5 para a decomposição em microsserviços (CQRS/ES na Fase 6, extração na Fase 7). Dentro de
+Pacotes-por-serviço, no mesmo processo/deploy/banco (schema `public`) do monólito: é a preparação da
+Fase 5 para a decomposição em microsserviços (CQRS/ES na Fase 6, extração na Fase 7: o `notification` saiu na #32 e o `reservation`
+na #33 — os dois NÃO estão em `monolito/`; o que sobrou lá é `identity`, `catalog` e `gateway`). Dentro de
 cada módulo as classes ficam **planas** (sem `POJO/`/`Repository/`/`Service/`), mais o subpacote
 `api`: as **interfaces e DTOs públicos** que os outros módulos podem usar.
 
 ```
 Main.java        entrypoint @SpringBootApplication (único; o component scan cobre os subpacotes)
 identity/        UserService, UserRepository, EmailVerificationService, PendingVerification(+Repository),
+                 IdentityNotifications (#32: appenda o evento que pede o e-mail; o monólito não envia mais),
                  security/ (JwtUtil, JwtAuthenticationFilter, AuthorizationUtil, SecurityConfig)
-  api/           User, UserApi, EmailVerificationApi, TokenApi, HostAuthorizationApi
+                 MyWalletService + MyWalletRepository (#33: a carteira é extensão 1:1 de `users`, criada por trigger; ficou em `public`)
+  api/           User, UserApi, EmailVerificationApi, TokenApi, HostAuthorizationApi, MyWallet, MyWalletApi
 catalog/         EventService, EventRepository, EventPresenterRepository (leitura),
                  CatalogEventWriter (command side ES, #28), CatalogEventProjection (projeção inline), EventPayloads
   api/           Event, EventApi
-reservation/     EventWalletService, MyWalletService, ReservationExpiryService,
-                 IdempotencyKeyRetentionService (job de retenção, #130),
-                 EventCapRepository, EventWalletRepository, MyWalletRepository, EventAvailabilityRepository,
-                 IdempotencyKeyRepository, CapacityReserver + ReservationWriter (interfaces internas, #24),
-                 ReservationEvents (eventos do stream reservation.wallet, #29),
-                 EventAvailabilityProjection + EventAvailabilityConsumer (projeção assíncrona de disponibilidade, #29)
-  api/           EventCap, EventWallet, MyWallet, EventCapacityApi, EventWalletApi, MyWalletApi,
-                 IdempotencyConflictException
-notification/    EmailNotificationService, EmailTemplates (envio de e-mail / JavaMailSender)
-  api/           EmailNotificationApi
-shared/          DatabaseConnection, CorsConfig, SchedulingConfig (infra sem domínio)
-  events/        infra de event sourcing sem domínio (#27): EventEnvelope, NovoEvento, EventStore, OutboxRelay,
-                 IdempotentConsumer + Projection, EventReplay, EventSnapshots/Snapshot, EventsKafkaConfig
+reservation/     (#33: SAIU do monólito, é o módulo Maven/serviço `reservation/` — ver "Serviço reservation")
+                 EventWalletService, ReservationExpiryService, IdempotencyKeyRetentionService (job de retenção, #130),
+                 EventCapRepository, EventWalletRepository, EventAvailabilityRepository, IdempotencyKeyRepository,
+                 CapacityReserver + ReservationWriter (interfaces internas, #24), ReservationEvents (stream reservation.wallet, #29),
+                 EventAvailabilityProjection + EventAvailabilityConsumer (#29), CatalogReconciliationConsumer (#33),
+                 ReservationController + EventCapController + InternalApiExceptionHandler (API interna HTTP, #33)
+reservationclient/ (lib `reservation-client`, #33) ReservationClient (HTTP, pool), ReservationClientConfig (o bean, no monólito)
+  api/           EventCap, EventWallet, IdempotencyConflictException (DTOs/erros do contrato), EventCapacityApi, EventWalletApi
+shared/          DatabaseConnection (módulo `shared`, lib), CorsConfig, SchedulingConfig (monólito) (infra sem domínio)
+  events/        (módulo `shared`) infra de event sourcing sem domínio (#27): EventEnvelope, NovoEvento, EventStore, OutboxRelay,
+                 IdempotentConsumer + Projection, EventReplay, EventSnapshots/Snapshot, EventsKafkaConfig,
+                 NotificationEvents (#32: contrato do stream identity.notification)
 gateway/         BffUserController, BffEventController, BffEventWalletController, BffMyWalletController,
-                 BffSeedController (@RestController, paths /bff/**) + SeedData; roteia e agrega, sem domínio
+                 BffSeedController (@RestController, paths /bff/**) + SeedData; roteia e agrega, sem domínio.
+                 EventWalletGateway (#33): confere carteira/evento NO monólito e chama o reservation por HTTP; decide o braço cas/naive
 ```
 
 - **Regra de fronteira**: um módulo (e o `gateway`) só enxerga outro módulo pelo pacote `<modulo>.api`;
@@ -178,15 +291,12 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
   domínio (módulos dependem dele). Dado de outro módulo entra por id ou DTO da `api`. Travado por
   `ModuleBoundaryArchTest` (ver "Quality gates"); as FKs do SQL ficam como estão (schema é Fase 7).
 - **Grafo de dependências** (sempre via `api`):
-  `gateway → identity, catalog, reservation`;
-  `identity → notification`;
-  `catalog → identity` (`UserApi.exists`, valida `creator_id`) e `catalog → reservation`
-  (`EventCapacityApi`: `EventRepository.save` cria o `eventcap` na **mesma transação JDBC** do
-  `event`, por isso a `Connection` aparece na interface; a hidratação lê a capacidade);
-  `reservation → catalog` (`EventApi.exists`, "Evento não encontrado").
-  Ciclo `catalog ↔ reservation` aceito por ora, e só pela `api` de cada lado; a interface fica no
-  módulo dono do dado (`eventcap` é de `reservation`, `event` é de `catalog`). Some quando a
-  `reservation` ganhar read model próprio de eventos (Fase 6/7).
+  `gateway → identity, catalog` e, por **HTTP** (`reservationclient`), o serviço `reservation`;
+  (`identity → notification` acabou na #32: o `notification` é outro processo e se fala com ele só por evento no backbone);
+  `catalog → identity` (`UserApi.exists`, valida `creator_id`) e `catalog → reservation` por **HTTP**
+  (`EventCapacityApi` da lib `reservation-client`: criar a capacidade DEPOIS do commit do evento, `updatePolicy`, hidratar
+  `lot_quantity`/`quantity` — `findByCreatorId` e a busca em UMA chamada em lote —, remover no cancelamento). O ciclo `catalog ↔ reservation` acabou na #33: o `reservation` não enxerga o
+  catálogo (a existência do evento é o `eventcap` dele, mais a conferência do gateway), só recebe o `EventCreated` do tópico.
 - **`gateway` é módulo, não container (issue #25)**: o antigo pacote `bff` virou `gateway` (roteamento +
   agregação) **dentro do mesmo processo/deploy do monólito**; container próprio só na Fase 7. Os paths HTTP
   continuam `/bff/**` (o contrato do Flutter não mudou; `HttpContractTest` é o juiz). Os controllers só
@@ -195,11 +305,12 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
   rota/segurança de `/bff/**` **continuam em `identity/security/SecurityConfig`** (única cadeia
   deny-by-default, auditável num arquivo só; movê-las pro `gateway` exigiria um contrato de
   "contribuição de rotas" com bean/interface novos sem mudar comportamento).
+- **Serviço fora do monólito não volta a ser pacote**: `nada_depende_do_codigo_do_servico_reservation` (ArchUnit) trava.
 - **Decisões**: `SecurityConfig` fica em `identity/security` (conhece as rotas e o filtro JWT, não é
   infra pura — em `shared` violaria a regra); `SeedData` fica em `gateway` (é o corpo do
   `POST /bff/seed` e agrega `User`+`Event`+`EventWallet` de três módulos); o envio de e-mail saiu
-  de `EmailVerificationService` para `notification` (o cadastro em duas fases continua em
-  `identity`); as `*Api` são implementadas pelas classes que já existiam (`UserService implements
+  de `EmailVerificationService` para `notification` (#23) e, na #32, de dentro do monólito (o cadastro em duas fases continua em
+  `identity`, que agora só publica o evento); as `*Api` são implementadas pelas classes que já existiam (`UserService implements
   UserApi`, `EventCapRepository implements EventCapacityApi`...), sem classe nova de adaptação.
 - Módulo novo ou chamada entre módulos nova → exponha só o necessário em `<modulo>.api`.
 
@@ -223,10 +334,10 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
   (ver `db/CLAUDE.md`), não crie entidade.
 - **POJO ≠ coluna.** Ex.: `Event` usa `is_EAD`; a tabela `event` tem `ead`. A conversão é
   feita à mão em cada repository — ao mexer num campo, ajuste o mapeamento nos dois lados.
-- **`Event` é um POJO de transporte.** Ele ainda carrega `lot_quantity` (= `eventcap.capacity`),
+- **`Event` é um POJO de transporte.** Ele ainda carrega `lot_quantity` (= `eventcap.capacity`, do serviço reservation, lido por HTTP),
   `quantity` (= `eventcap.quant`), `buy_time_limit` e `presenters`, mas esses campos **não
-  são colunas de `event`**: `EventRepository.save` os grava nos agregados `eventcap` /
-  `eventpresenter` (numa transação; o `eventpresenter` pela projeção do `EventCreated`, ver "Catalog em CQRS + Event Sourcing"), e `EventService.hydrate(...)` os relê de volta ao sair
+  são colunas de `event`**: `EventRepository.save` grava o `eventpresenter` (pela projeção do `EventCreated`, ver "Catalog em CQRS + Event Sourcing") e
+  `EventService.createEvent` cria o `eventcap` no serviço reservation por HTTP logo DEPOIS do commit; `EventService.hydrate(...)` os relê de volta ao sair
   do service. `lot_quantity` na criação: **`>= 1`** (capacidade fixa) ou **`-1`** (sem limite
   de vendas). Constante `EventCap.UNLIMITED == -1`; use `EventCap.isUnlimited()`.
   `buy_time_limit` não informado (`null`) ⇒ `EventService.applyDefaults` iguala à data do
@@ -234,18 +345,20 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
 - **Busca de eventos sem N+1 (issue #109).** `EventService.searchEvents` filtra no banco
   (`EventRepository.searchByName`: `lower(event_name) LIKE lower(?) ESCAPE '\'`, `%`/`_`/`\` do
   termo escapados; termo em branco = todos, ordem `event_id`) e hidrata em lote
-  (`EventService.hydrateAll` → `EventCapRepository.findByEventIds` /
-  `EventPresenterRepository.findByEventIds`, `event_id = ANY(?)`): 3 consultas no total,
+  (`EventService.hydrateAll` → `EventCapacityApi.findByEventIds` (UMA chamada HTTP ao reservation, `ids=1,2,3`) /
+  `EventPresenterRepository.findByEventIds`, `event_id = ANY(?)`): 2 consultas + 1 chamada no total,
   independente do nº de eventos. `hydrate` (1 evento) segue igual; `findByCreatorId` ainda faz N+1
   (#61). Coberto por `EventSearchTest`.
 - **Agregado `eventcap` isolado.** `EventCapRepository` faz a reserva de vaga por `UPDATE`
   condicional atômico (`tryReserve` → `false` = lotado) e a devolução (`release`). Os métodos
-  que precisam ser atômicos com `walletevent` recebem a `Connection` da transação do service.
+  que precisam ser atômicos com `walletevent` recebem a `Connection` da transação do service. (Desde a #33 isso é do **serviço reservation**, schema `reservation`.)
   Para evento ilimitado (`capacity = -1`) `tryReserve`/`release` são no-op e
   `EventWalletService` trata a reserva como sempre permitida.
-- Nomes de tabela em minúsculas: `users`, `event`, `eventcap`, `eventpresenter`, `mywallet`,
-  `walletevent`, `pending_verifications`, `event_availability`, `idempotency_key`, `event_store`,
-  `event_outbox`, `event_snapshot`, `projection_checkpoint`.
+- Nomes de tabela em minúsculas. **`public`** (monólito): `users`, `event`, `eventpresenter`, `mywallet`, `pending_verifications`,
+  `event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint`. **`reservation`** (#33): `eventcap`, `walletevent`,
+  `event_availability`, `idempotency_key` e o event store próprio (`event_store`, `event_outbox`, `event_snapshot`,
+  `projection_checkpoint`). **`notification`** (#32): `processed_event`. Sempre qualificar com o schema nas queries (nada de
+  `search_path`: o Supavisor em transaction mode proíbe).
 
 ### Pooler (Supavisor, transaction mode) — issue #19
 
@@ -269,7 +382,8 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
   são todos de `UPDATE ... SET` / `ON CONFLICT DO UPDATE SET`; a única outra exceção (#27) é o
   `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ` do `EventReplay`, que vale **só para a transação** em que é o
   primeiro statement (não é estado de sessão, some no commit/rollback). Fica proibido
-  `conn.setTransactionIsolation(...)`: no PgJDBC ele grava estado de sessão. Não há `connectionInitSql` no Hikari
+  `conn.setTransactionIsolation(...)`: no PgJDBC ele grava estado de sessão. Não há `search_path` (as tabelas vão sempre qualificadas
+  com o schema do serviço) nem `connectionInitSql` no Hikari
   nem `setReadOnly`/`setCatalog`/`setSchema`/`setTransactionIsolation`. O único estado de conexão
   mexido é `setAutoCommit(false)` → `commit`/`rollback` → `setAutoCommit(true)` (em
   `EventWalletService`, `ReservationExpiryService`, `CatalogEventWriter`, e, em `shared/events`, `EventReplay`, `IdempotentConsumer`, `OutboxRelay`),
@@ -278,16 +392,19 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
   `DatabaseConnection` só devolve conexões do `DataSource`. **Código novo não pode** depender de
   estado de sessão (`SET`, advisory lock de sessão, `LISTEN`, temp table, prepared statement
   nomeado): em transaction mode ele vaza entre clientes ou some.
-- **Dimensionamento** (números literais em `Projeto/supabase/docker-compose.pooler.yml`): Hikari `maximum-pool-size` 1000
-  (default) / `minimum-idle` 5 → `POOLER_MAX_CLIENT_CONN=1500` (>= Hikari; senão o Supavisor recusa
-  cliente). Conexões reais ao Postgres: `POOLER_DEFAULT_POOL_SIZE=45` para o `max_connections=100`
+- **Dimensionamento** (números literais em `Projeto/supabase/docker-compose.pooler.yml`): `POOLER_MAX_CLIENT_CONN=1500` tem de ser >= a
+  SOMA dos Hikari de todos os serviços no tenant (senão o Supavisor recusa cliente): **reservation 1000 + monólito 350 + notification 3
+  = 1353** (desde a #33; antes era um Hikari de 1000 só, no monólito). Conexões reais ao Postgres: `POOLER_DEFAULT_POOL_SIZE=45` para o `max_connections=100`
   do compose padrão (+ `DB_POOL_SIZE=5` do próprio Supavisor, 3 reservadas do superuser,
   testes e psql); com `carga/rpm` (`max_connections=300`) o pool vai para 245 sozinho (override + `subir-host-rpm.ps1`). Ou seja,
   o `too many clients` não vem mais do Hikari, e sim do pool do Supavisor + o resto passar do
   `max_connections`.
+- **Outros clientes do pooler** (#32, #33): o `notification` (Hikari 3) e o `reservation` (Hikari 1000) entram pelo **mesmo tenant e o mesmo
+  usuário** do monólito e NÃO aumentam o pool real (a conta está em "Serviço notification" e "Serviço reservation"). Todo serviço novo
+  divide esses mesmos 45/245: documente o Hikari dele e refaça a conta antes de subir.
 - **Threads do Tomcat** (issue #124): `server.tomcat.threads.max` = 300 (env `SERVER_TOMCAT_THREADS_MAX`;
-  o default do Spring Boot é 200). Na configuração de carga: Tomcat 300, Hikari 1000, pool do Supavisor
-  245. Os testes de 2026-10-17 pelo pooler deram o mesmo teto de vazão com 200, 300 e 400 threads, mas 300
+  o default do Spring Boot é 200), **no monólito/gateway e no reservation**. Na configuração de carga o caminho quente é o `reservation`:
+  Tomcat 300, Hikari 1000, pool do Supavisor 245 (a tabela por serviço está em "Serviço reservation"). Os testes de 2026-10-17 pelo pooler deram o mesmo teto de vazão com 200, 300 e 400 threads, mas 300
   teve o menor p95 (matriz CAS N=200: 155 → 114 ms; escada 50k–70k: 180–319 ms contra 192–392 ms com 200).
   **Virtual threads ficam desligadas** (padrão; não há `spring.threads.virtual.enabled`): sobem a vazão
   (~99k efetivos), mas pioram o p95 — a prioridade é a menor latência. Coberto por `TomcatThreadsTest`.
@@ -303,7 +420,16 @@ Infra genérica de CQRS + Event Sourcing em `shared/events` (sem domínio; a #28
 seguinte, e a #29 converte o lado wallet de `reservation`, só appendando eventos com o seu `streamType`). Broker: **Redpanda** (container
 `gerenciador-redpanda`, `redpanda:9092` na rede `gerenciador-net`, sem porta no host; imagem com tag fixa no compose;
 `docker exec gerenciador-redpanda rpk topic list` para inspecionar). Cliente: `spring-kafka` (versão do Boot).
-Tudo em `public` por ora (schema por serviço é a Fase 7).
+**Um event store POR SERVIÇO (#33):** a infra é parametrizada pelo schema do serviço (`events.schema`, env não exposta; default `public` =
+o monólito; `reservation` no `reservation/application.properties`). `EventStore.tabela("event_store")` devolve o nome qualificado e o
+`OutboxRelay`, o `IdempotentConsumer` (que confere o `eventId` e lê/avança o checkpoint), o `EventReplay` (tabelas vivas e sombra) e o
+`EventSnapshots` usam o mesmo, então o `reservation` tem `reservation.event_store`/`event_outbox`/`event_snapshot`/`projection_checkpoint`
+e **nenhum serviço lê a tabela de outro** (o consumer do `reservation` não olharia o `public.event_store` do catalog). O **advisory lock do relay é
+por schema** (`OutboxRelay.lockKey`: `public` mantém `LOCK_KEY`; os outros derivam do nome), senão os relays de serviços diferentes se
+serializariam (o lock é do BANCO) e inflariam o lag medido. Streams: `catalog.event` e `identity.notification` (#32; ver "Serviço
+notification": a única exceção à regra de não pôr dado pessoal no payload) em `public.event_store`; `reservation.wallet` em
+`reservation.event_store` (a migração `20261025` move os que já existiam). Registrado também na ADR do backbone.
+Esta infra vive no módulo Maven `shared` (lib); os testes dela, em `monolito/src/test` (schema `public`) e, para o schema `reservation`, nos do módulo `reservation`.
 
 - **`EventStore.append(Connection, NovoEvento)`**: um único statement (`INSERT ... ON CONFLICT (stream_type, stream_id,
   version) DO NOTHING` + `INSERT` em `event_outbox` num CTE). Devolve `Optional<EventEnvelope>`: **vazio = a versão já
@@ -349,11 +475,12 @@ Tudo em `public` por ora (schema por serviço é a Fase 7).
     (`40P01`, tratado como `SQLException` transitória); em produção há 1 consumer e 1 partição, e na sobreposição de consumers de um
     rebalance o deadlock se recupera pelo retry. Quando o lote falha, o prefixo comitado não aparece no `events.lag` (o log só sai
     com o lote bem-sucedido).
-- **`EventReplay`**: `rebuild(projecao, streamType, schema)` cria o schema-sombra (`CREATE TABLE ... (LIKE public.t
+- **`EventReplay`**: `rebuild(projecao, streamType, schema)` cria o schema-sombra (`CREATE TABLE ... (LIKE <schema do serviço>.t
   INCLUDING ALL)`), reaplica todos os eventos do tipo por `global_position` e `divergentTables` compara com a viva
   (`EXCEPT ALL` nos dois sentidos); `drop(schema)` derruba. Roda em **`REPEATABLE READ`** (`SET TRANSACTION` como primeiro
   statement): `global_position` é ordem de alocação e paginar por ela em READ COMMITTED (snapshot novo a cada página) pularia o
-  evento que comita no meio; assim todas as páginas leem o mesmo snapshot (a sombra = o log no início da leitura).
+  evento que comita no meio; assim todas as páginas leem o mesmo snapshot (a sombra = o log no início da leitura). A sombra copia as tabelas
+  vivas do schema do serviço (`LIKE <events.schema>.t`) e não pode ter o nome do schema vivo.
   `divergentTables(projecao, schema)` compara `SELECT *`; `divergentTables(projecao, schema, colunasComparaveis)` (#28)
   recebe um mapa tabela -> colunas e compara só elas (tabela fora do mapa, ou com lista vazia = `SELECT *`), para o que o
   log não determina (carimbo `now()`, `applied_at = clock_timestamp()`, `created_at`/`updated_at`, blob fora do ES);
@@ -375,6 +502,78 @@ Tudo em `public` por ora (schema por serviço é a Fase 7).
   `EVENTS_CONSUMER_GROUP` do `run-tests.sh` — não valeria). Um único `group.id` por ambiente; `auto.offset.reset=earliest`
   fixo (um group novo não pula nada; o checkpoint por stream e a conferência do `eventId` descartam o que já foi aplicado).
 
+## Serviço notification — issue #32 (Fase 7: primeira extração)
+
+O envio de e-mail saiu do monólito e virou o módulo/serviço `notification` (`Backend/notification/`, README próprio): processo,
+imagem (`notification/Dockerfile`), container (`gerenciador-notification`) e schema (`notification`) próprios, sem porta HTTP.
+O `gateway` e o contrato `/bff/**` não mudaram.
+
+- **Fluxo**: `identity` (monólito) NÃO fala com SMTP. `EmailVerificationService.requestEmailVerification`/`resendVerificationCode`
+  e `UserService.requestPasswordResetMfa` gravam o código (`pending_verifications` / `users.password_reset_mfa_code`) e, **na MESMA
+  transação JDBC**, appendam um evento em `event_store` + `event_outbox` (`IdentityNotifications`, que usa o `EventStore` da
+  `shared`). O relay (já ligado no compose) publica no tópico `identity.notification`; o `notification` consome e envia.
+  Cadastro e login **não dependem** do serviço: parado, o evento espera no outbox/tópico e o e-mail sai quando ele volta
+  (coberto por `IdentityNotificationEventsTest` e `NotificationConsumerTest`).
+- **Contrato** (`shared.events.NotificationEvents`): `streamType` = `identity.notification` (= nome do tópico, 1 partição);
+  cada notificação é **um stream novo de uma versão só** (`streamId` = UUID, `version` 1, chave da mensagem = o `streamId`).
+  `eventType`: `VerificationCodeRequested` e `PasswordResetMfaRequested`, ambos com payload `email`, `userName`, `code`,
+  `expirationMinutes` e `expiresAt` (ISO-8601, quando o código vence), `schemaVersion` 1, no envelope JSON da ADR do backbone. A
+  validade vem das constantes que já existem (`verification.code.expiration.minutes` no cadastro; `NotificationEvents.MFA_VALIDADE`
+  no MFA, usada também no SQL de `users.password_reset_mfa_expiration`): nada de número duplicado. Tipo novo: constante em
+  `NotificationEvents` + `if` no consumer; mudança incompatível de payload incrementa `schemaVersion`.
+- **Exceção deliberada à regra "sem dado pessoal no payload" — decisão do usuário (2026-10-21)** (ADR do backbone, seção 3): o
+  e-mail só pode ser montado com destinatário e código, então estes eventos levam `email`, `userName` e o código de uso único.
+  A senha e o hash NUNCA entram. **Retenção do dado pessoal = validade do código + 30 s** (`NotificationEvents.CARENCIA`), nas
+  três cópias: (1) **`event_store`**: `identity/NotificationEventRetentionService` (`@Scheduled` a cada
+  `notification.events.retention.scan.ms`, default 30 s, env `NOTIFICATION_EVENTS_RETENTION_SCAN_MS`; `run-tests.sh` estica para
+  1 h) apaga, em lotes de 1000, as linhas do stream cujo `payload.expiresAt` venceu há mais de 30 s e que **já saíram do
+  `event_outbox`** (cadastro: 5 min 30 s; MFA: 15 min 30 s; evento sem `expiresAt` conta como vencido em `occurred_at`); o
+  stream tem 1 versão por stream e nunca passa por replay/projeção, e a "imutabilidade" do `event_store` é convenção (a tabela
+  não tem trigger nem REVOKE), então nada quebra; (2) **tópico `identity.notification` e `.DLT`**: `retention.ms` = maior
+  validade + 30 s = 15 min 30 s (`NotificationEvents.RETENCAO_TOPICO`, declarado por `NotificationEvents.topic()` /
+  `deadLetterTopic()` nos DOIS lados, com `spring.kafka.admin.modify-topic-configs=true` para valer também no tópico que já
+  existe) e `segment.ms` = 5 min (o broker só apaga segmento FECHADO; sem isso o `retention.ms` não teria efeito, então o dado
+  some em até ~20 min, não em 15 min 30 s exatos). A validade do cadastro tem de ser `<=` a do MFA; (3) **consumer**: descarta, com
+  log e sem enviar, evento cujo código já venceu (e-mail com código vencido é inútil). O `.DLT` guarda a mensagem original (e
+  headers de exceção que podem trazer o endereço), por isso a mesma retenção curta.
+- **Consumer** (`NotificationConsumer`): `@KafkaListener` com `idIsGroup = false`, group próprio `notification`
+  (`NOTIFICATION_CONSUMER_GROUP`), ack manual. Por mensagem, numa transação de banco: `INSERT INTO notification.processed_event
+  (event_id, ...) ON CONFLICT DO NOTHING` (rowcount 0 = reentrega, descarta) → envia o e-mail → commit → ack. Envio que falha
+  desfaz a transação (sem checkpoint) e a mensagem volta. **Não usa o `IdempotentConsumer` da `shared`**: ele confere o
+  `event_id` contra `public.event_store` e preenche buraco relendo o log, ou seja, depende de tabelas do monólito; o serviço
+  extraído não lê o banco de ninguém. Reusa da `shared` o envelope, o `DatabaseConnection` e a política de erro/DLT
+  (`EventsKafkaConfig`, importada por `@Import`).
+- **Política de erro**: SMTP fora/banco fora = transitório, retry exponencial sem limite e sem DLT (loga ERROR a partir da 10ª
+  tentativa). Payload inválido e **destinatário recusado de vez pelo SMTP** (`SendFailedException` com `invalidAddresses`, ou
+  `MailParseException`) = `identity.notification.DLT` direto, sem retry — senão um e-mail digitado errado travaria todos os
+  seguintes (tópico de 1 partição). **Exceção:** recusa por culpa do REMETENTE (quota diária do Gmail `550 5.4.5`, limite de taxa:
+  o texto casa `NotificationConsumer.CAUSA_DO_REMETENTE`: "sending quota/limit", rate limit, `5.4.5`) também chega em
+  `invalidAddresses`, mas passa quando a quota volta, então continua reentregue; já "over quota" (`552 5.2.2`) é a caixa do
+  DESTINATÁRIO cheia e continua permanente. Tipo de evento desconhecido: aviso no log e ack, sem enviar. Código vencido: aviso no log e ack, sem enviar.
+  Evento sem `expiresAt`/`expirationMinutes` válidos: `.DLT`. **Poll**: `max-poll-records=10` e `ack-mode=manual_immediate`
+  (cada e-mail leva 1 a 3 s, até ~15 s com timeout; com os 500 do default um backlog grande estouraria o `max.poll.interval.ms` de
+  5 min e giraria em rebalance).
+- **Pool Hikari do serviço — a conta**: `maximum-pool-size` **3** / `minimum-idle` 1 (`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`
+  no compose; o default do `application.properties` do módulo também é 3). Tópico de 1 partição + 1 thread no listener ⇒ no máximo
+  **1** transação aberta por vez (ela segura a conexão durante o envio SMTP, timeouts de 5 s); 3 dá folga para reconexão. O
+  serviço usa o **mesmo tenant e o mesmo usuário do Supavisor** (`${POSTGRES_USER}.gerenciador-eventos`), então consome **de
+  dentro** do pool real de conexões ao Postgres (`POOLER_DEFAULT_POOL_SIZE` = 45 no compose padrão, 245 na configuração de
+  carga) que o monólito já usa: o teto **não cresce** (nem consome a folga do `max_connections`, que é para superuser, Supavisor,
+  suíte e `psql`). No transaction mode as 3 conexões de cliente só pegam uma conexão real durante a transação (1 em regime, segurada
+  durante o SMTP; 3 no pior caso) e a devolvem no commit; ou seja, no máximo 1 dos 245 fica ocupado por ele de cada vez, o que
+  tira uma conexão do monólito só enquanto o e-mail sai. O `POOLER_MAX_CLIENT_CONN` (1500) cobre a soma dos Hikari (1353 desde a #33: 1000 do `reservation` + 350 do monólito + 3; ver a seção do `reservation`).
+  **Não aumente** esse Hikari sem refazer a conta: ele divide o pool com o monólito, que é o que a carga mede.
+- **Config do serviço** (todas por env var, mesmos nomes do monólito; valores reais em `Projeto/.env`, nunca imprimir):
+  `SPRING_DATASOURCE_URL`/`_USERNAME`/`_PASSWORD`, `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`/`_MINIMUM_IDLE`,
+  `MAIL_USERNAME`/`MAIL_PASSWORD` (SMTP Gmail, `spring.mail.*` igual ao do monólito antigo), `SPRING_KAFKA_BOOTSTRAP_SERVERS`,
+  `NOTIFICATION_CONSUMER_GROUP` (default `notification`), `EVENTS_CONSUMER_RETRY_*`. O compose passa só esses nomes (interpolados do
+  `.env`; **sem `env_file`**, para o serviço não receber `JWT_SECRET`/reCAPTCHA). O monólito não lê mais `MAIL_*`.
+- **Pendências conhecidas**: (a) `notification.processed_event` cresce sem limpeza (com a retenção de 15 min 30 s do tópico, linhas
+  mais velhas que isso nunca mais serão reentregues e poderiam ser apagadas; `processed_event` não tem dado pessoal, só id e tipo);
+  (b) sem healthcheck no compose (o serviço não tem HTTP; `docker logs gerenciador-notification` e o lag do group `rpk group
+  describe notification` mostram a saúde); (c) o `backend` do compose recebe `MAIL_USERNAME`/`MAIL_PASSWORD` vazios (sobrepostos,
+  porque o `env_file` entrega o `.env` inteiro).
+
 ## Catalog em CQRS + Event Sourcing — issue #28
 
 Agregado `Event`: stream **`catalog.event`**, `streamId` = `partitionKey` = `event_id` (tópico `catalog.event`, relay
@@ -389,7 +588,8 @@ sem mudança de expectativa).
   **Sem PII**: só ids (`creatorId`) e dados do evento; nome de apresentador é dado público do evento, e-mail/telefone/senha
   nunca entram. **Capacidade é estado de `reservation`, não do stream `catalog`**: `eventcap` é o agregado relacional/CAS
   e não é projetado aqui. Só o `EventCreated` leva `capacity`/`buyTimeLimit` (valores iniciais), porque o `eventcap` nasce
-  na MESMA transação do append. Mudanças de capacidade (`updatePolicy`, outra transação, com `CHECK` que pode recusá-la
+  logo depois do commit, por chamada síncrona ao `reservation` (#33), e o `reservation` o reconcilia a partir deste mesmo evento se a
+  chamada falhar. Mudanças de capacidade (`updatePolicy`, outra transação, com `CHECK` que pode recusá-la
   depois do append) **não** entram no `EventUpdated`: o log imutável e o tópico nunca registram uma capacidade que o
   `eventcap` não aceitou (nem divergem em PUTs concorrentes). O histórico de capacidade, se for preciso, é do módulo `reservation`.
 - **`image_data` fica FORA do ES.** É blob (até 5 MB, base64 no JSON inflaria o `event_store` imutável), servido por
@@ -410,14 +610,23 @@ sem mudança de expectativa).
   envelope (a mesma função serve ao replay) e um command pode appendar vários eventos.
   - `createEvent`: o `event_id` sai da sequence da identity (`nextval`) antes do append, vira o `streamId`, e a projeção
     insere a linha com `OVERRIDING SYSTEM VALUE`. Numa transação: `EventCreated` v1 (+ apresentadores no payload) +
-    `event`/`eventpresenter` + `image_data` (se vier) + `eventcap`.
+    `event`/`eventpresenter` + `image_data` (se vier). **Depois do commit** (#33), `EventService` chama `PUT /internal/eventcaps/{id}` no
+    reservation (idempotente por `event_id`; read-your-writes) e relê a capacidade para a resposta. **Sem atomicidade distribuída — janela
+    de falha:** se a chamada falhar (reservation fora, rede), o evento JÁ existe sem `eventcap`; a criação NÃO quebra (responde com
+    `lot_quantity`/`quantity` da requisição, loga ERROR) e o reservation cria o `eventcap` sozinho pelo `EventCreated` do tópico
+    `catalog.event` quando voltar (`CatalogReconciliationConsumer`); reservar nesse intervalo falha com "Capacidade do evento não
+    configurada". Um `EventCreated` replicado depois de o evento sumir não ressuscita nada (group com `auto.offset.reset=latest`).
   - `updateEvent` **continua em 3 transações** (issue #60, não consertada aqui): (1) `EventUpdated` + `event` (+ `image_data`);
-    (2) `updatePolicy` de `reservation.api` (conexão própria; **não** gera evento de `catalog`: a capacidade é do
+    (2) `updatePolicy` (agora `PATCH /internal/eventcaps/{id}/policy` no reservation, HTTP; sem `eventcap` => 404 e o catalog o cria; **não** gera evento de `catalog`: a capacidade é do
     `eventcap`, e uma recusa do `CHECK`, HTTP 400, não deixa rastro no log; a não atomicidade com (1) é a de antes, #60); (3) `trocarApresentadores`: 1 `PresenterRemoved`/`PresenterAdded` por diferença
     (nomes aparados, sem vazios/repetidos; sem diferença não appenda). O append está sempre na transação da escrita que ele descreve.
   - `delete`: `EventCancelled` appendado e, **na mesma transação**, a projeção faz o `DELETE` de `event` que sempre existiu
-    (só `eventcap` cai por `CASCADE`; `event_availability` não tem FK desde a #29 e a linha fica órfã, inofensiva porque a leitura parte de `eventcap`). O stream fica no `event_store` como auditoria. `DELETE` que falha
-    (ex.: `walletevent` com `RESTRICT`) desfaz o `EventCancelled`. Evento inexistente = no-op, sem evento (204 como antes).
+    (`eventpresenter` cai por `CASCADE`). O `eventcap` e o `walletevent` não têm mais FK (outro schema): `EventService.delete` chama
+    `DELETE /internal/eventcaps/{id}` **antes** da transação, fora dela (sem segurar conexão nem lock durante a rede), e o serviço recusa com
+    **409 se existe reserva do evento em qualquer status** (o antigo `ON DELETE RESTRICT`), com o evento intacto. (Depois do commit não
+    preservaria o RESTRICT: o evento já teria sumido.) O stream fica no `event_store` como auditoria. Janela de
+    falha: se o reservation apagou a capacidade e a transação do catalog falha em seguida, o evento fica sem `eventcap`. Evento inexistente = no-op,
+    sem evento (204 como antes). `event_availability`, de um evento apagado, fica órfã e inofensiva (a leitura parte de `eventcap`).
 - **Read model** = `event`/`eventpresenter` (+ `event.version`), projeção **inline**: `HttpContractTest` lê o que acabou de
   escrever. A mesma `CatalogEventProjection` roda no command (schema `public`) e no replay (schema-sombra).
 - **Replay**: `EventReplay.rebuild(CatalogEventProjection, "catalog.event", sombra)` +
@@ -501,7 +710,9 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 
 ## Inscrição em evento — reserva em duas fases (CAS)
 
-`reservation/EventWalletService`:
+**Desde a #33 isto roda no serviço `reservation`** (ver "Serviço reservation"): o `gateway` (`EventWalletGateway`) confere carteira e evento no
+monólito e chama a API interna dele por HTTP; o CAS, a guarda e o append continuam exatamente como abaixo, só que dentro do outro processo
+e do schema `reservation`. `EventWalletService` (módulo `reservation`):
 
 1. `addLink` (`POST .../event-wallets`): valida, checa janela de compra (`eventcap.buy_time_limit`)
    e duplicidade (`existsActive` = pending/confirmed), então numa **transação** (uma `Connection`,
@@ -518,7 +729,7 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
    UPDATE afetou 1 linha — evita devolução dupla de vaga em cancelamento concorrente / corrida com o
    job. Reserva já `cancelled`/`expired`/inexistente ⇒ no-op silencioso (idempotente, sem evento).
 4. `reservation/ReservationExpiryService` — `@Scheduled` (a cada `reservation.expiry.scan.ms`,
-   default 30s; `@EnableScheduling` em `shared/SchedulingConfig`): varre `pending` vencidas e,
+   default 30s; `@EnableScheduling` em `ReservationApplication`, desde a #33): varre `pending` vencidas e,
    por transação, `expireIfStale` (condicional, não pisa em confirmação concorrente) + `release` + append de
    `ReservationExpired` (um por linha expirada, na transação dela; erro numa linha não para as outras).
 
@@ -572,7 +783,7 @@ tem os eventos `SlotReserved` (`{userId, eventId, expiresAt}`, metadata `{idempo
   aplicado; o `Get-AmostraLag` do harness de carga mede isso). Por evento, o consumer loga no logger `events.lag`:
   `relay_ms` (`publishedAt − occurredAt`), `consumer_ms` (aplicação − `publishedAt`) e `total_ms`
   (**DEBUG, desligado por padrão**: um log por evento no thread do único consumer infla o `consumer_ms` medido; ligue com `LOGGING_LEVEL_EVENTS_LAG=DEBUG` só na rodada que mede o lag, e veja o offset lag). Complemento: offset lag
-  do group (`docker exec gerenciador-redpanda rpk group describe gerenciador-eventos`). A amostra de `applied_at` só anda
+  do group (`docker exec gerenciador-redpanda rpk group describe reservation`). A amostra de `applied_at` só anda
   quando o consumer aplica evento: consumer parado não a atualiza, olhe também o offset lag. Falha transitória do consumer:
   retry sem limite, e a partir da 10ª tentativa (`events.consumer.retry.error-after-attempts`) cada tentativa loga em
   ERROR (`RetryListener` em `EventsKafkaConfig`).
@@ -654,28 +865,137 @@ seguido de `confirm`).
 
 ### Feature flag `reservation.readpath` — caminho CAS (default) vs. ingênuo (experimento)
 
-`addLink` tem dois caminhos de checagem de capacidade, escolhidos por
-`reservation.readpath` (`@Value` em `EventWalletService`, env `RESERVATION_READPATH`):
+`addLink` tem dois caminhos de checagem de capacidade, escolhidos **no gateway** (o monólito) por
+`reservation.readpath` (`@Value` em `EventWalletGateway`, env `RESERVATION_READPATH`, lida na subida; o `reservation` não tem a flag, recebe
+o modo no pedido: `POST /internal/reservations?path=cas|naive`):
 
-- **`cas`** (default) — o que está descrito acima: `EventCapRepository.tryReserve` (UPDATE
-  condicional atômico). Nunca oversella. **Zero mudança** de comportamento.
-- **`naive`** — lê a disponibilidade **defasada** via `EventAvailabilityRepository.findAvailable`
-  (`eventcap.capacity` menos `ativos` da projeção assíncrona `event_availability`, ver "Reservation em event sourcing") e
-  insere em `walletevent` **sem CAS** (só `reservePending`, **nunca** toca `eventcap`, mas appenda `SlotReserved`).
-  `== 0` ⇒ "Evento lotado"; `> 0` ou `-1` ⇒ segue. Oversella proporcional ao lag do consumer — é o **braço de
-  controle** do experimento de concorrência (issues #12/#13), não um bug.
+- **`cas`** (default) — **UMA chamada HTTP** `gateway → reservation`; lá dentro o que está descrito acima: `EventCapRepository.tryReserve`
+  (UPDATE condicional atômico). Nunca oversella.
+- **`naive`** — **DUAS chamadas HTTP**, uma depois da outra (`ReservationClient.addLink(..., naive = true)`): (1) `GET
+  /internal/events/{id}/availability` lê a disponibilidade **defasada** via `EventAvailabilityRepository.findAvailable`
+  (`eventcap.capacity` menos `ativos` da projeção assíncrona `event_availability`, ver "Reservation em event sourcing"); `== 0` ⇒ "Evento
+  lotado" **sem a 2ª chamada**; (2) `POST /internal/reservations?path=naive` insere em `walletevent` **sem CAS** (só `reservePending`, **nunca**
+  toca `eventcap`, mas appenda `SlotReserved`) e **não relê** a disponibilidade. A janela check-then-act inclui uma ida e volta de rede inteira:
+  é o que o braço de controle do experimento (ponto 3, Rodada 3) precisa mostrar. Oversella proporcional ao lag do consumer — é o **braço de
+  controle** do experimento de concorrência (issues #12/#13), não um bug. Diferença de ordem de erros vs. antes da #33: a disponibilidade é lida
+  ANTES do "Vínculo já existente", então quem já tem a vaga num evento esgotado vê "Evento lotado". Repetição com `Idempotency-Key` **do cliente**
+  e disponibilidade 0 consulta `GET /internal/reservations/replay` e devolve o resultado salvo (com chave gerada pelo servidor não consulta nada).
 
 O refresh por timer da Fase 2 (`ReadModelRefreshService`, `READMODEL_AVAILABILITY_REFRESH_MS`) **saiu** na #29: o lag deixou
 de ser variável controlada e passou a ser o lag real do consumer, medido (ver "Reservation em event sourcing"). Os dados da
 Rodada 1 (`docs/carga/resultados-*`) foram medidos com o refresh e ficam como histórico.
+
+## Serviço reservation — issue #33 (Fase 7: segunda extração)
+
+`eventcap` (CAS), `walletevent` (event sourcing, stream `reservation.wallet`), `idempotency_key` e a projeção `event_availability` saíram do
+monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, README próprio): processo, imagem (`reservation/Dockerfile`), container
+(`gerenciador-reservation`, API interna na `:8082` **sem porta no host**) e schema (`reservation`) próprios. O contrato `/bff/**` não mudou
+(`HttpContractTest` sem mudança de expectativa). Diagrama do salto: [`docs/arquitetura/fase7-servicos.md`](../../docs/arquitetura/fase7-servicos.md).
+
+- **Fronteira física.** `reservation` NÃO depende de `monolito` (só de `shared` e da lib de contrato `reservation-client`) e não lê tabela
+  de ninguém; o monólito não tem o código dele no classpath. **Schema `reservation`**: `eventcap`, `walletevent`, `event_availability`,
+  `idempotency_key` **sem nenhuma FK** (nem para `users`/`event`) e o **event store do serviço** (`event_store`, `event_outbox`,
+  `event_snapshot`, `projection_checkpoint`; `events.schema=reservation`, ver "Event store e backbone"). `mywallet` NÃO veio: é extensão 1:1
+  de `users` (criada por trigger) e continua em `public`, no `identity` (`MyWalletService`/`MyWalletApi`). O que as FKs garantiam virou
+  responsabilidade de quem chama: o **gateway** confere a carteira (`MyWalletApi.exists`) e o evento (`EventApi.exists`) antes de reservar,
+  e dentro do serviço a existência do `eventcap` é o "evento existe" ("Capacidade do evento não configurada" quando falta); "minhas reservas"
+  (`GET /internal/reservations/user/{id}`) devolve só `walletevent` (não há join: nunca houve). Migração a quente:
+  `db/migrations/20261025-reservation-schema.sql` (idempotente; `ALTER TABLE ... SET SCHEMA`, derruba as FKs, **move os streams `reservation.wallet`
+  do `public.event_store`/outbox/checkpoint/snapshot** — sem isso o consumer acharia buraco em todo stream antigo —, `lock_timeout` 5 s; pare o
+  backend e o reservation antes).
+- **API interna** (HTTP, `/internal/**`, só alcançável na rede `gerenciador-net`; o `userId` vai como **parâmetro
+  explícito** no corpo/query, a correção do IDOR #57 mexe só no gateway). **Autenticada por token de serviço compartilhado (volta 3 da #33):**
+  header `X-Internal-Token` com o valor de `INTERNAL_API_TOKEN`, enviado pelo `ReservationClient` em TODA chamada e exigido pelo
+  `InternalTokenFilter` do reservation em TODA requisição do serviço (sem filtro por caminho: o serviço não tem rota pública, o healthcheck é TCP, e
+  um teste do URI cru deixaria passar `/internal;x=1/...` e `/%69nternal/...`, que o Spring MVC normaliza) (comparação em tempo constante, `MessageDigest.isEqual`; **401** sem o header ou
+  com valor errado, sem chegar ao controller; o healthcheck é TCP e não passa por aí). **Sem valor default** (nem no código, nem no compose): o
+  reservation e o monólito **falham no boot** com mensagem clara se `INTERNAL_API_TOKEN` faltar. **Você precisa acrescentar ao `Projeto/.env`**
+  `INTERNAL_API_TOKEN=<valor aleatório>` (gerar: `openssl rand -hex 32`); o compose passa o mesmo valor aos dois containers
+  (`INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?...}`: o compose recusa subir sem a variável); o `run-tests.sh` usa o valor de teste `token-de-teste-nao-e-segredo`. Custo no caminho
+  quente (comparabilidade com o ponto 2): a leitura de um header e uma comparação de bytes. Testes: `ReservationApiE2ETest` (sem token,
+  token errado ou vazio -> 401 em toda rota e o PUT sem token não grava; token certo -> fluxo normal; sem a variável o filtro e o cliente
+  não sobem) e o `FakeReservationServer`, que responde 401 sem o header (prova que o cliente o envia). Erros: corpo = mensagem em texto puro; **400** regra de negócio
+  (`IllegalArgumentException`: "Evento lotado", "Vínculo já existente"...), **422** `Idempotency-Key` reusada com outro evento
+  (`IdempotencyConflictException`), **409** apagar capacidade de evento com reserva (`IllegalStateException` no cliente), **404** sem
+  `eventcap`/sem chave (o cliente devolve `null`), 500 o resto.
+  `POST /internal/reservations?path=cas|naive` (header `Idempotency-Key` opcional; 201 + header com a chave usada) ·
+  `GET /internal/reservations/replay?userId&eventId&idempotencyKey` · `POST /internal/reservations/confirm` ·
+  `DELETE /internal/reservations?userId&eventId` · `GET /internal/reservations/user/{userId}` ·
+  `GET /internal/reservations/active?userId&eventId` · `GET /internal/events/{eventId}/availability` (`{"available": n}`, defasada) ·
+  `PUT /internal/eventcaps/{id}` (idempotente por `event_id`: 201 criou / 200 já existia) · `GET /internal/eventcaps/{id}` ·
+  `POST /internal/eventcaps/batch` (ids no **corpo**: a busca de eventos hidrata a lista inteira, milhares de ids, e na query string
+  estouraria o limite de header de 8 KB do Tomcat) · `PATCH /internal/eventcaps/{id}/policy` (**404** se o evento não tem `eventcap`: o catalog
+  então o cria com os valores novos pelo PUT idempotente, em vez de a edição se perder para a reconciliação) · `DELETE /internal/eventcaps/{id}`.
+  Pedido malformado (JSON ilegível, parâmetro ausente/de tipo errado) responde **400**, não 500. Os DTOs são os da lib
+  `reservation-client` (`EventWallet`, `EventCap`), os mesmos dos dois lados.
+- **`eventcap` nasce por chamada síncrona do catalog** (decisão do usuário): depois do commit do evento, `PUT /internal/eventcaps/{id}`
+  (read-your-writes: reservar logo depois funciona). **Sem atomicidade distribuída** (janelas de falha em "Catalog em CQRS + Event Sourcing"): se a
+  chamada falha, o `CatalogReconciliationConsumer` cria o `eventcap` pelo `EventCreated` do tópico `catalog.event` (group `reservation-catalog`,
+  `auto.offset.reset=latest` — um group novo não relê o histórico, porque ids de evento se repetem depois de `TRUNCATE ... RESTART IDENTITY` —,
+  criação idempotente por `event_id` sem checkpoint, só liga com `RESERVATION_CATALOG_RECONCILIATION_ENABLED`).
+  Cancelar o evento chama `DELETE /internal/eventcaps/{id}` ANTES da transação do catalog, fora dela (409 se há reserva, o antigo
+  `RESTRICT`, antes de qualquer escrita; a chamada de rede não segura conexão nem o lock da linha `event`).
+- **Jobs dentro do serviço**: `ReservationExpiryService` (`reservation.expiry.scan.ms`), `IdempotencyKeyRetentionService` (#130) e o relay do
+  outbox do serviço; `@EnableScheduling` em `ReservationApplication`. Projeção `event_availability` + `EventAvailabilityConsumer` (lote da
+  #146) no serviço, group `reservation` (antes `gerenciador-eventos`; `EVENTS_CONSUMER_GROUP`).
+- **Costura `stock` + `wallet` (#47)** preservada: `CapacityReserver` (decrementar capacidade) e `ReservationWriter` (gravar reserva) seguem
+  como interfaces separadas dentro do serviço, orquestradas na mesma `Connection` pelo `EventWalletService`.
+- **Cliente `gateway → reservation`** (`ReservationClient`, lib `reservation-client`): Apache HttpClient 5 com **pool dimensionado para a
+  carga** (default do cliente é 5/20 e serializaria a medição): `reservation.client.max-connections` = **400** no total e por rota (>= as 300
+  threads do Tomcat do gateway; senão a fila se formaria no gateway), keep-alive, timeouts explícitos (conectar 2 s, esperar conexão livre do pool
+  5 s, resposta/leitura 10 s), `evict-idle` **20 s** (o evictor varre a cada 20 s e fecha o ocioso há mais que isso: uma conexão fica ociosa no máximo ~40 s) **menor** que o
+  `server.tomcat.keep-alive-timeout` do reservation (60 s), para um socket já fechado pelo servidor nunca virar 5xx (sem retry automático) e
+  `server.tomcat.max-keep-alive-requests=-1` (o default de 100 reconectaria sem parar), sem retry automático. Envs: `RESERVATION_SERVICE_URL`
+  (`http://reservation:8082` no compose), `RESERVATION_CLIENT_MAX_CONNECTIONS`, `RESERVATION_CLIENT_{CONNECT,CONNECTION_REQUEST,RESPONSE}_TIMEOUT_MS`,
+  `RESERVATION_CLIENT_EVICT_IDLE_MS`. **Efeito do timeout de resposta de 10 s sob sobrecarga (para a Rodada 3 vs. o ponto 2, que não tinha
+  timeout):** acima do limiar X uma reserva lenta vira **5xx no gateway** (`ResourceAccessException`) mas pode comitar no `reservation`; não afeta
+  o overselling (a verdade é lida do banco) nem o critério de X (p95 > 1 s dispara muito antes), mas quem compara taxa de erro entre os pontos
+  deve saber que o 5xx pode ser do timeout, não de falha do serviço.
+- **Configuração por serviço** (comparabilidade com o ponto 2; mexer quebra a comparação da Rodada 3):
+
+  | serviço | Tomcat (threads) | Hikari (max / min idle) | virtual threads | cliente HTTP |
+  |---|---|---|---|---|
+  | `reservation` (caminho quente) | **300** | **1000** / 5 | desligadas | — |
+  | `monolito` (gateway + catalog + identity) | 300 | **350** / 5 | desligadas | pool 400, resp. 10 s |
+  | `notification` | sem HTTP | 3 / 1 | — | — |
+
+  O monólito só faz as pré-checagens curtas (carteira, evento: uma conexão por vez por requisição, 300 threads + as do scheduler = 350) e
+  segura a thread durante a chamada HTTP; o `docker stats` dos dois na escada da Rodada 3 mostra se ele virou gargalo.
+- **A conta do pool do Supavisor.** Os três serviços usam o **mesmo tenant e o mesmo usuário** (`${POSTGRES_USER}.gerenciador-eventos`), então
+  todos consomem do MESMO pool real de conexões ao Postgres (`POOLER_DEFAULT_POOL_SIZE` = 45 no compose padrão, 245 na configuração de carga =
+  `max_connections` 300 − 55): ele **não cresce** por causa do `reservation` (outro usuário/tenant abriria outro pool e a soma teria de caber em
+  `max_connections − 55`; por isso não foi feito). Já as conexões de CLIENTE ao Supavisor somam os Hikari: **1000 (reservation) + 350 (monólito)
+  + 3 (notification) = 1353 <= `POOLER_MAX_CLIENT_CONN` 1500** (a #33 tirou 650 do Hikari do monólito, que era 1000 sozinho). Subir qualquer um
+  desses Hikari exige refazer esta conta.
+- **Custo por requisição (para a Rodada 3, vs. o ponto 2)**: `cas` — gateway: JWT + 2 SELECT curtos (carteira, evento) no Postgres do monólito
+  + **1 chamada HTTP**; reservation: 1 SELECT `eventcap`, 1 SELECT `existsActive` e a transação (`claim`, CAS, `reservePending`, append) —
+  as mesmas do ponto 2, menos carteira/evento que agora são do gateway. `naive` — gateway: os 2 SELECT + **2 chamadas HTTP**; reservation: GET =
+  1 SELECT `eventcap LEFT JOIN event_availability`; POST = SELECT `eventcap`, `existsActive` e a transação sem CAS. A rejeição "lotado" do naive
+  custa só a 1ª chamada. Criar evento: +1 chamada HTTP ao reservation (+1 `GET` para reler); listar/buscar eventos: +1 chamada HTTP em lote.
+- **Cobertura do caminho real `/bff → reservation`**: não há teste automatizado que passe pelo `/bff` até o serviço REAL (a suíte de integração
+  ponta a ponta é a #37, fora da #33). Até lá o caminho real é coberto pelo `ReservationApiE2ETest` (cliente real × serviço real) **mais** o
+  roteiro `smoke-reservation-servico-separado.sh`, que deve rodar antes da Rodada 3. O `FakeReservationServer` está alinhado ao serviço real nas
+  mensagens do confirm, na janela de compra, no CAS (seção crítica) e no PATCH sem `eventcap` (404), mas continua sendo um fake.
+- **Smoke da stack real**: `docs/testes-manuais/smoke-reservation-servico-separado.sh` (stack no ar): cria evento, 8 reservas simultâneas
+  no evento de capacidade 3 pelo gateway → serviço, e confere 3 x 201 + 5 x "Evento lotado" e o banco no schema `reservation`
+  (`eventcap.quant = 0`, 3 `SlotReserved` no `reservation.event_store`, nada no `public.event_store`). O roteiro antigo
+  `overselling-sob-concorrencia.sh` (#9) já não roda desde a #78/#79 (cria usuário sem JWT); só as queries foram qualificadas.
+- **Pendências conhecidas**: (a) o healthcheck do compose é "a porta aceita conexão" (`bash /dev/tcp`; o `/bin/sh` da imagem é dash e não tem
+  `/dev/tcp`), não há health HTTP; (b) o `HttpContractTest` do monólito roda contra
+  o servidor falso — o contrato com o serviço real é do `ReservationApiE2ETest` (e do smoke, até a #37); (c) `idempotency_key` e `event_availability` de eventos apagados
+  ficam órfãs (inofensivas); (d) a limpeza do banco entre blocos da carga (`E:\TCC\carga-overrides\limpar-banco.sh`, fora do repo) precisa
+  truncar o schema `reservation` e mover os groups `reservation`/`reservation-catalog` (lista no relatório da #33).
 
 ## Cadastro em duas fases + e-mail
 
 1. `POST /bff/users/request-verification` grava em `pending_verifications` (hash da senha +
    código de 6 dígitos, expira em 5 min — ver `application.properties`).
 2. `POST /bff/users/verify-email` confere o código e só então insere em `users`.
-3. `identity/EmailVerificationService` pede o envio ao módulo `notification` (`EmailNotificationApi`), que manda o código via SMTP Gmail (`spring-boot-starter-mail`),
-   templates em `notification/EmailTemplates`.
+3. `identity/EmailVerificationService` grava o código e, na mesma transação, appenda o evento `VerificationCodeRequested`
+   (`IdentityNotifications`); o **serviço `notification`** (processo à parte, #32) consome o tópico e manda o código via SMTP
+   Gmail (`spring-boot-starter-mail` só nele), templates em `notification/EmailTemplates`. O monólito não envia e-mail. O
+   `POST /bff/users/request-verification` responde igual; o e-mail chega de forma assíncrona (com o serviço fora, só depois que
+   ele voltar). O MFA do reset de senha segue o mesmo caminho (`PasswordResetMfaRequested`).
 4. reCAPTCHA v3: `POST /bff/users/verify-recaptcha` (em `gateway/BffUserController`) valida o
    token com a Google usando `RECAPTCHA_SECRET_KEY`.
 
@@ -683,32 +1003,39 @@ Rodada 1 (`docs/carga/resultados-*`) foram medidos com o refresh e ficam como hi
 
 - `application.properties` lê tudo de env var com default de dev:
   `SPRING_DATASOURCE_*` (inclui `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` e
-  `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`), `JWT_SECRET`, `JWT_EXPIRATION_SECONDS`, `MAIL_*`,
-  `RECAPTCHA_*`, `SERVER_TOMCAT_THREADS_MAX` (default `300`),
-  `RESERVATION_READPATH` (default `cas`; `naive` = braço de controle do experimento),
-  `IDEMPOTENCY_RETENTION_HOURS` (default `24`; prazo de retenção das chaves de idempotência),
-  `IDEMPOTENCY_RETENTION_SCAN_MS` (default `600000` = 10 min; intervalo do job de limpeza, issue #130),
-  `SPRING_TASK_SCHEDULING_POOL_SIZE` (default `3`; threads do scheduler dos `@Scheduled`. O default do Boot é
+  `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`), `JWT_SECRET`, `JWT_EXPIRATION_SECONDS`,
+  `RECAPTCHA_*` (`MAIL_*` saiu do monólito na #32: é do serviço `notification`), `SERVER_TOMCAT_THREADS_MAX` (default `300`),
+  `RESERVATION_READPATH` (default `cas`; `naive` = braço de controle do experimento; lido pelo **gateway**, no monólito),
+  `RESERVATION_SERVICE_URL` e `RESERVATION_CLIENT_*` (cliente HTTP do gateway, ver "Serviço reservation"),
+  **do serviço `reservation`** (mesmos nomes de antes, valores no `reservation/application.properties`): `SPRING_DATASOURCE_*` (Hikari default 1000),
+  `SERVER_TOMCAT_THREADS_MAX` (300), `SERVER_TOMCAT_MAX_KEEP_ALIVE_REQUESTS` (-1), `SERVER_TOMCAT_KEEP_ALIVE_TIMEOUT` (60s),
+  `EVENTS_*` (relay/consumer ligados no compose; `EVENTS_CONSUMER_GROUP` default `reservation`), `RESERVATION_CATALOG_RECONCILIATION_ENABLED`/`_GROUP`,
+  `RESERVATION_EXPIRY_SCAN_MS` (`reservation.expiry.scan.ms`, 30000), `IDEMPOTENCY_RETENTION_HOURS` (default `24`; prazo de retenção das chaves
+  de idempotência) e `IDEMPOTENCY_RETENTION_SCAN_MS` (default `600000` = 10 min; intervalo do job de limpeza, issue #130),
+  `NOTIFICATION_EVENTS_RETENTION_SCAN_MS` (default `30000`; intervalo do job que apaga do `event_store` os pedidos de e-mail
+  vencidos há mais de 30 s, #32),
+  `SPRING_TASK_SCHEDULING_POOL_SIZE` (default `3`, em cada serviço; threads do scheduler dos `@Scheduled`. O default do Boot é
   **1**, compartilhada pelo `OutboxRelay`, `ReservationExpiryService` e
-  `IdempotencyKeyRetentionService`: um purge em massa seguraria o relay e falsearia o lag medido do braço `naive`).
+  `IdempotencyKeyRetentionService` (no reservation) ou pelo relay e o `NotificationEventRetentionService` (no monólito): um purge em massa seguraria o relay e falsearia o lag medido do braço `naive`).
   Valores reais vêm de `Projeto/.env` — não commitar, não imprimir.
 - Backbone de eventos (issue #27; ver "Event store e backbone de eventos"), todos com default de dev:
   `SPRING_KAFKA_BOOTSTRAP_SERVERS` (default `localhost:9092`; `redpanda:9092` no compose e no `run-tests.sh`),
   `EVENTS_RELAY_ENABLED` (default `false`), `EVENTS_RELAY_INTERVAL_MS` (`50`), `EVENTS_RELAY_BATCH_SIZE` (`200`),
-  `EVENTS_CONSUMER_ENABLED` (default `false`), `EVENTS_CONSUMER_GROUP` (`gerenciador-eventos`),
+  `EVENTS_CONSUMER_ENABLED` (default `false`), `EVENTS_CONSUMER_GROUP` (`gerenciador-eventos` no monólito, que já não tem consumer; `reservation` no serviço),
   `EVENTS_CONSUMER_RETRY_INTERVAL_MS` (`1000`; base do backoff transitório e intervalo do retry do buraco),
   `EVENTS_CONSUMER_RETRY_MAX_ATTEMPTS` (`5`; só para o buraco irrecuperável), `EVENTS_CONSUMER_RETRY_ERROR_AFTER_ATTEMPTS` (`10`; a
   partir daí cada tentativa do retry transitório ilimitado loga em ERROR), `EVENTS_CONSUMER_BATCH_SIZE` (`500`, #146; tamanho máximo
   do lote do listener da projeção de disponibilidade, o `max.poll.records` dele; o compose o repassa), `EVENTS_SNAPSHOT_EVERY` (`100`). Sem segredo novo. As flags
   `EVENTS_RELAY_ENABLED`/`EVENTS_CONSUMER_ENABLED` têm default `false` (os testes ligam por `@SpringBootTest(properties=...)`); o
-  `docker-compose.yml` passa `EVENTS_RELAY_ENABLED=true` desde a #28 (o `catalog` appenda eventos) e `EVENTS_CONSUMER_ENABLED=true` desde a #29
-  (projeção assíncrona de disponibilidade). **Aviso:** com o `gerenciador-backend` no ar, o relay dele drena o `event_outbox` do
-  mesmo banco que o `run-tests.sh` usa e o consumer dele move `ativos`: o `run-tests.sh` **aborta** se o container estiver
-  rodando (`docker stop gerenciador-backend` antes).
+  `docker-compose.yml` passa `EVENTS_RELAY_ENABLED=true` ao monólito desde a #28 (o `catalog` appenda eventos) e, desde a #33, ao `reservation` (relay do
+  outbox dele) junto com `EVENTS_CONSUMER_ENABLED=true` (projeção assíncrona de disponibilidade, #29); o monólito passou a `EVENTS_CONSUMER_ENABLED=false`.
+  **Aviso:** com o `gerenciador-backend` ou o `gerenciador-reservation` no ar, o relay deles drena o `event_outbox` do
+  mesmo banco que o `run-tests.sh` usa e o consumer move `ativos`: o `run-tests.sh` **aborta** se algum dos containers estiver
+  rodando (`docker stop gerenciador-backend gerenciador-reservation` antes).
 - Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto
   (`management.endpoints.web.exposure.include=health`); `GET /actuator/health` público devolve
-  `{"status":"UP"}` (depende do Postgres). `management.health.mail.enabled=false` — o health do
-  SMTP derrubaria o status por falha de rede/credencial do Gmail. Cobertura em `HttpContractTest`.
+  `{"status":"UP"}` (depende do Postgres). O health do mail deixou de existir com o `spring-boot-starter-mail` (#32).
+  Cobertura em `HttpContractTest`.
 - `spring.jpa.show-sql=true` e log de SQL em DEBUG: saída verbosa é esperada em dev.
 
 ## Ao mexer aqui
@@ -717,6 +1044,8 @@ Rodada 1 (`docs/carga/resultados-*`) foram medidos com o refresh e ficam como hi
   controller do agregado correspondente. Desde o PR #79 (issue #78) o default dentro de `/bff/**` é
   **autenticado**: endpoint novo já nasce protegido; só adicione em `SecurityConfig` se ele
   precisar ser público (raro — normalmente já resolvido pelo padrão `GET /bff/events/**`).
+- Mudou a API interna do `reservation` (`/internal/**`) → atualize o `ReservationClient` (lib `reservation-client`), o
+  `ReservationApiE2ETest` (cliente real × serviço real) **e** o `FakeReservationServer` dos testes do monólito.
 - Mudou path, método ou forma de request/response de um endpoint consumido pelo Flutter →
   atualize `src/test/.../HttpContractTest` (trava a superfície pro harness de carga da
   issue #11) e o `frontend/CLAUDE.md`.

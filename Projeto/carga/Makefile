@@ -21,6 +21,7 @@ PASSO          ?= 30
 PCT_LEITURA    ?= 30
 PCT_CONFIRMA   ?= 100
 PCT_CONFIRMA_REAL ?= 60
+ROTULO         ?=
 SEMENTE        ?= 0
 # matriz do experimento (test-matriz): a senha do Postgres NUNCA entra aqui (o make ecoa a linha de
 # comando): defina PGPASSWORD no ambiente do PowerShell do gerador (ver README).
@@ -30,7 +31,7 @@ PGUSER         ?= admin
 PGDATABASE     ?= meu_banco
 GERADOR_IP     ?=
 # escada de carga (test-degraus, issue #14). POOL_HIKARI/MAX_CONN so REGISTRAM no CSV o que o host roda (o padrao do
-# pool do backend e 1000: se o host usar outro, informe). DEG_DURACAO: >= 60 e multiplo de 30. MAX_VUS = VUs do k6
+# pool do SERVICO reservation, o caminho quente desde a #33, e 1000: se o host usar outro, informe). DEG_DURACAO: >= 60 e multiplo de 30. MAX_VUS = VUs do k6
 # todos PRE-alocados (~1-2 MB cada): dimensione pela RAM do gerador.
 DEG_INICIO     ?= 12000
 DEG_PASSO      ?= 4000
@@ -42,7 +43,7 @@ CSV            ?=
 
 need_ip = $(if $(HOST_IP),,$(error Informe HOST_IP=<ip do host>))
 
-.PHONY: help setup-host setup-gerador host-rpm test-disputa test-rpm test-aleatorio test-disputa-real test-rpm-real test-aleatorio-real test-matriz test-matriz-cas test-matriz-naive report-matriz test-degraus report-degraus verificar-disputa verificar-rpm
+.PHONY: help setup-host setup-gerador host-rpm test-disputa test-rpm test-aleatorio test-disputa-real test-rpm-real test-aleatorio-real test-matriz test-matriz-cas test-matriz-naive report-matriz test-degraus report-degraus verificar-disputa verificar-rpm telemetria-host
 .DEFAULT_GOAL := help
 
 help:
@@ -61,6 +62,7 @@ help:
 	@Write-Host '  make verificar-rpm   PREFIXO=Ale-<id>                       (no HOST, logo apos a rodada)'
 	@Write-Host 'VERSAO REALISTA (cada aceita confirma ou nao ao acaso; as demais expiram em ~120 s)'
 	@Write-Host '  make test-disputa-real | test-rpm-real | test-aleatorio-real   (mesmos parametros dos testes 1-3; PCT_CONFIRMA_REAL=60)'
+	@Write-Host 'TELEMETRIA  make telemetria-host [ROTULO=escada-x]   (no HOST, ANTES de rodar a escada/matriz no gerador; Ctrl+C ao fim; o gerador grava a dele sozinho)'
 	@Write-Host 'MATRIZ DO EXPERIMENTO (oficial: 1 braco por vez; o lag e MEDIDO, nao configurado (#29); lista de N x repeticoes; PCT_CONFIRMA=100; precisa de PGPASSWORD e psql)'
 	@Write-Host '  make test-matriz     HOST_IP=<ip> [VUS=50,100,200 REPETICOES=10 CAPACIDADE=20 READPATH=cas]   (no GERADOR; READPATH = o que o host roda)'
 	@Write-Host '  make test-matriz-cas HOST_IP=<ip>                           (no GERADOR: rodada 1a, braco CAS: N=100,200 x 5 rep, capacity 20; host com READPATH=cas; "Error 3" na linha make[1] = overselling no CAS)'
@@ -110,15 +112,15 @@ test-matriz:
 # preset da rodada 1a (issue #12), braco CAS: N=100,200, 5 repeticoes, capacity 20, PCT_CONFIRMA=100 (fixo no
 # runner). O host deve rodar READPATH=cas.
 test-matriz-cas:
-	$(MAKE) test-matriz READPATH=cas VUS=100,200 REPETICOES=5 CAPACIDADE=20
+	$(MAKE) test-matriz READPATH=cas VUS=100,200 REPETICOES=10 CAPACIDADE=20
 
 # preset da rodada 1b (issue #13), braco ingenuo: N=100,200, 5 repeticoes, capacity 20, PCT_CONFIRMA=100 (fixo no
 # runner). O lag do naive deixou de ser um knob (#29): e o do consumer real, medido (lag_obs_*), entao nao ha mais
-# um host por lag. 2 N x 5 rep = 10 linhas no results\matriz.csv. Pinado como o preset CAS: VUS/REPETICOES/etc. da
+# um host por lag. 2 N x 10 rep = 20 linhas no results\matriz.csv. Pinado como o preset CAS: VUS/REPETICOES/etc. da
 # linha de comando nao valem.
 test-matriz-naive:
 	$(need_ip)
-	$(MAKE) test-matriz READPATH=naive VUS=100,200 REPETICOES=5 CAPACIDADE=20
+	$(MAKE) test-matriz READPATH=naive VUS=100,200 REPETICOES=10 CAPACIDADE=20
 
 # o report e bash+awk (Git Bash, ja exigido pelo seed); ProgramW6432: o make pode abrir um PowerShell de 32 bits
 report-matriz:
@@ -128,6 +130,10 @@ report-matriz:
 test-degraus:
 	$(need_ip)
 	.\degraus\rodar-degraus.ps1 -HostIp $(HOST_IP) -RpmInicio $(DEG_INICIO) -RpmPasso $(DEG_PASSO) -RpmMax $(DEG_MAX) -Duracao $(DEG_DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -PoolHikari $(POOL_HIKARI) -PctConfirma $(PCT_CONFIRMA) -MaxVus $(MAX_VUS)
+
+# telemetria (CPU/freq/RAM a cada 1 s) do HOST durante a escada/matriz; o gerador grava a dele sozinho. Ctrl+C encerra.
+telemetria-host:
+	.\telemetria-host.ps1 $(if $(ROTULO),-Rotulo $(ROTULO))
 
 report-degraus:
 	$(if $(CSV),,$(error Informe CSV=results\degraus-<id>.csv))

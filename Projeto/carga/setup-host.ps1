@@ -44,7 +44,8 @@ function Fail($m) { Write-Host "[erro] $m" -ForegroundColor Red; exit 1 }
 function Registrar($alvo, $saida) {
     $dir = Join-Path $PSScriptRoot 'results'
     New-Item -ItemType Directory -Force $dir | Out-Null
-    $cfg = (docker exec gerenciador-backend printenv RESERVATION_READPATH EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED 2>$null) -join ' / '
+    # RESERVATION_READPATH e do backend (gateway); relay/consumer sao do servico reservation (#33)
+    $cfg = ((docker exec gerenciador-backend printenv RESERVATION_READPATH 2>$null) + ' / ' + ((docker exec gerenciador-reservation printenv EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED 2>$null) -join ' / '))
     $cab = "===== {0} | {1} | config: {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $alvo, $cfg
     Add-Content -Path (Join-Path $dir 'verificacoes.log') -Value (@($cab, $saida, '') -join "`n") -Encoding utf8
 }
@@ -53,13 +54,13 @@ function Registrar($alvo, $saida) {
 if ($Verificar) {
     if ($EventId -le 0) { Fail 'Informe -EventId com o id do evento da rodada.' }
     $sql = @"
-SELECT 'eventcap' AS origem, capacity, quant AS vagas_restantes FROM eventcap WHERE event_id = $EventId;
-SELECT status, count(*) AS qtd FROM walletevent WHERE event_id = $EventId GROUP BY status ORDER BY status;
+SELECT 'eventcap' AS origem, capacity, quant AS vagas_restantes FROM reservation.eventcap WHERE event_id = $EventId;
+SELECT status, count(*) AS qtd FROM reservation.walletevent WHERE event_id = $EventId GROUP BY status ORDER BY status;
 SELECT count(*) FILTER (WHERE status IN ('pending','confirmed')) AS ativas,
-       (SELECT capacity FROM eventcap WHERE event_id = $EventId) AS capacity,
+       (SELECT capacity FROM reservation.eventcap WHERE event_id = $EventId) AS capacity,
        count(*) FILTER (WHERE status IN ('pending','confirmed'))
-         - (SELECT capacity FROM eventcap WHERE event_id = $EventId) AS overselling
-FROM walletevent WHERE event_id = $EventId;
+         - (SELECT capacity FROM reservation.eventcap WHERE event_id = $EventId) AS overselling
+FROM reservation.walletevent WHERE event_id = $EventId;
 "@
     $saida = $sql | docker exec -i gerenciador-db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' | Out-String
     Write-Host $saida
@@ -125,7 +126,7 @@ Get-NetConnectionProfile | ForEach-Object {
 
 # ---------------------------------------------------------------- subir a stack
 $env:RESERVATION_READPATH = $ReadPath
-Info "Subindo a stack (readpath=$ReadPath; relay e consumer de eventos ligados pelo compose)..."
+Info "Subindo a stack (readpath=$ReadPath no gateway; servico reservation com relay e consumer de eventos ligados pelo compose)..."
 $composeArgs = @('compose', '-f', $Compose, '-f', $Override, 'up', '-d')
 if (-not $SemBuild) { $composeArgs += '--build' }
 & docker @composeArgs
@@ -142,7 +143,7 @@ for ($i = 0; $i -lt 90; $i++) {
     Start-Sleep -Seconds 2
 }
 if (-not $ok) { Fail 'Backend nao ficou saudavel. Veja: docker logs gerenciador-backend --tail 100' }
-Ok 'Backend respondendo em /actuator/health.'
+Ok 'Backend respondendo em /actuator/health (o compose so o sobe com o servico reservation saudavel).'
 
 # ---------------------------------------------------------------- resumo
 Write-Host ''

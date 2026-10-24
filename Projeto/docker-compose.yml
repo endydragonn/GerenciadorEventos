@@ -77,7 +77,7 @@ services:
   backend:
     build:
       context: ./Backend
-      dockerfile: Dockerfile
+      dockerfile: monolito/Dockerfile
     container_name: gerenciador-backend
     env_file:
       - ./.env
@@ -96,15 +96,98 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       JWT_SECRET: ${JWT_SECRET}
+      # O e-mail saiu do monólito (issue #32, serviço notification): o env_file ./.env entrega o arquivo inteiro, então
+      # as credenciais SMTP são sobrepostas por vazio aqui para o backend não recebê-las sem precisar.
+      MAIL_USERNAME: ""
+      MAIL_PASSWORD: ""
       # Backbone de eventos (issue #27): o broker interno do compose. Relay (outbox -> broker) ligado desde a #28
-      # (catalog appenda eventos) e consumer (projeção de disponibilidade do braço naive) desde a #29.
+      # (catalog e identity appendam eventos). Desde a #33 o monólito NÃO tem consumer: a projeção de disponibilidade
+      # (braço naive) é do serviço reservation.
       SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       EVENTS_RELAY_ENABLED: "true"
-      EVENTS_CONSUMER_ENABLED: "true"
-      EVENTS_CONSUMER_BATCH_SIZE: ${EVENTS_CONSUMER_BATCH_SIZE:-500}
+      EVENTS_CONSUMER_ENABLED: "false"
+      # Serviço reservation (issue #33): API interna HTTP, só na rede gerenciador-net. O gateway (este container) chama o
+      # reservation para reservar/confirmar/cancelar e o catalog para criar a capacidade do evento. O braço da reserva
+      # (cas = 1 chamada; naive = 2) é decidido AQUI por RESERVATION_READPATH (default cas; os scripts de carga trocam).
+      RESERVATION_SERVICE_URL: http://reservation:8082
+      # Token de serviço que autentica as chamadas internas (X-Internal-Token). SEM default: vem do Projeto/.env
+      # (INTERNAL_API_TOKEN=<openssl rand -hex 32>) e o MESMO valor vai ao reservation; sem ele o backend não sobe.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?defina INTERNAL_API_TOKEN no Projeto/.env}
+      # Pool do cliente HTTP gateway -> reservation >= threads do Tomcat (300); o resto dos timeouts tem default no application.properties.
+      RESERVATION_CLIENT_MAX_CONNECTIONS: ${RESERVATION_CLIENT_MAX_CONNECTIONS:-400}
 
     ports:
       - "8081:8081"
+    depends_on:
+      supabase-pooler:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      reservation:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Serviço reservation (issue #33, Fase 7: segunda extração): dono de eventcap (CAS), walletevent (event sourcing, stream
+  # reservation.wallet), idempotency_key e da projeção de disponibilidade, no schema `reservation`. Imagem e processo próprios
+  # (Backend/reservation/Dockerfile). A API interna (/internal/**, porta 8082) só existe na rede gerenciador-net: SEM porta
+  # no host. Não usa env_file: recebe só o que precisa, pelo NOME (senha do banco do Projeto/.env), sem JWT_SECRET/reCAPTCHA/SMTP.
+  # É o CAMINHO QUENTE do experimento: mesmos valores que o monólito tinha no ponto 2 (Tomcat 300, Hikari 1000, virtual threads
+  # desligadas). Fala com o Postgres pelo Supavisor, mesmo tenant e mesmo usuário do backend e do notification, então o pool real
+  # (45 / 245) NÃO cresce; a conta dos Hikari (1000 + 350 + 3 <= POOLER_MAX_CLIENT_CONN 1500) está no Backend/CLAUDE.md.
+  reservation:
+    build:
+      context: ./Backend
+      dockerfile: reservation/Dockerfile
+    container_name: gerenciador-reservation
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}.gerenciador-eventos
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-1000}
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-5}
+      SERVER_TOMCAT_THREADS_MAX: ${SERVER_TOMCAT_THREADS_MAX:-300}
+      # Token de serviço exigido em todo /internal/** (401 sem/errado). SEM default: o serviço falha no boot se faltar.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?defina INTERNAL_API_TOKEN no Projeto/.env}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      # Relay do outbox do SERVIÇO (reservation.event_outbox), consumer da projeção de disponibilidade (group `reservation`)
+      # e reconciliação do eventcap pelo EventCreated de catalog.event (group `reservation-catalog`).
+      EVENTS_RELAY_ENABLED: "true"
+      EVENTS_CONSUMER_ENABLED: "true"
+      EVENTS_CONSUMER_BATCH_SIZE: ${EVENTS_CONSUMER_BATCH_SIZE:-500}
+      RESERVATION_CATALOG_RECONCILIATION_ENABLED: "true"
+    healthcheck:
+      # sem HTTP de saúde nem curl na imagem: o healthcheck é "a porta aceita conexão" (bash /dev/tcp; o /bin/sh da imagem é dash e não tem /dev/tcp, por isso CMD com bash)
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8082"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    depends_on:
+      supabase-pooler:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Serviço notification (issue #32, Fase 7): consumer do tópico identity.notification que envia e-mail por SMTP.
+  # Imagem e processo próprios (Backend/notification/Dockerfile), sem porta HTTP. O monólito não depende dele: com este
+  # container parado o cadastro/login seguem normais e o evento espera no tópico (o e-mail sai quando ele volta).
+  # NÃO usa env_file: recebe só o que precisa (senha do banco e credenciais SMTP, pelo NOME, interpolados do
+  # Projeto/.env), sem JWT_SECRET/reCAPTCHA. Fala com o Postgres pelo Supavisor (mesmo tenant do backend) com um pool
+  # Hikari de 3 conexões que NÃO aumenta o pool real do Supavisor (conta no Backend/CLAUDE.md, "Serviço notification").
+  notification:
+    build:
+      context: ./Backend
+      dockerfile: notification/Dockerfile
+    container_name: gerenciador-notification
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}.gerenciador-eventos
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "3"
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
     depends_on:
       supabase-pooler:
         condition: service_healthy

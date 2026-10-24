@@ -23,7 +23,7 @@
 #  automaticamente por:
 #    - EventWalletTest.testEventoLotado
 #    - EventWalletTest.testRemoveLinkConcorrenteNaoCausaOverselling (CyclicBarrier)
-#  (Projeto/Backend/src/test/java/com/gerenciador/eventos/EventWalletTest.java)
+#  (Projeto/Backend/monolito/src/test/java/com/gerenciador/eventos/EventWalletTest.java)
 #
 #  Pre-requisito: a stack no ar (db + backend).
 #    docker compose -f Projeto/docker-compose.yml up -d --build db backend
@@ -131,10 +131,10 @@ limpar() {
         return
     fi
     echo ""
-    echo "==> Limpeza (ordem respeita as FKs ON DELETE RESTRICT de walletevent)"
-    # 1. walletevent (FK -> event/users e RESTRICT); 2. event (eventcap cai por
-    # CASCADE); 3. users (mywallet cai por CASCADE).
-    psql_db "DELETE FROM walletevent WHERE event_id IN (SELECT event_id FROM event WHERE event_name LIKE 'Evento Overselling %${SUFIXO}');" >/dev/null 2>&1 || true
+    echo "==> Limpeza (walletevent/eventcap sao do schema reservation, sem FK: nao ha ordem a respeitar entre schemas)"
+    # 1. walletevent e eventcap do servico reservation; 2. event; 3. users (mywallet cai por CASCADE).
+    psql_db "DELETE FROM reservation.walletevent WHERE event_id IN (SELECT event_id FROM event WHERE event_name LIKE 'Evento Overselling %${SUFIXO}');" >/dev/null 2>&1 || true
+    psql_db "DELETE FROM reservation.eventcap WHERE event_id IN (SELECT event_id FROM event WHERE event_name LIKE 'Evento Overselling %${SUFIXO}');" >/dev/null 2>&1 || true
     psql_db "DELETE FROM event WHERE event_name LIKE 'Evento Overselling %${SUFIXO}';" >/dev/null 2>&1 || true
     psql_db "DELETE FROM users WHERE email LIKE 'oversell-%-${SUFIXO}@example.com';" >/dev/null 2>&1 || true
     echo "    dados do sufixo $SUFIXO removidos"
@@ -243,7 +243,7 @@ EVENT_ID=$(extrair_id "event_id" "$TMP/event.json")
 [ -n "$EVENT_ID" ] || { echo "   ERRO: nao consegui extrair event_id."; exit 1; }
 ok "evento criado: event_id=$EVENT_ID"
 
-QUANT_INICIAL=$(psql_db "SELECT quant FROM eventcap WHERE event_id = ${EVENT_ID};" | tr -d '[:space:]')
+QUANT_INICIAL=$(psql_db "SELECT quant FROM reservation.eventcap WHERE event_id = ${EVENT_ID};" | tr -d '[:space:]')
 ok "eventcap inicial: quant=$QUANT_INICIAL (esperado $CAPACIDADE)"
 [ "$QUANT_INICIAL" = "$CAPACIDADE" ] || falhar "eventcap.quant inicial = $QUANT_INICIAL, esperado $CAPACIDADE"
 
@@ -280,9 +280,9 @@ CODE_B=$(cat "$TMP/resp_b.code"); BODY_B=$(cat "$TMP/resp_b.body")
 #  4. Estado observado (impresso ANTES da limpeza -> um run que falha deixa
 #     evidencia no stdout mesmo com os dados ja removidos)
 # ---------------------------------------------------------------------------
-QUANT_FINAL=$(psql_db "SELECT quant FROM eventcap WHERE event_id = ${EVENT_ID};" | tr -d '[:space:]')
-PENDING=$(psql_db "SELECT count(*) FROM walletevent WHERE event_id = ${EVENT_ID} AND status = 'pending';" | tr -d '[:space:]')
-ATIVOS=$(psql_db "SELECT count(*) FROM walletevent WHERE event_id = ${EVENT_ID} AND status IN ('pending','confirmed');" | tr -d '[:space:]')
+QUANT_FINAL=$(psql_db "SELECT quant FROM reservation.eventcap WHERE event_id = ${EVENT_ID};" | tr -d '[:space:]')
+PENDING=$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = ${EVENT_ID} AND status = 'pending';" | tr -d '[:space:]')
+ATIVOS=$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = ${EVENT_ID} AND status IN ('pending','confirmed');" | tr -d '[:space:]')
 
 echo ""
 echo "--------------------------------------------------"
