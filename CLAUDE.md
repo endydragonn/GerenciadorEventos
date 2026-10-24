@@ -186,6 +186,10 @@ threads off), Hikari 350 no monólito, e a conta do pool do Supavisor (mesmo ten
 `Projeto/Backend/CLAUDE.md`, "Serviço reservation"; diagrama em [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md).
 O kit de carga aponta para o schema/serviço novos (`Projeto/carga/README.md`); a Rodada 3 (#34) mede.
 
+**Medido (Fase 7, Rodada 3, issue #34, 2026-10-24):** o ponto 3 (`reservation` e `notification` como serviços), no cabo e em SSD, ficou com
+X ≈ 58k RPM, overselling 0 no CAS (20 de 20) e naive no teto; controle do ponto 2 no cabo em `Projeto/carga/results/04b-fase6-es-cabo`, resultados em
+`Projeto/carga/results/05-distribuido` e seção "Ponto 3" em `docs/artigo/experimento-monolito.md`.
+
 **Decidido, não implementado:** extrair os demais módulos como microsserviços (Opção B — `gateway`, `identity`,
 `catalog`, `admission`; o `notification` saiu na #32 e o `reservation` na #33);
 camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
