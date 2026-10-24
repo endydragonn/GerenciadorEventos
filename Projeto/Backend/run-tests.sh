@@ -9,8 +9,8 @@
 #  - no Git Bash o binário do Docker é nativo do Windows e não entende "/e/...",
 #    então usamos "pwd -W" (-> "E:/...") e desligamos a conversão de path do MSYS.
 #
-# Roda o REACTOR inteiro (issues #32 e #33, Fase 7): shared + reservation-client + monolito + notification + reservation, um
-# `mvn clean test` na raiz do Backend/.
+# Roda o REACTOR inteiro (issues #32, #33 e #35, Fase 7): shared + reservation-client + catalog-client + monolito + notification +
+# reservation + catalog, um `mvn clean test` na raiz do Backend/.
 # Os relatórios Surefire de todos os módulos são copiados para Backend/target/surefire-reports (nomes de classe únicos).
 #
 # Pré-requisito: a stack no ar pra existir a rede, o banco e o broker (Redpanda; os testes do backbone de
@@ -91,6 +91,15 @@ fi
 if [ -n "$(docker ps -q -f name=^gerenciador-reservation$)" ]; then
     echo "❌ O container gerenciador-reservation está rodando: o relay/consumer dele disputam o banco e o Redpanda dos testes."
     echo "   Pare-o antes: docker stop gerenciador-reservation"
+    echo ""
+    exit 1
+fi
+
+# Schema do serviço catalog (#35, fatia 2): bancos novos já nascem com ele (supabase-app-init.sql), mas um volume existente não.
+# O 14-catalog.sql é idempotente e não destrutivo (só IF NOT EXISTS), então é aplicado a cada rodada, como a role do app.
+if ! docker exec -i -e PGOPTIONS='-c client_min_messages=warning' gerenciador-db \
+        psql -h localhost -U admin -d meu_banco -v ON_ERROR_STOP=1 -q < "$SCRIPT_DIR/db/init-scripts/14-catalog.sql"; then
+    echo "❌ Não consegui aplicar db/init-scripts/14-catalog.sql (schema catalog) no gerenciador-db. Abortando."
     echo ""
     exit 1
 fi

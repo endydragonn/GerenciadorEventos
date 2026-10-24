@@ -10,6 +10,9 @@ import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
@@ -169,9 +172,9 @@ public class UserRepository {
     }
 
     /** Nomes dos usuários ativos entre os ids, numa consulta ({@code user_id = ANY(?)}). */
-    public java.util.Map<Long, String> findActiveNames(java.util.Collection<Long> ids) {
+    public Map<Long, String> findActiveNames(Collection<Long> ids) {
         String sql = "SELECT user_id, user_name FROM users WHERE user_id = ANY(?) AND isactive";
-        java.util.Map<Long, String> nomes = new java.util.HashMap<>();
+        Map<Long, String> nomes = new HashMap<>();
         try (Connection conn = databaseConnection.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setArray(1, conn.createArrayOf("bigint", ids.toArray()));

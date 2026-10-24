@@ -33,7 +33,7 @@ serviço é um módulo com o próprio jar e Dockerfile; o que é comum é uma li
 
 ```
 Backend/
-  pom.xml                agregador (módulos: shared, reservation-client, monolito, notification, reservation)
+  pom.xml                agregador (módulos: shared, reservation-client, catalog-client, monolito, notification, reservation, catalog)
   checkstyle*.xml        um só para todos os módulos (${maven.multiModuleProjectDirectory})
   run-tests.sh           roda o reactor inteiro
   shared/                LIB (jar simples, sem repackage): DatabaseConnection + shared.events (EventStore, relay, consumer,
@@ -44,6 +44,11 @@ Backend/
   monolito/              identity, catalog, gateway (/bff/**), CorsConfig/SchedulingConfig; src/, Dockerfile, pom.xml
   notification/          serviço extraído (README.md próprio); src/, Dockerfile, pom.xml
   reservation/           serviço extraído (README.md próprio): eventcap/CAS, walletevent/ES, API interna; src/, Dockerfile, pom.xml
+  catalog-client/        LIB (#35): contrato HTTP do serviço catalog — Event, EventApi, EventoNaoEncontradoException,
+                         CatalogUnavailableException e o CatalogClient (pool). Usada pelo catalog (contrato + testes ponta a ponta) e,
+                         no cutover (fatia 3 da #35), pelo gateway
+  catalog/               serviço extraído (#35, README.md próprio): eventos em CQRS + ES no schema catalog, API interna
+                         /internal/events/**; src/, Dockerfile, pom.xml. Fatia 2: ainda NÃO é chamado (o monólito usa o pacote catalog)
   db/                    schema (fora do Maven)
 ```
 
@@ -72,7 +77,8 @@ Backend/
 
 `./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`
 (URL direta `db:5432`, **sem passar pelo pooler**),
-e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `monolito`, `notification`, `reservation`;
+e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `catalog-client`, `monolito`, `notification`,
+`reservation`, `catalog`; antes aplica `db/init-scripts/14-catalog.sql`, idempotente, no `gerenciador-db` por `docker exec ... psql -U admin`;
 `-fae` = um módulo vermelho não esconde o resultado dos outros). Antes disso apaga `target/surefire-reports` sozinho, então o total do
 resumo reflete só os testes desta rodada — não precisa limpar na mão; os relatórios de todos os módulos são copiados para
 `Backend/target/surefire-reports` (nomes de classe únicos). **Pré-requisito do `notification` (#32):** o schema `notification`
@@ -593,9 +599,11 @@ sem mudança de expectativa).
   depois do append) **não** entram no `EventUpdated`: o log imutável e o tópico nunca registram uma capacidade que o
   `eventcap` não aceitou (nem divergem em PUTs concorrentes). O histórico de capacidade, se for preciso, é do módulo `reservation`.
 - **`image_data` fica FORA do ES.** É blob (até 5 MB, base64 no JSON inflaria o `event_store` imutável), servido por
-  `/bff/events/{id}/image`. Não entra em payload nenhum; o command grava a coluna direto na linha viva
-  (`EventRepository.gravarImagem`, mesma transação), a projeção/replay nunca a tocam, e a comparação do replay a ignora. Trocar
-  só a imagem (`POST .../image` faz `findById` + `updateEvent`) gera um `EventUpdated` sem mudança de metadado.
+  `/bff/events/{id}/image`. Não entra em payload nenhum; a coluna é gravada direto na linha viva (`EventRepository.gravarImagem`:
+  na transação do `createEvent`, quando o corpo traz imagem, ou sozinha por `saveImage`), a projeção/replay nunca a tocam, e a
+  comparação do replay a ignora. Desde a #35 (fatia 1) a imagem tem métodos próprios (`EventApi.findImage`/`saveImage`): o
+  `POST .../image` chama só `saveImage` (um `UPDATE event SET image_data`, **sem evento no stream**), e o `updateEvent` não
+  lê nem grava `image_data` (antes um PUT sem imagem a apagava).
   `created_at`/`updated_at` também ficam fora da comparação: são carimbos do banco (`CURRENT_TIMESTAMP`), não vêm do log.
 - **Command side** (`CatalogEventWriter.executar`): uma transação JDBC manual por command, na ordem: (1) trava a linha de
   `event` (`SELECT version ... FOR NO KEY UPDATE`) e lê a `version` = versão do último evento aplicado. Esse lock não
@@ -616,7 +624,7 @@ sem mudança de expectativa).
     `lot_quantity`/`quantity` da requisição, loga ERROR) e o reservation cria o `eventcap` sozinho pelo `EventCreated` do tópico
     `catalog.event` quando voltar (`CatalogReconciliationConsumer`); reservar nesse intervalo falha com "Capacidade do evento não
     configurada". Um `EventCreated` replicado depois de o evento sumir não ressuscita nada (group com `auto.offset.reset=latest`).
-  - `updateEvent` **continua em 3 transações** (issue #60, não consertada aqui): (1) `EventUpdated` + `event` (+ `image_data`);
+  - `updateEvent` **continua em 3 transações** (issue #60, não consertada aqui): (1) `EventUpdated` + `event` (só metadados; `image_data` não é tocada);
     (2) `updatePolicy` (agora `PATCH /internal/eventcaps/{id}/policy` no reservation, HTTP; sem `eventcap` => 404 e o catalog o cria; **não** gera evento de `catalog`: a capacidade é do
     `eventcap`, e uma recusa do `CHECK`, HTTP 400, não deixa rastro no log; a não atomicidade com (1) é a de antes, #60); (3) `trocarApresentadores`: 1 `PresenterRemoved`/`PresenterAdded` por diferença
     (nomes aparados, sem vazios/repetidos; sem diferença não appenda). O append está sempre na transação da escrita que ele descreve.
@@ -625,8 +633,9 @@ sem mudança de expectativa).
     `DELETE /internal/eventcaps/{id}` **antes** da transação, fora dela (sem segurar conexão nem lock durante a rede), e o serviço recusa com
     **409 se existe reserva do evento em qualquer status** (o antigo `ON DELETE RESTRICT`), com o evento intacto. (Depois do commit não
     preservaria o RESTRICT: o evento já teria sumido.) O stream fica no `event_store` como auditoria. Janela de
-    falha: se o reservation apagou a capacidade e a transação do catalog falha em seguida, o evento fica sem `eventcap`. Evento inexistente = no-op,
-    sem evento (204 como antes). `event_availability`, de um evento apagado, fica órfã e inofensiva (a leitura parte de `eventcap`).
+    falha: se o reservation apagou a capacidade e a transação do catalog falha em seguida, o evento fica sem `eventcap`. Evento inexistente = no-op
+    no `EventService.delete` (sem evento); no `/bff`, desde a #35 (fatia 1), `DELETE /bff/events/{id}` de id inexistente responde **404**
+    (era 204): o gateway confere o dono antes (`EventApi.findCreatorId`) e nem chega a chamar o delete. `event_availability`, de um evento apagado, fica órfã e inofensiva (a leitura parte de `eventcap`).
 - **Read model** = `event`/`eventpresenter` (+ `event.version`), projeção **inline**: `HttpContractTest` lê o que acabou de
   escrever. A mesma `CatalogEventProjection` roda no command (schema `public`) e no replay (schema-sombra).
 - **Replay**: `EventReplay.rebuild(CatalogEventProjection, "catalog.event", sombra)` +
@@ -705,12 +714,14 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 - **Dono do evento (issue #35, fatia 1)**: o `creator_id` é amarrado ao token no `gateway` (`HostAuthorizationApi.currentUserId()`).
   `POST /bff/events` grava o usuário do token (o `creator_id` do corpo é ignorado); `PUT` ignora o do corpo e usa o gravado;
   `PUT`, `DELETE` e `POST /{id}/image` exigem o dono (`creator_id` do evento == usuário do token) → **403**; id inexistente → **404**
-  (o `DELETE` dava 204). **Sem exceção de admin**: nenhum gate usa `users.admin` (gravável pelo próprio usuário em
+  (o `DELETE` dava 204). A checagem de dono lê só o criador (`EventApi.findCreatorId`: `SELECT creator_id`, sem blob nem
+  hidratação, nem chamada ao reservation). **Sem exceção de admin**: nenhum gate usa `users.admin` (gravável pelo próprio usuário em
   `PUT /bff/users/{id}`). O upload de imagem exige dono, não host. A existência do criador (`UserApi.exists`) é conferida pelo
   gateway (`/validate`, mesma mensagem; `POST /bff/seed`, que aceita o `creator_id` do corpo), não mais pelo `catalog`.
 - **Resposta de `Event` (issue #35)**: ganha `creator_name` (somente-leitura no DTO; composto no gateway por `gateway/CreatorNames`:
   `UserApi.findNames(ids)` em lote, só `isactive = true` → conta desativada = `creator_name` nulo; Caffeine com TTL 45 s ±20% por
-  entrada, ~10k entradas, sem cache negativo). As listas (`/search`, `?creator_id=`) **não trazem `image_data`** (o SQL nem lê a
+  entrada, ~10k entradas, sem cache negativo; **falha do `findNames` não falha a resposta**: o nome sai nulo, sem cache, e a próxima
+  resposta tenta de novo — senão o GET viraria 404 e o POST/PUT já comitado viraria 500). As listas (`/search`, `?creator_id=`) **não trazem `image_data`** (o SQL nem lê a
   coluna); ela continua no `GET /{id}` e em `/{id}/image`. A imagem tem métodos próprios (`EventApi.findImage`/`saveImage`): o
   `updateEvent` não toca mais nela (antes um `PUT` sem `image_data` apagava a imagem). `exists(eventId)` é `SELECT 1` e o
   `EventWalletGateway` guarda o positivo por 30 s (Caffeine; negativo e falha nunca entram no cache).
@@ -997,6 +1008,48 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   o servidor falso — o contrato com o serviço real é do `ReservationApiE2ETest` (e do smoke, até a #37); (c) `idempotency_key` e `event_availability` de eventos apagados
   ficam órfãs (inofensivas); (d) a limpeza do banco entre blocos da carga (`E:\TCC\carga-overrides\limpar-banco.sh`, fora do repo) precisa
   truncar o schema `reservation` e mover os groups `reservation`/`reservation-catalog` (lista no relatório da #33).
+
+## Serviço catalog — issue #35 (Fase 7: terceira extração; fatia 2 de 4)
+
+Estado da fatia 2: os módulos `catalog` (serviço) e `catalog-client` (lib) existem, compilam, têm testes e imagem
+(`catalog/Dockerfile`), mas **o monólito continua usando o pacote `catalog` interno e `public.event`** (o cutover — gateway no
+`CatalogClient`, migração `20261026`, saída de `03`/`05`, compose, guarda do container no `run-tests.sh` — é a fatia 3). Spec:
+`docs/superpowers/specs/2026-10-24-catalog-servico-design.md`.
+
+- **Serviço** (`Backend/catalog/`, README próprio; entrypoint `com.gerenciador.eventos.catalog.CatalogApplication`, porta **8083**): o
+  código do pacote `catalog` do monólito (`EventService`, `CatalogEventWriter`, `CatalogEventProjection`, `EventRepository`,
+  `EventPresenterRepository`, `EventPayloads`) com **toda query qualificada com `catalog.`** e `events.schema=catalog` (event store, outbox,
+  snapshot e checkpoint próprios). `EventService implements catalogclient.api.EventApi` (o contrato 1:1 é checado pelo compilador dos
+  dois lados). Scan: `catalog`, `shared` e `reservationclient` (o `eventcap` segue por HTTP no reservation, como antes); o
+  `catalogclient` fica FORA do scan (sem cliente de si mesmo). Relay desligado por default (como no reservation; o compose da fatia 3
+  liga), consumer sempre desligado. Hikari **100** com `connection-timeout` **5 s**, Tomcat 300, keep-alive sem teto / 60 s.
+- **API interna** `/internal/events/**` (um endpoint por método do `EventApi`; `InternalTokenFilter` com `X-Internal-Token`, 401 em
+  TODA requisição sem/errado): `POST /` (201), `PUT|GET|DELETE /{id}` (DELETE de inexistente = 204 no-op: o 404 é do gateway),
+  `POST /validate` (texto), `GET /search?term=`, `GET ?creatorId=`, `GET /{id}/exists` (200 `true`/`false`, `SELECT 1`),
+  `GET /{id}/creator` (só o `creator_id`, 404 se não existe), `GET|POST /{id}/image` (`application/octet-stream`, 404 sem imagem).
+  Erros (`InternalApiExceptionHandler`, corpo = mensagem em texto): **400** `IllegalArgumentException`, pedido malformado e o
+  **`23505`** só da constraint `Event_event_name_key` (procurado na cadeia de causas, constraint lida do `PSQLException`; dois creates
+  concorrentes passam juntos pela pré-checagem; outro 23505, ex. `Event_pkey`, é 500);
+  **404** `EventoNaoEncontradoException`; **409** `IllegalStateException` (delete recusado pelo reservation, evento pré-ES, conflito de
+  versão esgotado); 500 o resto.
+- **Cliente** (`CatalogClient`, lib `catalog-client`; bean em `CatalogClientConfig`, ainda não usado pelo monólito): HttpClient 5 como o
+  `ReservationClient`, pool `CATALOG_CLIENT_MAX_CONNECTIONS` (default 400), conectar 2 s, pool 5 s, **resposta 15 s**, evict 20 s, **sem
+  retry**; URL `CATALOG_SERVICE_URL` (default `http://localhost:8083`). 400 → `IllegalArgumentException`, 404 →
+  `EventoNaoEncontradoException` (`null` em `findImage`/`findCreatorId`), 409 → `IllegalStateException`; rede, timeout, 5xx e qualquer
+  outro status → `CatalogUnavailableException` (o gateway a mapeará para 503 na fatia 3). `exists` nunca devolve `false` por falha.
+- **Schema**: `db/init-scripts/14-catalog.sql` (idempotente, só `IF NOT EXISTS`), incluído no `supabase-app-init.sql` e aplicado pelo
+  `run-tests.sh` a cada rodada (banco existente). Convive com `public.event`/`eventpresenter` até o cutover.
+- **Testes do módulo `catalog`** (pacote `com.gerenciador.eventos.catalog`, nomes de relatório únicos; Postgres real, reservation =
+  `TestSupport/FakeEventCapServer`, só `/internal/eventcaps`, subido pelo `LauncherSessionListener` `EventCapFakeSession`; `TestSchemas`
+  default `catalog`): `CatalogEventSourcingTest`, `EventTest`, `EventSearchTest` (cópias adaptadas dos do monólito, que continuam lá
+  até o cutover; criador = id solto; sem o backfill da `20261022`, que é de `public`), `SchemaValidationTest` (tabelas/colunas/chaves,
+  `eventpresenter_event_id_fkey` em cascata, zero FK cross-schema, índice de `creator_id`, autovacuum do outbox),
+  `CatalogSchemaConstraintsTest` (23505 do nome, `creator_id` sem FK, cascata), `CatalogApiE2ETest` (**cliente real × serviço real**:
+  CRUD e JSON do `Event`, imagem em bytes e fora das listas, `exists`/`creator` sem `findById`, 404 tipado, 400 de regra e de nome
+  duplicado inclusive 8 creates concorrentes = 1×201 + 7×400, 409 delete com reserva e pré-ES, 401 sem/errado em toda rota e o POST sem
+  token não grava), `CatalogClientIndisponivelTest` (sem Spring: porta morta, 500 e resposta lenta → `CatalogUnavailableException`,
+  inclusive `exists`; uma chamada por falha, sem retry) e `CatalogConfigTest` (Tomcat 300, porta 8083, Hikari 100 / 5 s, schema
+  `catalog`, consumer desligado, sem bean do próprio cliente).
 
 ## Cadastro em duas fases + e-mail
 

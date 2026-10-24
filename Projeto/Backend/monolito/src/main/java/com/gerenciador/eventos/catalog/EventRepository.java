@@ -156,6 +156,19 @@ public class EventRepository {
         }
     }
 
+    /** Só o {@code creator_id} (checagem de dono do gateway, sem blob nem hidratação); {@code null} se não existe. */
+    public Long findCreatorId(Long id) {
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement("SELECT creator_id FROM event WHERE event_id = ?")) {
+            stmt.setLong(1, id);
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
+        } catch (SQLException ex) {
+            throw new RuntimeException("Erro ao buscar o criador do evento: " + ex.getMessage(), ex);
+        }
+    }
+
     /** Listar todos os eventos (sem {@code image_data}). */
     public List<Event> findAll() {
         return listar("SELECT " + COLUNAS_LISTA + " FROM event ORDER BY event_id", null, "Erro ao listar eventos");

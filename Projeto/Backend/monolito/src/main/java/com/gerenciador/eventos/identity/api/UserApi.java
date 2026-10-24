@@ -1,5 +1,8 @@
 package com.gerenciador.eventos.identity.api;
 
+import java.util.Collection;
+import java.util.Map;
+
 /**
  * Interface pública do módulo {@code identity} para usuários (issue #23). Outros módulos e o
  * {@code gateway} só chamam usuários por aqui, nunca por {@code UserService}/{@code UserRepository}.
@@ -41,5 +44,5 @@ public interface UserApi {
      * Nomes dos usuários ATIVOS ({@code isactive = true}) entre os ids pedidos, numa consulta só (issue #35: o gateway compõe
      * {@code creator_name}). Id inexistente ou de conta desativada fica fora do mapa.
      */
-    java.util.Map<Long, String> findNames(java.util.Collection<Long> ids);
+    Map<Long, String> findNames(Collection<Long> ids);
 }

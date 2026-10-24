@@ -40,6 +40,8 @@ SET ROLE :"app_user";
 \i /app-init/11-event-store.sql
 \i /app-init/12-notification.sql
 \i /app-init/13-reservation.sql
+-- catalog (#35, fatia 2): convive com 03/05 até o cutover (fatia 3)
+\i /app-init/14-catalog.sql
 \i /app-init/99-tests.sql
 
 RESET ROLE;

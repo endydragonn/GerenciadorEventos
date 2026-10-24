@@ -122,12 +122,12 @@ public class BffEventController {
             return ResponseEntity.badRequest().body("ID do path difere do body");
         }
         try {
-            Event gravado = buscarOuNull(id);
-            ResponseEntity<?> negado = negarSeNaoDono(gravado, usuario);
+            Long criador = eventService.findCreatorId(id); // leve: só o creator_id, sem blob nem hidratação
+            ResponseEntity<?> negado = negarSeNaoDono(criador, usuario);
             if (negado != null) {
                 return negado;
             }
-            event.setCreator_id(gravado.getCreator_id()); // o creator_id do corpo é ignorado: vale o gravado
+            event.setCreator_id(criador); // o creator_id do corpo é ignorado: vale o gravado
             List<String> basicErrors = validateEventBasic(event);
             if (!basicErrors.isEmpty()) {
                 return ResponseEntity.badRequest().body(String.join("; ", basicErrors));
@@ -159,7 +159,7 @@ public class BffEventController {
             return ResponseEntity.badRequest().body(ex.getMessage());
         }
         try {
-            ResponseEntity<?> negado = negarSeNaoDono(buscarOuNull(id), usuario); // inexistente: 404 (era 204)
+            ResponseEntity<?> negado = negarSeNaoDono(eventService.findCreatorId(id), usuario); // inexistente: 404 (era 204)
             if (negado != null) {
                 return negado;
             }
@@ -194,7 +194,7 @@ public class BffEventController {
             @RequestParam("image") org.springframework.web.multipart.MultipartFile file) {
         try {
             // Só o dono troca a imagem (não exige host): inexistente 404, outro usuário 403
-            ResponseEntity<?> negado = negarSeNaoDono(buscarOuNull(id), authorizationUtil.currentUserId());
+            ResponseEntity<?> negado = negarSeNaoDono(eventService.findCreatorId(id), authorizationUtil.currentUserId());
             if (negado != null) {
                 return negado;
             }
@@ -245,24 +245,15 @@ public class BffEventController {
         }
     }
 
-    /** Evento gravado, ou {@code null} se não existe; outro erro (banco, reservation) propaga. */
-    private Event buscarOuNull(Long id) {
-        try {
-            return eventService.findById(id);
-        } catch (RuntimeException ex) {
-            if (ex.getMessage() != null && ex.getMessage().startsWith("Evento não encontrado")) {
-                return null;
-            }
-            throw ex;
-        }
-    }
-
-    /** 404 se o evento não existe, 403 se o usuário do token não é o criador; {@code null} = é o dono, pode seguir. */
-    private static ResponseEntity<?> negarSeNaoDono(Event gravado, Long usuario) {
-        if (gravado == null) {
+    /**
+     * 404 se o evento não existe ({@code criador} nulo), 403 se o usuário do token não é o criador; {@code null} = é o dono, pode
+     * seguir. O criador vem de {@link EventApi#findCreatorId} (só a coluna; o {@code findById} trazia o blob e hidratava o evento).
+     */
+    private static ResponseEntity<?> negarSeNaoDono(Long criador, Long usuario) {
+        if (criador == null) {
             return ResponseEntity.notFound().build();
         }
-        if (!gravado.getCreator_id().equals(usuario)) {
+        if (!criador.equals(usuario)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Apenas o criador do evento pode alterá-lo");
         }
         return null;

@@ -16,13 +16,16 @@
 
     <!-- Multi-módulo (issue #32, Fase 7): cada serviço é um módulo com o próprio jar e o próprio Dockerfile;
          o que é comum vive nas libs (sem spring-boot-maven-plugin: não são executáveis): "shared" (conexão e infra de
-         event sourcing) e, desde a #33, "reservation-client" (contrato HTTP do serviço reservation: DTOs + cliente). -->
+         event sourcing), desde a #33 "reservation-client" (contrato HTTP do serviço reservation: DTOs + cliente) e, desde a
+         #35, "catalog-client" (contrato HTTP do serviço catalog). -->
     <modules>
         <module>shared</module>
         <module>reservation-client</module>
+        <module>catalog-client</module>
         <module>monolito</module>
         <module>notification</module>
         <module>reservation</module>
+        <module>catalog</module>
     </modules>
 
     <properties>
@@ -39,6 +42,11 @@
             <dependency>
                 <groupId>com.example.demo</groupId>
                 <artifactId>reservation-client</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.example.demo</groupId>
+                <artifactId>catalog-client</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>

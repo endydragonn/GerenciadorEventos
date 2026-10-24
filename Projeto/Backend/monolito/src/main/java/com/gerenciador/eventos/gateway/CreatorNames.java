@@ -10,6 +10,8 @@ import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import com.gerenciador.eventos.catalog.api.Event;
@@ -26,9 +28,15 @@ import com.github.benmanes.caffeine.cache.Expiry;
  * de uma mesma listagem não vencerem juntas), até ~10k entradas, <b>sem cache negativo</b> (id sem nome — conta desativada
  * ou inexistente — não entra no cache e é reconsultado na próxima vez). Um nome trocado ou uma conta desativada aparece na
  * resposta em até ~54 s.</p>
+ *
+ * <p>Falha do {@code findNames} (banco/identity fora) NÃO falha a resposta: o nome fica nulo, sem cache, e a próxima resposta
+ * tenta de novo. O nome é decoração somente-leitura; derrubar por causa dele o GET (que viraria 404) ou a resposta de um POST/PUT
+ * já comitado (que viraria 500 com o evento gravado) seria pior.</p>
  */
 @Component
 public class CreatorNames {
+
+    private static final Logger log = LoggerFactory.getLogger(CreatorNames.class);
 
     static final Duration TTL = Duration.ofSeconds(45);
     static final int MAX_ENTRADAS = 10_000;
@@ -65,9 +73,16 @@ public class CreatorNames {
         Set<Long> faltam = new HashSet<>(ids);
         faltam.removeAll(nomes.keySet());
         if (!faltam.isEmpty()) {
-            Map<Long, String> lidos = userApi.findNames(faltam); // só contas ativas; ausente = nome nulo, não cacheado
-            cache.putAll(lidos);
-            nomes.putAll(lidos);
+            try {
+                Map<Long, String> lidos = userApi.findNames(faltam); // só contas ativas; ausente = nome nulo, não cacheado
+                cache.putAll(lidos);
+                nomes.putAll(lidos);
+            } catch (RuntimeException ex) {
+                // O nome é decoração: falha do identity não vira 404 no GET nem 500 depois do commit do POST/PUT. Fica nulo
+                // (como o de conta desativada) e nada entra no cache: a próxima resposta tenta de novo.
+                log.warn("[CreatorNames] não consegui compor creator_name de {} criador(es); respondendo sem nome: {}",
+                        faltam.size(), ex.toString());
+            }
         }
         eventos.forEach(e -> e.setCreator_name(nomes.get(e.getCreator_id())));
         return eventos;

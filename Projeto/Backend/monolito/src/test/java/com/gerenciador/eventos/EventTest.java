@@ -117,7 +117,8 @@ public class EventTest {
         creator = userService.createUser(creator);
         Event e = new Event();
         e.setCreator_id(creator.getId());
-        e.setEvent_name("Evento Img");
+        String nome = "Evento Img " + System.nanoTime(); // único: a busca abaixo não pode casar outro evento
+        e.setEvent_name(nome);
         e.setIs_EAD(true);
         e.setEvent_date(LocalDateTime.now().plusDays(10).truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
         e.setLot_quantity(5);
@@ -128,7 +129,7 @@ public class EventTest {
         eventService.saveImage(saved.getEvent_id(), new byte[] {4, 5, 6});
         assertArrayEquals(new byte[] {4, 5, 6}, eventService.findImage(saved.getEvent_id()));
         assertArrayEquals(new byte[] {4, 5, 6}, eventService.findById(saved.getEvent_id()).getImage_data());
-        assertNull(eventService.searchEvents("Evento Img").get(0).getImage_data(), "busca sem image_data");
+        assertNull(eventService.searchEvents(nome).get(0).getImage_data(), "busca sem image_data");
         assertNull(eventService.findByCreatorId(creator.getId()).get(0).getImage_data(), "lista do criador sem image_data");
 
         Event semImagem = eventService.findById(saved.getEvent_id());
@@ -141,6 +142,8 @@ public class EventTest {
         assertNull(eventService.findImage(999_999L));
         assertTrue(eventService.exists(saved.getEvent_id()));
         assertFalse(eventService.exists(999_999L));
+        assertEquals(creator.getId(), eventService.findCreatorId(saved.getEvent_id()), "findCreatorId: só o criador");
+        assertNull(eventService.findCreatorId(999_999L), "inexistente = null");
     }
 
     /** {@code findByCreatorId} filtra no banco: só os eventos do criador, em ordem de {@code event_id}. */

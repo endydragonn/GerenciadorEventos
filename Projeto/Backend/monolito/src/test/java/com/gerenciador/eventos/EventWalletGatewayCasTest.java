@@ -1,5 +1,7 @@
 package com.gerenciador.eventos;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -21,6 +23,7 @@ import com.gerenciador.eventos.identity.api.User;
 import com.gerenciador.eventos.reservationclient.api.EventCap;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.EventCapacityApi;
+import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**
  * O braço CAS (default) decidido no gateway: UMA chamada HTTP ao serviço reservation (o CAS é atômico lá dentro, sem ler a
@@ -34,6 +37,7 @@ public class EventWalletGatewayCasTest {
     @Autowired private UserService userService;
     @Autowired private EventService eventService;
     @Autowired private EventWalletGateway gateway;
+    @Autowired private DatabaseConnection db;
     @Autowired private EventCapacityApi capacidade;
 
     @Test
@@ -150,7 +154,7 @@ public class EventWalletGatewayCasTest {
      * negativo nunca é guardado.
      */
     @Test
-    void existsDoEventoTemCachePositivo() {
+    void existsDoEventoTemCachePositivo() throws Exception {
         User u = usuario("gw-cas-8");
         Event e = evento(u.getId(), "GW CAS cache exists", 2);
         assertEquals("", gateway.getValidationErrors(new EventWallet(u.getId(), e.getEvent_id())));
@@ -160,8 +164,28 @@ public class EventWalletGatewayCasTest {
         assertEquals(false, eventService.exists(e.getEvent_id()), "o catalog já não tem o evento");
         assertEquals("", gateway.getValidationErrors(new EventWallet(u.getId(), e.getEvent_id())),
                 "positivo em cache: o gateway não reconsulta o catalog dentro da janela");
-        assertEquals("Carteira não encontrada. Evento não encontrado.",
-                gateway.getValidationErrors(new EventWallet(987_654L, 987_655L)), "negativo não vai para o cache");
+
+        // negativo NÃO vai para o cache: consulta um id inexistente, cria o evento com ESSE id e ele aparece na hora
+        long idNovo = 2_000_000_000L + (System.nanoTime() % 100_000_000L);
+        assertEquals("Evento não encontrado.", gateway.getValidationErrors(new EventWallet(u.getId(), idNovo)));
+        try (Connection c = db.getConnection(); PreparedStatement ps = c.prepareStatement(
+                "INSERT INTO public.event (event_id, creator_id, event_name, ead, event_date, description, version) "
+                        + "OVERRIDING SYSTEM VALUE VALUES (?, ?, ?, true, CURRENT_TIMESTAMP + interval '10 days', 'desc', 1)")) {
+            ps.setLong(1, idNovo);
+            ps.setLong(2, u.getId());
+            ps.setString(3, "GW CAS cache negativo " + idNovo);
+            ps.executeUpdate();
+        }
+        try {
+            assertEquals("", gateway.getValidationErrors(new EventWallet(u.getId(), idNovo)),
+                    "o 'não existe' anterior não ficou em cache: o evento recém-criado já é visto");
+        } finally {
+            try (Connection c = db.getConnection(); PreparedStatement ps = c.prepareStatement(
+                    "DELETE FROM public.event WHERE event_id = ?")) {
+                ps.setLong(1, idNovo);
+                ps.executeUpdate();
+            }
+        }
     }
 
     private User usuario(String prefixo) {

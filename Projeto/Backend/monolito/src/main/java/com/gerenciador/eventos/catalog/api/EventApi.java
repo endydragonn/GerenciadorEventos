@@ -30,4 +30,7 @@ public interface EventApi {
 
     /** Grava a imagem do evento (fora de {@link #updateEvent}). Lança "Evento não encontrado" se ele não existe. */
     void saveImage(Long id, byte[] imageData);
+
+    /** Só o {@code creator_id} (checagem de dono do gateway, sem blob nem hidratação), ou {@code null} se o evento não existe. */
+    Long findCreatorId(Long id);
 }

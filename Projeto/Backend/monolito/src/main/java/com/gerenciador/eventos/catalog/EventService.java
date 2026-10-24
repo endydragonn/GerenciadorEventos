@@ -117,6 +117,11 @@ public class EventService implements EventApi {
         }
     }
 
+    @Override
+    public Long findCreatorId(Long id) {
+        return eventRepository.findCreatorId(id); // SELECT creator_id, sem blob nem hidratação (checagem de dono do gateway)
+    }
+
     public Event findById(Long id) {
         Event e = eventRepository.findById(id);
         if (e == null) throw new RuntimeException("Evento não encontrado: id=" + id);
