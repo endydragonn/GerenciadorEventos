@@ -17,7 +17,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import org.junit.jupiter.api.Test;
 
-import com.gerenciador.eventos.catalog.api.Event;
+import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.identity.api.UserApi;
 
 /** O TTL do cache de {@code creator_name} (issue #35) é 45 s ±20%, sorteado por entrada (sem Spring, sem banco). */

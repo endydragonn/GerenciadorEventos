@@ -9,6 +9,7 @@
 -- - Projecao assincrona event_availability (so ativos; disponibilidade calculada na leitura) e walletevent.version da guarda
 -- - event_store/event_outbox/event_snapshot/projection_checkpoint (concorrência otimista, outbox, checkpoint atômico)
 -- - TRUNCATE e revalidação pós-TRUNCATE
+-- Desde a #35 event/eventpresenter estão no schema catalog (14-catalog.sql), sem FK para users; as de reserva, em reservation (#33).
 
 \echo Iniciando testes minimos do banco...
 
@@ -27,7 +28,7 @@ BEGIN
   v_err := NULL;
   BEGIN
     -- Baseline limpa
-    TRUNCATE TABLE public.eventpresenter, public.event,
+    TRUNCATE TABLE catalog.eventpresenter, catalog.event,
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                    public.mywallet, public.users,
                    reservation.eventcap, reservation.event_availability, reservation.walletevent,
@@ -49,11 +50,11 @@ BEGIN
     RETURNING user_id INTO v_user2;
 
     -- 2) Criar eventos + eventcap
-    INSERT INTO public.event (creator_id, event_name, event_date, description)
+    INSERT INTO catalog.event (creator_id, event_name, event_date, description)
     VALUES (v_user1, 'Evento Teste 1', now() + interval '30 days', 'desc1')
     RETURNING event_id INTO v_event1;
 
-    INSERT INTO public.event (creator_id, event_name, event_date, description)
+    INSERT INTO catalog.event (creator_id, event_name, event_date, description)
     VALUES (v_user1, 'Evento Teste 2', now() + interval '60 days', 'desc2')
     RETURNING event_id INTO v_event2;
 
@@ -63,20 +64,20 @@ BEGIN
     VALUES (v_event2, 1, 1, now() + interval '50 days');
 
     -- 3) eventpresenter: lista de apresentadores, PK composta
-    INSERT INTO public.eventpresenter (event_id, presenter_name) VALUES (v_event1, 'Alice');
-    INSERT INTO public.eventpresenter (event_id, presenter_name) VALUES (v_event1, 'Bob');
-    SELECT count(*) INTO v_count FROM public.eventpresenter WHERE event_id = v_event1;
+    INSERT INTO catalog.eventpresenter (event_id, presenter_name) VALUES (v_event1, 'Alice');
+    INSERT INTO catalog.eventpresenter (event_id, presenter_name) VALUES (v_event1, 'Bob');
+    SELECT count(*) INTO v_count FROM catalog.eventpresenter WHERE event_id = v_event1;
     IF v_count <> 2 THEN
       RAISE EXCEPTION 'Falha: esperado 2 apresentadores, obtido %', v_count;
     END IF;
     BEGIN
-      INSERT INTO public.eventpresenter (event_id, presenter_name) VALUES (v_event1, 'Alice');
+      INSERT INTO catalog.eventpresenter (event_id, presenter_name) VALUES (v_event1, 'Alice');
       RAISE EXCEPTION 'Falha: apresentador duplicado nao violou a PK composta';
     EXCEPTION WHEN unique_violation THEN NULL; END;
 
     -- 4) CHECK da invariante 0 <= quant <= capacity
     BEGIN
-      INSERT INTO public.event (creator_id, event_name, event_date, description)
+      INSERT INTO catalog.event (creator_id, event_name, event_date, description)
       VALUES (v_user1, 'Evento Invalido', now() + interval '10 days', 'x')
       RETURNING event_id INTO v_count;
       INSERT INTO reservation.eventcap (event_id, capacity, quant) VALUES (v_count, 5, 6);
@@ -100,7 +101,7 @@ BEGIN
     IF v_count <> 0 THEN RAISE EXCEPTION 'Falha: quant do evento 2 deveria ser 0, e %', v_count; END IF;
 
     -- 5b) Evento ILIMITADO (capacity = -1): CAS nao afeta linha; CHECK nao exige quant<=capacity
-    INSERT INTO public.event (creator_id, event_name, event_date, description)
+    INSERT INTO catalog.event (creator_id, event_name, event_date, description)
     VALUES (v_user1, 'Evento Ilimitado', now() + interval '90 days', 'sem limite')
     RETURNING event_id INTO v_event_ilim;
     INSERT INTO reservation.eventcap (event_id, capacity, quant) VALUES (v_event_ilim, -1, -1);
@@ -130,7 +131,7 @@ BEGIN
 
     -- 6b) Projecao assincrona event_availability (issue #29): so guarda "ativos"; a disponibilidade e calculada na
     --     leitura (eventcap LEFT JOIN projecao), nunca grava nem le eventcap.quant
-    INSERT INTO public.event (creator_id, event_name, event_date, description)
+    INSERT INTO catalog.event (creator_id, event_name, event_date, description)
     VALUES (v_user1, 'Evento Read Model', now() + interval '40 days', 'rm')
     RETURNING event_id INTO v_event_rm;
     INSERT INTO reservation.eventcap (event_id, capacity, quant) VALUES (v_event_rm, 4, 4);
@@ -171,14 +172,14 @@ BEGIN
     END IF;
 
     -- sem FK para event: apagar o evento nao mexe na projecao (e a projecao nao trava o DELETE)
-    DELETE FROM public.event WHERE event_id = v_event_rm;
+    DELETE FROM catalog.event WHERE event_id = v_event_rm;
     SELECT count(*) INTO v_count FROM reservation.event_availability WHERE event_id = v_event_rm;
     IF v_count <> 1 THEN RAISE EXCEPTION 'Falha: event_availability nao deveria ter FK para event'; END IF;
     DELETE FROM reservation.event_availability WHERE event_id = v_event_rm;
 
     -- 6c) walletevent.version sai da propria guarda (UPDATE ... RETURNING version): a 1a reserva e a v1 e reviver
     --     uma cancelada continua o mesmo stream
-    INSERT INTO public.event (creator_id, event_name, event_date, description)
+    INSERT INTO catalog.event (creator_id, event_name, event_date, description)
     VALUES (v_user1, 'Evento Version', now() + interval '41 days', 'ver')
     RETURNING event_id INTO v_event_rm;
     INSERT INTO reservation.walletevent (user_id, event_id, status, expires_at, version)
@@ -204,7 +205,7 @@ BEGIN
     RETURNING version INTO v_count;
     IF v_count IS NOT NULL THEN RAISE EXCEPTION 'Falha: guarda sobre reserva ativa nao deveria afetar linha (version %)', v_count; END IF;
     DELETE FROM reservation.walletevent WHERE event_id = v_event_rm;
-    DELETE FROM public.event WHERE event_id = v_event_rm;
+    DELETE FROM catalog.event WHERE event_id = v_event_rm;
 
     -- 7) status invalido rejeitado pelo CHECK
     BEGIN
@@ -298,23 +299,24 @@ BEGIN
     IF v_rows <> 0 THEN RAISE EXCEPTION 'Falha: reavanco do checkpoint deveria afetar 0 linhas (%)', v_rows; END IF;
 
     -- 8d) event.version (issue #28): nasce 0 (= pre-ES, sem stream) e e a versao esperada do proximo append
-    SELECT version INTO v_count FROM public.event WHERE event_id = v_event1;
+    SELECT version INTO v_count FROM catalog.event WHERE event_id = v_event1;
     IF v_count <> 0 THEN RAISE EXCEPTION 'Falha: event.version deveria nascer 0 (%)', v_count; END IF;
     BEGIN
-      UPDATE public.event SET version = NULL WHERE event_id = v_event1;
+      UPDATE catalog.event SET version = NULL WHERE event_id = v_event1;
       RAISE EXCEPTION 'Falha: event.version aceitou NULL';
     EXCEPTION WHEN not_null_violation THEN NULL; END;
 
-    -- 9) ON DELETE CASCADE de event -> eventpresenter. eventcap/walletevent moraram em public com FK e cascata; desde a #33 sao do
-    --    schema reservation, SEM FK: apagar o evento NAO mexe nelas (quem remove o eventcap e o catalog, chamando o servico).
-    DELETE FROM public.event WHERE event_id = v_event1;
+    -- 9) ON DELETE CASCADE de event -> eventpresenter (interna ao schema catalog, #35). eventcap/walletevent moraram em public com
+    --    FK e cascata; desde a #33 sao do schema reservation, SEM FK: apagar o evento NAO mexe nelas (quem remove o eventcap e o
+    --    servico catalog, chamando o reservation).
+    DELETE FROM catalog.event WHERE event_id = v_event1;
     SELECT count(*) INTO v_count FROM reservation.eventcap WHERE event_id = v_event1;
     IF v_count <> 1 THEN RAISE EXCEPTION 'Falha: eventcap nao deveria cair com o evento (sem FK cross-schema; %)', v_count; END IF;
-    SELECT count(*) INTO v_count FROM public.eventpresenter WHERE event_id = v_event1;
+    SELECT count(*) INTO v_count FROM catalog.eventpresenter WHERE event_id = v_event1;
     IF v_count <> 0 THEN RAISE EXCEPTION 'Falha: eventpresenter nao foi removido em cascata'; END IF;
 
     -- 10) TRUNCATE e revalidacao do trigger
-    TRUNCATE TABLE public.eventpresenter, public.event,
+    TRUNCATE TABLE catalog.eventpresenter, catalog.event,
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                    public.mywallet, public.users,
                    reservation.eventcap, reservation.event_availability, reservation.walletevent,
@@ -330,7 +332,7 @@ BEGIN
     SELECT count(*) INTO v_count FROM public.mywallet WHERE user_id = v_user1;
     IF v_count <> 1 THEN RAISE EXCEPTION 'trigger nao criou mywallet apos TRUNCATE'; END IF;
 
-    TRUNCATE TABLE public.eventpresenter, public.event,
+    TRUNCATE TABLE catalog.eventpresenter, catalog.event,
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                    public.mywallet, public.users,
                    reservation.eventcap, reservation.event_availability, reservation.walletevent,
@@ -341,7 +343,7 @@ BEGIN
   END;
 
   -- Cleanup incondicional
-  TRUNCATE TABLE public.eventpresenter, public.event,
+  TRUNCATE TABLE catalog.eventpresenter, catalog.event,
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                    public.mywallet, public.users,
                    reservation.eventcap, reservation.event_availability, reservation.walletevent,

@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
+import com.gerenciador.eventos.TestSupport.FakeEventCapServer;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.catalogclient.api.EventoNaoEncontradoException;
@@ -132,6 +133,65 @@ public class EventTest {
         assertEquals(List.of("FBC A1" + sufixo, "FBC A2" + sufixo),
                 eventService.findByCreatorId(a).stream().map(Event::getEvent_name).toList());
         assertEquals(List.of(), eventService.findByCreatorId(999_999L));
+    }
+
+    /**
+     * Janela de falha documentada (issue #33, decisão 3; veio do {@code EventWalletGatewayCasTest} do monólito na #35): o
+     * {@code eventcap} nasce por chamada síncrona DEPOIS do commit do evento. Com o reservation fora, a criação NÃO quebra
+     * (responde com os valores da requisição) e o {@code eventcap} chega depois pela reconciliação (no serviço reservation).
+     */
+    @Test
+    public void criarEventoComOReservationForaNaoQuebra() {
+        FakeEventCapServer reservation = FakeEventCapServer.get();
+        reservation.falharCriacao(true);
+        Event saved;
+        try {
+            saved = eventService.createEvent(evento(41L, unico("Evento reservation fora"), 5));
+        } finally {
+            reservation.falharCriacao(false);
+        }
+        assertEquals(5, saved.getLot_quantity(), "a resposta traz a capacidade pedida");
+        assertEquals(5, saved.getQuantity());
+        assertNull(reservation.capacidade(saved.getEvent_id()), "o reservation ainda não tem o eventcap");
+        assertTrue(eventService.exists(saved.getEvent_id()), "o evento foi gravado");
+    }
+
+    /**
+     * Editar um evento que ficou SEM eventcap não perde a edição: o PATCH responde 404 e o catalog cria o eventcap com os valores
+     * NOVOS (a reconciliação, depois, é no-op).
+     */
+    @Test
+    public void editarEventoSemEventcapCriaOEventcapComACapacidadeNova() {
+        FakeEventCapServer reservation = FakeEventCapServer.get();
+        reservation.falharCriacao(true);
+        Event saved;
+        try {
+            saved = eventService.createEvent(evento(42L, unico("Evento editar sem eventcap"), 5));
+        } finally {
+            reservation.falharCriacao(false);
+        }
+        assertNull(reservation.capacidade(saved.getEvent_id()));
+
+        saved.setLot_quantity(9);
+        eventService.updateEvent(saved);
+
+        assertEquals(9, reservation.capacidade(saved.getEvent_id()).getCapacity(), "a edição não se perdeu");
+    }
+
+    /** {@code findByCreatorId} hidrata a lista com UMA chamada em lote ao reservation, não uma por evento. */
+    @Test
+    public void eventosDoCriadorSaoHidratadosEmUmaChamadaSo() {
+        long criador = 9_000L + (System.nanoTime() % 1000);
+        for (int capacidade = 2; capacidade <= 4; capacidade++) {
+            eventService.createEvent(evento(criador, unico("Evento lote " + capacidade), capacidade));
+        }
+        FakeEventCapServer reservation = FakeEventCapServer.get();
+        reservation.limparChamadas();
+
+        List<Event> eventos = eventService.findByCreatorId(criador);
+
+        assertEquals(List.of(2, 3, 4), eventos.stream().map(Event::getLot_quantity).sorted().toList());
+        assertEquals(List.of("POST /internal/eventcaps/batch"), reservation.chamadas());
     }
 
     @Test

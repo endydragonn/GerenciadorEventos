@@ -45,22 +45,24 @@ public class TestSchemasTest {
     void defaultCobreSoPublicEIncluiTabelasDoApp() throws Exception {
         try (Connection c = databaseConnection.getConnection()) {
             List<String> tabelas = TestSchemas.tabelas(c, TestSchemas.parse("public"));
-            assertTrue(tabelas.containsAll(List.of("public.users", "public.event", "public.eventpresenter",
-                    "public.mywallet", "public.event_store")));
+            assertTrue(tabelas.containsAll(List.of("public.users", "public.mywallet", "public.event_store")));
             assertTrue(tabelas.stream().allMatch(t -> t.startsWith("public.")));
             assertFalse(tabelas.contains("public.eventcap"), "eventcap saiu de public na #33");
+            assertFalse(tabelas.contains("public.event"), "event saiu de public na #35 (schema catalog)");
         }
     }
 
-    /** Fase 7 (#32, #33): os schemas dos serviços notification e reservation entram no harness (truncate + validação) por padrão. */
+    /** Fase 7 (#32, #33, #35): os schemas dos serviços notification, reservation e catalog entram no harness (truncate + validação) por padrão. */
     @Test
-    void defaultDoHarnessCobrePublicNotificationEReservation() throws Exception {
-        assertEquals(List.of("public", "notification", "reservation"), TestSchemas.parse(TestSchemas.DEFAULT));
+    void defaultDoHarnessCobrePublicNotificationReservationECatalog() throws Exception {
+        assertEquals(List.of("public", "notification", "reservation", "catalog"), TestSchemas.parse(TestSchemas.DEFAULT));
         try (Connection c = databaseConnection.getConnection()) {
             List<String> tabelas = TestSchemas.tabelas(c, TestSchemas.parse(TestSchemas.DEFAULT));
             assertTrue(tabelas.contains("notification.processed_event"), "tabelas: " + tabelas);
             assertTrue(tabelas.containsAll(List.of("reservation.eventcap", "reservation.walletevent",
                     "reservation.event_availability", "reservation.idempotency_key", "reservation.event_store")),
+                    "tabelas: " + tabelas);
+            assertTrue(tabelas.containsAll(List.of("catalog.event", "catalog.eventpresenter", "catalog.event_store")),
                     "tabelas: " + tabelas);
             assertTrue(tabelas.contains("public.users"));
         }

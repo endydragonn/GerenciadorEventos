@@ -1,13 +1,14 @@
 -- Schema: catalog  |  event, eventpresenter + infra de event sourcing
 -- Terceira extração de microsserviço (issue #35, Fase 7): o serviço catalog tem schema PRÓPRIO e é o único que lê e escreve
--- estas tabelas. Consolida 03-event.sql e 05-eventpresenter.sql (mesmas colunas) + o event store do serviço (mesmo desenho do
--- 11-event-store.sql / 13-reservation.sql). Todas as queries do serviço qualificam com "catalog." (o Supavisor em transaction mode
--- proíbe search_path).
+-- estas tabelas. Consolida os antigos 03-event.sql e 05-eventpresenter.sql (mesmas colunas; saíram no cutover, fatia 3 da #35, e
+-- estão no histórico do git) + o event store do serviço (mesmo desenho do 11-event-store.sql / 13-reservation.sql). Todas as
+-- queries do serviço qualificam com "catalog." (o Supavisor em transaction mode proíbe search_path).
 --
--- FATIA 2 da #35: este schema CONVIVE com public.event/public.eventpresenter (03/05), que o monólito ainda usa. A migração dos dados
--- e a saída de 03/05 são da fatia 3 (db/migrations/20261026-catalog-schema.sql).
+-- Banco NOVO: nasce só com o schema catalog (public.event não existe). Banco EXISTENTE (ainda com public.event): NÃO aplique este
+-- script; aplique a migração db/migrations/20261026-catalog-schema.sql, que MOVE as tabelas de public (preservando a identity de
+-- event_id) e o stream catalog.event do event store do monólito.
 --
--- IDEMPOTENTE e NÃO destrutivo (sem DROP, tudo IF NOT EXISTS): o run-tests.sh o aplica a cada rodada num banco existente.
+-- Idempotente (sem DROP, tudo IF NOT EXISTS).
 --
 -- SEM FK cross-schema: event.creator_id é integer SEM FK para public.users (referência solta; quem confere o criador é o gateway,
 -- UserApi.exists). A única FK é interna: eventpresenter -> event, ON DELETE CASCADE.

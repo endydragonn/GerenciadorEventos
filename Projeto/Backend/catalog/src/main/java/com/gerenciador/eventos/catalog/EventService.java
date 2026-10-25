@@ -9,12 +9,14 @@ import org.springframework.stereotype.Service;
 
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.catalogclient.api.EventApi;
+import com.gerenciador.eventos.catalogclient.api.EventoEmConflitoException;
 import com.gerenciador.eventos.catalogclient.api.EventoNaoEncontradoException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.gerenciador.eventos.reservationclient.api.EventCap;
 import com.gerenciador.eventos.reservationclient.api.EventCapacityApi;
+import com.gerenciador.eventos.reservationclient.api.ReservationConflictException;
 
 /**
  * Service - regras de negócio e validações para Event. No serviço {@code catalog} (issue #35) implementa o contrato
@@ -142,10 +144,15 @@ public class EventService implements EventApi {
      * qualquer status: o antigo {@code ON DELETE RESTRICT} de {@code walletevent}) acontece antes de qualquer escrita, com o evento
      * intacto. (Depois do commit não daria: o evento já teria sumido do catálogo com as reservas ainda de pé.) Janela de falha
      * documentada: se o reservation apagou o {@code eventcap} e a transação do catalog falha em seguida, o evento fica sem
-     * {@code eventcap} (reservar nele falha com "Capacidade do evento não configurada"). Evento inexistente: no-op.
+     * {@code eventcap} (reservar nele falha com "Capacidade do evento não configurada"). Evento inexistente: no-op. O 409 do
+     * reservation vira {@link EventoEmConflitoException} (o único 409 da API interna).
      */
     public void delete(Long id) {
-        eventCapacityApi.delete(id);
+        try {
+            eventCapacityApi.delete(id);
+        } catch (ReservationConflictException ex) {
+            throw new EventoEmConflitoException(ex.getMessage());
+        }
         eventRepository.delete(id); // EventCancelled + remoção (eventpresenter cai por CASCADE)
     }
 

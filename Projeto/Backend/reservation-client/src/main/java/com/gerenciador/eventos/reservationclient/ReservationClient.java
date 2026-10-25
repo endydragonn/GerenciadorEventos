@@ -34,6 +34,7 @@ import com.gerenciador.eventos.reservationclient.api.EventCapacityApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.EventWalletApi;
 import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictException;
+import com.gerenciador.eventos.reservationclient.api.ReservationConflictException;
 
 /**
  * Cliente HTTP da API interna do serviço reservation (issue #33, Fase 7): é o salto de rede {@code gateway -> reservation}
@@ -52,7 +53,8 @@ import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictExceptio
  * às cegas é decisão do chamador (a {@code Idempotency-Key} existe para isso).</p>
  *
  * <p><b>Erros</b> (o corpo da resposta de erro é a mensagem, texto puro): 400 => {@link IllegalArgumentException},
- * 422 => {@link IdempotencyConflictException}, 409 => {@link IllegalStateException}, 404 => depende do método,
+ * 422 => {@link IdempotencyConflictException}, 409 => {@link ReservationConflictException} (uma {@link IllegalStateException}),
+ * 404 => depende do método,
  * qualquer outro => {@link RuntimeException}.</p>
  */
 public class ReservationClient implements EventWalletApi, EventCapacityApi {
@@ -270,7 +272,7 @@ public class ReservationClient implements EventWalletApi, EventCapacityApi {
         return switch (status) {
             case 400 -> new IllegalArgumentException(mensagem);
             case 404 -> new NaoEncontrado(mensagem);
-            case 409 -> new IllegalStateException(mensagem);
+            case 409 -> new ReservationConflictException(mensagem);
             case 422 -> new IdempotencyConflictException(mensagem);
             default -> new RuntimeException("Serviço reservation respondeu HTTP " + status + ": " + mensagem);
         };

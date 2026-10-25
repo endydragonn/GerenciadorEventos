@@ -33,14 +33,12 @@ SET ROLE :"app_user";
 
 \i /app-init/01-functions.sql
 \i /app-init/02-users.sql
-\i /app-init/03-event.sql
-\i /app-init/05-eventpresenter.sql
 \i /app-init/06-mywallet.sql
 \i /app-init/08-pending-verifications.sql
 \i /app-init/11-event-store.sql
 \i /app-init/12-notification.sql
 \i /app-init/13-reservation.sql
--- catalog (#35, fatia 2): convive com 03/05 até o cutover (fatia 3)
+-- catalog (#35): event/eventpresenter e o event store do serviço, no schema catalog (substituiu o 03-event e o 05-eventpresenter)
 \i /app-init/14-catalog.sql
 \i /app-init/99-tests.sql
 

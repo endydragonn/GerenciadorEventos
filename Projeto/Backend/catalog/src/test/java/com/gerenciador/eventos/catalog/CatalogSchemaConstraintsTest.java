@@ -37,6 +37,19 @@ public class CatalogSchemaConstraintsTest {
         }
     }
 
+    /** O UNIQUE {@code Event_event_name_key} restringe EXATAMENTE {@code event_name} (igualdade de conjunto, issue #59). */
+    @Test
+    void eventEventNameTemConstraintUniqueSoPelaColunaEventName() throws Exception {
+        try (Connection conn = databaseConnection.getConnection(); PreparedStatement ps = conn.prepareStatement(
+                "SELECT array_agg(a.attname::text ORDER BY a.attname) FROM pg_constraint c "
+              + "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey) "
+              + "WHERE c.conname = 'Event_event_name_key' AND c.conrelid = 'catalog.event'::regclass AND c.contype = 'u'");
+             ResultSet rs = ps.executeQuery()) {
+            rs.next();
+            assertEquals(java.util.List.of("event_name"), java.util.Arrays.asList((Object[]) rs.getArray(1).getArray()));
+        }
+    }
+
     /** {@code creator_id} sem FK: um id que não existe em {@code users} é aceito (quem confere o criador é o gateway). */
     @Test
     void creatorIdInexistenteEmUsersEhAceito() throws Exception {

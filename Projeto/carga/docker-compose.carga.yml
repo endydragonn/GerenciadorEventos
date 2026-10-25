@@ -14,12 +14,15 @@
 # - Lag por evento (relay_ms / consumer_ms / total_ms) no logger events.lag do RESERVATION: DESLIGADO por padrao (um log por
 #   evento no thread do unico consumer infla o consumer_ms medido). Para ligar SO na rodada que mede o lag, descomente
 #   a linha LOGGING_LEVEL_EVENTS_LAG do reservation abaixo (e confira tambem o offset lag: rpk group describe reservation).
+# - POST /bff/seed (o kit de carga semeia por ele: lib-seed.ps1 -> docs/carga/harness/setup.sh) so existe com SEED_ENABLED=true
+#   (issue #35: desligado por padrao no compose normal, 404). Ligado aqui; ligado, o creator_id do corpo e aceito (ferramenta de dev).
 # - SQL/Hibernate em INFO no backend: o application.properties liga log DEBUG de SQL, que distorce
 #   latencia sob carga. Aqui so no ambiente de teste. (O reservation nao usa Hibernate.)
 services:
   backend:
     environment:
       RESERVATION_READPATH: ${RESERVATION_READPATH:-cas}
+      SEED_ENABLED: "true"
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${BACKEND_HIKARI_MAXIMUM_POOL_SIZE:-350}
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-5}
       SPRING_JPA_SHOW_SQL: "false"

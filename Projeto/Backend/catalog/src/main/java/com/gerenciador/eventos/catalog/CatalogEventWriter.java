@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.gerenciador.eventos.catalogclient.api.EventoEmConflitoException;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 import com.gerenciador.eventos.shared.events.EventEnvelope;
 import com.gerenciador.eventos.shared.events.EventStore;
@@ -103,7 +104,7 @@ public class CatalogEventWriter {
                     eventId = id;
                     version = rs.getInt(1);
                     if (version == 0) { // pré-ES: sem EventCreated, um append aqui deixaria um stream órfão a partir da v1
-                        throw new IllegalStateException("Evento " + id + " é pré-ES (version = 0, sem stream): aplique "
+                        throw new EventoEmConflitoException("Evento " + id + " é pré-ES (version = 0, sem stream): aplique "
                                 + "db/migrations/20261022-catalog-event-version.sql (backfill) antes de alterá-lo");
                     }
                     return true;
@@ -134,7 +135,7 @@ public class CatalogEventWriter {
                 } catch (ConflitoDeVersao ex) {
                     conn.rollback();
                     if (tentativa >= MAX_TENTATIVAS) {
-                        throw new IllegalStateException(
+                        throw new EventoEmConflitoException(
                                 "Conflito de versão no stream catalog.event após " + MAX_TENTATIVAS + " tentativas");
                     }
                 } catch (SQLException | RuntimeException ex) {

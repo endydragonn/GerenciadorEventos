@@ -14,7 +14,13 @@
 -- este seed é script de OPERADOR (psql como admin) e por isso escreve nos dois schemas. Os eventos inseridos aqui não passam
 -- pelo serviço; o eventcap vem direto no INSERT abaixo.
 
+-- Desde a #35 (Fase 7) event/eventpresenter são do schema `catalog` (serviço catalog), depois da migração
+-- db/migrations/20261026-catalog-schema.sql; num banco ainda não migrado continuam em `public`. O schema é escolhido na hora
+-- (variável do psql :evs; rode com psql, não com outro cliente).
+
 SET client_encoding = 'UTF8';
+
+SELECT CASE WHEN to_regclass('public.event') IS NOT NULL THEN 'public' ELSE 'catalog' END AS evs \gset
 
 -- Inserir usuários de exemplo
 INSERT INTO users (user_name, email, fone, password, birthdate, admin) VALUES
@@ -26,7 +32,7 @@ INSERT INTO users (user_name, email, fone, password, birthdate, admin) VALUES
 ON CONFLICT (email) DO NOTHING;
 
 -- Inserir eventos de exemplo (metadados apenas; capacidade vai em eventcap)
-INSERT INTO event (creator_id, event_name, ead, address, event_date, description) VALUES
+INSERT INTO :"evs".event (creator_id, event_name, ead, address, event_date, description) VALUES
     (
         (SELECT user_id FROM users WHERE email = 'joao.silva@email.com'),
         'Workshop de Java',
@@ -79,18 +85,18 @@ FROM (VALUES
     ('Meetup de Spring Boot', 80,  79,  TIMESTAMP '2026-12-01 18:00:00'),
     ('Curso de Docker',       30,  29,  TIMESTAMP '2027-02-04 23:59:59')
 ) AS v(event_name, capacity, quant, buy_time_limit)
-JOIN event e ON e.event_name = v.event_name
+JOIN :"evs".event e ON e.event_name = v.event_name
 ON CONFLICT (event_id) DO NOTHING;
 
 -- Apresentadores de exemplo
-INSERT INTO eventpresenter (event_id, presenter_name)
+INSERT INTO :"evs".eventpresenter (event_id, presenter_name)
 SELECT e.event_id, v.presenter_name
 FROM (VALUES
     ('Workshop de Java',      'Fulano de Tal'),
     ('Workshop de Java',      'Ciclana Souza'),
     ('Conferência de DevOps', 'Beltrano Lima')
 ) AS v(event_name, presenter_name)
-JOIN event e ON e.event_name = v.event_name
+JOIN :"evs".event e ON e.event_name = v.event_name
 ON CONFLICT (event_id, presenter_name) DO NOTHING;
 
 -- Nota: MyWallet é criada automaticamente pelo trigger create_wallet_for_user
@@ -100,32 +106,32 @@ ON CONFLICT (event_id, presenter_name) DO NOTHING;
 INSERT INTO reservation.walletevent (user_id, event_id, status) VALUES
     (
         (SELECT user_id FROM users WHERE email = 'maria.santos@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Workshop de Java'),
+        (SELECT event_id FROM :"evs".event WHERE event_name = 'Workshop de Java'),
         'confirmed'
     ),
     (
         (SELECT user_id FROM users WHERE email = 'pedro.oliveira@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Conferência de DevOps'),
+        (SELECT event_id FROM :"evs".event WHERE event_name = 'Conferência de DevOps'),
         'confirmed'
     ),
     (
         (SELECT user_id FROM users WHERE email = 'ana.costa@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Meetup de Spring Boot'),
+        (SELECT event_id FROM :"evs".event WHERE event_name = 'Meetup de Spring Boot'),
         'confirmed'
     ),
     (
         (SELECT user_id FROM users WHERE email = 'carlos.souza@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Hackathon 2026'),
+        (SELECT event_id FROM :"evs".event WHERE event_name = 'Hackathon 2026'),
         'confirmed'
     ),
     (
         (SELECT user_id FROM users WHERE email = 'maria.santos@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Curso de Docker'),
+        (SELECT event_id FROM :"evs".event WHERE event_name = 'Curso de Docker'),
         'confirmed'
     ),
     (
         (SELECT user_id FROM users WHERE email = 'joao.silva@email.com'),
-        (SELECT event_id FROM event WHERE event_name = 'Conferência de DevOps'),
+        (SELECT event_id FROM :"evs".event WHERE event_name = 'Conferência de DevOps'),
         'confirmed'
     )
 ON CONFLICT (user_id, event_id) DO NOTHING;
@@ -139,7 +145,8 @@ DECLARE
     v_transactions_count INTEGER;
 BEGIN
     SELECT COUNT(*) INTO v_users_count FROM users;
-    SELECT COUNT(*) INTO v_events_count FROM event;
+    EXECUTE format('SELECT count(*) FROM %s', COALESCE(to_regclass('public.event'), to_regclass('catalog.event')))
+        INTO v_events_count;
     SELECT COUNT(*) INTO v_wallets_count FROM mywallet;
     SELECT COUNT(*) INTO v_transactions_count FROM reservation.walletevent;
 
@@ -168,7 +175,7 @@ SELECT e.event_id, e.event_name,
        TO_CHAR(e.event_date, 'DD/MM/YYYY HH24:MI') as data_evento,
        c.capacity as capacidade,
        c.quant as vagas_disponiveis
-FROM event e
+FROM :"evs".event e
 LEFT JOIN reservation.eventcap c ON c.event_id = e.event_id
 ORDER BY e.event_date;
 
@@ -184,5 +191,5 @@ ORDER BY w.user_id;
 SELECT u.user_name as usuario, e.event_name as evento, we.status
 FROM reservation.walletevent we
 JOIN users u ON we.user_id = u.user_id
-JOIN event e ON we.event_id = e.event_id
+JOIN :"evs".event e ON we.event_id = e.event_id
 ORDER BY u.user_name, e.event_name;

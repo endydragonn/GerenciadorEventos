@@ -151,9 +151,9 @@ Decidido em 2026-09-02 ([Architecture-Decision-Microservices-Split](Architecture
 | `admission` | — (Redis) | — |
 
 Mudanças de referência:
-- **`event.creator_id` → `user.user_id` deixa de ser FK** (cross-service). Vira UUID solto;
-  `creator_name` é composto no `gateway` ou projetado no `catalog` a partir de eventos do
-  `identity`.
+- **`event.creator_id` → `user.user_id` deixa de ser FK** (cross-service). Continua `integer`, como
+  referência solta (sem FK; quem confere o criador é o `gateway`); UUID fica como evolução. `creator_name`
+  é composto no `gateway` (consulta em lote ao `identity` + cache), não projetado no `catalog` (issue #35).
 - `walletevent.event_id` → `event` também cruza serviço (`reservation` ↔ `catalog`): sem FK.
 - Cada schema de serviço tem uma tabela de **event store** (`stream_id`, `version`,
   `event_type`, `payload`, `occurred_at`) com concorrência otimista por `version`, e uma

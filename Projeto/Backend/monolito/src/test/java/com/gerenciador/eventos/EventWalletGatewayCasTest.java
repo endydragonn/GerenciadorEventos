@@ -1,7 +1,5 @@
 package com.gerenciador.eventos;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -13,32 +11,30 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
+import com.gerenciador.eventos.TestSupport.FakeCatalogServer;
 import com.gerenciador.eventos.TestSupport.FakeReservationServer;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.catalog.EventService;
-import com.gerenciador.eventos.catalog.api.Event;
+import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
+import com.gerenciador.eventos.catalogclient.api.Event;
+import com.gerenciador.eventos.catalogclient.api.EventApi;
 import com.gerenciador.eventos.gateway.EventWalletGateway;
 import com.gerenciador.eventos.identity.UserService;
 import com.gerenciador.eventos.identity.api.User;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
-import com.gerenciador.eventos.reservationclient.api.EventCapacityApi;
-import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**
  * O braço CAS (default) decidido no gateway: UMA chamada HTTP ao serviço reservation (o CAS é atômico lá dentro, sem ler a
- * disponibilidade antes). Também cobre a criação do {@code eventcap} por chamada síncrona do catalog, idempotente por
- * {@code event_id}, e a falha dessa chamada (a criação do evento não pode quebrar: o reservation reconcilia pelo tópico).
+ * disponibilidade antes). Desde a #35 o evento vem do serviço catalog (aqui o {@code FakeCatalogServer}, pelo
+ * {@code CatalogClient} real): a criação do {@code eventcap} e a hidratação em lote são do catalog e são testadas no módulo dele
+ * ({@code catalog/EventTest}).
  */
 @SpringBootTest
 @Import(GlobalDbTruncator.class)
 public class EventWalletGatewayCasTest {
 
     @Autowired private UserService userService;
-    @Autowired private EventService eventService;
+    @Autowired private EventApi eventService;
     @Autowired private EventWalletGateway gateway;
-    @Autowired private DatabaseConnection db;
-    @Autowired private EventCapacityApi capacidade;
 
     @Test
     void casEhUmaChamadaSoPostDaReservaSemLerADisponibilidade() {
@@ -81,80 +77,12 @@ public class EventWalletGatewayCasTest {
     }
 
     /**
-     * Janela de falha documentada (issue #33, decisão 3): o catalog cria o {@code eventcap} por chamada síncrona DEPOIS de
-     * comitar o evento. Se o reservation estiver fora, o evento já existe, a criação NÃO quebra (responde com os valores da
-     * requisição) e o {@code eventcap} chega depois pelo {@code EventCreated} do tópico (reconciliação, no serviço). A
-     * criação é idempotente por {@code event_id}: repetir não altera a capacidade.
-     */
-    @Test
-    void criarEventoComOReservationForaNaoQuebraEACapacidadeChegaDepoisPelaReconciliacao() {
-        User u = usuario("gw-cas-5");
-        FakeReservationServer reservation = FakeReservationServer.get();
-        reservation.falharCriacaoDeCapacidade(true);
-        Event e;
-        try {
-            e = evento(u.getId(), "GW CAS reservation fora", 5);
-        } finally {
-            reservation.falharCriacaoDeCapacidade(false);
-        }
-
-        assertEquals(5, e.getLot_quantity(), "a resposta traz a capacidade pedida");
-        assertEquals(5, e.getQuantity());
-        assertEquals(null, capacidade.findByEventId(e.getEvent_id()), "o serviço ainda não tem o eventcap");
-
-        // a reconciliação pelo EventCreated chama a mesma criação idempotente (no serviço real, direto no repositório)
-        capacidade.create(new EventCap(e.getEvent_id(), 5, 5, e.getBuy_time_limit()));
-        capacidade.create(new EventCap(e.getEvent_id(), 99, 99, null));
-        assertEquals(5, capacidade.findByEventId(e.getEvent_id()).getCapacity(), "o eventcap criado primeiro vence");
-    }
-
-    /**
-     * Editar um evento que ficou SEM eventcap (a criação síncrona falhou e a reconciliação ainda não rodou) não perde a edição:
-     * o PATCH responde 404 e o catalog cria o eventcap com os valores NOVOS (a reconciliação, depois, é no-op).
-     */
-    @Test
-    void editarEventoSemEventcapCriaOEventcapComAsCapacidadeNova() {
-        User u = usuario("gw-cas-6");
-        FakeReservationServer reservation = FakeReservationServer.get();
-        reservation.falharCriacaoDeCapacidade(true);
-        Event e;
-        try {
-            e = evento(u.getId(), "GW CAS editar sem eventcap", 5);
-        } finally {
-            reservation.falharCriacaoDeCapacidade(false);
-        }
-        assertEquals(null, capacidade.findByEventId(e.getEvent_id()));
-
-        e.setLot_quantity(9);
-        eventService.updateEvent(e);
-
-        assertEquals(9, capacidade.findByEventId(e.getEvent_id()).getCapacity(), "a edição não se perdeu");
-    }
-
-    /** {@code findByCreatorId} hidrata a lista com UMA chamada em lote, não uma por evento. */
-    @Test
-    void eventosDoCriadorSaoHidratadosEmUmaChamadaSo() {
-        User u = usuario("gw-cas-7");
-        evento(u.getId(), "GW CAS criador 1", 2);
-        evento(u.getId(), "GW CAS criador 2", 3);
-        evento(u.getId(), "GW CAS criador 3", 4);
-        FakeReservationServer reservation = FakeReservationServer.get();
-        reservation.limparChamadas();
-
-        List<Event> eventos = eventService.findByCreatorId(u.getId());
-
-        assertEquals(3, eventos.size());
-        assertEquals(List.of(2, 3, 4), eventos.stream().map(Event::getLot_quantity).sorted().toList());
-        assertEquals(List.of("POST /internal/eventcaps/batch"), reservation.chamadas());
-    }
-
-    /**
-     * Issue #35: o gateway guarda o {@code exists(eventId)} positivo por ~30 s (o catalog vira salto de rede). Apagado o evento,
+     * Issue #35: o gateway guarda o {@code exists(eventId)} positivo por ~30 s (o catalog é um salto de rede). Apagado o evento,
      * a conferência do gateway ainda o vê dentro da janela (o reservation recusa a reserva depois, sem {@code eventcap}); o
      * negativo nunca é guardado.
      */
     @Test
-    void existsDoEventoTemCachePositivo() throws Exception {
+    void existsDoEventoTemCachePositivo() {
         User u = usuario("gw-cas-8");
         Event e = evento(u.getId(), "GW CAS cache exists", 2);
         assertEquals("", gateway.getValidationErrors(new EventWallet(u.getId(), e.getEvent_id())));
@@ -165,27 +93,41 @@ public class EventWalletGatewayCasTest {
         assertEquals("", gateway.getValidationErrors(new EventWallet(u.getId(), e.getEvent_id())),
                 "positivo em cache: o gateway não reconsulta o catalog dentro da janela");
 
-        // negativo NÃO vai para o cache: consulta um id inexistente, cria o evento com ESSE id e ele aparece na hora
+        // negativo NÃO vai para o cache: consulta um id inexistente, o catalog passa a ter um evento com ESSE id e ele aparece
         long idNovo = 2_000_000_000L + (System.nanoTime() % 100_000_000L);
         assertEquals("Evento não encontrado.", gateway.getValidationErrors(new EventWallet(u.getId(), idNovo)));
-        try (Connection c = db.getConnection(); PreparedStatement ps = c.prepareStatement(
-                "INSERT INTO public.event (event_id, creator_id, event_name, ead, event_date, description, version) "
-                        + "OVERRIDING SYSTEM VALUE VALUES (?, ?, ?, true, CURRENT_TIMESTAMP + interval '10 days', 'desc', 1)")) {
-            ps.setLong(1, idNovo);
-            ps.setLong(2, u.getId());
-            ps.setString(3, "GW CAS cache negativo " + idNovo);
-            ps.executeUpdate();
-        }
+        FakeCatalogServer catalog = FakeCatalogServer.get();
+        catalog.gravarComId(idNovo, u.getId(), "GW CAS cache negativo " + idNovo);
         try {
             assertEquals("", gateway.getValidationErrors(new EventWallet(u.getId(), idNovo)),
                     "o 'não existe' anterior não ficou em cache: o evento recém-criado já é visto");
         } finally {
-            try (Connection c = db.getConnection(); PreparedStatement ps = c.prepareStatement(
-                    "DELETE FROM public.event WHERE event_id = ?")) {
-                ps.setLong(1, idNovo);
-                ps.executeUpdate();
-            }
+            catalog.apagar(idNovo);
         }
+    }
+
+    /**
+     * Caso 6 do spec (parte do gateway): com o catalog fora, a conferência do evento na reserva FALHA com erro
+     * ({@link CatalogUnavailableException}, 503 no {@code /bff}) e NUNCA vira "Evento não encontrado"; nada chega ao reservation.
+     * O id nunca foi conferido antes (o cache positivo não mascara a falha).
+     */
+    @Test
+    void catalogForaNaReservaFalhaComErroENuncaComEventoNaoEncontrado() {
+        User u = usuario("gw-cas-9");
+        long nuncaConferido = 1_900_000_000L + (System.nanoTime() % 100_000_000L);
+        FakeReservationServer reservation = FakeReservationServer.get();
+        reservation.limparChamadas();
+        FakeCatalogServer catalog = FakeCatalogServer.get();
+        catalog.foraDoAr(true);
+        try {
+            assertThrows(CatalogUnavailableException.class,
+                    () -> gateway.addLink(new EventWallet(u.getId(), nuncaConferido), null));
+            assertThrows(CatalogUnavailableException.class,
+                    () -> gateway.getValidationErrors(new EventWallet(u.getId(), nuncaConferido)));
+        } finally {
+            catalog.foraDoAr(false);
+        }
+        assertEquals(List.of(), reservation.chamadas(), "a reserva não foi tentada");
     }
 
     private User usuario(String prefixo) {

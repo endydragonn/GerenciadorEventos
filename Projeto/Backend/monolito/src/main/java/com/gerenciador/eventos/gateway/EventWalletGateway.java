@@ -6,7 +6,7 @@ import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import com.gerenciador.eventos.catalog.api.EventApi;
+import com.gerenciador.eventos.catalogclient.api.EventApi;
 import com.gerenciador.eventos.identity.api.MyWalletApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.EventWalletApi;

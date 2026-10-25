@@ -14,7 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import com.gerenciador.eventos.catalog.api.Event;
+import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.identity.api.UserApi;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;

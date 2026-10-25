@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -12,8 +13,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.gerenciador.eventos.catalog.api.Event;
-import com.gerenciador.eventos.catalog.api.EventApi;
+import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
+import com.gerenciador.eventos.catalogclient.api.Event;
+import com.gerenciador.eventos.catalogclient.api.EventApi;
 import com.gerenciador.eventos.identity.api.User;
 import com.gerenciador.eventos.identity.api.UserApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
@@ -22,6 +24,11 @@ import com.gerenciador.eventos.reservationclient.api.EventWallet;
  * Popula o banco com dados de exemplo (uso em dev). Garante que senhas sejam
  * criptografadas ao passar pelo {@link UserApi}. Antes desta issue (#78) vivia em
  * {@code Controller.SeedController} sob {@code /api/seed}; comportamento inalterado.
+ *
+ * <p>Issue #35 (spec, aceite 7): <b>desligado por padrão</b>. Sem {@code SEED_ENABLED=true} ({@code seed.enabled}) o
+ * {@code POST /bff/seed} responde 404 e nada é criado; a rota é pública e aceitaria {@code creator_id}/{@code isAdmin} de
+ * qualquer um. Liga-se só no override de carga/dev ({@code carga/docker-compose.carga.yml}) e nos testes; ligado, o
+ * {@code creator_id} do corpo é aceito (ferramenta de dev).</p>
  */
 @RestController
 @RequestMapping("/bff/seed")
@@ -30,12 +37,15 @@ public class BffSeedController {
     private final UserApi userService;
     private final EventApi eventService;
     private final EventWalletGateway eventWalletService;
+    private final boolean habilitado;
 
     public BffSeedController(UserApi userService, EventApi eventService,
-                              EventWalletGateway eventWalletService) {
+                              EventWalletGateway eventWalletService,
+                              @Value("${seed.enabled:false}") boolean habilitado) {
         this.userService = userService;
         this.eventService = eventService;
         this.eventWalletService = eventWalletService;
+        this.habilitado = habilitado;
     }
 
     /**
@@ -75,6 +85,9 @@ public class BffSeedController {
      */
     @PostMapping
     public ResponseEntity<?> seedDatabase(@RequestBody SeedData seedData) {
+        if (!habilitado) {
+            return ResponseEntity.notFound().build(); // SEED_ENABLED desligado (default): a rota "não existe"
+        }
         Map<String, Object> result = new HashMap<>();
         List<String> errors = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
@@ -103,7 +116,7 @@ public class BffSeedController {
             for (Event event : seedData.getEvents()) {
                 try {
                     // o criador é do identity: conferido aqui (o catalog só guarda o id). Ferramenta de dev: o creator_id do
-                    // corpo é aceito (issue #35); a flag SEED_ENABLED vem na fatia 3.
+                    // corpo é aceito (issue #35), só com SEED_ENABLED ligado.
                     if (event.getCreator_id() != null && !userService.exists(event.getCreator_id())) {
                         throw new IllegalArgumentException("creator_id não existe");
                     }
@@ -111,6 +124,8 @@ public class BffSeedController {
                     eventsCreated++;
                 } catch (IllegalArgumentException e) {
                     warnings.add("Evento '" + event.getEvent_name() + "': " + e.getMessage());
+                } catch (CatalogUnavailableException e) { // a mensagem traz URL interna: fica no log, não na resposta
+                    errors.add("Erro ao criar evento '" + event.getEvent_name() + "': " + CatalogIndisponivelHandler.INDISPONIVEL);
                 } catch (Exception e) {
                     errors.add("Erro ao criar evento '" + event.getEvent_name() + "': " + e.getMessage());
                 }
@@ -128,6 +143,8 @@ public class BffSeedController {
                 } catch (IllegalArgumentException e) {
                     warnings.add("Inscrição (user:" + enrollment.getUserId() +
                                ", event:" + enrollment.getEventId() + "): " + e.getMessage());
+                } catch (CatalogUnavailableException e) {
+                    errors.add("Erro ao criar inscrição: " + CatalogIndisponivelHandler.INDISPONIVEL);
                 } catch (Exception e) {
                     errors.add("Erro ao criar inscrição: " + e.getMessage());
                 }

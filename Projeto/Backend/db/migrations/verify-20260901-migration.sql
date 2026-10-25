@@ -10,7 +10,7 @@
 --       (ANTIGO: ingressos vendidos  ->  NOVO: vagas disponíveis = capacity - vendidos),
 --     inclusive esgotamento (piso 0, capacity preservada) e evento ilimitado (-1 / -1).
 --
--- Executar SEMPRE num banco DESCARTÁVEL já inicializado pelos init-scripts 01–11
+-- Executar SEMPRE num banco DESCARTÁVEL já inicializado pelos init-scripts atuais (ver o .sh)
 -- (schema NOVO) — NUNCA em `meu_banco`. O reshape abaixo é destrutivo.
 --
 -- Uso (ver verify-20260901-migration.sh, que monta o banco descartável):
@@ -30,6 +30,27 @@ SET client_encoding = 'UTF8';
 -- ---------------------------------------------------------------------------
 DROP TABLE IF EXISTS public.eventpresenter;
 DROP TABLE IF EXISTS public.eventcap;
+
+-- Desde a #35 event/eventpresenter moram no schema catalog (14-catalog.sql) e o 03-event.sql saiu: a migração de 2026-09-01 só
+-- conhece o estado LEGADO em public (ALTER TABLE public.event, FKs para public.event). O harness recria a public.event legada (DDL
+-- do antigo 03-event.sql) e a derruba no fim, sem tocar no schema catalog.
+CREATE TABLE IF NOT EXISTS public.event
+(
+    event_id integer NOT NULL GENERATED ALWAYS AS IDENTITY,
+    creator_id integer NOT NULL,
+    event_name text NOT NULL,
+    ead boolean NOT NULL DEFAULT false,
+    address text,
+    event_date timestamp without time zone NOT NULL,
+    description text NOT NULL,
+    image_data bytea,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    version integer NOT NULL DEFAULT 0,
+    CONSTRAINT "Event_pkey" PRIMARY KEY (event_id),
+    CONSTRAINT "Event_event_name_key" UNIQUE (event_name),
+    CONSTRAINT "Event_creator_id_fkey" FOREIGN KEY (creator_id) REFERENCES public.users (user_id)
+);
 
 -- Desde a #33 eventcap/walletevent moram no schema reservation, sem FK (init-script 13); a migração de 2026-09-01 só
 -- conhece o estado LEGADO em public. O harness reconstrói a walletevent legada (já com status/expires_at/version: o
@@ -285,6 +306,8 @@ END $$;
 -- Limpeza: as tabelas legadas de public não existem no schema atual.
 DROP TABLE IF EXISTS public.eventcap CASCADE;
 DROP TABLE IF EXISTS public.walletevent CASCADE;
+DROP TABLE IF EXISTS public.eventpresenter CASCADE;
+DROP TABLE IF EXISTS public.event CASCADE;
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'walletevent_status_check_res') THEN
         ALTER TABLE reservation.walletevent RENAME CONSTRAINT walletevent_status_check_res TO walletevent_status_check;

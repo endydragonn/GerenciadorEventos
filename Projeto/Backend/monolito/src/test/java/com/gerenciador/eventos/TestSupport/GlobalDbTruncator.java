@@ -34,6 +34,10 @@ public class GlobalDbTruncator {
         if (fake != null) {
             fake.reset();
         }
+        FakeCatalogServer catalog = FakeCatalogServer.get(); // eventos do catalog falso (#35), em memória
+        if (catalog != null) {
+            catalog.reset();
+        }
         String truncateSQL = null;
         try (Connection conn = databaseConnection.getConnection();
              Statement stmt = conn.createStatement()) {

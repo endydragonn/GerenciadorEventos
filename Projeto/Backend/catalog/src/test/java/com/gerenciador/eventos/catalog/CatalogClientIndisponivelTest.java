@@ -8,12 +8,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.Test;
 
 import com.gerenciador.eventos.catalogclient.CatalogClient;
 import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
 import com.gerenciador.eventos.catalogclient.api.Event;
+import com.gerenciador.eventos.catalogclient.api.EventoNaoEncontradoException;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -87,6 +89,44 @@ public class CatalogClientIndisponivelTest {
             assertThrows(CatalogUnavailableException.class, () -> c.findById(1L));
             Thread.sleep(TIMEOUT_CURTO.toMillis() * 5); // deixa o servidor terminar as respostas atrasadas
             assertEquals(2, chamadas.get(), "cada chamada chegou uma vez só (sem retry)");
+        } finally {
+            c.close();
+            server.stop(0);
+        }
+    }
+
+    /**
+     * Um 404 que NÃO veio do catalog (rota inexistente, URL apontando para outro serviço, proxy) não pode virar "não encontrado"
+     * ({@code null} em {@code findImage}/{@code findCreatorId}, 404 no gateway): só o 404 com o cabeçalho
+     * {@link EventoNaoEncontradoException#HEADER} é "o evento não existe"; o resto é indisponibilidade.
+     */
+    @Test
+    void resposta404SemOMarcadorDoCatalogViraIndisponivel() throws Exception {
+        AtomicInteger chamadas = new AtomicInteger();
+        HttpServer server = servidor(ex -> responder(ex, 404, chamadas));
+        CatalogClient c = cliente("http://127.0.0.1:" + server.getAddress().getPort());
+        try {
+            assertThrows(CatalogUnavailableException.class, () -> c.findImage(1L), "404 de rota não é 'sem imagem'");
+            assertThrows(CatalogUnavailableException.class, () -> c.findCreatorId(1L), "404 de rota não é 'evento não existe'");
+            assertThrows(CatalogUnavailableException.class, () -> c.findById(1L));
+            assertThrows(CatalogUnavailableException.class, () -> c.exists(1L));
+        } finally {
+            c.close();
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void resposta404ComOMarcadorDoCatalogEhNaoEncontrado() throws Exception {
+        HttpServer server = servidor(ex -> {
+            ex.getResponseHeaders().add(EventoNaoEncontradoException.HEADER, "true");
+            responder(ex, 404, new AtomicInteger());
+        });
+        CatalogClient c = cliente("http://127.0.0.1:" + server.getAddress().getPort());
+        try {
+            assertNull(c.findImage(1L));
+            assertNull(c.findCreatorId(1L));
+            assertThrows(EventoNaoEncontradoException.class, () -> c.findById(1L));
         } finally {
             c.close();
             server.stop(0);

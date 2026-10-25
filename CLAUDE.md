@@ -98,23 +98,30 @@ commitar ou registrar em log.
   clara se faltar um deles). **Pare o `gerenciador-backend` antes** (`docker stop gerenciador-backend`): desde a #28/#29 o
   relay e o consumer dele compartilham o `meu_banco` e drenam o `event_outbox` dos testes; o script aborta com
   mensagem clara se o container estiver rodando. Desde a #32 o script roda o **reactor Maven inteiro** (`shared`, `reservation-client`,
-  `monolito`, `notification`, `reservation`) e também aborta se o `gerenciador-notification` ou o `gerenciador-reservation` estiverem
-  rodando (`docker stop gerenciador-notification gerenciador-reservation`; o notification
-  consumiria o tópico dos testes e mandaria e-mail de verdade, o reservation dividiria o banco e o broker deles); ao fim o script também move o group `notification` para o
+  `catalog-client`, `monolito`, `notification`, `reservation`, `catalog`) e também aborta se o `gerenciador-notification`, o
+  `gerenciador-reservation` ou o `gerenciador-catalog` estiverem rodando
+  (`docker stop gerenciador-backend gerenciador-notification gerenciador-reservation gerenciador-catalog`; o notification
+  consumiria o tópico dos testes e mandaria e-mail de verdade, o reservation e o catalog dividiriam o banco e o broker deles); ao fim o script também move o group `notification` para o
   fim do tópico (`rpk group seek`), para os eventos de teste nunca virarem e-mail quando o serviço subir (um e-mail real pendente
   antes da rodada é pulado). Ao fim o script também move os groups `reservation` e `reservation-catalog` para o fim dos tópicos
   `reservation.wallet` / `catalog.event` (a reconciliação criaria `eventcap` para ids de evento de teste). Banco já existente precisa dos
-  schemas novos: aplicar `Projeto/Backend/db/migrations/20261024-notification-schema.sql` e, **com o backend e o reservation parados**,
-  `20261025-reservation-schema.sql` (idempotentes; bancos novos já nascem com eles).
-- **`INTERNAL_API_TOKEN` (desde a #33, volta 3):** as chamadas internas gateway → reservation (`/internal/**`) exigem um token de serviço
+  schemas novos: aplicar `Projeto/Backend/db/migrations/20261024-notification-schema.sql`, **com o backend e o reservation parados**
+  `20261025-reservation-schema.sql` e, **com o backend e o catalog parados e depois do backup
+  `pg_dump -h localhost -U admin --clean --if-exists -n public meu_banco`** (backup, migração e rollback no cabeçalho do arquivo),
+  `20261026-catalog-schema.sql` (move `event`/`eventpresenter` e o stream `catalog.event` para o schema `catalog`;
+  idempotentes; bancos novos já nascem com eles). O `run-tests.sh` **aborta** se o banco ainda tiver `public.event` (migração 20261026
+  pendente) ou não tiver `catalog.event`.
+- **`INTERNAL_API_TOKEN` (desde a #33, volta 3):** as chamadas internas gateway → reservation e gateway → catalog (`/internal/**`; #35) exigem um token de serviço
   (header `X-Internal-Token`; 401 sem/errado). **Acrescente ao `Projeto/.env` (você mesmo; o repo nunca edita nem imprime o `.env`)**
-  `INTERNAL_API_TOKEN=<valor aleatório>`, por exemplo gerado com `openssl rand -hex 32`. O compose repassa o MESMO valor ao `backend` e ao
-  `reservation`. Não há valor default: sem a variável **qualquer `docker compose`** (inclusive o `up -d db redpanda` dos testes)
-  recusa com mensagem clara (`${INTERNAL_API_TOKEN:?...}`), e os dois serviços também falham no boot. O `run-tests.sh` usa um valor de teste
+  `INTERNAL_API_TOKEN=<valor aleatório>`, por exemplo gerado com `openssl rand -hex 32`. O compose repassa o MESMO valor ao `backend`, ao
+  `reservation` e ao `catalog`. Não há valor default: sem a variável **qualquer `docker compose`** (inclusive o `up -d db redpanda` dos testes)
+  recusa com mensagem clara (`${INTERNAL_API_TOKEN:?...}`), e os serviços também falham no boot. O `run-tests.sh` usa um valor de teste
   explícito (não é segredo).
 - O serviço `notification` sobe junto com `up -d --build` (container `gerenciador-notification`); o `backend` não depende dele. O serviço
-  `reservation` (container `gerenciador-reservation`, API interna `:8082` só na rede `gerenciador-net`) também sobe junto, mas o `backend`
-  **depende dele** (`service_healthy`).
+  `reservation` (container `gerenciador-reservation`, API interna `:8082` só na rede `gerenciador-net`) e o serviço `catalog` (#35, container
+  `gerenciador-catalog`, API interna `:8083` só na rede `gerenciador-net`) também sobem junto, e o `backend` **depende dos dois**
+  (`service_healthy`). `POST /bff/seed` fica **desligado** (404) no compose normal; o override de carga (`carga/docker-compose.carga.yml`)
+  liga `SEED_ENABLED=true`.
 - Relate o resultado real dos testes; se algo falhou ou foi pulado, diga.
 
 ## Documentação de arquitetura (vault Obsidian)

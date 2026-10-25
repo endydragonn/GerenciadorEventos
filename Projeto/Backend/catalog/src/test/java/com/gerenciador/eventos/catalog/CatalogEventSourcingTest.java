@@ -33,6 +33,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gerenciador.eventos.TestSupport.FakeEventCapServer;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.catalogclient.api.Event;
+import com.gerenciador.eventos.catalogclient.api.EventoEmConflitoException;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 import com.gerenciador.eventos.shared.events.EventReplay;
 import com.gerenciador.eventos.shared.events.EventStore;
@@ -43,8 +44,8 @@ import com.gerenciador.eventos.shared.events.NovoEvento;
  * schema {@code catalog} (event store próprio). Cada escrita appenda no stream {@code catalog.event} na transação da projeção
  * inline ({@code catalog.event}/{@code catalog.eventpresenter}); conflito de versão repete o command; o replay do
  * {@code catalog.event_store} na sombra == projeção viva nas colunas comparáveis (sem {@code image_data} nem carimbos). O
- * criador é só um id (sem FK para {@code users}); o backfill da migração {@code 20261022} fica de fora (ela é de {@code public}
- * e é reescrita no cutover).
+ * criador é só um id (sem FK para {@code users}). O backfill da migração {@code 20261022} (reescrita no cutover da #35 para
+ * agir no schema em que {@code event} está) é exercitado aqui, no schema {@code catalog}.
  */
 @SpringBootTest
 @Import(GlobalDbTruncator.class)
@@ -169,7 +170,7 @@ public class CatalogEventSourcingTest {
     }
 
     @Test
-    void payloadsNaoTemImagemEGuardamValoresCalculados() throws Exception {
+    void payloadsNaoTemPiiNemImagemEGuardamValoresCalculados() throws Exception {
         Event e = novo("ES payload", 7, "Gil");
         e.setImage_data(new byte[] {9, 9, 9});
         e.setBuy_time_limit(null);                                 // calculado: assume a data do evento
@@ -181,6 +182,7 @@ public class CatalogEventSourcingTest {
             String payload = rs.getString(1);
             assertEquals(String.valueOf(salvo.getEvent_id()), rs.getString(2), "chave da mensagem = id do evento");
             assertEquals(String.valueOf(salvo.getEvent_id()), rs.getString(3));
+            assertFalse(payload.contains("@"), "sem e-mail/PII: " + payload);
             assertFalse(payload.toLowerCase().contains("image"), "image_data fica fora do ES: " + payload);
             var p = json.readTree(payload);
             assertEquals(CRIADOR, p.get("creatorId").asLong(), "só o id do criador");
@@ -221,7 +223,7 @@ public class CatalogEventSourcingTest {
         appendPorFora(id, 3);
         long antes = consultar("SELECT count(*) FROM catalog.event_store");
         e.setDescription("não pode gravar");
-        RuntimeException ex = assertThrows(RuntimeException.class, () -> eventService.updateEvent(e));
+        EventoEmConflitoException ex = assertThrows(EventoEmConflitoException.class, () -> eventService.updateEvent(e));
         assertTrue(ex.getMessage().contains("Conflito de versão"), ex.getMessage());
         assertEquals(antes, consultar("SELECT count(*) FROM catalog.event_store"));
         assertEquals("desc ES conflito", eventService.findById(id).getDescription());
@@ -273,7 +275,7 @@ public class CatalogEventSourcingTest {
         Event e = eventService.createEvent(novo("ES com reserva", 4));
         FakeEventCapServer.get().marcarReserva(e.getEvent_id());
 
-        assertThrows(IllegalStateException.class, () -> eventService.delete(e.getEvent_id()));
+        assertThrows(EventoEmConflitoException.class, () -> eventService.delete(e.getEvent_id()));
 
         assertEquals(List.of("EventCreated"), tiposDoStream(e.getEvent_id()), "nenhum EventCancelled");
         assertEquals(1, consultar("SELECT count(*) FROM catalog.event WHERE event_id = " + e.getEvent_id()));
@@ -304,7 +306,7 @@ public class CatalogEventSourcingTest {
     }
 
     @Test
-    void eventoPreESERecusado() throws Exception {
+    void eventoPreESERecusadoEOBackfillDaMigracaoCriaOStream() throws Exception {
         Event e = eventService.createEvent(novo("ES pre-ES", 6, "Iara"));
         long id = e.getEvent_id();
         try (Connection c = db.getConnection(); Statement st = c.createStatement()) { // estado de uma linha anterior à #28
@@ -312,10 +314,31 @@ public class CatalogEventSourcingTest {
             st.execute("TRUNCATE TABLE catalog.event_store, catalog.event_outbox");
         }
 
-        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> eventService.updateEvent(e));
+        EventoEmConflitoException ex = assertThrows(EventoEmConflitoException.class, () -> eventService.updateEvent(e));
         assertTrue(String.valueOf(ex.getMessage()).contains("pré-ES"), ex.getMessage());
-        assertThrows(IllegalStateException.class, () -> eventService.delete(id));
+        assertThrows(EventoEmConflitoException.class, () -> eventService.delete(id));
         assertEquals(0, consultar("SELECT count(*) FROM catalog.event_store"), "nenhum stream órfão");
         assertEquals(1, consultar("SELECT count(*) FROM catalog.event WHERE event_id = " + id), "e nada foi removido");
+
+        // o backfill da 20261022 age no schema em que event está (catalog, depois do cutover); cwd = o módulo catalog
+        String migracao = java.nio.file.Files.readString(
+                java.nio.file.Path.of("../db/migrations/20261022-catalog-event-version.sql"));
+        for (int i = 0; i < 2; i++) { // idempotente: a 2ª aplicação não duplica nada
+            try (Connection c = db.getConnection(); Statement st = c.createStatement()) {
+                st.execute(migracao);
+            }
+        }
+        assertEquals(List.of("EventCreated"), tiposDoStream(id));
+        assertEquals(1, consultar("SELECT version FROM catalog.event WHERE event_id = " + id));
+        assertEquals(1, consultar("SELECT count(*) FROM catalog.event_outbox"));
+        assertEquals(0, consultar("SELECT count(*) FROM public.event_store WHERE stream_type = 'catalog.event'"),
+                "nada no event store do monólito");
+
+        e.setDescription("depois do backfill");
+        eventService.updateEvent(e);
+        assertEquals(List.of("EventCreated", "EventUpdated"), tiposDoStream(id));
+        replay.rebuild(projection, CatalogEventProjection.STREAM_TYPE, SOMBRA);
+        assertEquals(List.of(), replay.divergentTables(projection, SOMBRA, COMPARAVEIS),
+                "o EventCreated do backfill reconstrói a mesma linha e os apresentadores");
     }
 }

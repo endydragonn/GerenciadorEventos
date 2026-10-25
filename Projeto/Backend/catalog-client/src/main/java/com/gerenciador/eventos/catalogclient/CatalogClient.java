@@ -30,6 +30,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.catalogclient.api.EventApi;
+import com.gerenciador.eventos.catalogclient.api.EventoEmConflitoException;
 import com.gerenciador.eventos.catalogclient.api.EventoNaoEncontradoException;
 
 /**
@@ -42,10 +43,11 @@ import com.gerenciador.eventos.catalogclient.api.EventoNaoEncontradoException;
  * livre do pool 5 s, {@code evictIdle} 20 s (< keep-alive de 60 s do catalog). <b>Sem retry automático</b>: um POST repetido às
  * cegas poderia criar o evento duas vezes.</p>
  *
- * <p><b>Erros</b> (o corpo da resposta de erro é a mensagem, texto puro): 400 => {@link IllegalArgumentException}, 404 =>
- * {@link EventoNaoEncontradoException} (ou {@code null}, onde o contrato devolve {@code null}), 409 =>
- * {@link IllegalStateException}; rede, timeout, 5xx e qualquer outro status => {@link CatalogUnavailableException}.
- * {@link #exists} nunca devolve {@code false} por falha.</p>
+ * <p><b>Erros</b> (o corpo da resposta de erro é a mensagem, texto puro): 400 => {@link IllegalArgumentException}, 404 COM o
+ * cabeçalho {@link EventoNaoEncontradoException#HEADER} => {@link EventoNaoEncontradoException} (ou {@code null}, onde o contrato
+ * devolve {@code null}), 409 => {@link EventoEmConflitoException}; rede, timeout, 5xx, 404 sem o cabeçalho (rota inexistente,
+ * URL de outro serviço) e qualquer outro status => {@link CatalogUnavailableException}. {@link #exists} nunca devolve
+ * {@code false} por falha.</p>
  */
 public class CatalogClient implements EventApi {
 
@@ -94,7 +96,7 @@ public class CatalogClient implements EventApi {
                     c.add(0, new MappingJackson2HttpMessageConverter(mapper));
                 })
                 .defaultStatusHandler(HttpStatusCode::isError, (req, resp) -> {
-                    throw erro(resp.getStatusCode().value(),
+                    throw erro(resp.getStatusCode().value(), resp.getHeaders().containsKey(EventoNaoEncontradoException.HEADER),
                             new String(resp.getBody().readAllBytes(), StandardCharsets.UTF_8));
                 })
                 .build();
@@ -213,11 +215,13 @@ public class CatalogClient implements EventApi {
         return eventos == null ? new ArrayList<>() : eventos;
     }
 
-    private static RuntimeException erro(int status, String mensagem) {
+    /** {@code naoEncontrado} = o 404 traz o cabeçalho do catalog; sem ele, o 404 não é do catalog (é falha, não "não existe"). */
+    private static RuntimeException erro(int status, boolean naoEncontrado, String mensagem) {
         return switch (status) {
             case 400 -> new IllegalArgumentException(mensagem);
-            case 404 -> new EventoNaoEncontradoException(mensagem);
-            case 409 -> new IllegalStateException(mensagem);
+            case 404 -> naoEncontrado ? new EventoNaoEncontradoException(mensagem)
+                    : new CatalogUnavailableException("Serviço catalog respondeu 404 sem o marcador de evento inexistente", null);
+            case 409 -> new EventoEmConflitoException(mensagem);
             default -> new CatalogUnavailableException("Serviço catalog respondeu HTTP " + status + ": " + mensagem, null);
         };
     }

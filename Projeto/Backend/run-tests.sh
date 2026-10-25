@@ -95,11 +95,26 @@ if [ -n "$(docker ps -q -f name=^gerenciador-reservation$)" ]; then
     exit 1
 fi
 
-# Schema do serviço catalog (#35, fatia 2): bancos novos já nascem com ele (supabase-app-init.sql), mas um volume existente não.
-# O 14-catalog.sql é idempotente e não destrutivo (só IF NOT EXISTS), então é aplicado a cada rodada, como a role do app.
-if ! docker exec -i -e PGOPTIONS='-c client_min_messages=warning' gerenciador-db \
-        psql -h localhost -U admin -d meu_banco -v ON_ERROR_STOP=1 -q < "$SCRIPT_DIR/db/init-scripts/14-catalog.sql"; then
-    echo "❌ Não consegui aplicar db/init-scripts/14-catalog.sql (schema catalog) no gerenciador-db. Abortando."
+# O serviço catalog (#35) tem o relay do catalog.event_outbox ligado no compose: drenaria o outbox dos testes do módulo catalog
+# (quebrando as provas de outbox/replay) e dividiria o banco deles. Falha cedo, como nos outros serviços.
+if [ -n "$(docker ps -q -f name=^gerenciador-catalog$)" ]; then
+    echo "❌ O container gerenciador-catalog está rodando: o relay dele disputa o banco e o Redpanda dos testes."
+    echo "   Pare-o antes: docker stop gerenciador-catalog"
+    echo ""
+    exit 1
+fi
+
+# Schema do serviço catalog (#35): bancos novos já nascem com ele (supabase-app-init.sql); um volume existente precisa da migração
+# 20261026 (move public.event/eventpresenter e o stream catalog.event para o schema catalog, preservando a identity de event_id).
+# O script NÃO aplica o 14-catalog.sql: num banco não migrado ele criaria catalog.event vazia ao lado de public.event. Só confere o
+# estado e aborta com o caminho da migração. O usuário do app vem do ambiente do próprio container (APP_DB_USER).
+ESTADO_CATALOG="$(echo "SELECT to_regclass('public.event') IS NULL, to_regclass('catalog.event') IS NOT NULL;" \
+    | docker exec -i gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d meu_banco -At' 2>&1)"
+if [ "$ESTADO_CATALOG" != "t|t" ]; then
+    echo "❌ O banco não está no schema do serviço catalog (public.event ainda existe ou catalog.event não existe; psql: $ESTADO_CATALOG)."
+    echo "   Pare o backend e o catalog, faça o backup e aplique a migração (ver o cabeçalho do arquivo):"
+    echo "   docker exec -i gerenciador-db psql -h localhost -U supabase_admin -d meu_banco -v ON_ERROR_STOP=1 \\"
+    echo "     < Projeto/Backend/db/migrations/20261026-catalog-schema.sql"
     echo ""
     exit 1
 fi
@@ -131,8 +146,8 @@ mkdir -p "$SCRIPT_DIR/target"
 # inteira, mesmo que o Projeto/.env tenha sido setado para "naive" (experimento #11/#12) — senão os testes CAS do gateway
 # (ex.: EventWalletGatewayCasTest) quebrariam.
 #
-# INTERNAL_API_TOKEN: token de serviço das chamadas internas gateway -> reservation (#33). Valor de TESTE explícito, não é segredo; o
-# serviço e o cliente não sobem sem a variável (sem default).
+# INTERNAL_API_TOKEN: token de serviço das chamadas internas gateway -> reservation (#33) e gateway -> catalog (#35). Valor de
+# TESTE explícito, não é segredo; os serviços e os clientes não sobem sem a variável (sem default).
 #
 # SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092: o broker interno do compose (o default do application.properties,
 # localhost:9092, não existe dentro do container de teste).
@@ -182,7 +197,7 @@ else
 fi
 
 # Os testes também publicam em reservation.wallet (relay do serviço reservation, testes do módulo) e em catalog.event (relay do
-# catalog, testes do monólito). Os groups do serviço vivo NÃO podem reler isso: `reservation` (projeção de disponibilidade) até
+# serviço catalog, testes do módulo catalog). Os groups do serviço vivo NÃO podem reler isso: `reservation` (projeção de disponibilidade) até
 # descartaria (o eventId não está no event_store depois do TRUNCATE), mas um backlog desses custaria minutos; `reservation-catalog`
 # (reconciliação do eventcap pelo EventCreated) CRIARIA eventcap para ids de evento de teste, que se repetem depois de um
 # TRUNCATE ... RESTART IDENTITY e pegariam a capacidade errada. Move os dois para o FIM dos tópicos (a guarda acima garante que

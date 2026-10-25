@@ -41,14 +41,14 @@ Backend/
   reservation-client/    LIB (#33): contrato HTTP do serviço reservation — DTOs (EventWallet, EventCap), IdempotencyConflictException,
                          as interfaces EventWalletApi/EventCapacityApi e o ReservationClient (pool de conexões). Usada pelo monólito
                          (inteira) e pelo reservation (DTOs + testes ponta a ponta)
-  monolito/              identity, catalog, gateway (/bff/**), CorsConfig/SchedulingConfig; src/, Dockerfile, pom.xml
+  monolito/              identity, gateway (/bff/**), CorsConfig/SchedulingConfig; src/, Dockerfile, pom.xml (o catalog saiu na #35)
   notification/          serviço extraído (README.md próprio); src/, Dockerfile, pom.xml
   reservation/           serviço extraído (README.md próprio): eventcap/CAS, walletevent/ES, API interna; src/, Dockerfile, pom.xml
   catalog-client/        LIB (#35): contrato HTTP do serviço catalog — Event, EventApi, EventoNaoEncontradoException,
-                         CatalogUnavailableException e o CatalogClient (pool). Usada pelo catalog (contrato + testes ponta a ponta) e,
-                         no cutover (fatia 3 da #35), pelo gateway
+                         EventoEmConflitoException, CatalogUnavailableException e o CatalogClient (pool). Usada pelo catalog (contrato +
+                         testes ponta a ponta) e pelo gateway (desde o cutover, fatia 3 da #35)
   catalog/               serviço extraído (#35, README.md próprio): eventos em CQRS + ES no schema catalog, API interna
-                         /internal/events/**; src/, Dockerfile, pom.xml. Fatia 2: ainda NÃO é chamado (o monólito usa o pacote catalog)
+                         /internal/events/**; src/, Dockerfile, pom.xml. Chamado pelo gateway por HTTP (CatalogClient)
   db/                    schema (fora do Maven)
 ```
 
@@ -78,8 +78,10 @@ Backend/
 `./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`
 (URL direta `db:5432`, **sem passar pelo pooler**),
 e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `catalog-client`, `monolito`, `notification`,
-`reservation`, `catalog`; antes aplica `db/init-scripts/14-catalog.sql`, idempotente, no `gerenciador-db` por `docker exec ... psql -U admin`;
-`-fae` = um módulo vermelho não esconde o resultado dos outros). Antes disso apaga `target/surefire-reports` sozinho, então o total do
+`reservation`, `catalog`; `-fae` = um módulo vermelho não esconde o resultado dos outros). **Pré-requisito do `catalog` (#35):** o banco
+migrado (`db/migrations/20261026-catalog-schema.sql`): o script ABORTA se `public.event` ainda existe ou `catalog.event` não existe (não
+aplica o `14-catalog.sql`, que num banco não migrado criaria `catalog.event` vazia ao lado de `public.event`), e aborta se o
+`gerenciador-catalog` estiver rodando (o relay dele drenaria o `catalog.event_outbox` dos testes). Antes disso apaga `target/surefire-reports` sozinho, então o total do
 resumo reflete só os testes desta rodada — não precisa limpar na mão; os relatórios de todos os módulos são copiados para
 `Backend/target/surefire-reports` (nomes de classe únicos). **Pré-requisito do `notification` (#32):** o schema `notification`
 no banco (`db/migrations/20261024-notification-schema.sql`, num volume antigo; bancos novos já nascem com ele). **Pare também o
@@ -111,17 +113,19 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   (`reservation/src/test/.../SchemaValidationTest`) valida o schema `reservation` (tabelas, colunas, chaves, sem FK, event store próprio).
 - `TestSupport/GlobalDbTruncator` dá `TRUNCATE` (início/fim da suíte) em **todas** as tabelas dos
   schemas configurados, descobertas por catálogo (`TestSupport/TestSchemas`) — não há mock de banco.
-  Schemas alvo: propriedade `test.db.schemas` (lista separada por vírgula, default `public,notification,reservation` no monólito desde a #33, só `reservation` no módulo dele; vale
+  Schemas alvo: propriedade `test.db.schemas` (lista separada por vírgula, default `public,notification,reservation,catalog` no monólito desde a #35, só `reservation`/`catalog` no módulo de cada serviço; vale
   também via env `TEST_DB_SCHEMAS` ou `-Dtest.db.schemas=`), usada também por `SchemaValidationTest`
   (`table_schema = any(?)`). Nomes validados por `[a-z_][a-z0-9_]*` (identificador não é
   parametrizável em SQL). **O default só lista schemas do app** (`TestSchemas.DEFAULT`): os schemas do Supabase (`auth`, `storage`,
   `extensions`...) vivem no mesmo banco e não podem ser truncados nem validados. Cada serviço extraído acrescenta o seu schema
-  ao default (Fase 7: `notification`, `reservation`). O `GlobalDbTruncator` do monólito também zera o estado do `FakeReservationServer`
+  ao default (Fase 7: `notification`, `reservation`, `catalog`). O `GlobalDbTruncator` do monólito também zera o estado do `FakeReservationServer`
+  e do `FakeCatalogServer`
   (os ids de evento voltam a 1 com `RESTART IDENTITY`). O `run-tests.sh` roda o mvn num
   container com env fixo (`--env-file ../.env`): para mudar `test.db.schemas` por ali, passe
   `-e TEST_DB_SCHEMAS=...` no `docker run` do script. Coberto por `TestSchemasTest`.
-- `EventTest`, `UserTest`, `MyWalletTest` (monólito) e `EventWalletTest` (módulo `reservation`) exercitam services + repositories.
-- `CatalogEventSourcingTest` (issue #28; ver "Catalog em CQRS + Event Sourcing"): **teste de replay do agregado `Event`**
+- `UserTest`, `MyWalletTest` (monólito), `EventTest` (módulo `catalog`, desde a #35) e `EventWalletTest` (módulo `reservation`) exercitam
+  services + repositories.
+- `CatalogEventSourcingTest` (issue #28; módulo `catalog` desde a #35; ver "Catalog em CQRS + Event Sourcing"): **teste de replay do agregado `Event`**
   (cria/edita/adiciona e remove apresentador/troca imagem/cancela vários eventos, reconstrói `event`/`eventpresenter` na
   sombra a partir do `event_store` e compara com a viva nas colunas comparáveis, sem `image_data` e sem carimbos; uma
   divergência provocada é detectada), tipos e versões contíguas de cada stream, payload sem PII/imagem e com valores
@@ -272,9 +276,11 @@ identity/        UserService, UserRepository, EmailVerificationService, PendingV
                  security/ (JwtUtil, JwtAuthenticationFilter, AuthorizationUtil, SecurityConfig)
                  MyWalletService + MyWalletRepository (#33: a carteira é extensão 1:1 de `users`, criada por trigger; ficou em `public`)
   api/           User, UserApi, EmailVerificationApi, TokenApi, HostAuthorizationApi, MyWallet, MyWalletApi
-catalog/         EventService, EventRepository, EventPresenterRepository (leitura),
-                 CatalogEventWriter (command side ES, #28), CatalogEventProjection (projeção inline), EventPayloads
-  api/           Event, EventApi
+catalog/         (#35: SAIU do monólito, é o módulo Maven/serviço `catalog/` — ver "Serviço catalog")
+                 EventService, EventRepository, EventPresenterRepository, CatalogEventWriter, CatalogEventProjection, EventPayloads,
+                 EventController + InternalApiExceptionHandler (API interna HTTP)
+catalogclient/   (lib `catalog-client`, #35) CatalogClient (HTTP, pool), CatalogClientConfig (o bean, no monólito)
+  api/           Event, EventApi, EventoNaoEncontradoException, EventoEmConflitoException, CatalogUnavailableException
 reservation/     (#33: SAIU do monólito, é o módulo Maven/serviço `reservation/` — ver "Serviço reservation")
                  EventWalletService, ReservationExpiryService, IdempotencyKeyRetentionService (job de retenção, #130),
                  EventCapRepository, EventWalletRepository, EventAvailabilityRepository, IdempotencyKeyRepository,
@@ -290,6 +296,7 @@ shared/          DatabaseConnection (módulo `shared`, lib), CorsConfig, Schedul
 gateway/         BffUserController, BffEventController, BffEventWalletController, BffMyWalletController,
                  BffSeedController (@RestController, paths /bff/**) + SeedData; roteia e agrega, sem domínio.
                  EventWalletGateway (#33): confere carteira/evento NO monólito e chama o reservation por HTTP; decide o braço cas/naive
+                 CatalogIndisponivelHandler (#35): catalog fora => 503 genérico; CreatorNames (creator_name por composição)
 ```
 
 - **Regra de fronteira**: um módulo (e o `gateway`) só enxerga outro módulo pelo pacote `<modulo>.api`;
@@ -297,7 +304,7 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
   domínio (módulos dependem dele). Dado de outro módulo entra por id ou DTO da `api`. Travado por
   `ModuleBoundaryArchTest` (ver "Quality gates"); as FKs do SQL ficam como estão (schema é Fase 7).
 - **Grafo de dependências** (sempre via `api`):
-  `gateway → identity, catalog` e, por **HTTP** (`reservationclient`), o serviço `reservation`;
+  `gateway → identity` e, por **HTTP**, os serviços `reservation` (`reservationclient`) e `catalog` (`catalogclient`, #35);
   (`identity → notification` acabou na #32: o `notification` é outro processo e se fala com ele só por evento no backbone);
   `catalog → identity` acabou na #35 (fatia 1: quem valida o `creator_id` com `UserApi.exists` é o `gateway`) e `catalog → reservation` por **HTTP**
   (`EventCapacityApi` da lib `reservation-client`: criar a capacidade DEPOIS do commit do evento, `updatePolicy`, hidratar
@@ -354,14 +361,15 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
   (`EventService.hydrateAll` → `EventCapacityApi.findByEventIds` (UMA chamada HTTP ao reservation, `ids=1,2,3`) /
   `EventPresenterRepository.findByEventIds`, `event_id = ANY(?)`): 2 consultas + 1 chamada no total,
   independente do nº de eventos. `hydrate` (1 evento) segue igual; `findByCreatorId` filtra no banco
-  (`WHERE creator_id = ?`, índice `idx_event_creator_id`, issue #35) e hidrata em lote. Coberto por `EventSearchTest` e `EventTest`.
+  (`WHERE creator_id = ?`, índice `idx_event_creator_id`, issue #35) e hidrata em lote. Coberto por `EventSearchTest` e `EventTest` (módulo `catalog`).
 - **Agregado `eventcap` isolado.** `EventCapRepository` faz a reserva de vaga por `UPDATE`
   condicional atômico (`tryReserve` → `false` = lotado) e a devolução (`release`). Os métodos
   que precisam ser atômicos com `walletevent` recebem a `Connection` da transação do service. (Desde a #33 isso é do **serviço reservation**, schema `reservation`.)
   Para evento ilimitado (`capacity = -1`) `tryReserve`/`release` são no-op e
   `EventWalletService` trata a reserva como sempre permitida.
-- Nomes de tabela em minúsculas. **`public`** (monólito): `users`, `event`, `eventpresenter`, `mywallet`, `pending_verifications`,
-  `event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint`. **`reservation`** (#33): `eventcap`, `walletevent`,
+- Nomes de tabela em minúsculas. **`public`** (monólito): `users`, `mywallet`, `pending_verifications`,
+  `event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint`. **`catalog`** (#35): `event`, `eventpresenter` e o event
+  store próprio. **`reservation`** (#33): `eventcap`, `walletevent`,
   `event_availability`, `idempotency_key` e o event store próprio (`event_store`, `event_outbox`, `event_snapshot`,
   `projection_checkpoint`). **`notification`** (#32): `processed_event`. Sempre qualificar com o schema nas queries (nada de
   `search_path`: o Supavisor em transaction mode proíbe).
@@ -432,9 +440,10 @@ o monólito; `reservation` no `reservation/application.properties`). `EventStore
 `EventSnapshots` usam o mesmo, então o `reservation` tem `reservation.event_store`/`event_outbox`/`event_snapshot`/`projection_checkpoint`
 e **nenhum serviço lê a tabela de outro** (o consumer do `reservation` não olharia o `public.event_store` do catalog). O **advisory lock do relay é
 por schema** (`OutboxRelay.lockKey`: `public` mantém `LOCK_KEY`; os outros derivam do nome), senão os relays de serviços diferentes se
-serializariam (o lock é do BANCO) e inflariam o lag medido. Streams: `catalog.event` e `identity.notification` (#32; ver "Serviço
+serializariam (o lock é do BANCO) e inflariam o lag medido. Streams: `identity.notification` (#32; ver "Serviço
 notification": a única exceção à regra de não pôr dado pessoal no payload) em `public.event_store`; `reservation.wallet` em
-`reservation.event_store` (a migração `20261025` move os que já existiam). Registrado também na ADR do backbone.
+`reservation.event_store` (a migração `20261025` move os que já existiam); `catalog.event` em `catalog.event_store` (#35; a migração
+`20261026` move os que já existiam). Registrado também na ADR do backbone.
 Esta infra vive no módulo Maven `shared` (lib); os testes dela, em `monolito/src/test` (schema `public`) e, para o schema `reservation`, nos do módulo `reservation`.
 
 - **`EventStore.append(Connection, NovoEvento)`**: um único statement (`INSERT ... ON CONFLICT (stream_type, stream_id,
@@ -1009,12 +1018,29 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   ficam órfãs (inofensivas); (d) a limpeza do banco entre blocos da carga (`E:\TCC\carga-overrides\limpar-banco.sh`, fora do repo) precisa
   truncar o schema `reservation` e mover os groups `reservation`/`reservation-catalog` (lista no relatório da #33).
 
-## Serviço catalog — issue #35 (Fase 7: terceira extração; fatia 2 de 4)
+## Serviço catalog — issue #35 (Fase 7: terceira extração; fatia 3 de 4, cutover)
 
-Estado da fatia 2: os módulos `catalog` (serviço) e `catalog-client` (lib) existem, compilam, têm testes e imagem
-(`catalog/Dockerfile`), mas **o monólito continua usando o pacote `catalog` interno e `public.event`** (o cutover — gateway no
-`CatalogClient`, migração `20261026`, saída de `03`/`05`, compose, guarda do container no `run-tests.sh` — é a fatia 3). Spec:
+Estado da fatia 3: o cutover foi feito. O monólito NÃO tem mais o pacote `catalog` (nem `public.event`): o `gateway` usa o
+`CatalogClient` (lib `catalog-client`) contra o serviço `catalog` (container `gerenciador-catalog`, `:8083` só na rede
+`gerenciador-net`; o `backend` depende dele `service_healthy`), e `event`/`eventpresenter` e o stream `catalog.event` estão no schema
+`catalog` (migração `db/migrations/20261026-catalog-schema.sql`; `03-event.sql`/`05-eventpresenter.sql` saíram, bancos novos nascem pelo
+`14-catalog.sql`). Operação/docs completas (smoke, `limpar-banco`, README da carga...) são a fatia 4. Spec:
 `docs/superpowers/specs/2026-10-24-catalog-servico-design.md`.
+
+- **Gateway** (fatia 3): `CatalogUnavailableException` (rede, timeout, 5xx, 404 sem o marcador) vira **503 com corpo genérico**
+  (`gateway/CatalogIndisponivelHandler`; o detalhe só no log): os `catch (RuntimeException)` dos controllers a relançam antes de virar
+  404/500, inclusive na reserva (`exists` falhando nunca vira "Evento não encontrado"). Criar evento com o catalog fora/lento => 503
+  "resultado incerto, confira em Meus eventos" (o timeout pode ser depois do commit). O cache positivo de `exists` (30 s) continua.
+  `POST /bff/seed` só existe com `SEED_ENABLED=true` (`seed.enabled`, default `false` => 404 e nada criado); o override de carga liga.
+  Testes do monólito: servidor falso `TestSupport/FakeCatalogServer` (mesmo contrato do controller real, capacidade no
+  `FakeReservationServer`, subido pelo `LauncherSessionListener` `CatalogFakeSession`, URL em `catalog.service.url`; `foraDoAr(true)` =
+  container parado); `HttpContractTest` (casos 1-6 do spec, `seed.enabled=true`), `SeedDesligadoTest` (caso 4), `EventWalletGatewayCasTest`
+  (catalog fora na reserva). As cópias antigas (`CatalogEventSourcingTest`, `EventTest`, `EventSearchTest`, trechos de
+  `SchemaConstraintsTest`/`SchemaValidationTest`) saíram do monólito (cobertura no módulo `catalog`, que ganhou os casos do reservation fora
+  na criação, edição sem `eventcap`, hidratação em lote e o backfill da `20261022`); `EventCapMigrationTest` saiu (o estado-alvo dele,
+  `public.event` com as colunas antigas, não existe mais em banco nenhum; a conversão segue coberta pelo `verify-20260901-migration.sh`,
+  banco descartável). Migração verificada por `db/migrations/verify-20261026-migration.sh` (bancos descartáveis: guarda, casos 7, 9, 10 e o
+  init completo do caso 8).
 
 - **Serviço** (`Backend/catalog/`, README próprio; entrypoint `com.gerenciador.eventos.catalog.CatalogApplication`, porta **8083**): o
   código do pacote `catalog` do monólito (`EventService`, `CatalogEventWriter`, `CatalogEventProjection`, `EventRepository`,
@@ -1030,26 +1056,37 @@ Estado da fatia 2: os módulos `catalog` (serviço) e `catalog-client` (lib) exi
   Erros (`InternalApiExceptionHandler`, corpo = mensagem em texto): **400** `IllegalArgumentException`, pedido malformado e o
   **`23505`** só da constraint `Event_event_name_key` (procurado na cadeia de causas, constraint lida do `PSQLException`; dois creates
   concorrentes passam juntos pela pré-checagem; outro 23505, ex. `Event_pkey`, é 500);
-  **404** `EventoNaoEncontradoException`; **409** `IllegalStateException` (delete recusado pelo reservation, evento pré-ES, conflito de
-  versão esgotado); 500 o resto.
-- **Cliente** (`CatalogClient`, lib `catalog-client`; bean em `CatalogClientConfig`, ainda não usado pelo monólito): HttpClient 5 como o
+  **404** `EventoNaoEncontradoException`, com o cabeçalho `X-Catalog-Nao-Encontrado` (`EventoNaoEncontradoException.HEADER`); **409** SÓ
+  `EventoEmConflitoException` (delete recusado pelo reservation — o `ReservationConflictException` do cliente —, evento pré-ES, conflito de
+  versão esgotado; uma `IllegalStateException` qualquer, como pool fechado ou buraco no stream, é 500); **500** o resto, com corpo
+  genérico ("Erro interno no serviço catalog"; o detalhe, que pode ser SQL, fica no log).
+- **Cliente** (`CatalogClient`, lib `catalog-client`; bean em `CatalogClientConfig`, o `EventApi` do gateway): HttpClient 5 como o
   `ReservationClient`, pool `CATALOG_CLIENT_MAX_CONNECTIONS` (default 400), conectar 2 s, pool 5 s, **resposta 15 s**, evict 20 s, **sem
-  retry**; URL `CATALOG_SERVICE_URL` (default `http://localhost:8083`). 400 → `IllegalArgumentException`, 404 →
-  `EventoNaoEncontradoException` (`null` em `findImage`/`findCreatorId`), 409 → `IllegalStateException`; rede, timeout, 5xx e qualquer
-  outro status → `CatalogUnavailableException` (o gateway a mapeará para 503 na fatia 3). `exists` nunca devolve `false` por falha.
-- **Schema**: `db/init-scripts/14-catalog.sql` (idempotente, só `IF NOT EXISTS`), incluído no `supabase-app-init.sql` e aplicado pelo
-  `run-tests.sh` a cada rodada (banco existente). Convive com `public.event`/`eventpresenter` até o cutover.
+  retry**; URL `CATALOG_SERVICE_URL` (default `http://localhost:8083`; `http://catalog:8083` no compose). 400 → `IllegalArgumentException`,
+  404 COM o cabeçalho → `EventoNaoEncontradoException` (`null` em `findImage`/`findCreatorId`), 409 → `EventoEmConflitoException`; rede,
+  timeout, 5xx, 404 SEM o cabeçalho (rota inexistente, URL de outro serviço) e qualquer outro status → `CatalogUnavailableException`
+  (503 genérico no gateway). `exists` nunca devolve `false` por falha.
+- **Schema**: `db/init-scripts/14-catalog.sql` (idempotente, só `IF NOT EXISTS`), incluído no `supabase-app-init.sql` (bancos novos).
+  Banco existente: migração `20261026-catalog-schema.sql` (com o backend e o catalog parados e `pg_dump -n public` antes; derruba as
+  tabelas VAZIAS que o 14 da fatia 2 criou e as sobras de teste do event store do serviço, faz o backfill de `version = 0`, `SET SCHEMA` de
+  `event`/`eventpresenter` — a identity de `event_id` vai junto, sem `setval` —, derruba só as FKs que saem de `catalog.*` para fora e ABORTA se houver FK de fora apontando para `event`/`eventpresenter`
+  (banco sem a `20261025`), move os
+  streams `catalog.event` de `public` preservando `global_position` e ajusta só a sequence de `global_position`). Pool no compose: Hikari 100
+  (1000 + 350 + 3 + 100 = 1453 <= `POOLER_MAX_CLIENT_CONN` 1500), relay LIGADO (`EVENTS_RELAY_ENABLED=true`: sem ele o outbox cresce e a
+  reconciliação do `eventcap` no reservation nunca recebe o `EventCreated`).
 - **Testes do módulo `catalog`** (pacote `com.gerenciador.eventos.catalog`, nomes de relatório únicos; Postgres real, reservation =
   `TestSupport/FakeEventCapServer`, só `/internal/eventcaps`, subido pelo `LauncherSessionListener` `EventCapFakeSession`; `TestSchemas`
-  default `catalog`): `CatalogEventSourcingTest`, `EventTest`, `EventSearchTest` (cópias adaptadas dos do monólito, que continuam lá
-  até o cutover; criador = id solto; sem o backfill da `20261022`, que é de `public`), `SchemaValidationTest` (tabelas/colunas/chaves,
+  default `catalog`): `CatalogEventSourcingTest`, `EventTest`, `EventSearchTest` (vieram do monólito, de onde saíram no cutover; criador = id
+  solto; o `CatalogEventSourcingTest` aplica o backfill da `20261022` no schema `catalog`), `SchemaValidationTest` (tabelas/colunas/chaves,
   `eventpresenter_event_id_fkey` em cascata, zero FK cross-schema, índice de `creator_id`, autovacuum do outbox),
   `CatalogSchemaConstraintsTest` (23505 do nome, `creator_id` sem FK, cascata), `CatalogApiE2ETest` (**cliente real × serviço real**:
   CRUD e JSON do `Event`, imagem em bytes e fora das listas, `exists`/`creator` sem `findById`, 404 tipado, 400 de regra e de nome
   duplicado inclusive 8 creates concorrentes = 1×201 + 7×400, 409 delete com reserva e pré-ES, 401 sem/errado em toda rota e o POST sem
   token não grava), `CatalogClientIndisponivelTest` (sem Spring: porta morta, 500 e resposta lenta → `CatalogUnavailableException`,
   inclusive `exists`; uma chamada por falha, sem retry) e `CatalogConfigTest` (Tomcat 300, porta 8083, Hikari 100 / 5 s, schema
-  `catalog`, consumer desligado, sem bean do próprio cliente).
+  `catalog`, consumer desligado, sem bean do próprio cliente). Fatia 3: `CatalogApiE2ETest` ganhou
+  `illegalStateQueNaoEConflitoDa500ComCorpoGenerico` e a limpeza da linha crua em `violacaoDeOutraUniqueNaoViraNomeDuplicado`;
+  `CatalogClientIndisponivelTest`, o 404 sem/com o marcador.
 
 ## Cadastro em duas fases + e-mail
 

@@ -20,7 +20,7 @@ public interface EventApi {
     /** @throws EventoNaoEncontradoException se o evento não existe */
     Event findById(Long id);
 
-    /** Cancela o evento; inexistente é no-op. Recusa (409, {@link IllegalStateException}) se há reserva do evento. */
+    /** Cancela o evento; inexistente é no-op. Recusa (409, {@link EventoEmConflitoException}) se há reserva do evento. */
     void delete(Long id);
 
     String getValidationErrors(Event e);

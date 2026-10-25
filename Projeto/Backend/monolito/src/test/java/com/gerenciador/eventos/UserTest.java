@@ -41,8 +41,8 @@ public class UserTest {
         // Para evitar dependência entre métodos desta classe, limpamos as tabelas dependentes primeiro
         try (Connection conn = databaseConnection.getConnection();
              Statement stmt = conn.createStatement()) {
-            // Ordem: primeiro event (a walletevent é do serviço reservation, sem FK para users), depois a carteira, depois users
-            stmt.execute("DELETE FROM public.event");
+            // Ordem: a carteira, depois users (event é do serviço catalog desde a #35 e walletevent do reservation desde a #33: sem
+            // FK para users, nada a apagar antes)
             stmt.execute("DELETE FROM public.mywallet");
             stmt.execute("DELETE FROM public.users");
         }

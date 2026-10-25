@@ -16,15 +16,18 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+import com.gerenciador.eventos.catalogclient.api.EventoEmConflitoException;
 import com.gerenciador.eventos.catalogclient.api.EventoNaoEncontradoException;
 
 /**
  * Status HTTP da API interna do catalog (issue #35, spec "Erros e contrato"); o corpo de toda resposta de erro é a MENSAGEM em
  * texto puro (o {@code CatalogClient} a repassa como mensagem da exceção). 400 = regra de negócio
  * ({@link IllegalArgumentException}) ou pedido malformado, e também o {@code 23505} SÓ da constraint {@code Event_event_name_key} (dois creates
- * concorrentes com o mesmo nome passam ambos pela pré-checagem; o segundo bate na constraint); 404 = evento inexistente; 409 =
- * {@link IllegalStateException} (apagar evento com reserva, recusado pelo reservation; evento pré-ES; conflito de versão
- * esgotado); 500 = o resto.
+ * concorrentes com o mesmo nome passam ambos pela pré-checagem; o segundo bate na constraint); 404 = evento inexistente, com o
+ * cabeçalho {@link EventoNaoEncontradoException#HEADER} (o cliente só aceita como "não existe" o 404 marcado); 409 = SÓ
+ * {@link EventoEmConflitoException} (apagar evento com reserva, recusado pelo reservation; evento pré-ES; conflito de versão
+ * esgotado: uma {@link IllegalStateException} qualquer não é conflito); 500 = o resto, com corpo GENÉRICO (o detalhe, que pode
+ * ser mensagem de SQL, fica só no log do serviço).
  */
 @RestControllerAdvice
 public class InternalApiExceptionHandler {
@@ -50,11 +53,12 @@ public class InternalApiExceptionHandler {
 
     @ExceptionHandler(EventoNaoEncontradoException.class)
     ResponseEntity<String> naoEncontrado(EventoNaoEncontradoException ex) {
-        return texto(HttpStatus.NOT_FOUND, ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).header(EventoNaoEncontradoException.HEADER, "true")
+                .contentType(MediaType.TEXT_PLAIN).body(ex.getMessage());
     }
 
-    @ExceptionHandler(IllegalStateException.class)
-    ResponseEntity<String> conflito(IllegalStateException ex) {
+    @ExceptionHandler(EventoEmConflitoException.class)
+    ResponseEntity<String> conflito(EventoEmConflitoException ex) {
         return texto(HttpStatus.CONFLICT, ex.getMessage());
     }
 
@@ -64,7 +68,7 @@ public class InternalApiExceptionHandler {
             return texto(HttpStatus.BAD_REQUEST, "Nome de evento já existente");
         }
         log.error("[catalog] falha na API interna: {}", ex.toString(), ex);
-        return texto(HttpStatus.INTERNAL_SERVER_ERROR, String.valueOf(ex.getMessage()));
+        return texto(HttpStatus.INTERNAL_SERVER_ERROR, "Erro interno no serviço catalog");
     }
 
     /**

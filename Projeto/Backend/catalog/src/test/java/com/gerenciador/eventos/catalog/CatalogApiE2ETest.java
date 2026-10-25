@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
@@ -43,6 +44,7 @@ import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.catalogclient.CatalogClient;
 import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
 import com.gerenciador.eventos.catalogclient.api.Event;
+import com.gerenciador.eventos.catalogclient.api.EventoEmConflitoException;
 import com.gerenciador.eventos.catalogclient.api.EventoNaoEncontradoException;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 
@@ -50,7 +52,7 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
  * PONTA A PONTA do salto {@code gateway -> catalog} (issue #35): o {@link CatalogClient} REAL (o que o gateway vai usar) fala por
  * HTTP com o serviço REAL, na porta sorteada, contra o Postgres real (schema {@code catalog}); o reservation é o servidor falso. É
  * o teste que mantém o contrato da API interna honesto dos dois lados: DTO {@link Event} em JSON, imagem em bytes, status HTTP
- * (401 token, 400 regra de negócio e nome duplicado, 404, 409) e o mapeamento de erro do cliente.
+ * (401 token, 400 regra de negócio e nome duplicado, 404, 409 só para conflito, 500 genérico) e o mapeamento de erro do cliente.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -255,14 +257,40 @@ public class CatalogApiE2ETest {
     /** Outro 23505 (aqui o {@code Event_pkey}: a linha com o próximo id da sequence já existe) NÃO é "nome já existente": 500. */
     @Test
     void violacaoDeOutraUniqueNaoViraNomeDuplicado() throws Exception {
+        String ocupada = "E2E pkey ocupada " + System.nanoTime();
         try (Connection c = db.getConnection(); Statement st = c.createStatement()) {
             st.execute("INSERT INTO catalog.event (event_id, creator_id, event_name, ead, event_date, description, version) "
-                    + "OVERRIDING SYSTEM VALUE SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END, 1, 'E2E pkey ocupada " + System.nanoTime() + "', true, "
+                    + "OVERRIDING SYSTEM VALUE SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END, 1, '" + ocupada + "', true, "
                     + "CURRENT_TIMESTAMP + interval '10 days', 'desc', 1 "
                     + "FROM catalog.event_event_id_seq");
         }
-        CatalogUnavailableException ex = assertThrows(CatalogUnavailableException.class, () -> cliente.createEvent(novo("E2E pkey", 2)));
-        assertTrue(ex.getMessage().contains("HTTP 500"), ex.getMessage());
+        try {
+            CatalogUnavailableException ex = assertThrows(CatalogUnavailableException.class,
+                    () -> cliente.createEvent(novo("E2E pkey", 2)));
+            assertTrue(ex.getMessage().contains("HTTP 500"), ex.getMessage());
+            assertFalse(ex.getMessage().contains("Event_pkey"), "o corpo do 500 não repete a mensagem do SQL: " + ex.getMessage());
+        } finally { // a linha crua não passou pelo serviço (sem stream nem eventcap): não pode sobrar no banco
+            try (Connection c = db.getConnection(); Statement st = c.createStatement()) {
+                st.execute("DELETE FROM catalog.event WHERE event_name = '" + ocupada + "'");
+            }
+        }
+    }
+
+    /**
+     * Só o conflito do catálogo é 409 ({@link EventoEmConflitoException}); outra {@link IllegalStateException} (ex.: pool do
+     * cliente HTTP fechado, buraco no stream) é falha interna: 500, com corpo genérico (o detalhe fica no log do serviço).
+     */
+    @Test
+    void illegalStateQueNaoEConflitoDa500ComCorpoGenerico() {
+        doThrow(new IllegalStateException("Connection pool shut down: detalhe-interno"))
+                .when(eventRepository).findCreatorId(anyLong());
+        try {
+            CatalogUnavailableException ex = assertThrows(CatalogUnavailableException.class, () -> cliente.findCreatorId(1L));
+            assertTrue(ex.getMessage().contains("HTTP 500"), ex.getMessage());
+            assertFalse(ex.getMessage().contains("detalhe-interno"), "corpo do 500 genérico: " + ex.getMessage());
+        } finally {
+            reset(eventRepository);
+        }
     }
 
     @Test
@@ -270,7 +298,7 @@ public class CatalogApiE2ETest {
         Event e = cliente.createEvent(novo("E2E com reserva", 2));
         FakeEventCapServer.get().marcarReserva(e.getEvent_id());
 
-        assertThrows(IllegalStateException.class, () -> cliente.delete(e.getEvent_id()));
+        assertThrows(EventoEmConflitoException.class, () -> cliente.delete(e.getEvent_id()));
         assertTrue(cliente.exists(e.getEvent_id()));
     }
 
@@ -280,7 +308,7 @@ public class CatalogApiE2ETest {
         try (Connection c = db.getConnection(); Statement st = c.createStatement()) {
             st.execute("UPDATE catalog.event SET version = 0 WHERE event_id = " + e.getEvent_id());
         }
-        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> cliente.updateEvent(e));
+        EventoEmConflitoException ex = assertThrows(EventoEmConflitoException.class, () -> cliente.updateEvent(e));
         assertTrue(ex.getMessage().contains("pré-ES"), ex.getMessage());
     }
 

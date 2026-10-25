@@ -100,21 +100,25 @@ services:
       # as credenciais SMTP são sobrepostas por vazio aqui para o backend não recebê-las sem precisar.
       MAIL_USERNAME: ""
       MAIL_PASSWORD: ""
-      # Backbone de eventos (issue #27): o broker interno do compose. Relay (outbox -> broker) ligado desde a #28
-      # (catalog e identity appendam eventos). Desde a #33 o monólito NÃO tem consumer: a projeção de disponibilidade
-      # (braço naive) é do serviço reservation.
+      # Backbone de eventos (issue #27): o broker interno do compose. Relay (outbox -> broker) ligado: o identity appenda
+      # eventos (#32; o catalog saiu na #35 e tem o relay dele). Desde a #33 o monólito NÃO tem consumer: a projeção de
+      # disponibilidade (braço naive) é do serviço reservation.
       SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       EVENTS_RELAY_ENABLED: "true"
       EVENTS_CONSUMER_ENABLED: "false"
       # Serviço reservation (issue #33): API interna HTTP, só na rede gerenciador-net. O gateway (este container) chama o
-      # reservation para reservar/confirmar/cancelar e o catalog para criar a capacidade do evento. O braço da reserva
+      # reservation para reservar/confirmar/cancelar. O braço da reserva
       # (cas = 1 chamada; naive = 2) é decidido AQUI por RESERVATION_READPATH (default cas; os scripts de carga trocam).
       RESERVATION_SERVICE_URL: http://reservation:8082
       # Token de serviço que autentica as chamadas internas (X-Internal-Token). SEM default: vem do Projeto/.env
-      # (INTERNAL_API_TOKEN=<openssl rand -hex 32>) e o MESMO valor vai ao reservation; sem ele o backend não sobe.
+      # (INTERNAL_API_TOKEN=<openssl rand -hex 32>) e o MESMO valor vai ao reservation e ao catalog; sem ele o backend não sobe.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?defina INTERNAL_API_TOKEN no Projeto/.env}
       # Pool do cliente HTTP gateway -> reservation >= threads do Tomcat (300); o resto dos timeouts tem default no application.properties.
       RESERVATION_CLIENT_MAX_CONNECTIONS: ${RESERVATION_CLIENT_MAX_CONNECTIONS:-400}
+      # Serviço catalog (issue #35): eventos (/bff/events/** e a conferência do evento na reserva) por HTTP, só na rede
+      # gerenciador-net. Pool >= threads do Tomcat (300); resposta 15 s, sem retry (default no application.properties).
+      CATALOG_SERVICE_URL: http://catalog:8083
+      CATALOG_CLIENT_MAX_CONNECTIONS: ${CATALOG_CLIENT_MAX_CONNECTIONS:-400}
 
     ports:
       - "8081:8081"
@@ -125,6 +129,48 @@ services:
         condition: service_healthy
       reservation:
         condition: service_healthy
+      catalog:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Serviço catalog (issue #35, Fase 7: terceira extração): dono de event/eventpresenter (CQRS + event sourcing, stream
+  # catalog.event) no schema `catalog`, com event store, outbox, snapshot e checkpoint próprios. Imagem e processo próprios
+  # (Backend/catalog/Dockerfile). API interna (/internal/events/**, porta 8083) SÓ na rede gerenciador-net: SEM porta no host. Não
+  # usa env_file: recebe só o que precisa, pelo NOME (senha do banco do Projeto/.env), sem JWT_SECRET/reCAPTCHA/SMTP.
+  # Pool: Hikari 100, pelo Supavisor (mesmo tenant e usuário dos outros: o pool real 45 / 245 NÃO cresce); soma dos Hikari =
+  # 1000 (reservation) + 350 (backend) + 3 (notification) + 100 (catalog) = 1453 <= POOLER_MAX_CLIENT_CONN 1500.
+  # Chama o reservation (eventcap) por HTTP, mas NÃO depende dele no boot: com o reservation fora a criação de evento segue e o
+  # eventcap vem pela reconciliação do EventCreated (tópico catalog.event, publicado pelo relay daqui).
+  catalog:
+    build:
+      context: ./Backend
+      dockerfile: catalog/Dockerfile
+    container_name: gerenciador-catalog
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}.gerenciador-eventos
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "100"
+      SERVER_TOMCAT_THREADS_MAX: ${SERVER_TOMCAT_THREADS_MAX:-300}
+      # Token de serviço exigido em toda requisição (401 sem/errado) e enviado ao reservation. SEM default: falha no boot sem ele.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?defina INTERNAL_API_TOKEN no Projeto/.env}
+      RESERVATION_SERVICE_URL: http://reservation:8082
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      # Relay do outbox do SERVIÇO (catalog.event_outbox -> tópico catalog.event). OBRIGATÓRIO: sem ele o outbox cresce e a
+      # reconciliação do eventcap no reservation (group reservation-catalog) nunca recebe o EventCreated.
+      EVENTS_RELAY_ENABLED: "true"
+    healthcheck:
+      # sem HTTP de saúde nem curl na imagem: "a porta aceita conexão" (bash /dev/tcp; o /bin/sh da imagem é dash)
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8083"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    depends_on:
+      supabase-pooler:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
     restart: unless-stopped
 
   # Serviço reservation (issue #33, Fase 7: segunda extração): dono de eventcap (CAS), walletevent (event sourcing, stream
@@ -133,7 +179,7 @@ services:
   # no host. Não usa env_file: recebe só o que precisa, pelo NOME (senha do banco do Projeto/.env), sem JWT_SECRET/reCAPTCHA/SMTP.
   # É o CAMINHO QUENTE do experimento: mesmos valores que o monólito tinha no ponto 2 (Tomcat 300, Hikari 1000, virtual threads
   # desligadas). Fala com o Postgres pelo Supavisor, mesmo tenant e mesmo usuário do backend e do notification, então o pool real
-  # (45 / 245) NÃO cresce; a conta dos Hikari (1000 + 350 + 3 <= POOLER_MAX_CLIENT_CONN 1500) está no Backend/CLAUDE.md.
+  # (45 / 245) NÃO cresce; a conta dos Hikari (1000 + 350 + 3 + 100 do catalog <= POOLER_MAX_CLIENT_CONN 1500) está no Backend/CLAUDE.md.
   reservation:
     build:
       context: ./Backend

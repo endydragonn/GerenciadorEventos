@@ -17,8 +17,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.gerenciador.eventos.catalog.api.Event;
-import com.gerenciador.eventos.catalog.api.EventApi;
+import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
+import com.gerenciador.eventos.catalogclient.api.Event;
+import com.gerenciador.eventos.catalogclient.api.EventApi;
 import com.gerenciador.eventos.identity.api.HostAuthorizationApi;
 import com.gerenciador.eventos.identity.api.UserApi;
 
@@ -37,6 +38,10 @@ import com.gerenciador.eventos.identity.api.UserApi;
  * token), senão 403, e id inexistente dá 404 (o DELETE dava 204). <b>Sem exceção de admin</b>: {@code users.admin} é
  * gravável pelo próprio usuário. Toda resposta de {@link Event} ganha {@code creator_name} ({@link CreatorNames}); as listas
  * não trazem {@code image_data} (continua no GET por id e em {@code /image}).</p>
+ *
+ * <p>Fatia 3: o {@link EventApi} é o {@code CatalogClient} (HTTP para o serviço catalog). Catalog fora => 503 genérico
+ * ({@link CatalogIndisponivelHandler}); os {@code catch (RuntimeException)} abaixo relançam a {@link CatalogUnavailableException}
+ * antes de virar 404/500. Criar com o catalog fora/lento => 503 "resultado incerto" (o evento pode ter sido gravado).</p>
  */
 @RestController
 @RequestMapping("/bff/events")
@@ -75,6 +80,8 @@ public class BffEventController {
             return ResponseEntity.status(HttpStatus.CREATED).body(creatorNames.preencher(saved));
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
+        } catch (CatalogUnavailableException ex) { // timeout pode ser depois do commit: o evento talvez exista
+            return CatalogIndisponivelHandler.resposta(ex, CatalogIndisponivelHandler.CRIACAO_INCERTA);
         } catch (RuntimeException ex) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
         }
@@ -102,6 +109,8 @@ public class BffEventController {
         try {
             Event event = eventService.findById(id);
             return ResponseEntity.ok(creatorNames.preencher(event));
+        } catch (CatalogUnavailableException ex) {
+            throw ex; // 503 genérico (CatalogIndisponivelHandler), nunca o 404/500 abaixo
         } catch (RuntimeException ex) {
             return ResponseEntity.notFound().build();
         }
@@ -136,6 +145,8 @@ public class BffEventController {
             return ResponseEntity.ok(creatorNames.preencher(updated));
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
+        } catch (CatalogUnavailableException ex) {
+            throw ex; // 503 genérico (CatalogIndisponivelHandler), nunca o 404/500 abaixo
         } catch (RuntimeException ex) {
             if (ex.getMessage() != null && ex.getMessage().startsWith("Evento não encontrado")) {
                 return ResponseEntity.notFound().build();
@@ -165,6 +176,8 @@ public class BffEventController {
             }
             eventService.delete(id);
             return ResponseEntity.noContent().build();
+        } catch (CatalogUnavailableException ex) {
+            throw ex; // 503 genérico (CatalogIndisponivelHandler), nunca o 404/500 abaixo
         } catch (RuntimeException ex) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
         }
@@ -183,6 +196,8 @@ public class BffEventController {
         try {
             List<Event> events = eventService.findByCreatorId(creator_id);
             return ResponseEntity.ok(creatorNames.preencher(events));
+        } catch (CatalogUnavailableException ex) {
+            throw ex; // 503 genérico (CatalogIndisponivelHandler), nunca o 404/500 abaixo
         } catch (RuntimeException ex) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
         }
@@ -219,6 +234,8 @@ public class BffEventController {
             eventService.saveImage(id, imageBytes); // método próprio, fora do updateEvent (issue #35)
 
             return ResponseEntity.ok("Imagem carregada com sucesso");
+        } catch (CatalogUnavailableException ex) {
+            throw ex; // 503 genérico (CatalogIndisponivelHandler), nunca o 404/500 abaixo
         } catch (RuntimeException ex) {
             return ResponseEntity.notFound().build();
         } catch (Exception ex) {
@@ -240,6 +257,8 @@ public class BffEventController {
                     .header("Content-Type", "image/jpeg")
                     .header("Cache-Control", "max-age=3600")
                     .body(imageData);
+        } catch (CatalogUnavailableException ex) {
+            throw ex; // 503 genérico (CatalogIndisponivelHandler), nunca o 404/500 abaixo
         } catch (RuntimeException ex) {
             return ResponseEntity.notFound().build();
         }

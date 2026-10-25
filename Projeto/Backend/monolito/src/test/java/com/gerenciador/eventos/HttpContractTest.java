@@ -31,14 +31,15 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
-import com.gerenciador.eventos.catalog.EventService;
-import com.gerenciador.eventos.catalog.api.Event;
+import com.gerenciador.eventos.catalogclient.api.Event;
+import com.gerenciador.eventos.catalogclient.api.EventApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.identity.api.MyWallet;
 import com.gerenciador.eventos.identity.PendingVerification;
 import com.gerenciador.eventos.identity.api.User;
 import com.gerenciador.eventos.identity.PendingVerificationRepository;
 import com.gerenciador.eventos.identity.UserService;
+import com.gerenciador.eventos.TestSupport.FakeCatalogServer;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 
@@ -63,11 +64,15 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
  * exige auth e a maioria dos testes usa esse fixture só para ter um usuário/token disponível
  * antes de exercitar a rota que o teste realmente cobre; o contrato HTTP de
  * {@code POST /bff/users} continua coberto por {@link #createUser_returns201WithUserId()}.</p>
+ *
+ * <p>Issue #35 (fatia 3): o catalog é outro serviço; aqui as chamadas de evento vão ao {@code FakeCatalogServer} (HTTP de
+ * verdade, mesmo contrato do serviço) pelo {@code CatalogClient} real, como as de reserva vão ao {@code FakeReservationServer}.
+ * {@code POST /bff/seed} só existe com {@code seed.enabled=true} (ligado aqui; desligado = 404, em {@code SeedDesligadoTest}).</p>
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Import(GlobalDbTruncator.class)
-@TestPropertySource(properties = "RECAPTCHA_SECRET_KEY=")
+@TestPropertySource(properties = {"RECAPTCHA_SECRET_KEY=", "seed.enabled=true"})
 public class HttpContractTest {
 
     @LocalServerPort
@@ -85,8 +90,9 @@ public class HttpContractTest {
     @Autowired
     private DatabaseConnection databaseConnection;
 
+    /** O {@code CatalogClient} do gateway, contra o {@code FakeCatalogServer} (issue #35: o catalog é outro serviço). */
     @Autowired
-    private EventService eventService;
+    private EventApi eventService;
 
     private String url(String path) {
         return "http://localhost:" + port + path;
@@ -796,6 +802,67 @@ public class HttpContractTest {
             assertTrue(status == HttpStatus.NOT_FOUND || status == HttpStatus.UNAUTHORIZED,
                     path + " não deve devolver dados sem token, veio " + status);
         }
+    }
+
+    // ======================= catalog fora (issue #35, caso 6 do spec) =======================
+
+    /**
+     * Caso 6 do spec: com o serviço catalog fora, {@code GET /bff/events/{id}} é 503 (não 404), a reserva falha com 503 e NUNCA
+     * com "Evento não encontrado" (o {@code exists} não vira {@code false}), a busca é 503 e criar evento é 503 "resultado
+     * incerto". O corpo é genérico: não ecoa host/URL interna nem a mensagem da exceção do cliente.
+     */
+    @Test
+    public void catalogFora_respostas503Genericas_nuncaNaoEncontrado() {
+        User host = createHostUser("host-catalog-fora");
+        String hostToken = loginAndGetToken(host.getEmail(), "senha123");
+        User attendee = createUser("attendee-catalog-fora");
+        String token = loginAndGetToken(attendee.getEmail(), "senha123");
+        long nuncaConferido = 1_800_000_000L + (System.nanoTime() % 100_000_000L); // fora do cache positivo de exists
+        FakeCatalogServer catalog = FakeCatalogServer.get();
+        catalog.foraDoAr(true);
+        try {
+            ResponseEntity<String> get = restTemplate.getForEntity(url("/bff/events/1"), String.class);
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, get.getStatusCode());
+            assertCorpoGenerico(get.getBody());
+
+            ResponseEntity<String> reserva = restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                    new HttpEntity<>(new EventWallet(attendee.getId(), nuncaConferido), authHeaders(token)), String.class);
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, reserva.getStatusCode());
+            assertFalse(String.valueOf(reserva.getBody()).contains("não encontrado"), "veio: " + reserva.getBody());
+            assertCorpoGenerico(reserva.getBody());
+
+            ResponseEntity<String> validar = restTemplate.exchange(url("/bff/event-wallets/validate"), HttpMethod.POST,
+                    new HttpEntity<>(new EventWallet(attendee.getId(), nuncaConferido), authHeaders(token)), String.class);
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, validar.getStatusCode());
+
+            ResponseEntity<String> busca = restTemplate.getForEntity(url("/bff/events/search?term=x"), String.class);
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, busca.getStatusCode());
+
+            Event novo = new Event();
+            novo.setEvent_name("Evento catalog fora " + System.nanoTime());
+            novo.setIs_EAD(true);
+            novo.setEvent_date(LocalDateTime.now().plusDays(5));
+            novo.setLot_quantity(5);
+            novo.setPresenters(new ArrayList<>());
+            ResponseEntity<String> criar = restTemplate.exchange(url("/bff/events"), HttpMethod.POST,
+                    new HttpEntity<>(novo, authHeaders(hostToken)), String.class);
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, criar.getStatusCode());
+            assertTrue(criar.getBody().contains("resultado incerto") && criar.getBody().contains("Meus eventos"),
+                    "veio: " + criar.getBody());
+            assertCorpoGenerico(criar.getBody());
+
+            ResponseEntity<String> apagar = restTemplate.exchange(url("/bff/events/1"), HttpMethod.DELETE,
+                    new HttpEntity<>(authHeaders(hostToken)), String.class);
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, apagar.getStatusCode(), "dono indeterminado: nem 404 nem 403");
+        } finally {
+            catalog.foraDoAr(false);
+        }
+    }
+
+    private static void assertCorpoGenerico(String corpo) {
+        String c = String.valueOf(corpo);
+        assertFalse(c.contains("http") || c.contains("127.0.0.1") || c.contains("Serviço catalog") || c.contains("/internal"),
+                "o 503 não pode ecoar a mensagem interna da exceção, veio: " + corpo);
     }
 
     // ======================= /bff/event-wallets =======================

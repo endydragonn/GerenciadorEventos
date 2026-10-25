@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -51,6 +52,8 @@ public final class FakeEventCapServer {
     private final HttpServer server;
     private final Map<Long, EventCap> caps = new ConcurrentHashMap<>();
     private final Set<Long> comReserva = ConcurrentHashMap.newKeySet();
+    private final List<String> chamadas = new CopyOnWriteArrayList<>();
+    private volatile boolean falharCriacao;
 
     private FakeEventCapServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -67,6 +70,22 @@ public final class FakeEventCapServer {
     public void reset() {
         caps.clear();
         comReserva.clear();
+        chamadas.clear();
+        falharCriacao = false;
+    }
+
+    /** Faz o {@code PUT /internal/eventcaps/{id}} responder 500 (o reservation "fora do ar" na criação do evento). */
+    public void falharCriacao(boolean falhar) {
+        this.falharCriacao = falhar;
+    }
+
+    /** "METODO /caminho" de cada chamada recebida, na ordem. */
+    public List<String> chamadas() {
+        return List.copyOf(chamadas);
+    }
+
+    public void limparChamadas() {
+        chamadas.clear();
     }
 
     /** O evento passa a "ter reserva": apagar a capacidade dele responde 409, como o serviço real. */
@@ -85,6 +104,7 @@ public final class FakeEventCapServer {
             return;
         }
         String metodo = ex.getRequestMethod();
+        chamadas.add(metodo + " " + ex.getRequestURI().getPath());
         String[] p = ex.getRequestURI().getPath().substring("/internal/eventcaps/".length()).split("/");
         if ("batch".equals(p[0]) && "POST".equals(metodo)) {
             List<EventCap> achadas = new ArrayList<>();
@@ -99,6 +119,10 @@ public final class FakeEventCapServer {
         }
         long id = Long.parseLong(p[0]);
         if (p.length == 1 && "PUT".equals(metodo)) {
+            if (falharCriacao) {
+                responder(ex, 500, "reservation indisponível (falha injetada)");
+                return;
+            }
             EventCap cap = JSON.readValue(ex.getRequestBody(), EventCap.class);
             cap.setEventId(id);
             cap.setQuant(cap.getCapacity());
