@@ -41,9 +41,9 @@ if ($Verificar) {
     if (-not $Prefixo) { Fail 'Informe -Prefixo (nome impresso pelo rodar-rpm.ps1, ex.: Rpm-123456).' }
     if ($Prefixo -notmatch '^[A-Za-z0-9-]+$') { Fail '-Prefixo so aceita letras, numeros e hifen.' }
     $sql = @"
--- O prefixo e atributo do CATALOG (public.event); capacidade e reservas sao do servico (schema reservation). Consulta de
+-- O prefixo e atributo do CATALOG (catalog.event, #35); capacidade e reservas sao do servico (schema reservation). Consulta de
 -- verificacao do OPERADOR (psql como admin), nao leitura de um servico em tabela de outro.
-WITH ev AS (SELECT e.event_id, c.capacity FROM public.event e JOIN reservation.eventcap c USING (event_id)
+WITH ev AS (SELECT e.event_id, c.capacity FROM catalog.event e JOIN reservation.eventcap c USING (event_id)
             WHERE e.event_name LIKE '$Prefixo-%'),
 ativas AS (SELECT ev.event_id, ev.capacity,
                   count(w.*) FILTER (WHERE w.status IN ('pending','confirmed')) AS n
@@ -53,9 +53,9 @@ SELECT count(*) AS eventos, sum(n) AS reservas_ativas, sum(capacity) AS capacida
        coalesce(sum(n - capacity) FILTER (WHERE n > capacity), 0) AS overselling_total
 FROM ativas;
 SELECT status, count(*) FROM reservation.walletevent
- WHERE event_id IN (SELECT event_id FROM public.event WHERE event_name LIKE '$Prefixo-%') GROUP BY status ORDER BY status;
+ WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name LIKE '$Prefixo-%') GROUP BY status ORDER BY status;
 "@
-    $saida = $sql | docker exec -i gerenciador-db sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB' | Out-String
+    $saida = $sql | docker exec -i gerenciador-db sh -c 'psql -v ON_ERROR_STOP=1 -U $POSTGRES_USER -d $POSTGRES_DB' | Out-String
     Write-Host $saida
     $rc = $LASTEXITCODE
     Registrar "prefixo $Prefixo" $saida.TrimEnd()

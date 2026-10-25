@@ -40,7 +40,7 @@ não há migração via ORM. Leia também o CLAUDE.md da raiz e o de `Backend/`.
 ## Inspeção visual (Supabase Studio)
 
 Com a stack no ar, o Studio fica em `http://localhost:8000` (via Kong; login com `DASHBOARD_USERNAME` e
-`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`). Table Editor → schemas `public` (`users`, `event`...) e `reservation` (`eventcap`,
+`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`). Table Editor → schemas `public` (`users`, `mywallet`...), `catalog` (`event`, `eventpresenter`; #35) e `reservation` (`eventcap`,
 `walletevent`...) mostram as tabelas do app; o SQL Editor roda consultas em `meu_banco`. Studio e `meta` conectam como
 `supabase_admin`, não como `admin`: é leitura/edição manual de apoio, o backend continua usando só JDBC.
 Detalhes e limites (sem GoTrue/PostgREST/Realtime/Storage/functions) em `Projeto/supabase/README.md`.
@@ -123,7 +123,10 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   - Trigger `trigger_create_wallet` (`AFTER INSERT`): cria automaticamente a linha em
     `mywallet`. A aplicação **nunca** insere carteira à mão.
 - **`event`** — (schema `catalog` desde a #35) PK `event_id`. `creator_id` integer **sem FK** para `users` (referência solta; a
-  `Event_creator_id_fkey` caiu na migração `20261026`; quem confere o criador é o gateway).
+  `Event_creator_id_fkey` caiu na migração `20261026`; quem confere o criador é o gateway). Migração a quente
+  `db/migrations/20261026-catalog-schema.sql`: com o `backend` e o `catalog` parados e depois do `pg_dump -n public` (backup, aplicação e
+  rollback no cabeçalho do arquivo); move `event`/`eventpresenter` e os streams `catalog.event` para o schema `catalog`. Lido e escrito SÓ
+  pelo serviço `catalog`; qualificar sempre com `catalog.` nas queries.
   `event_name` `UNIQUE`, `ead` (bool), `image_data bytea`. **Só metadados** — capacidade/venda
   saíram daqui para `eventcap`.
   - **`version integer NOT NULL DEFAULT 0`** (issue #28): é a **projeção inline** do stream `catalog.event` (ver
@@ -164,8 +167,8 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   - Limitado: reserva = `UPDATE eventcap SET quant = quant - 1 WHERE event_id = ? AND
     capacity <> -1 AND quant >= 1` (CAS atômico; `rowcount = 0` ⇒ lotado). Liberação =
     `+ 1 ... WHERE capacity <> -1 AND quant < capacity`.
-- **`eventpresenter`** — apresentadores por evento. PK composta `(event_id, presenter_name)`,
-  FK `→ event` `ON DELETE CASCADE`. Substitui o antigo campo único `presenters`.
+- **`eventpresenter`** — (schema `catalog` desde a #35) apresentadores por evento. PK composta `(event_id, presenter_name)`,
+  FK `→ catalog.event` `ON DELETE CASCADE` (a única FK do schema). Substitui o antigo campo único `presenters`.
 - **`mywallet`** — PK `user_id`, FK `→ users` `ON DELETE CASCADE`.
 - **`walletevent`** — (schema `reservation`) inscrição/reserva N:N. PK composta `(user_id, event_id)`. **Sem FK** (antes para
   `users`/`event`, `ON DELETE RESTRICT`, até a #33). `status` (`confirmed`|`pending`|`expired`|
@@ -221,10 +224,10 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   `admin` (dona do banco) cria o schema; o `OWNER TO admin` explícito é para a migração a quente, que roda como `supabase_admin`:
   `db/migrations/20261024-notification-schema.sql` (idempotente; `docker exec -i gerenciador-db psql -h localhost -U supabase_admin
   -d meu_banco < ...`). Coberta por `SchemaValidationTest`, `TestSchemasTest` (o default do harness agora é `public,notification`)
-  e `NotificationConsumerTest`. O harness de migração `verify-20260901-migration.sh` aplica só os scripts `01`–`11` (não toca no
+  e `NotificationConsumerTest`. O harness de migração `verify-20260901-migration.sh` não aplica o `12` (não toca no
   `notification`). Qualificar sempre com `notification.` nas queries (não há `search_path`, o Supavisor em transaction mode proíbe).
 - **Event sourcing (issue #27; ADR "Event-Backbone-Event-Store")** — infra genérica, sem domínio, sem FK (um conjunto por schema de serviço desde a #33:
-  `public.*` e `reservation.*`; o texto abaixo descreve o de `public`, o de `reservation` é igual) (as #28/#29
+  `public.*`, `reservation.*` e, desde a #35, `catalog.*`; o texto abaixo descreve o de `public`, os outros são iguais) (as #28/#29
   só appendam eventos com o seu `stream_type`; a #28 usa `catalog.event`). Código em `Backend/.../shared/events` (ver `Backend/CLAUDE.md`,
   "Event store e backbone de eventos"). Migração a quente: `db/migrations/20261021-event-store.sql` (idempotente; roda como
   `supabase_admin`, por isso o `OWNER TO admin` explícito). Cobertas por `SchemaValidationTest`, pelos testes de

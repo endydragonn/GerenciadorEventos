@@ -14,6 +14,10 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
 - Serviço `reservation` (issue #33): `docker compose -f Projeto/docker-compose.yml up -d --build reservation` — container
   `gerenciador-reservation`, API interna na `:8082` **só na rede `gerenciador-net`** (sem porta no host). Ver "Serviço reservation".
   O `backend` **depende dele** (`depends_on: reservation: service_healthy`): sem ele não há reserva (o resto do monólito sobe).
+- Serviço `catalog` (issue #35): `docker compose -f Projeto/docker-compose.yml up -d --build catalog` — container `gerenciador-catalog`,
+  API interna na `:8083` **só na rede**; entrypoint `com.gerenciador.eventos.catalog.CatalogApplication`, `catalog/Dockerfile`. O `backend`
+  também depende dele (`service_healthy`); com ele parado `/bff/events/**` e a reserva respondem 503 (na reserva, um positivo de `exists`
+  ainda no cache de 30 s do gateway deixa a reserva seguir). Ver "Serviço catalog".
 - Local: `cd Projeto/Backend && mvn -pl monolito -am spring-boot:run` (ou `mvn -pl notification -am spring-boot:run`,
   `mvn -pl reservation -am spring-boot:run`) — precisa de um Postgres em `localhost:5433` (e, para a reserva, do `reservation` em
   `localhost:8082`, o default de `RESERVATION_SERVICE_URL`). `application.properties` de cada módulo tem defaults de dev para as vars do `.env`,
@@ -408,7 +412,7 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
   nomeado): em transaction mode ele vaza entre clientes ou some.
 - **Dimensionamento** (números literais em `Projeto/supabase/docker-compose.pooler.yml`): `POOLER_MAX_CLIENT_CONN=1500` tem de ser >= a
   SOMA dos Hikari de todos os serviços no tenant (senão o Supavisor recusa cliente): **reservation 1000 + monólito 350 + notification 3
-  = 1353** (desde a #33; antes era um Hikari de 1000 só, no monólito). Conexões reais ao Postgres: `POOLER_DEFAULT_POOL_SIZE=45` para o `max_connections=100`
+  + catalog 100 = 1453** (1353 na #33, +100 do catalog na #35; antes era um Hikari de 1000 só, no monólito). Conexões reais ao Postgres: `POOLER_DEFAULT_POOL_SIZE=45` para o `max_connections=100`
   do compose padrão (+ `DB_POOL_SIZE=5` do próprio Supavisor, 3 reservadas do superuser,
   testes e psql); com `carga/rpm` (`max_connections=300`) o pool vai para 245 sozinho (override + `subir-host-rpm.ps1`). Ou seja,
   o `too many clients` não vem mais do Hikari, e sim do pool do Supavisor + o resto passar do
@@ -576,7 +580,7 @@ O `gateway` e o contrato `/bff/**` não mudaram.
   carga) que o monólito já usa: o teto **não cresce** (nem consome a folga do `max_connections`, que é para superuser, Supavisor,
   suíte e `psql`). No transaction mode as 3 conexões de cliente só pegam uma conexão real durante a transação (1 em regime, segurada
   durante o SMTP; 3 no pior caso) e a devolvem no commit; ou seja, no máximo 1 dos 245 fica ocupado por ele de cada vez, o que
-  tira uma conexão do monólito só enquanto o e-mail sai. O `POOLER_MAX_CLIENT_CONN` (1500) cobre a soma dos Hikari (1353 desde a #33: 1000 do `reservation` + 350 do monólito + 3; ver a seção do `reservation`).
+  tira uma conexão do monólito só enquanto o e-mail sai. O `POOLER_MAX_CLIENT_CONN` (1500) cobre a soma dos Hikari (1453 desde a #35: 1000 do `reservation` + 350 do monólito + 3 + 100 do `catalog`; ver a seção do `reservation`).
   **Não aumente** esse Hikari sem refazer a conta: ele divide o pool com o monólito, que é o que a carga mede.
 - **Config do serviço** (todas por env var, mesmos nomes do monólito; valores reais em `Projeto/.env`, nunca imprimir):
   `SPRING_DATASOURCE_URL`/`_USERNAME`/`_PASSWORD`, `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`/`_MINIMUM_IDLE`,
@@ -590,6 +594,9 @@ O `gateway` e o contrato `/bff/**` não mudaram.
   porque o `env_file` entrega o `.env` inteiro).
 
 ## Catalog em CQRS + Event Sourcing — issue #28
+
+**Desde a #35 isto roda no serviço `catalog`** (schema `catalog`, event store/outbox próprios; ver "Serviço catalog"); o texto abaixo
+descreve o desenho do agregado, que a extração não mudou.
 
 Agregado `Event`: stream **`catalog.event`**, `streamId` = `partitionKey` = `event_id` (tópico `catalog.event`, relay
 ligado no compose desde a #28; o `catalog` não tem projeção assíncrona, o consumer é o da #29 para `reservation.wallet`). `/bff/events/**` não mudou (`HttpContractTest`
@@ -611,7 +618,7 @@ sem mudança de expectativa).
   `/bff/events/{id}/image`. Não entra em payload nenhum; a coluna é gravada direto na linha viva (`EventRepository.gravarImagem`:
   na transação do `createEvent`, quando o corpo traz imagem, ou sozinha por `saveImage`), a projeção/replay nunca a tocam, e a
   comparação do replay a ignora. Desde a #35 (fatia 1) a imagem tem métodos próprios (`EventApi.findImage`/`saveImage`): o
-  `POST .../image` chama só `saveImage` (um `UPDATE event SET image_data`, **sem evento no stream**), e o `updateEvent` não
+  `POST .../image` chama só `saveImage` (um `UPDATE catalog.event SET image_data`, **sem evento no stream**), e o `updateEvent` não
   lê nem grava `image_data` (antes um PUT sem imagem a apagava).
   `created_at`/`updated_at` também ficam fora da comparação: são carimbos do banco (`CURRENT_TIMESTAMP`), não vêm do log.
 - **Command side** (`CatalogEventWriter.executar`): uma transação JDBC manual por command, na ordem: (1) trava a linha de
@@ -646,7 +653,7 @@ sem mudança de expectativa).
     no `EventService.delete` (sem evento); no `/bff`, desde a #35 (fatia 1), `DELETE /bff/events/{id}` de id inexistente responde **404**
     (era 204): o gateway confere o dono antes (`EventApi.findCreatorId`) e nem chega a chamar o delete. `event_availability`, de um evento apagado, fica órfã e inofensiva (a leitura parte de `eventcap`).
 - **Read model** = `event`/`eventpresenter` (+ `event.version`), projeção **inline**: `HttpContractTest` lê o que acabou de
-  escrever. A mesma `CatalogEventProjection` roda no command (schema `public`) e no replay (schema-sombra).
+  escrever. A mesma `CatalogEventProjection` roda no command (schema `catalog` desde a #35; `public` antes) e no replay (schema-sombra).
 - **Replay**: `EventReplay.rebuild(CatalogEventProjection, "catalog.event", sombra)` +
   `divergentTables(..., colunasComparaveis)` com `event`: `event_id, creator_id, event_name, ead, address, event_date,
   description, version` (e `eventpresenter` inteira). Ver `CatalogEventSourcingTest`.
@@ -663,7 +670,8 @@ sem mudança de expectativa).
   concorrente com um create do mesmo nome pode inverter a ordem na sombra e violar o `UNIQUE`, mesmo a viva estando
   consistente. Caso raro, não tratado. (b) Com o relay ligado ele faz ~80 statements/s pelo pooler mesmo com o outbox
   vazio (o tick de 50 ms); é uma variável a acompanhar na #31, não foi medida aqui.
-- **Relay**: com `EVENTS_RELAY_ENABLED=true` no compose, o `catalog` publica no tópico `catalog.event`. O relay ocupa uma das
+- **Relay**: com `EVENTS_RELAY_ENABLED=true` no compose, o `catalog` publica no tópico `catalog.event` (desde a #35 o relay é o do
+  serviço `catalog`, lendo `catalog.event_outbox`). O relay ocupa uma das
   3 threads do scheduler só enquanto houver outbox (o volume do catálogo é baixo); o efeito sobre a medição fica para a #31.
 
 ## Padrão dos Services
@@ -694,7 +702,7 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
     `POST /bff/users/verify-email`, `POST /bff/users/resend-verification-code`,
     `POST /bff/users/verify-recaptcha`, `GET /bff/events/**` (inclui `/bff/events/search` e
     `/bff/events/{id}/image` — este último servido via `<img>`/`Image.network` no Flutter,
-    que nunca manda header customizado), `POST /bff/seed` (ferramenta de dev) e
+    que nunca manda header customizado), `POST /bff/seed` (ferramenta de dev; desde a #35 só existe com `SEED_ENABLED=true`, senão 404) e
     `GET /actuator/health`.
   - **Autenticado**: todo o resto de `/bff/**` — `/bff/event-wallets/**` e
     `/bff/my-wallets/**` por inteiro, mutações de evento (`POST/PUT/DELETE /bff/events/**`,
@@ -742,8 +750,8 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 
 ## Inscrição em evento — reserva em duas fases (CAS)
 
-**Desde a #33 isto roda no serviço `reservation`** (ver "Serviço reservation"): o `gateway` (`EventWalletGateway`) confere carteira e evento no
-monólito e chama a API interna dele por HTTP; o CAS, a guarda e o append continuam exatamente como abaixo, só que dentro do outro processo
+**Desde a #33 isto roda no serviço `reservation`** (ver "Serviço reservation"): o `gateway` (`EventWalletGateway`) confere a carteira no
+monólito e o evento no serviço `catalog` (desde a #35, por HTTP, com cache positivo de 30 s) e chama a API interna dele por HTTP; o CAS, a guarda e o append continuam exatamente como abaixo, só que dentro do outro processo
 e do schema `reservation`. `EventWalletService` (módulo `reservation`):
 
 1. `addLink` (`POST .../event-wallets`): valida, checa janela de compra (`eventcap.buy_time_limit`)
@@ -988,7 +996,8 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   | serviço | Tomcat (threads) | Hikari (max / min idle) | virtual threads | cliente HTTP |
   |---|---|---|---|---|
   | `reservation` (caminho quente) | **300** | **1000** / 5 | desligadas | — |
-  | `monolito` (gateway + catalog + identity) | 300 | **350** / 5 | desligadas | pool 400, resp. 10 s |
+  | `monolito` (gateway + identity) | 300 | **350** / 5 | desligadas | pool 400, resp. 10 s (reservation) · pool 400, resp. 15 s (catalog, #35) |
+  | `catalog` (#35) | 300 | **100** / 5 (timeout 5 s) | desligadas | pool 100, resp. 10 s (reservation) |
   | `notification` | sem HTTP | 3 / 1 | — | — |
 
   O monólito só faz as pré-checagens curtas (carteira, evento: uma conexão por vez por requisição, 300 threads + as do scheduler = 350) e
@@ -997,35 +1006,50 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   todos consomem do MESMO pool real de conexões ao Postgres (`POOLER_DEFAULT_POOL_SIZE` = 45 no compose padrão, 245 na configuração de carga =
   `max_connections` 300 − 55): ele **não cresce** por causa do `reservation` (outro usuário/tenant abriria outro pool e a soma teria de caber em
   `max_connections − 55`; por isso não foi feito). Já as conexões de CLIENTE ao Supavisor somam os Hikari: **1000 (reservation) + 350 (monólito)
-  + 3 (notification) = 1353 <= `POOLER_MAX_CLIENT_CONN` 1500** (a #33 tirou 650 do Hikari do monólito, que era 1000 sozinho). Subir qualquer um
+  + 3 (notification) = 1353 <= `POOLER_MAX_CLIENT_CONN` 1500** na #33 (que tirou 650 do Hikari do monólito, que era 1000 sozinho); com o
+  `catalog` (#35, Hikari 100) a soma é **1453**. Subir qualquer um
   desses Hikari exige refazer esta conta.
 - **Custo por requisição (para a Rodada 3, vs. o ponto 2)**: `cas` — gateway: JWT + 2 SELECT curtos (carteira, evento) no Postgres do monólito
   + **1 chamada HTTP**; reservation: 1 SELECT `eventcap`, 1 SELECT `existsActive` e a transação (`claim`, CAS, `reservePending`, append) —
   as mesmas do ponto 2, menos carteira/evento que agora são do gateway. `naive` — gateway: os 2 SELECT + **2 chamadas HTTP**; reservation: GET =
   1 SELECT `eventcap LEFT JOIN event_availability`; POST = SELECT `eventcap`, `existsActive` e a transação sem CAS. A rejeição "lotado" do naive
   custa só a 1ª chamada. Criar evento: +1 chamada HTTP ao reservation (+1 `GET` para reler); listar/buscar eventos: +1 chamada HTTP em lote.
+  **Desde a #35 (a Rodada 3, #34, mede sem este salto)**: o SELECT do evento virou `GET /internal/events/{id}/exists` no `catalog` (+1 salto HTTP, só
+  quando o positivo não está no cache de 30 s do gateway), e ler/listar/buscar evento passa por gateway → catalog → reservation.
 - **Cobertura do caminho real `/bff → reservation`**: não há teste automatizado que passe pelo `/bff` até o serviço REAL (a suíte de integração
   ponta a ponta é a #37, fora da #33). Até lá o caminho real é coberto pelo `ReservationApiE2ETest` (cliente real × serviço real) **mais** o
   roteiro `smoke-reservation-servico-separado.sh`, que deve rodar antes da Rodada 3. O `FakeReservationServer` está alinhado ao serviço real nas
   mensagens do confirm, na janela de compra, no CAS (seção crítica) e no PATCH sem `eventcap` (404), mas continua sendo um fake.
-- **Smoke da stack real**: `docs/testes-manuais/smoke-reservation-servico-separado.sh` (stack no ar): cria evento, 8 reservas simultâneas
-  no evento de capacidade 3 pelo gateway → serviço, e confere 3 x 201 + 5 x "Evento lotado" e o banco no schema `reservation`
-  (`eventcap.quant = 0`, 3 `SlotReserved` no `reservation.event_store`, nada no `public.event_store`). O roteiro antigo
+- **Smoke da stack real**: `docs/testes-manuais/smoke-reservation-servico-separado.sh` (stack no ar com o override de carga, que liga o
+  seed): cria evento, 8 reservas simultâneas no evento de capacidade 3 pelo gateway → serviço, no braço do backend no ar
+  (`RESERVATION_READPATH`, variável `BRACO`), e confere o banco no schema `reservation` (reservas ativas = 201 = `SlotReserved` no
+  `reservation.event_store`, nada no `public.event_store`). **`cas`**: 3 x 201 + 5 x "Evento lotado", overselling 0 exigido,
+  `eventcap.quant = 0`. **`naive`** (braço de controle): exige só 201 + "Evento lotado" = usuários e `eventcap.quant` = capacidade (o naive
+  não toca o `eventcap`) e **reporta** o overselling (`ESPERADAS_201` opcional): a janela check-then-act passa pela rede e oversela mesmo
+  sem backlog relevante na projeção (na #35: 8 x 201 e 7 x 201 em duas rodadas; o `cas` deu 3 x 201 nas duas). O roteiro antigo
   `overselling-sob-concorrencia.sh` (#9) já não roda desde a #78/#79 (cria usuário sem JWT); só as queries foram qualificadas.
 - **Pendências conhecidas**: (a) o healthcheck do compose é "a porta aceita conexão" (`bash /dev/tcp`; o `/bin/sh` da imagem é dash e não tem
   `/dev/tcp`), não há health HTTP; (b) o `HttpContractTest` do monólito roda contra
   o servidor falso — o contrato com o serviço real é do `ReservationApiE2ETest` (e do smoke, até a #37); (c) `idempotency_key` e `event_availability` de eventos apagados
-  ficam órfãs (inofensivas); (d) a limpeza do banco entre blocos da carga (`E:\TCC\carga-overrides\limpar-banco.sh`, fora do repo) precisa
-  truncar o schema `reservation` e mover os groups `reservation`/`reservation-catalog` (lista no relatório da #33).
+  ficam órfãs (inofensivas); (d) a limpeza do banco entre blocos da carga (`E:\TCC\carga-overrides\limpar-banco.sh`, fora do repo) trunca
+  `public`, `reservation` e `catalog` numa instrução, move os groups `reservation`/`reservation-catalog`/`notification` para o fim dos
+  tópicos e sobe `reservation` + `catalog` antes do `backend` (#35; resumo em `Projeto/carga/README.md`).
 
-## Serviço catalog — issue #35 (Fase 7: terceira extração; fatia 3 de 4, cutover)
+## Serviço catalog — issue #35 (Fase 7: terceira extração)
 
-Estado da fatia 3: o cutover foi feito. O monólito NÃO tem mais o pacote `catalog` (nem `public.event`): o `gateway` usa o
+O monólito NÃO tem mais o pacote `catalog` (nem `public.event`): o `gateway` usa o
 `CatalogClient` (lib `catalog-client`) contra o serviço `catalog` (container `gerenciador-catalog`, `:8083` só na rede
 `gerenciador-net`; o `backend` depende dele `service_healthy`), e `event`/`eventpresenter` e o stream `catalog.event` estão no schema
 `catalog` (migração `db/migrations/20261026-catalog-schema.sql`; `03-event.sql`/`05-eventpresenter.sql` saíram, bancos novos nascem pelo
-`14-catalog.sql`). Operação/docs completas (smoke, `limpar-banco`, README da carga...) são a fatia 4. Spec:
-`docs/superpowers/specs/2026-10-24-catalog-servico-design.md`.
+`14-catalog.sql`). Spec: `docs/superpowers/specs/2026-10-24-catalog-servico-design.md`; diagrama em
+[`docs/arquitetura/fase7-servicos.md`](../../docs/arquitetura/fase7-servicos.md).
+
+- **Operação (fatia 4)**: smoke da stack real `docs/testes-manuais/smoke-catalog-servico-separado.sh` (com o override de carga, que liga o
+  seed: host cria evento pelo BFF e recebe o `creator_name`; `/internal/events/**` 401 sem `X-Internal-Token` e sem porta no host; com o
+  `gerenciador-catalog` parado `GET /bff/events/{id}` e a reserva dão 503, num evento sem positivo no cache de `exists`; volta e recuperação; `catalog.event` sem `public.event`; outbox
+  do catalog escoando). O kit de carga lê `catalog.event` (`carga/rpm/subir-host-rpm.ps1 -Verificar`, agora com `ON_ERROR_STOP`) e a
+  limpeza entre blocos trunca `catalog` junto com `reservation` (`Projeto/carga/README.md`). Lag do relay do catalog:
+  `catalog.event_outbox` e `rpk group describe reservation-catalog`.
 
 - **Gateway** (fatia 3): `CatalogUnavailableException` (rede, timeout, 5xx, 404 sem o marcador) vira **503 com corpo genérico**
   (`gateway/CatalogIndisponivelHandler`; o detalhe só no log): os `catch (RuntimeException)` dos controllers a relançam antes de virar
@@ -1129,11 +1153,14 @@ Estado da fatia 3: o cutover foi feito. O monólito NÃO tem mais o pacote `cata
   partir daí cada tentativa do retry transitório ilimitado loga em ERROR), `EVENTS_CONSUMER_BATCH_SIZE` (`500`, #146; tamanho máximo
   do lote do listener da projeção de disponibilidade, o `max.poll.records` dele; o compose o repassa), `EVENTS_SNAPSHOT_EVERY` (`100`). Sem segredo novo. As flags
   `EVENTS_RELAY_ENABLED`/`EVENTS_CONSUMER_ENABLED` têm default `false` (os testes ligam por `@SpringBootTest(properties=...)`); o
-  `docker-compose.yml` passa `EVENTS_RELAY_ENABLED=true` ao monólito desde a #28 (o `catalog` appenda eventos) e, desde a #33, ao `reservation` (relay do
+  `docker-compose.yml` passa `EVENTS_RELAY_ENABLED=true` ao monólito desde a #28 (o `catalog` appendava eventos; desde a #35 o relay do monólito
+  só publica o `identity.notification` e o `catalog` tem o dele) e, desde a #33, ao `reservation` (relay do
   outbox dele) junto com `EVENTS_CONSUMER_ENABLED=true` (projeção assíncrona de disponibilidade, #29); o monólito passou a `EVENTS_CONSUMER_ENABLED=false`.
-  **Aviso:** com o `gerenciador-backend` ou o `gerenciador-reservation` no ar, o relay deles drena o `event_outbox` do
+  **Aviso:** com o `gerenciador-backend`, o `gerenciador-reservation` ou o `gerenciador-catalog` no ar, o relay deles drena o `event_outbox` do
   mesmo banco que o `run-tests.sh` usa e o consumer move `ativos`: o `run-tests.sh` **aborta** se algum dos containers estiver
-  rodando (`docker stop gerenciador-backend gerenciador-reservation` antes).
+  rodando (`docker stop gerenciador-backend gerenciador-reservation gerenciador-catalog gerenciador-notification` antes).
+- Serviço catalog e seed (#35): `CATALOG_SERVICE_URL` e `CATALOG_CLIENT_MAX_CONNECTIONS` (cliente HTTP do gateway, ver "Serviço catalog"),
+  `SEED_ENABLED` (`seed.enabled`, default `false`: `POST /bff/seed` responde 404; só o override de carga liga).
 - Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto
   (`management.endpoints.web.exposure.include=health`); `GET /actuator/health` público devolve
   `{"status":"UP"}` (depende do Postgres). O health do mail deixou de existir com o `spring-boot-starter-mail` (#32).

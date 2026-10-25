@@ -110,7 +110,8 @@ Representa um evento. É como um convite com todos os detalhes.
 
 - **Campos principais**:
   - `event_id`: Número único do evento (gerado automaticamente).
-  - `creator_id`: ID do usuário que criou o evento.
+  - `creator_id`: ID do usuário que criou o evento. Desde a #35 o gateway grava o usuário do token (o `creator_id` do corpo é ignorado) e só o dono edita, apaga ou troca a imagem (403).
+  - `creator_name`: Nome de quem criou (somente leitura, #35). Composto pelo gateway a partir do `creator_id`; vem nulo se a conta estiver desativada.
   - `event_name`: Nome do evento (obrigatório e único).
   - `is_EAD`: Indica se é online (true) ou presencial (false).
   - `address`: Endereço (obrigatório se presencial).
@@ -120,7 +121,7 @@ Representa um evento. É como um convite com todos os detalhes.
   - `quantity`: Quantidade de ingressos disponíveis (não pode ser negativa).
   - `description`: Descrição do evento.
   - `presenters`: Lista de nomes de apresentadores (pode ser vazia).
-  - `image_data`: Imagem do evento (em formato bytes, como uma foto JPG).
+  - `image_data`: Imagem do evento (em formato bytes, como uma foto JPG). Não vem nas listas (busca e eventos de um criador, #35): só no evento por id e em `/bff/events/{id}/image`.
   - `createdAt` e `updatedAt`: Datas automáticas de criação e atualização.
 
 Exemplo: Um evento "Palestra sobre Java" online, criado por João, em 2025-12-01.
@@ -367,7 +368,7 @@ Essas são as "gavetas" principais. Cada uma tem colunas (campos) para guardar d
 - **O que faz**: Guarda detalhes de eventos, como nome, data e local.
 - **Campos principais**:
   - `event_id`: Número único automático.
-  - `creator_id`: ID do usuário que criou (liga à tabela users).
+  - `creator_id`: ID do usuário que criou (referência solta a `users`, sem FK: desde a #35 a tabela fica no schema `catalog`, do serviço `catalog`).
   - `event_name`: Nome único.
   - `ead`: Se é online (sim/não, padrão não).
   - `address`: Endereço (se presencial).
@@ -452,6 +453,7 @@ Exemplo: Uma lista: "Adicionar João, Maria; Eventos: Festa1, Festa2; Inscriçõ
   - Registra sucessos, avisos (como "Já existe") e erros.
   - Retorna um resumo: "X criados, com Y avisos".
 - **Por quê?**: Útil para desenvolvedores testarem ou inicializarem o sistema com dados reais.
+- **Desligado por padrão (#35)**: `POST /bff/seed` só existe com `SEED_ENABLED=true` (senão responde 404). O override de carga (`Projeto/carga/docker-compose.carga.yml`) liga; ligado, ele aceita o `creator_id` do corpo (ferramenta de dev).
 
 Exemplo: Como importar uma planilha de convidados para uma festa — o sistema checa duplicatas e avisa problemas.
 

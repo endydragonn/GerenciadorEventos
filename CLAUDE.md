@@ -193,7 +193,16 @@ threads off), Hikari 350 no monólito, e a conta do pool do Supavisor (mesmo ten
 `Projeto/Backend/CLAUDE.md`, "Serviço reservation"; diagrama em [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md).
 O kit de carga aponta para o schema/serviço novos (`Projeto/carga/README.md`); a Rodada 3 (#34) mede.
 
+**Implementado (Fase 7, issue #35, 2026-10-24):** terceira extração, o `catalog` — `event`/`eventpresenter` (CQRS + ES, stream
+`catalog.event`) viraram o serviço `catalog` (módulo Maven, Dockerfile, imagem e container `gerenciador-catalog`, API interna `:8083` só na
+rede, schema `catalog` com **event store e relay próprios**; migração `20261026-catalog-schema.sql`). O `gateway` o chama pela lib
+`catalog-client` (`/internal/**` com `X-Internal-Token`; cadeia gateway → catalog → reservation nas leituras), segue validando JWT e host,
+amarra `creator_id` (integer, sem FK) ao token e exige o dono em PUT/DELETE/imagem (403), e compõe o `creator_name` (lote ao `identity` +
+cache). Catalog fora → 503 (inclusive na reserva, salvo positivo de `exists` ainda no cache de 30 s do gateway). `POST /bff/seed` desligado por padrão (`SEED_ENABLED`). JWT assimétrico + JWKS é a #36.
+Detalhes no `Projeto/Backend/CLAUDE.md`, "Serviço catalog"; diagrama em [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md);
+smoke da stack real em `docs/testes-manuais/smoke-catalog-servico-separado.sh`.
+
 **Decidido, não implementado:** extrair os demais módulos como microsserviços (Opção B — `gateway`, `identity`,
-`catalog`, `admission`; o `notification` saiu na #32 e o `reservation` na #33);
+`admission`; o `notification` saiu na #32, o `reservation` na #33 e o `catalog` na #35);
 camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
 `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.

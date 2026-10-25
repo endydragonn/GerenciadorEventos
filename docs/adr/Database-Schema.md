@@ -19,6 +19,8 @@ Schema refinado a partir do README original do sistema (back-end Java/Spring Boo
 > [Implementacao-EventCap-e-Reserva-CAS](Implementacao-EventCap-e-Reserva-CAS.md). Com a decomposição em microsserviços
 > ([Architecture-Decision-Microservices-Split](Architecture-Decision-Microservices-Split.md)) o schema passa a ser **por serviço** e
 > ganha tabelas de stream/projeção/snapshot — ver a seção "Impacto de microsserviços + CQRS/ES".
+> No implementado, desde a #35, `event.creator_id` é `integer` **sem FK** (referência solta a `users`, no schema `catalog`); o `uuid` e o
+> `Ref: User.user_id > Event.creator_id` abaixo são do modelo lógico.
 
 ## DBML atual
 
