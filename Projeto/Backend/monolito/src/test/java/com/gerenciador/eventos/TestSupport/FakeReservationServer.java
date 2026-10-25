@@ -117,6 +117,45 @@ public final class FakeReservationServer {
         return caps.get(eventId);
     }
 
+    // ===== chamadas em memória do FakeCatalogServer (issue #35): o catalog real fala HTTP com o reservation; o falso do
+    // catalog mexe direto no estado deste, com as mesmas regras das rotas /internal/eventcaps abaixo =====
+
+    /** PUT idempotente por {@code event_id}; {@code false} se a criação está "fora do ar" (o catalog real segue sem eventcap). */
+    public boolean criarCapacidade(long eventId, Integer capacity, LocalDateTime buyTimeLimit) {
+        if (falharCriacaoDeCapacidade) {
+            return false;
+        }
+        EventCap cap = new EventCap(eventId, capacity, capacity, buyTimeLimit);
+        cap.setCreatedAt(LocalDateTime.now().truncatedTo(ChronoUnit.MICROS));
+        caps.putIfAbsent(eventId, cap);
+        return true;
+    }
+
+    /** PATCH da política; sem eventcap cria com os valores novos (como o catalog real faz depois do 404). */
+    public void atualizarCapacidade(long eventId, Integer capacity, LocalDateTime buyTimeLimit) {
+        EventCap atual = caps.get(eventId);
+        if (atual == null) {
+            criarCapacidade(eventId, capacity, buyTimeLimit);
+            return;
+        }
+        int vendidas = reservasAtivas(eventId);
+        if (capacity != -1 && capacity < vendidas) {
+            throw new IllegalArgumentException("Capacidade menor que o número de inscrições já feitas");
+        }
+        atual.setCapacity(capacity);
+        atual.setQuant(capacity == -1 ? -1 : capacity - vendidas);
+        atual.setBuyTimeLimit(buyTimeLimit);
+    }
+
+    /** DELETE da capacidade; {@code false} = recusado (o evento tem reserva, o 409 do serviço real). */
+    public boolean removerCapacidade(long eventId) {
+        if (reservas.values().stream().anyMatch(r -> r.getEventId() == eventId)) {
+            return false;
+        }
+        caps.remove(eventId);
+        return true;
+    }
+
     // ===================== roteamento =====================
 
     private void tratar(HttpExchange ex) throws IOException {

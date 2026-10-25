@@ -27,10 +27,13 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
  * na implementação EventCap/CAS de 2026-09-01 (issue #7 — verificação):
  *
  * <ul>
- *   <li><b>A)</b> UNIQUE em {@code users(email)}, {@code users(fone)} e {@code event(event_name)}
+ *   <li><b>A)</b> UNIQUE em {@code users(email)} e {@code users(fone)}
  *       — conjunto EXATO de colunas restringidas, consultado no catálogo ({@code pg_constraint}),
  *       não subconjunto;</li>
  * </ul>
+ *
+ * <p>O UNIQUE de {@code event(event_name)} saiu com a tabela para o schema {@code catalog} na #35: é do
+ * {@code CatalogSchemaConstraintsTest}, no módulo {@code catalog}.</p>
  *
  * <p>Os itens B (índice parcial {@code idx_walletevent_pending_expires}) e C ({@code walletevent_status_check}) eram sobre
  * {@code walletevent}, que saiu para o schema {@code reservation} na #33: agora são do
@@ -63,11 +66,6 @@ public class SchemaConstraintsTest {
     }
 
     @Test
-    void eventEventNameTemConstraintUniquePelaColunaEventName() throws Exception {
-        assertUniqueConstraintColumns("Event_event_name_key", "public.event", "event_name");
-    }
-
-    @Test
     void emailDuplicadoViolaConstraintNoBanco() throws Exception {
         // INSERT cru, contornando UserService.validateDuplicates (pré-check em emailExists),
         // para exercitar de fato a constraint Users_email_key no Postgres. As demais colunas
@@ -78,22 +76,6 @@ public class SchemaConstraintsTest {
                     inserirUsuarioCru(conn, "SC7 dup email 2", "sc7-dup-email@example.com", "sc7-fone-42"));
             assertEquals("23505", erro.getSQLState(),
                     "email duplicado deveria violar Users_email_key (unique_violation 23505), veio: "
-                            + erro.getSQLState() + " / " + erro.getMessage());
-        }
-    }
-
-    @Test
-    void nomeDeEventoDuplicadoViolaConstraintNoBanco() throws Exception {
-        // INSERT cru, contornando EventService.validateDuplicatesOnCreate (pré-check em nameExists),
-        // para exercitar de fato a constraint Event_event_name_key no Postgres.
-        try (Connection conn = databaseConnection.getConnection()) {
-            long criadorId = inserirUsuarioCruRetornandoId(
-                    conn, "SC7 ev creator", "sc7-ev-creator@example.com", "sc7-fone-51");
-            inserirEventoCru(conn, criadorId, "Evento SC7 Nome Duplicado");
-            SQLException erro = assertThrows(SQLException.class, () ->
-                    inserirEventoCru(conn, criadorId, "Evento SC7 Nome Duplicado"));
-            assertEquals("23505", erro.getSQLState(),
-                    "event_name duplicado deveria violar Event_event_name_key (unique_violation 23505), veio: "
                             + erro.getSQLState() + " / " + erro.getMessage());
         }
     }
@@ -160,32 +142,6 @@ public class SchemaConstraintsTest {
             ps.setString(1, nome);
             ps.setString(2, email);
             ps.setString(3, fone);
-            ps.executeUpdate();
-        }
-    }
-
-    private long inserirUsuarioCruRetornandoId(Connection conn, String nome, String email, String fone)
-            throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement(
-                "INSERT INTO users (user_name, email, fone, password, birthdate) "
-              + "VALUES (?, ?, ?, 'x', DATE '2000-01-01') RETURNING user_id")) {
-            ps.setString(1, nome);
-            ps.setString(2, email);
-            ps.setString(3, fone);
-            try (ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                return rs.getLong(1);
-            }
-        }
-    }
-
-    /** INSERT cru em public.event (contorna o pré-check de duplicidade do EventService). */
-    private void inserirEventoCru(Connection conn, long criadorId, String nome) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement(
-                "INSERT INTO event (creator_id, event_name, ead, event_date, description) "
-              + "VALUES (?, ?, true, CURRENT_TIMESTAMP + interval '10 days', 'desc')")) {
-            ps.setLong(1, criadorId);
-            ps.setString(2, nome);
             ps.executeUpdate();
         }
     }

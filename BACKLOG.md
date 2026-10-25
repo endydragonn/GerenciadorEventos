@@ -72,7 +72,8 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 31 | #32 | fechada — `notification` como serviço (Maven multi-módulo, Dockerfile por serviço); e-mail por evento `identity.notification`, dado pessoal com retenção = validade do código + 30 s | #152 |
 | 32 | #33 | fechada — `reservation` como serviço atrás do `gateway` (schema e event store próprios, API `/internal/**` com token de serviço); naive em 2 chamadas HTTP, CAS em 1; `eventcap` por chamada síncrona | #153 |
 | 33 | #34 | feita — Rodada 3 (ponto 3) em `Projeto/carga/results/05-distribuido`, X ≈ 58k, CAS com overselling 0; controle do ponto 2 no cabo em `04b-fase6-es-cabo`; ponto 3 em `docs/artigo/experimento-monolito.md` (fecha com o merge da `Fase_7`) | — |
-| 34–46 | #35–#47 | abertas — a próxima é a #35 (`catalog` como serviço) | — |
+| 34 | #35 | implementada na branch `Issue-35` (PR em aberto, draft) — `catalog` como serviço (schema, event store e relay próprios; API `/internal/events/**` com token de serviço); `creator_id` integer amarrado ao token, `creator_name` composto no `gateway`; seed desligado por padrão | — |
+| 35–46 | #36–#47 | abertas | — |
 | 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
 
 Branch de integração da Fase 2: `Fase_2` (a #11 entrou pelo PR #104; as #12–#15 foram
@@ -325,6 +326,12 @@ Rodada 2 (#31, ponto 2 da série) feita em 2026-10-19 (PR #148). Fase 7: #32 →
 `fase/7` `area/backend` `area/banco` `area/eventos`
 - **Aceite:** schema + streams próprios; `event.creator_id` vira UUID sem FK cross-service; `creator_name` por projeção consumindo eventos do `identity` (ou composição no `gateway` — decisão da ADR); host auth valida JWT localmente.
 - **Depende de:** #32
+
+> **Implementado na branch `Issue-35` (2026-10-24), com o aceite reescrito** (spec `docs/superpowers/specs/2026-10-24-catalog-servico-design.md`):
+> serviço `catalog` com schema, event store, outbox, snapshot e checkpoint próprios, sem FK cross-schema; `creator_id` **segue integer**
+> (referência solta; UUID fica como evolução); `creator_name` **por composição no `gateway`** (lote ao `identity` + cache); o `gateway`
+> segue validando JWT e host e o `catalog` autentica só por `X-Internal-Token` (JWT assimétrico + JWKS é a #36); `POST /bff/seed`
+> desligado por padrão (`SEED_ENABLED`).
 
 ### 35. Extrair `identity` (Auth, MFA, reCAPTCHA, verificação de e-mail)
 `fase/7` `area/backend` `area/banco` `seguranca`

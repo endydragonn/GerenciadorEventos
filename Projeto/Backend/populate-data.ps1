@@ -1,5 +1,7 @@
 # Script PowerShell para popular banco via API
 # Garante que senhas sejam criptografadas corretamente
+# Desde a #35 o POST /bff/seed so existe com SEED_ENABLED=true no backend (default: 404). Suba com o override de carga:
+# docker compose -f docker-compose.yml -f carga/docker-compose.carga.yml up -d
 
 $apiUrl = "http://localhost:8081/bff/seed"
 

@@ -1,6 +1,8 @@
 package com.gerenciador.eventos.identity;
 
 import java.sql.SQLException;
+import java.util.Collection;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -102,6 +104,11 @@ public class UserService implements UserApi {
     @Override
     public boolean exists(Long userId) {
         return userRepository.findById(userId) != null;
+    }
+
+    @Override
+    public Map<Long, String> findNames(Collection<Long> ids) {
+        return ids == null || ids.isEmpty() ? Map.of() : userRepository.findActiveNames(ids);
     }
 
     /**

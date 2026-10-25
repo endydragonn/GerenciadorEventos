@@ -1,14 +1,17 @@
 package com.gerenciador.eventos.gateway;
 
+import java.time.Duration;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import com.gerenciador.eventos.catalog.api.EventApi;
+import com.gerenciador.eventos.catalogclient.api.EventApi;
 import com.gerenciador.eventos.identity.api.MyWalletApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.EventWalletApi;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 /**
  * Roteamento da inscrição em evento (issue #33, Fase 7): o gateway confere o que é DELE (a carteira do usuário, que é do
@@ -35,6 +38,10 @@ public class EventWalletGateway {
     private final MyWalletApi myWalletApi;
     private final EventApi eventApi;
     private final boolean naive;
+    private final Cache<Long, Boolean> eventosExistentes = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(Duration.ofSeconds(30))
+            .build();
 
     public EventWalletGateway(EventWalletApi reservation, MyWalletApi myWalletApi, EventApi eventApi,
             @Value("${reservation.readpath:cas}") String readPath) {
@@ -44,12 +51,29 @@ public class EventWalletGateway {
         this.naive = "naive".equalsIgnoreCase(readPath);
     }
 
+    /**
+     * Existência do evento com cache POSITIVO de 30 s (issue #35: o {@code exists} vira um salto de rede quando o catalog sair do
+     * processo). Só {@code true} entra no cache; {@code false} é reconsultado; falha do catalog propaga (nunca vira
+     * {@code false}, ou seria "evento não existe"). Trade-off: um evento apagado ainda passa por aqui por até 30 s, e a reserva
+     * é recusada pelo reservation ("Capacidade do evento não configurada", o {@code eventcap} sai no cancelamento).
+     */
+    private boolean eventoExiste(Long eventId) {
+        if (eventosExistentes.getIfPresent(eventId) != null) {
+            return true;
+        }
+        boolean existe = eventApi.exists(eventId);
+        if (existe) {
+            eventosExistentes.put(eventId, Boolean.TRUE);
+        }
+        return existe;
+    }
+
     public EventWallet addLink(EventWallet ew, String idempotencyKey) {
         validateBasic(ew);
         if (!myWalletApi.exists(ew.getUserId())) {
             throw new IllegalArgumentException("Carteira do usuário não encontrada");
         }
-        if (!eventApi.exists(ew.getEventId())) {
+        if (!eventoExiste(ew.getEventId())) {
             throw new IllegalArgumentException("Evento não encontrado");
         }
         return reservation.addLink(ew, idempotencyKey, naive);
@@ -77,7 +101,7 @@ public class EventWalletGateway {
         if (!userOk) sb.append("user_id é obrigatório e deve ser positivo. ");
         if (!eventOk) sb.append("event_id é obrigatório e deve ser positivo. ");
         if (userOk && !myWalletApi.exists(ew.getUserId())) sb.append("Carteira não encontrada. ");
-        if (eventOk && !eventApi.exists(ew.getEventId())) sb.append("Evento não encontrado. ");
+        if (eventOk && !eventoExiste(ew.getEventId())) sb.append("Evento não encontrado. ");
         if (userOk && eventOk && reservation.existsActive(ew.getUserId(), ew.getEventId())) {
             sb.append("Vínculo já existente. ");
         }

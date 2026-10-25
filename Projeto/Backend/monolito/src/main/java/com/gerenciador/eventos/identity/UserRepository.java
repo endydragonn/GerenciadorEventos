@@ -10,6 +10,9 @@ import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
@@ -165,6 +168,24 @@ public class UserRepository {
             
         } catch (SQLException e) {
             throw new RuntimeException("Erro ao buscar usuário: " + e.getMessage(), e);
+        }
+    }
+
+    /** Nomes dos usuários ativos entre os ids, numa consulta ({@code user_id = ANY(?)}). */
+    public Map<Long, String> findActiveNames(Collection<Long> ids) {
+        String sql = "SELECT user_id, user_name FROM users WHERE user_id = ANY(?) AND isactive";
+        Map<Long, String> nomes = new HashMap<>();
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setArray(1, conn.createArrayOf("bigint", ids.toArray()));
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    nomes.put(rs.getLong(1), rs.getString(2));
+                }
+            }
+            return nomes;
+        } catch (SQLException e) {
+            throw new RuntimeException("Erro ao buscar nomes de usuários: " + e.getMessage(), e);
         }
     }
 

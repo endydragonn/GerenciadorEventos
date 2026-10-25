@@ -33,10 +33,8 @@ public class SchemaValidationTest {
 
     @Test
     void shouldHaveRequiredTables() throws Exception {
-        assertTrue(tableExists("users"), "Tabela 'users' não existe");
-        assertTrue(tableExists("event"), "Tabela 'event' não existe");
-        assertTrue(tableExists("eventpresenter"), "Tabela 'eventpresenter' não existe");
-        assertTrue(tableExists("mywallet"), "Tabela 'mywallet' não existe");
+        assertTrue(tableExists("public.users"), "Tabela 'users' não existe");
+        assertTrue(tableExists("public.mywallet"), "Tabela 'mywallet' não existe");
         assertTrue(tableExists("public.event_store"), "Tabela 'public.event_store' não existe");
         assertTrue(tableExists("public.event_outbox"), "Tabela 'public.event_outbox' não existe");
         assertTrue(tableExists("public.event_snapshot"), "Tabela 'public.event_snapshot' não existe");
@@ -57,19 +55,6 @@ public class SchemaValidationTest {
             "user_id", "user_name", "email", "fone", "password", "birthdate",
             "admin", "isactive", "created_at", "updated_at"
         );
-    }
-
-    @Test
-    void eventTableShouldHaveKeyColumns() throws Exception {
-        assertColumns("event",
-            "event_id", "creator_id", "event_name", "ead", "address",
-            "event_date", "description", "created_at", "updated_at", "version"
-        );
-    }
-
-    @Test
-    void eventPresenterTableShouldHaveKeyColumns() throws Exception {
-        assertColumns("eventpresenter", "event_id", "presenter_name");
     }
 
     @Test
@@ -160,6 +145,36 @@ public class SchemaValidationTest {
              ResultSet rs = ps.executeQuery()) {
             rs.next();
             assertEquals(0, rs.getInt(1), "nenhuma FK cross-schema envolvendo reservation");
+        }
+    }
+
+    /**
+     * Issue #35 (Fase 7, cutover): {@code event} e {@code eventpresenter} SAÍRAM de {@code public} para o schema {@code catalog}
+     * (do serviço catalog, validado no módulo dele: colunas, chaves, cascata), e não restou FK cruzando o schema {@code catalog}
+     * (a {@code Event_creator_id_fkey} para {@code users} caiu); a {@code mywallet_user_id_fkey} do {@code identity} continua.
+     */
+    @Test
+    void catalogTablesLeftPublicAndNoFkCrossesTheCatalogSchema() throws Exception {
+        for (String t : List.of("event", "eventpresenter")) {
+            assertTrue(!tableExists("public." + t), "public." + t + " deveria ter ido para o schema catalog (migração 20261026)");
+            assertTrue(tableExists("catalog." + t), "catalog." + t + " não existe");
+        }
+        assertEquals(0, contar("select count(*) from pg_constraint c join pg_class t on t.oid = c.conrelid "
+            + "join pg_namespace n on n.oid = t.relnamespace join pg_class r on r.oid = c.confrelid "
+            + "join pg_namespace rn on rn.oid = r.relnamespace "
+            + "where c.contype = 'f' and n.nspname <> rn.nspname and 'catalog' in (n.nspname, rn.nspname)"),
+            "nenhuma FK cross-schema envolvendo catalog");
+        assertEquals(1, contar("select count(*) from pg_constraint where conname = 'mywallet_user_id_fkey' "
+            + "and conrelid = 'public.mywallet'::regclass and confrelid = 'public.users'::regclass"),
+            "a FK mywallet -> users (identity) não é cross-schema e continua");
+    }
+
+    private int contar(String sql) throws Exception {
+        try (Connection c = databaseConnection.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            rs.next();
+            return rs.getInt(1);
         }
     }
 

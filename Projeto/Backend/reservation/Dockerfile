@@ -10,6 +10,8 @@ COPY reservation ./reservation
 # O agregador lista todos os módulos: o Maven exige o pom de cada um, mas não o código (aqui só o pom dos outros serviços).
 COPY monolito/pom.xml ./monolito/pom.xml
 COPY notification/pom.xml ./notification/pom.xml
+COPY catalog-client/pom.xml ./catalog-client/pom.xml
+COPY catalog/pom.xml ./catalog/pom.xml
 RUN mvn -B -DskipTests -pl reservation -am clean package
 
 # Estágio runtime: imagem pequena apenas para executar o jar (Java 25)

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictException;
 
@@ -56,6 +57,8 @@ public class BffEventWalletController {
             return ResponseEntity.badRequest().body(ex.getMessage());
         } catch (IdempotencyConflictException ex) {
             return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(ex.getMessage());
+        } catch (CatalogUnavailableException ex) {
+            throw ex; // a conferência do evento (exists) falhou: 503 genérico, nunca "Evento não encontrado"
         } catch (RuntimeException ex) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
         }

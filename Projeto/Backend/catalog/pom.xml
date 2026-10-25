@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.example.demo</groupId>
+        <artifactId>backend</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+    <artifactId>catalog</artifactId>
+    <name>catalog</name>
+    <description>Serviço catalog (issue 35): eventos em CQRS + event sourcing (stream catalog.event), API interna HTTP chamada pelo gateway</description>
+    <dependencies>
+        <!-- Lib comum: DatabaseConnection e a infra de event sourcing (event store, relay, replay) -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>shared</artifactId>
+        </dependency>
+        <!-- Contrato HTTP DESTE serviço: Event, EventApi (o EventService a implementa) e as exceções. Os testes ponta a ponta
+             usam também o CatalogClient real contra este serviço. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>catalog-client</artifactId>
+        </dependency>
+        <!-- Cliente do serviço reservation: o eventcap nasce/muda/sai por chamada HTTP (PUT/PATCH/batch/DELETE /internal/eventcaps). -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>reservation-client</artifactId>
+        </dependency>
+        <!-- API interna HTTP (sem Spring Security: só alcançável na rede gerenciador-net; autenticada por X-Internal-Token) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <!-- Escopo compile (não runtime): o InternalApiExceptionHandler lê a constraint do 23505 em PSQLException/ServerErrorMessage. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- LauncherSessionListener (TestSupport/EventCapFakeSession): sobe o servidor falso do reservation antes de qualquer
+             contexto Spring dos testes (versão do BOM do Spring Boot). -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.gerenciador.eventos.catalog.CatalogApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

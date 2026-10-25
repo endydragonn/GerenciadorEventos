@@ -53,6 +53,11 @@ docker compose -f Projeto/docker-compose.yml down
 - Frontend: http://localhost:8088
 - Backend:  http://localhost:8081
 - Postgres: host=localhost port=5433 (na rede Docker: host=db port=5432)
+- Serviços internos, **sem porta no host** (só na rede `gerenciador-net`): `reservation` :8082 (#33) e `catalog` :8083 (#35, container
+  `gerenciador-catalog`; o backend depende dele e, com ele parado, `/bff/events/**` e a reserva respondem 503; na reserva, um evento conferido há menos de 30 s
+  ainda está no cache de `exists` do gateway e a reserva segue).
+- `POST /bff/seed` fica desligado (404) por padrão (`SEED_ENABLED`, #35). Para semear, suba com o override de carga:
+  `docker compose -f Projeto/docker-compose.yml -f Projeto/carga/docker-compose.carga.yml up -d --build`.
 
 ## Variáveis de ambiente (.env)
 Arquivo env enviado no grupo do zap por segurança

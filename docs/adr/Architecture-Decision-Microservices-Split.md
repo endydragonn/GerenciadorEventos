@@ -36,7 +36,7 @@ migrando por *strangler pattern* a partir do monólito atual.
 |---|---|---|---|
 | `gateway` | Roteamento + agregação (BFF atual formalizado); contrato externo do Flutter inalterado | — | HTTP para os demais |
 | `identity` | Cadastro, login, MFA, reCAPTCHA, verificação de e-mail, troca de senha | schema próprio (hash de senha, segredos MFA) | HTTP síncrono; emite `UserRegistered`, `PasswordChanged` |
-| `catalog` | CRUD de `event`, `eventpresenter`, autorização de host | schema próprio | HTTP síncrono; `creator_id` = referência solta (sem FK cross-service) |
+| `catalog` | CRUD de `event`, `eventpresenter` (a autorização de host e de dono ficou no `gateway`, #35) | schema próprio | HTTP síncrono; `creator_id` = referência solta (sem FK cross-service) |
 | `reservation` | `eventcap` + CAS, `walletevent` (máquina de estados), confirmar/cancelar, job de expiração | schema próprio | API interna síncrona (checkout chama direto); emite `SlotReserved`, `ReservationExpired` |
 | `notification` | Envio de e-mail | sem estado durável (ou fila local) | consumidor assíncrono de eventos |
 | `admission` | Contador RPM por evento (Redis) + fila RabbitMQ + worker pool — modo de alta carga | Redis | consome fila, chama `reservation` |
@@ -145,8 +145,8 @@ cada passo** ("verde" numa extração = o gateway/BFF ainda serve o mesmo contra
 a suíte compila):
 1. `notification` — o mais fácil, valida o consumo do backbone.
 2. `reservation` — híbrido CAS + ES, API interna síncrona, schema + streams próprios.
-3. `catalog` — ES, schema próprio; `creator_id` vira referência solta + projeção de
-   `creator_name` a partir de eventos do `identity`.
+3. `catalog` — ES, schema próprio; `creator_id` vira referência solta (segue `integer`, sem FK; UUID fica como evolução) e
+   `creator_name` é **composto no `gateway`** (consulta em lote ao `identity` + cache), não projetado no `catalog` (issue #35).
 4. `identity` — CRUD emitindo eventos; validação de JWT stateless nos demais.
 
 Depois da extração: **teste de carga** sobre a estrutura completa — mede throughput
@@ -210,11 +210,13 @@ estados intermediários deixam o sistema quebrado).
   tabela de streams no Postgres + publish no Kafka**. O primeiro casa melhor com o argumento
   de throughput/elasticidade do TCC.
 - Formato do evento de domínio (JSON schema? Avro? + schema registry?) e versionamento.
-- JWT: segredo compartilhado simétrico vs. JWKS assimétrico servido pelo `identity`.
+- JWT: segredo compartilhado simétrico vs. JWKS assimétrico servido pelo `identity`. (Até a #36 só o `gateway` valida o JWT; o
+  `reservation` e o `catalog` autenticam o gateway por token de serviço, `X-Internal-Token`.)
 - Admissão: fila no RabbitMQ (do [Architecture-Decision-Async-Checkout-Queue](Architecture-Decision-Async-Checkout-Queue.md)) vs. tópico
   particionado no Kafka — reavaliar agora que o Kafka já está no stack.
 - Onde compor `creator_name` — gateway (chamada extra) vs. projeção no `catalog`
-  (consome `UserRegistered`/`UserRenamed`).
+  (consome `UserRegistered`/`UserRenamed`). **Resolvida na #35:** composição no `gateway` (`UserApi.findNames` em lote + cache
+  com TTL curto); a projeção fica como evolução.
 
 ## Relacionado
 

@@ -30,7 +30,7 @@ CONTAINER="gerenciador-db"
 CHECK_DB="eventcap_mig_check"
 REMOTE_DIR="/tmp/eventcap_mig_check"
 
-INIT_SCRIPTS="01-functions 02-users 03-event 05-eventpresenter 06-mywallet 08-pending-verifications 11-event-store 13-reservation"
+INIT_SCRIPTS="01-functions 02-users 06-mywallet 08-pending-verifications 11-event-store 13-reservation 14-catalog"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -81,7 +81,7 @@ docker exec -i "$CONTAINER" sh -c \
     'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS '"$CHECK_DB"' WITH (FORCE);" -c "CREATE DATABASE '"$CHECK_DB"';"'
 
 echo ""
-echo "==> Aplicando os init-scripts do schema NOVO (01-03, 05, 06, 08, 11, 13; o 04/07/09/10 viraram o 13 na #33) no banco descartavel"
+echo "==> Aplicando os init-scripts do schema NOVO (01, 02, 06, 08, 11, 13, 14; o 04/07/09/10 viraram o 13 na #33 e o 03/05 o 14 na #35) no banco descartavel"
 for f in $INIT_SCRIPTS; do
     echo "    - $f.sql"
     docker exec -i "$CONTAINER" sh -c \

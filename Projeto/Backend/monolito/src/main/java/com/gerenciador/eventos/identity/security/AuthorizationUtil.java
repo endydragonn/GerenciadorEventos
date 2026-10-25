@@ -51,6 +51,11 @@ public class AuthorizationUtil implements HostAuthorizationApi {
         }
     }
 
+    @Override
+    public Long currentUserId() {
+        return getCurrentUser().getId();
+    }
+
     /**
      * Extrai o email do usuário autenticado
      * @return email do usuário autenticado

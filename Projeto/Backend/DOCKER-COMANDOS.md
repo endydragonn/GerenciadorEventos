@@ -251,9 +251,12 @@ docker compose exec db psql -h localhost -U admin -d meu_banco \
 docker compose exec db psql -h localhost -U admin -d meu_banco \
   -c "SELECT user_id, user_name, email FROM users;"
 
-# Limpar todas as tabelas (CUIDADO!)
+# Limpar todas as tabelas (CUIDADO!). Pare antes backend, catalog e reservation (relays/consumers). Uma ÚNICA instrução:
+# catalog.event e reservation.eventcap andam juntos (id de evento reciclado não herda eventcap/reservas), e os event stores
+# vão junto (senão o EventCreated/SlotReserved de um id reciclado bate no UNIQUE do stream antigo). Depois mova os consumer
+# groups para o fim dos tópicos (ver o fim do run-tests.sh), senão a reconciliação recria eventcap de evento apagado.
 docker compose exec db psql -h localhost -U admin -d meu_banco \
-  -c "TRUNCATE users, event, mywallet, reservation.eventcap, reservation.walletevent, reservation.event_availability, reservation.idempotency_key RESTART IDENTITY CASCADE;"
+  -c "TRUNCATE users, mywallet, pending_verifications, event_store, event_outbox, event_snapshot, projection_checkpoint, catalog.event, catalog.eventpresenter, catalog.event_store, catalog.event_outbox, catalog.event_snapshot, catalog.projection_checkpoint, reservation.eventcap, reservation.walletevent, reservation.event_availability, reservation.idempotency_key, reservation.event_store, reservation.event_outbox, reservation.event_snapshot, reservation.projection_checkpoint RESTART IDENTITY CASCADE;"
 ```
 
 ---

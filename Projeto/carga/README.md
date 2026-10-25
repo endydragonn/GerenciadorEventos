@@ -16,14 +16,28 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **Consultas de banco** (psql do gerador e verificações do host) leem `reservation.eventcap`, `reservation.walletevent`,
 >   `reservation.event_availability`, `reservation.event_outbox`. O consumer group da projeção é `reservation` (`docker exec
 >   gerenciador-redpanda rpk group describe reservation`), não mais `gerenciador-eventos`.
-> - **Limpeza do banco entre blocos** (`E:\TCC\carga-overrides\limpar-banco.sh`, fora do repo): precisa truncar o schema `reservation`, mover
->   os groups `reservation` e `reservation-catalog` para o fim dos tópicos `reservation.wallet` / `catalog.event` e reiniciar
->   `gerenciador-reservation` e `gerenciador-backend` (a lista exata está no relatório da #33).
+> - **Limpeza do banco entre blocos** (`E:\TCC\carga-overrides\limpar-banco.sh`, fora do repo): para `backend`, `catalog`, `reservation`
+>   (e o `notification`, se no ar), move os groups `reservation`, `reservation-catalog` e `notification` para o fim dos tópicos
+>   `reservation.wallet` / `catalog.event` / `identity.notification`, trunca numa única instrução `public`, `reservation` **e `catalog`**
+>   (`catalog.event` e `reservation.eventcap` andam juntos; os event stores vão junto) e sobe `reservation` + `catalog` (healthy) antes do
+>   `backend`.
 > - **Smoke antes de medir**: `docs/testes-manuais/smoke-reservation-servico-separado.sh` (stack no ar) prova overselling 0 no `cas` com o
->   serviço separado e confere o banco lendo o schema `reservation`; ou `make test-matriz-cas HOST_IP=<ip> VUS=50 REPETICOES=2` (N pequeno).
-> - **`INTERNAL_API_TOKEN`** precisa estar no `Projeto/.env` do HOST (o compose o repassa ao `backend` e ao `reservation`, que não sobem sem
->   ele). O gerador não precisa dele: o k6 só fala `/bff/**`.
-> - **Pool do Supavisor não cresce** (mesmo tenant e usuário dos três serviços); a soma dos Hikari de cliente é 1000 + 350 + 3 = 1353 <= 1500.
+>   serviço separado e confere o banco lendo o schema `reservation`; `docs/testes-manuais/smoke-catalog-servico-separado.sh` prova o
+>   `catalog` separado (#35); ou `make test-matriz-cas HOST_IP=<ip> VUS=50 REPETICOES=2` (N pequeno).
+> - **`INTERNAL_API_TOKEN`** precisa estar no `Projeto/.env` do HOST (o compose o repassa ao `backend`, ao `reservation` e ao `catalog`, que
+>   não sobem sem ele). O gerador não precisa dele: o k6 só fala `/bff/**`.
+> - **Pool do Supavisor não cresce** (mesmo tenant e usuário de todos os serviços); a soma dos Hikari de cliente é
+>   1000 + 350 + 3 + 100 (catalog) = 1453 <= 1500.
+>
+> **Desde a issue #35 os eventos são o serviço `catalog`** (container `gerenciador-catalog`, `:8083` só na rede, schema `catalog`):
+>
+> - **Seed só com o override**: `POST /bff/seed` (usado por `lib-seed.ps1` → `docs/carga/harness/setup.sh`) fica desligado (404) no compose
+>   normal; o `docker-compose.carga.yml` liga `SEED_ENABLED=true` (o `setup-host.ps1` e o `rpm/subir-host-rpm.ps1` já sobem com ele).
+> - **Consultas de banco** pelo nome/prefixo do evento leem `catalog.event` (`public.event` não existe mais; o `rpm/subir-host-rpm.ps1
+>   -Verificar` já lê de lá). O lag do relay do catalog é `catalog.event_outbox` (deve ficar vazio) e `rpk group describe reservation-catalog`.
+> - **Salto novo**: o gateway confere o evento da reserva por HTTP no `catalog` (`exists`, com cache positivo de 30 s no gateway);
+>   ler/listar/buscar evento passa por gateway → catalog → reservation (capacidade). Com o `catalog` fora, `/bff/events/**` e a reserva
+>   respondem 503 (na reserva, um positivo de `exists` ainda no cache de 30 s deixa a reserva seguir).
 
 Duas máquinas: o **host** (roda a stack, o alvo do teste) e o **gerador** (roda o k6).
 O k6 **nunca** roda no host: competiria por CPU/rede com o backend e invalidaria as latências.

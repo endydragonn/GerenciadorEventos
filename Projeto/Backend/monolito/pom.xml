@@ -8,7 +8,7 @@
     </parent>
     <artifactId>monolito</artifactId>
     <name>monolito</name>
-    <description>Monólito: identity, catalog e gateway (/bff/**). O e-mail saiu para o serviço notification (issue 32) e a reserva para o serviço reservation (issue 33)</description>
+    <description>Monólito: identity e gateway (/bff/**). O e-mail saiu para o serviço notification (issue 32), a reserva para o serviço reservation (issue 33) e os eventos para o serviço catalog (issue 35)</description>
     <dependencies>
         <!-- Lib comum: DatabaseConnection + infra de event sourcing (shared.events) -->
         <dependency>
@@ -20,6 +20,12 @@
         <dependency>
             <groupId>com.example.demo</groupId>
             <artifactId>reservation-client</artifactId>
+        </dependency>
+        <!-- Contrato HTTP do serviço catalog (issue #35): Event, EventApi, exceções + CatalogClient. O código do serviço (módulo
+             catalog) NÃO está no classpath do monólito; o gateway o chama por /internal/events/**. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>catalog-client</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -76,6 +82,11 @@
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <!-- Cache em memória do gateway (issue #35): creator_name e exists(eventId). Versão gerenciada pelo Spring Boot. -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
         </dependency>
         <!-- LauncherSessionListener (TestSupport/ReservationFakeSession): sobe o servidor falso do reservation antes de
              qualquer contexto Spring dos testes (versão do BOM do Spring Boot). -->

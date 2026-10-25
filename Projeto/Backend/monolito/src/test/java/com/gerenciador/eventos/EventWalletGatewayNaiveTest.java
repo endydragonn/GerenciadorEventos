@@ -14,8 +14,8 @@ import org.springframework.context.annotation.Import;
 
 import com.gerenciador.eventos.TestSupport.FakeReservationServer;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.catalog.EventService;
-import com.gerenciador.eventos.catalog.api.Event;
+import com.gerenciador.eventos.catalogclient.api.EventApi;
+import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.gateway.EventWalletGateway;
 import com.gerenciador.eventos.identity.UserService;
 import com.gerenciador.eventos.identity.api.User;
@@ -33,7 +33,7 @@ import com.gerenciador.eventos.reservationclient.api.EventWallet;
 public class EventWalletGatewayNaiveTest {
 
     @Autowired private UserService userService;
-    @Autowired private EventService eventService;
+    @Autowired private EventApi eventService;
     @Autowired private EventWalletGateway gateway;
 
     private FakeReservationServer reservation;
