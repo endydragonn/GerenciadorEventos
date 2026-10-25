@@ -626,6 +626,41 @@ consumer ligados. Fontes: `04-fase6-es/resultados-aleatorio.csv` e `summary-ale-
   rede com clareza**; é nelas que o custo do ES (ou outro efeito) fica visível. Separar as parcelas pede uma repetição
   no cabo.
 
+### Ponto 3 (serviços separados, Rodada 3, 2026-10-24)
+
+Rodada 3 do experimento (issue #34), contra a `Fase_7` em `20aae4e` (código das #32 e #33, ainda não mergeado na `main`
+quando a rodada rodou), capacidade 20 e 100% de confirmação. Fonte: `Projeto/carga/results/05-distribuido/` (README da
+etapa, `matriz-naive.csv`, `matriz-cas.csv`, `degraus-*.csv`, `resultados-aleatorio.csv`). O **controle do ponto 2 no cabo**
+está em `04b-fase6-es-cabo/`. Rede cabeada (baseline HTTP p50 15,8 ms / p95 18,0 ms), host com Docker em SSD, banco limpo
+antes de cada bloco. Nenhuma repetição foi descartada.
+
+**O que mudou em relação ao ponto 2.** `reservation` virou serviço (schema, event store e relay próprios); o `gateway` o
+chama por HTTP interno autenticado: o braço `cas` em 1 chamada, o `naive` em 2 (a janela check-then-act inclui a rede). Junto
+com a arquitetura mudaram o Hikari do monólito (1000 → 350), o pool HTTP de 400, o timeout de 10 s e o token interno.
+
+- **Overselling.** CAS: **0 em 20 de 20 repetições**, 0 erros 5xx. Naive: no teto em 19 de 20 (80 em N=100, 10/10; 180 em
+  N=200, 9/10; 168 na rep 1, em que a projeção refletiu parte da lotação). Igual ao ponto 2.
+- **Matrizes (p95 por requisição).** Naive 97–345 ms (N=100) e 189–274 ms (N=200); CAS 106–176 ms e 156–205 ms. No cabo e
+  em SSD, o ponto 2 refeito (04b) deu naive 87–187 ms e 127–186 ms: o p95 subiu na faixa de dezenas de ms, o que é a ordem
+  de grandeza do salto HTTP, mas a rodada mudou junto outras variáveis (acima) e não as isola.
+- **Limiar X ≈ 58k RPM.** Grossa: 50k limpo (243 ms), 60k satura (1,78 s), efetivo ~60–61k acima de 70k. Refino sobre banco
+  limpo: 51k–57k entre 260 e 482 ms; **58k é o primeiro degrau saturado** (1,94 s). 0 erros 5xx, 0 outros, 0 descartes até
+  58k. Contra o ponto 2: ≈ 56k no Wi-Fi (04) e ≥ 60k no cabo (04b, refino inconclusivo por banco sujo): o distribuído fica
+  ~3% abaixo do ponto 2 na mesma rede, com o mesmo teto de vazão (~61k req/min).
+- **Aleatório de 45 min** (mesma semente 617706): 146.400 aceitas, todas confirmadas, 0 erros, 0 descartes; p95 de reserva
+  6,6 ms, confirma 4,5, busca 19,9, evento 3,7, carteira 10,1. Está na faixa da #109 (pós-pooler, sem ES) e muito abaixo do
+  ponto 2 no Wi-Fi (reserva 36,2 ms). Como o ponto 3 também grava no event store, o aumento de p95 do ponto 2 vinha em boa
+  parte do Wi-Fi, não do ES; a confirmação direta (aleatório do código do ponto 2 no cabo) não foi feita.
+- **Os 5xx.** Não houve nenhum, e `backend` e `reservation` terminaram sem `WARN`/`ERROR`: o timeout de 10 s e o pool HTTP
+  de 400 não foram atingidos até 58k.
+
+**Ameaças a este ponto.** (i) Mudaram juntas a arquitetura, o Hikari (350), o pool HTTP, o timeout e o token: o delta de
+X e de p95 não se atribui só ao salto de rede. (ii) Resolução de 1k RPM no X e uma escada por configuração; o 04b tem
+refino inconclusivo, então o X do ponto 2 no cabo é um piso (≥ 60k). (iii) A 1ª tentativa do 04b rodou com os dados do
+Docker em HDD (`fsync` ≈ 30 ms) e foi descartada; as medidas válidas são as de SSD. (iv) A matriz naive tem `lag_obs_*`
+quase sempre -1 (a projeção ficou mais rápida que o polling), então o lag não aparece como variável. (v) O PR da `Fase_7`
+não estava mergeado: o código medido é o que vai para a `main`.
+
 ### Resultados preliminares (fora do protocolo)
 
 Antes do protocolo acima, rodadas de 2026-10-04 (`Projeto/carga/results/02-hikari/ANALISE.md`) mediram os dois braços

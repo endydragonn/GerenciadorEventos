@@ -193,6 +193,10 @@ threads off), Hikari 350 no monólito, e a conta do pool do Supavisor (mesmo ten
 `Projeto/Backend/CLAUDE.md`, "Serviço reservation"; diagrama em [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md).
 O kit de carga aponta para o schema/serviço novos (`Projeto/carga/README.md`); a Rodada 3 (#34) mede.
 
+**Medido (Fase 7, Rodada 3, issue #34, 2026-10-24):** o ponto 3 (`reservation` e `notification` como serviços), no cabo e em SSD, ficou com
+X ≈ 58k RPM, overselling 0 no CAS (20 de 20) e naive no teto; controle do ponto 2 no cabo em `Projeto/carga/results/04b-fase6-es-cabo`, resultados em
+`Projeto/carga/results/05-distribuido` e seção "Ponto 3" em `docs/artigo/experimento-monolito.md`.
+
 **Implementado (Fase 7, issue #35, 2026-10-24):** terceira extração, o `catalog` — `event`/`eventpresenter` (CQRS + ES, stream
 `catalog.event`) viraram o serviço `catalog` (módulo Maven, Dockerfile, imagem e container `gerenciador-catalog`, API interna `:8083` só na
 rede, schema `catalog` com **event store e relay próprios**; migração `20261026-catalog-schema.sql`). O `gateway` o chama pela lib

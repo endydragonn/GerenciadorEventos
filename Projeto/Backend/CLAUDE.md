@@ -1014,7 +1014,7 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   as mesmas do ponto 2, menos carteira/evento que agora são do gateway. `naive` — gateway: os 2 SELECT + **2 chamadas HTTP**; reservation: GET =
   1 SELECT `eventcap LEFT JOIN event_availability`; POST = SELECT `eventcap`, `existsActive` e a transação sem CAS. A rejeição "lotado" do naive
   custa só a 1ª chamada. Criar evento: +1 chamada HTTP ao reservation (+1 `GET` para reler); listar/buscar eventos: +1 chamada HTTP em lote.
-  **Desde a #35 (a Rodada 3, #34, mede sem este salto)**: o SELECT do evento virou `GET /internal/events/{id}/exists` no `catalog` (+1 salto HTTP, só
+  **Desde a #35 (a Rodada 3, #34, mediu sem este salto)**: o SELECT do evento virou `GET /internal/events/{id}/exists` no `catalog` (+1 salto HTTP, só
   quando o positivo não está no cache de 30 s do gateway), e ler/listar/buscar evento passa por gateway → catalog → reservation.
 - **Cobertura do caminho real `/bff → reservation`**: não há teste automatizado que passe pelo `/bff` até o serviço REAL (a suíte de integração
   ponta a ponta é a #37, fora da #33). Até lá o caminho real é coberto pelo `ReservationApiE2ETest` (cliente real × serviço real) **mais** o
