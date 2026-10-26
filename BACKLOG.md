@@ -34,7 +34,7 @@ Labels sugeridas: `fase/0`…`fase/11`, `area/backend`, `area/banco`, `area/infr
 
 ---
 
-## Estado (2026-10-21)
+## Estado (2026-10-26)
 
 Snapshot do GitHub (`gh issue list` / `gh pr list`). A definição de cada item continua sendo o
 texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
@@ -71,8 +71,8 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 30 | #31 | fechada — Rodada 2 em `Projeto/carga/results/04-fase6-es`, ponto 2 em `docs/artigo/experimento-monolito.md` | #148 |
 | 31 | #32 | fechada — `notification` como serviço (Maven multi-módulo, Dockerfile por serviço); e-mail por evento `identity.notification`, dado pessoal com retenção = validade do código + 30 s | #152 |
 | 32 | #33 | fechada — `reservation` como serviço atrás do `gateway` (schema e event store próprios, API `/internal/**` com token de serviço); naive em 2 chamadas HTTP, CAS em 1; `eventcap` por chamada síncrona | #153 |
-| 33 | #34 | feita — Rodada 3 (ponto 3) em `Projeto/carga/results/05-distribuido`, X ≈ 58k, CAS com overselling 0; controle do ponto 2 no cabo em `04b-fase6-es-cabo`; ponto 3 em `docs/artigo/experimento-monolito.md` (fecha com o merge da `Fase_7`) | — |
-| 34 | #35 | implementada na branch `Issue-35` (PR em aberto, draft) — `catalog` como serviço (schema, event store e relay próprios; API `/internal/events/**` com token de serviço); `creator_id` integer amarrado ao token, `creator_name` composto no `gateway`; seed desligado por padrão | — |
+| 33 | #34 | fechada (2026-10-26) — Rodada 3 (ponto 3) em `Projeto/carga/results/05-distribuido`, X ≈ 58k, CAS com overselling 0; controle do ponto 2 no cabo em `04b-fase6-es-cabo`; ponto 3 em `docs/artigo/experimento-monolito.md` | #155, #156 |
+| 34 | #35 | fechada — `catalog` como serviço (schema, event store e relay próprios; API `/internal/events/**` com token de serviço); `creator_id` integer amarrado ao token, `creator_name` composto no `gateway`; seed desligado por padrão | #157 |
 | 35–46 | #36–#47 | abertas | — |
 | 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
 
@@ -94,7 +94,7 @@ fechadas na `Fase_6`; #133 (CORS `*` com credenciais) aberta. #146 (consumer da 
 Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feitas (marco de banca atingido); Fase 4: #17 → #18
 → #19/#20/#21 → #22 feitas (ponto 1 da série; PR #122); Fase 5: #23 → #24/#25 feitas (PR #134); Fase 6: #26 → #27 → #28/#29 → #30 feitas (na `Fase_6`);
 Rodada 2 (#31, ponto 2 da série) feita em 2026-10-19 (PR #148). Fase 7: #32 → #33 feitas em 2026-10-21 na branch de integração
-`Fase_7` (PRs #152 e #153; PR final `Fase_7` → `main`, merge do usuário); a #34 (Rodada 3) foi feita em 2026-10-24 com o gerador (resultados em `Projeto/carga/results/05-distribuido`).
+`Fase_7` (PRs #152 e #153; PR final #156 `Fase_7` → `main`, mergeado em 2026-10-25); a #34 (Rodada 3) foi feita em 2026-10-24 com o gerador (resultados em `Projeto/carga/results/05-distribuido`) e fechada em 2026-10-26; a #35 (`catalog`) fechou em 2026-10-25 (PR #157). Próximo: #36 (`identity`).
 
 ## Fase 0 — Desbloqueio de ambiente
 
