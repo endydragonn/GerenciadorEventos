@@ -383,14 +383,15 @@ make verificar-rpm PREFIXO=Deg-<id>
 Sem `make`: `.\degraus\rodar-degraus.ps1 -HostIp <ip> -MaxConnections 300 -PoolHikari 1000` e
 `bash ../../docs/carga/harness/report-degraus.sh results/degraus-<id>.csv results/degraus-<id>.html`.
 Parâmetros: `DEG_INICIO=12000`, `DEG_PASSO=4000`, `DEG_MAX=40000` (degraus de INICIO a MAX, no máximo 40),
-`DEG_DURACAO=60` (por degrau: ≥ 60 s e múltiplo de 30), `USUARIOS=200`, `MAX_VUS=2000`, `PCT_CONFIRMA=100`.
+`DEG_DURACAO=60` (por degrau: ≥ 60 s e múltiplo de 30), `USUARIOS=200`, `MAX_VUS=2000`, `PCT_CONFIRMA=100`,
+`MAPEAMENTO=sequencial` (ou `intercalado`; ver "Mapeamento" abaixo; sem `make`: `-Mapeamento`).
 A escada **vai até o máximo**, mesmo depois de o host degradar: ajuste `DEG_MAX` perto do esperado.
 
 **Versione** `Projeto/carga/results/degraus-<id>.csv` (uma linha por degrau) e o `summary-degraus-<id>.json` da
 escada; anote o X preliminar (refinado na Fase 8, issue #40) e se o report o marcou como **limite inferior**. O `.html`
 regenera do CSV e fica fora do git.
 
-**Colunas do CSV:** `escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit`
+**Colunas do CSV:** `escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit,mapeamento`
 
 | Coluna | Significado |
 |---|---|
@@ -404,6 +405,7 @@ regenera do CSV e fica fora do git.
 | `throughput` | reservas/s respondidas sem 5xx (`(reservas − 5xx da reserva) / duração`) |
 | `iteracoes_descartadas` | `dropped_iterations` do k6 no degrau |
 | `braco`, `max_connections`, `pool_hikari`, `commit` | o que o host roda (rotulado) e o commit do checkout do gerador |
+| `mapeamento` | `sequencial` ou `intercalado` (última coluna): como a iteração virou o par (usuário, evento). O report lê por nome e a mostra no subtítulo; CSV antigo, sem a coluna, continua valendo e aparece como `mapeamento n/d` (não se presume `sequencial`) |
 
 **Regra do X** (só em `report-degraus.sh`; o runner apenas grava as colunas; `report-degraus-selftest.sh` cobre as
 fixtures): *degradou* = `taxa_5xx > 1%` (5xx das reservas / reservas) ou `p95_max_janela_30s > 1000 ms`; *gerador saturado* = `iteracoes_descartadas > 0`
@@ -423,6 +425,30 @@ em `USUARIOS × eventos`, com `eventos = ceil(total × 1,05 / USUARIOS)`; o k6 a
 Padrão (12k…40k de 4k em 4k, 60 s, 200 usuários): 8 degraus, 208.008 pares, 1.093 eventos, ~11,6 min de k6 (31 s
 ociosos entre degraus: 30 s de `gracefulStop`, para as iterações em voo terminarem antes do próximo, mais 1 s de folga
 para os planos de VUs dos cenários não se tocarem).
+
+**Mapeamento (`MAPEAMENTO`, issue #113):** como o índice `i` da iteração vira o par (usuário, evento), com `U` usuários e
+`E` eventos. A lógica mora em `degraus/lib-mapeamento.js` (módulo puro, importado pelo `carga-degraus.js`; o k6 resolve o
+`import` relativo ao script).
+
+| Valor | Par | Efeito | Use para |
+|---|---|---|---|
+| `sequencial` (padrão) | usuário `i % U`, evento `⌊i / U⌋` | `U` reservas seguidas caem no **mesmo** evento: uma linha quente de cada vez no `eventcap` | **evento disputado**: onde o CAS degrada quando muita gente vai ao mesmo evento |
+| `intercalado` | usuário `⌊i / E⌋`, evento `i % E` | `E` reservas seguidas caem em eventos **diferentes**: a carga se espalha pelos eventos | **capacidade do host**: o X sem a linha quente de um evento |
+
+Nos dois modos cada par (usuário, evento) é único dentro da escada e a checagem `USUARIOS × eventos ≥ soma das cotas` vale
+igual (o `setup()` aborta se não couber). O padrão `sequencial` gera exatamente os mesmos pares e requisições de antes
+da opção. Valor diferente dos dois aborta o `setup()` com mensagem clara antes do login; maiúscula (`Intercalado`) também é recusada
+pelo k6 quando a env `MAPEAMENTO` é setada à mão. O `rodar-degraus.ps1` aceita qualquer caixa no `-Mapeamento` (`ValidateSet`)
+e normaliza para minúsculas antes de repassar ao k6 e ao CSV.
+
+**Capacidade por evento no mapeamento (`-Capacidade 0`, o padrão):** `sequencial` mantém `USUARIOS / 2` (como o teste 2: cada
+evento recebe `U` reservas seguidas e metade vira "lotado", de propósito). No `intercalado` o evento recebe a *u*-ésima
+reserva na "rodada" *u*, então `USUARIOS / 2` lotaria **todos os eventos juntos** por volta do meio da escada e a segunda
+metade viraria 100% "lotado" (X inflado). Por isso o padrão do `intercalado` é `USUARIOS`: cada evento aceita no máximo `U`
+reservas (uma por usuário), todas aceitas na escada inteira. O runner imprime a capacidade usada (`Pares: ... (capacidade
+N/evento)`) e avisa se um `-Capacidade` explícito ficar abaixo de `USUARIOS` no `intercalado`
+(`Get-CapacidadePadrao` em `degraus/lib-degraus.ps1`, coberta pelo `lib-degraus.selftest.ps1`). Para comparar com CSVs antigos, lembre que os históricos não trazem a
+coluna: confira o `commit`/o script usado antes de presumir o mapeamento.
 
 **VUs:** os `MAX_VUS` (2000) VUs são **todos pré-alocados** (`preAllocatedVUs = maxVUs`). No `constant-arrival-rate` o
 k6 descarta a iteração quando não há VU livre e só aloca VU extra depois, em segundo plano (o que pesa no gerador e o
@@ -454,7 +480,8 @@ Limites: os degraus são contíguos (só os 31 s ociosos; sem resfriamento do ho
 degrau pode contaminar o seguinte); um degrau cujo host trava de vez gera timeouts (`outros`), que não contam como
 5xx. O limite de 110 s do teste 2 não vale aqui: ele protege a conta de overselling contra reservas `pending` que
 expiram, e a escada não mede overselling (e com `PCT_CONFIRMA=100` nada fica `pending`). Auto-testes (sem rede/stack):
-`.\degraus\lib-degraus.selftest.ps1` e `bash ../../docs/carga/harness/report-degraus-selftest.sh`.
+`.\degraus\lib-degraus.selftest.ps1`, `node degraus/lib-mapeamento.selftest.mjs` (mapeamento: pares exatos e únicos nos
+dois modos; exige Node >= 22.7, que detecta ESM em `.js` sem `package.json`) e `bash ../../docs/carga/harness/report-degraus-selftest.sh`.
 
 ## Teste 3 — carga aleatória (estabilidade por tempo)
 
@@ -595,7 +622,7 @@ naquela etapa; a raiz de `results/` é a área de trabalho da rodada corrente.**
 | `../../docs/carga/harness/report-matriz.sh` | gerador | `make report-matriz`: `results\matriz.csv` → `results\matriz.html` (SVG, bash+awk) |
 | `lib-seed.ps1` | gerador | `Invoke-Seed`: chama o seed único `docs/carga/harness/setup.sh` via Git Bash |
 | `rpm/*` | ambos | teste 2 |
-| `degraus/*` | gerador | escada de carga (limiar X preliminar): `carga-degraus.js`, `rodar-degraus.ps1`, `lib-degraus.ps1` (plano, p95 em janelas de 30 s, linha do CSV; `lib-degraus.selftest.ps1` testa) |
+| `degraus/*` | gerador | escada de carga (limiar X preliminar): `carga-degraus.js`, `rodar-degraus.ps1`, `lib-degraus.ps1` (plano, p95 em janelas de 30 s, linha do CSV; `lib-degraus.selftest.ps1` testa), `lib-mapeamento.js` (mapeamento iteração → par usuário/evento, `sequencial`/`intercalado`; `lib-mapeamento.selftest.mjs` testa com `node`) |
 | `../../docs/carga/harness/report-degraus.sh` | gerador | `make report-degraus`: `results\degraus-<id>.csv` → curva × carga + degrau X (SVG, bash+awk; `report-degraus-selftest.sh` testa) |
 | `aleatorio/*` | gerador | teste 3 |
 | `Makefile` | ambos | atalhos |
