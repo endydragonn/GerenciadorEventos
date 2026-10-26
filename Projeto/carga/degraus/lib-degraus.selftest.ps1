@@ -28,7 +28,8 @@ function Lanca($nome, [scriptblock]$bloco, $trecho) {
 Write-Host ''
 Write-Host '==> Cabecalho do CSV'
 Confere 'colunas da spec (rpm_alvo, rpm_efetivo, taxa_5xx, p50/p95/p99, throughput, descartadas) + as do criterio (5xx so da reserva: reservas, erros_5xx, taxa_5xx; erros_5xx_confirma e informativa)' $DegrausCabecalho `
-    'escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit'
+    'escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit,mapeamento'
+Confere 'mapeamento e a ULTIMA coluna (colunas antigas nao mudam de posicao)' (($DegrausCabecalho -split ',')[-1]) 'mapeamento'
 # o rodar-degraus.ps1 imprime a tabela final pelas POSICOES das colunas do CSV: se o cabecalho mudar, este teste acusa
 Confere 'posicoes que o rodar-degraus.ps1 imprime na tabela (rpm_alvo, rpm_efetivo, taxa_5xx, p50, p95, p99, janela, descartadas)' `
     ((($DegrausCabecalho -split ',')[1, 2, 6, 9, 10, 11, 12, 14]) -join ',') 'rpm_alvo,rpm_efetivo,taxa_5xx,p50,p95,p99,p95_max_janela_30s,iteracoes_descartadas'
@@ -56,6 +57,13 @@ Lanca 'duracao que nao e multipla de 30 e recusada (janelas de 30 s inteiras)' {
 Lanca 'mais de 40 degraus e recusado (passo digitado errado)' { Get-PlanoEscada -RpmInicio 1 -RpmPasso 1 -RpmMax 1000 -DuracaoS 60 -Usuarios 200 } 'degraus'
 
 Write-Host ''
+Write-Host '==> Capacidade padrao por evento (-Capacidade 0): depende do mapeamento'
+Confere 'sequencial: Usuarios/2 (como o teste 2; 200 -> 100)' (Get-CapacidadePadrao -Usuarios 200 -Mapeamento sequencial) 100
+Confere 'sequencial: nunca < 1 (1 usuario -> 1)' (Get-CapacidadePadrao -Usuarios 1 -Mapeamento sequencial) 1
+Confere 'intercalado: Usuarios (cada evento recebe no maximo U reservas, uma por usuario: nenhuma "lotada" na escada)' (Get-CapacidadePadrao -Usuarios 200 -Mapeamento intercalado) 200
+Confere 'intercalado: capacidade >= reservas por evento no pior caso (U x E pares / E eventos = U)' ((Get-CapacidadePadrao -Usuarios 37 -Mapeamento intercalado) -ge 37) $true
+
+Write-Host ''
 Write-Host '==> O p95 por janela sai do resumo do k6, nao de uma serie: as funcoes da serie nao existem mais'
 Confere 'Get-P95Janelas removida' ($null -eq (Get-Command Get-P95Janelas -ErrorAction SilentlyContinue)) $true
 Confere 'Get-Percentil removida' ($null -eq (Get-Command Get-Percentil -ErrorAction SilentlyContinue)) $true
@@ -69,10 +77,13 @@ function Degrau($ajustes) {
     foreach ($k in $ajustes.Keys) { $o[$k] = $ajustes[$k] }
     ($o | ConvertTo-Json) | ConvertFrom-Json   # como o rodar-degraus.ps1 le o resumo do k6
 }
-$f = { param($d) Format-LinhaDegrau -Escada Deg-1 -Degrau $d -DuracaoS 60 -Braco cas -MaxConnections 300 -PoolHikari 1000 -Commit abc1234 }
+$f = { param($d) Format-LinhaDegrau -Escada Deg-1 -Degrau $d -DuracaoS 60 -Braco cas -MaxConnections 300 -PoolHikari 1000 -Commit abc1234 -Mapeamento sequencial }
 Confere 'linha completa; ponto decimal mesmo em pt-BR; p95_max_janela_30s = p95_max_janela_ms do resumo; taxa = 5xx da reserva / reservas (a confirma vai so em erros_5xx_confirma); throughput = (reservas - 5xx da reserva) / D' `
     (& $f (Degrau @{})) `
-    'Deg-1,20000,19000,60,19000,380,0.020000,20,5,12.3,456.8,1234.5,1100.0,310.3,1000,cas,300,1000,abc1234'
+    'Deg-1,20000,19000,60,19000,380,0.020000,20,5,12.3,456.8,1234.5,1100.0,310.3,1000,cas,300,1000,abc1234,sequencial'
+Confere 'mapeamento intercalado vai no fim da linha' `
+    ((Format-LinhaDegrau -Escada Deg-1 -Degrau (Degrau @{}) -DuracaoS 60 -Braco cas -MaxConnections 300 -PoolHikari 1000 -Commit abc1234 -Mapeamento intercalado)) `
+    'Deg-1,20000,19000,60,19000,380,0.020000,20,5,12.3,456.8,1234.5,1100.0,310.3,1000,cas,300,1000,abc1234,intercalado'
 Confere 'rpm_efetivo = reservas / D * 60 (9500 reservas em 60 s = 9500 RPM)' `
     ((& $f (Degrau @{ reservas = 9500 })) -split ',')[2] '9500'
 Confere 'sem janela (-1 no resumo): vai como -1.0 (o report trata como n/d)' ((& $f (Degrau @{ p95_max_janela_ms = -1 })) -split ',')[12] '-1.0'
@@ -89,7 +100,7 @@ Confere '5xx so na confirma (500): taxa 0.000000 (nao entra no X)...' $c[6] '0.0
 Confere '...mas fica visivel em erros_5xx_confirma (informativa)' $c[7] '500'
 Confere 'erros_5xx (coluna 5) = so os 5xx da reserva' ((& $f (Degrau @{ erros_5xx = 7; confirma_5xx = 9 })) -split ',')[5] '7'
 Lanca 'resumo sem p95_max_janela_ms (resumo de outra versao) falha alto, em vez de gravar 0' {
-    $d = Degrau @{}; $d.PSObject.Properties.Remove('p95_max_janela_ms'); Format-LinhaDegrau -Escada Deg-1 -Degrau $d -DuracaoS 60 -Braco cas -MaxConnections 300 -PoolHikari 1000 -Commit abc1234 } 'p95_max_janela_ms'
+    $d = Degrau @{}; $d.PSObject.Properties.Remove('p95_max_janela_ms'); Format-LinhaDegrau -Escada Deg-1 -Degrau $d -DuracaoS 60 -Braco cas -MaxConnections 300 -PoolHikari 1000 -Commit abc1234 -Mapeamento sequencial } 'p95_max_janela_ms'
 
 Write-Host ''
 Write-Host '=================================================='
