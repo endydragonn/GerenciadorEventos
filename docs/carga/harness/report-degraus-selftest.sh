@@ -35,6 +35,9 @@
 #    K  5xx só nas reservas: 16000 com exatamente 1,00% (100 de 10000) não é X; 20000 com 1,20% é
 #                                                             -> X firme (5xx das reservas)
 #    L  5xx só nas confirmações (erros_5xx_confirma) em dois degraus -> nenhum degradou (não entram em X)
+#    M  CSV novo (19 colunas + mapeamento no fim, = intercalado) e depois sequencial -> o subtítulo mostra o modo;
+#       as fixtures A..L têm o cabeçalho ANTIGO de 19 colunas (CSV histórico) e provam que o report segue funcionando
+#       e mostra "mapeamento n/d" (sem a coluna não se assume "sequencial": há CSV histórico intercalado)
 #    (o runner calcula taxa_5xx = erros_5xx / reservas; o report só lê taxa_5xx. A conta do runner é testada em
 #    Projeto/carga/degraus/lib-degraus.selftest.ps1.) CSV no formato antigo (coluna requisicoes) é recusado.
 #
@@ -66,8 +69,13 @@ R() {
 # degrau saudável: S <escada> <alvo>
 S() { L "$1" "$2" "$2" 0.000000 0 20.0 25.0 0; }
 
+CAB_NOVO="$CAB,mapeamento"   # cabeçalho atual do runner (lib-degraus.ps1): mapeamento é a última coluna
+
 fixture() {   # $1 = nome ; lê as linhas do stdin
     { echo "$CAB"; cat; } > "$TMP/$1.csv"
+}
+fixture_novo() {   # $1 = nome ; $2 = modo ; lê as linhas do stdin e acrescenta a coluna mapeamento
+    { echo "$CAB_NOVO"; sed "s/\$/,$2/"; } > "$TMP/$1.csv"
 }
 
 gerar() {   # $1 = nome (gera $TMP/$1.html)
@@ -125,6 +133,11 @@ gerar K
 # L: 5xx só nas confirmações (500 e 10000): taxa_5xx = 0, nenhum degrau degrada
 { S Deg-1 12000; R Deg-1 16000 10000 0 500; R Deg-1 20000 10000 0 10000; } | fixture L
 gerar L
+# M: CSV novo com a coluna mapeamento (intercalado); N: o mesmo com sequencial
+{ S Deg-1 12000; S Deg-1 16000; L Deg-1 20000 20000 0.030000 0 20.0 25.0 0; } | fixture_novo M intercalado
+gerar M
+{ S Deg-1 12000; S Deg-1 16000; L Deg-1 20000 20000 0.030000 0 20.0 25.0 0; } | fixture_novo N sequencial
+gerar N
 
 echo ""
 echo "==> A: X por 5xx"
@@ -143,6 +156,7 @@ assert_html A "painel de latência" 'aria-label="Latência × RPM alvo"'
 assert_html A "painel de throughput" 'aria-label="Throughput × RPM alvo"'
 assert_html A "painel de 5xx das reservas" 'aria-label="Taxa de 5xx das reservas × RPM alvo"'
 assert_html A "subtítulo: escada, degraus, host" 'escada Deg-1 · 4 degraus de 60 s · braço cas · max_connections 300 · pool HikariCP 1000 · commit abc1234'
+assert_html A "CSV antigo (sem a coluna mapeamento): subtítulo mostra n/d, não assume sequencial" 'commit abc1234 · mapeamento n/d'
 assert_html A "tokens de cor no :root, claro e escuro" ':root:where(:not([data-theme="light"])) {'
 assert_html A "tema escuro explícito" ':root[data-theme="dark"] {'
 
@@ -206,6 +220,13 @@ echo ""
 echo "==> L: 5xx só nas confirmações NÃO decidem X"
 assert_html L "nenhum degrau degradou: X acima do último" '<p class="veredito" data-tipo="nao-degradou" data-x="20000">'
 refute_html L "sem degrau X" 'class="degrau-x"'
+
+echo ""
+echo "==> M/N: coluna mapeamento no CSV novo"
+assert_html M "subtítulo mostra o modo intercalado" 'commit abc1234 · mapeamento intercalado'
+assert_html M "o veredito não muda com a coluna nova (X firme em 20000 por 5xx)" '<p class="veredito" data-tipo="firme" data-x="20000" data-motivo="5xx" data-saturado="0">'
+refute_html M "não mostra n/d quando a coluna existe" 'mapeamento n/d'
+assert_html N "subtítulo mostra o modo sequencial" 'commit abc1234 · mapeamento sequencial'
 
 echo ""
 echo "==> H: eixo x linear (posição proporcional ao RPM alvo)"

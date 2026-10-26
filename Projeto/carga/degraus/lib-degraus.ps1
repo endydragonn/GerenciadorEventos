@@ -15,8 +15,10 @@
 #   throughput            = reservas/s respondidas sem 5xx (reservas - 5xx da reserva) / duracao
 #   iteracoes_descartadas = dropped_iterations do k6 no degrau
 #   max_connections / pool_hikari / braco = do HOST (o gerador nao os enxerga; so registra o que foi informado)
+#   mapeamento            = como a iteracao vira o par (usuario, evento): sequencial | intercalado (degraus/lib-mapeamento.js).
+#                           Ultima coluna: CSV antigo (sem ela) continua valido para o report, que mostra "n/d"
 
-$DegrausCabecalho = 'escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit'
+$DegrausCabecalho = 'escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit,mapeamento'
 
 # Degraus (RpmInicio, RpmInicio + RpmPasso, ... <= RpmMax), cota de pares (usuario, evento) de cada um e
 # tamanho do seed. O k6 reinicia scenario.iterationInTest em 0 a cada cenario: cada degrau usa a faixa
@@ -47,6 +49,19 @@ function Get-PlanoEscada {
     }
 }
 
+# Capacidade por evento quando o runner recebe -Capacidade 0 (padrao). sequencial: Usuarios/2, como o teste 2 (cada evento
+# recebe U reservas seguidas e metade vira "lotado", de proposito). intercalado: Usuarios, porque o evento recebe a u-esima
+# reserva na "rodada" u (u = 0..U-1): com Usuarios/2 todos os eventos lotariam juntos no meio da escada e a segunda metade
+# viraria 100% "lotado" (X inflado). Com Usuarios, cada evento aceita no maximo U reservas (uma por usuario): nenhuma lotada.
+function Get-CapacidadePadrao {
+    param(
+        [Parameter(Mandatory)][int]$Usuarios,
+        [Parameter(Mandatory)][string]$Mapeamento
+    )
+    if ($Mapeamento -eq 'intercalado') { return $Usuarios }
+    [math]::Max(1, [int]($Usuarios / 2))
+}
+
 # Linha do CSV de um degrau. $Degrau = objeto do resumo do k6 (carga-degraus.js: reservas,
 # erros_5xx, confirma_5xx, outros, descartadas, p50_ms, p95_ms, p99_ms, p95_max_janela_ms). Numeros pela
 # cultura invariante (ponto decimal), mesmo em Windows pt-BR.
@@ -58,7 +73,8 @@ function Format-LinhaDegrau {
         [Parameter(Mandatory)][string]$Braco,
         [Parameter(Mandatory)][int]$MaxConnections,
         [Parameter(Mandatory)][int]$PoolHikari,
-        [Parameter(Mandatory)][string]$Commit
+        [Parameter(Mandatory)][string]$Commit,
+        [Parameter(Mandatory)][string]$Mapeamento
     )
     if ($null -eq $Degrau.p95_max_janela_ms) { throw 'Resumo do degrau sem p95_max_janela_ms: resumo de outra versao do carga-degraus.js?' }
     $reservas = [double]$Degrau.reservas
@@ -66,9 +82,9 @@ function Format-LinhaDegrau {
     $taxa = 0.0
     if ($reservas -gt 0) { $taxa = $erros / $reservas }
     [string]::Format([System.Globalization.CultureInfo]::InvariantCulture,
-        '{0},{1},{2:F0},{3},{4},{5},{6:F6},{7},{8},{9:F1},{10:F1},{11:F1},{12:F1},{13:F1},{14},{15},{16},{17},{18}',
+        '{0},{1},{2:F0},{3},{4},{5},{6:F6},{7},{8},{9:F1},{10:F1},{11:F1},{12:F1},{13:F1},{14},{15},{16},{17},{18},{19}',
         $Escada, $Degrau.rpm_alvo, ($reservas / $DuracaoS * 60), $DuracaoS, [long]$reservas, [long]$erros, $taxa,
         [long]$Degrau.confirma_5xx, $Degrau.outros, $Degrau.p50_ms, $Degrau.p95_ms, $Degrau.p99_ms,
         [double]$Degrau.p95_max_janela_ms, (($reservas - $erros) / $DuracaoS), $Degrau.descartadas,
-        $Braco, $MaxConnections, $PoolHikari, $Commit)
+        $Braco, $MaxConnections, $PoolHikari, $Commit, $Mapeamento)
 }
