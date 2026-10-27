@@ -46,6 +46,17 @@ public class SchemaValidationTest {
         assertEquals("integer", tipo("event", "creator_id"), "creator_id segue integer (UUID é evolução)");
     }
 
+    /**
+     * Capacidade, vagas e janela de compra são do agregado {@code eventcap} (serviço reservation): saíram de {@code event}
+     * (issue #5/#33). Asserção NEGATIVA explícita: a lista exata acima já pegaria, mas este teste diz o porquê e continua
+     * valendo se alguém afrouxar aquela lista para "contém".
+     */
+    @Test
+    void eventTableShouldNotCarryCapacityNorBuyWindow() throws Exception {
+        assertNoColumns("event", "capacity", "quant", "buy_time_limit", "lot_quantity", "max_time_in_line");
+        assertNoColumns("eventpresenter", "capacity", "quant", "buy_time_limit");
+    }
+
     @Test
     void eventPresenterTableShouldHaveKeyColumns() throws Exception {
         assertEquals(List.of("event_id", "presenter_name"), colunas("eventpresenter"));
@@ -112,6 +123,13 @@ public class SchemaValidationTest {
     private List<String> colunas(String tabela) throws Exception {
         return lista("select column_name from information_schema.columns where table_schema = 'catalog' and table_name = ? "
                 + "order by ordinal_position", tabela);
+    }
+
+    /** Nenhuma das {@code proibidas} existe em {@code catalog.<tabela>} (uma coluna que voltou não passa despercebida). */
+    private void assertNoColumns(String tabela, String... proibidas) throws Exception {
+        List<String> presentes = new ArrayList<>(colunas(tabela));
+        presentes.retainAll(List.of(proibidas));
+        assertEquals(List.of(), presentes, "catalog." + tabela + " não deve ter estas colunas");
     }
 
     private String tipo(String tabela, String coluna) throws Exception {

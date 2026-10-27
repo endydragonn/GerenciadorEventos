@@ -107,6 +107,13 @@ conversão de `quant` (limitado / esgotado-piso-0 / ilimitado) e **preservação
 spring-boot:run` no host Windows grava em UTC-3 e exigiria trocar o fuso na migração), cria `idx_walletevent_event_id` e troca `eventcap_capacity_valid` para
 `capacity = -1 OR capacity >= 1` (aborta com a contagem se houver linha com `capacity = 0`). Idempotente (o 2º run só emite NOTICEs); roda como `supabase_admin`.
 O código Java não mudou (`LocalDateTime` ↔ `Timestamp` na JVM em UTC já roda contra `timestamptz`, como em `idempotency_key.expires_at`).
+`migrations/verify-20261027-migration.sh` (+ `verify-20261027-migration.sql`; harness da issue #59, cross-platform como os outros): cria bancos **descartáveis**
+`meu_banco_mig27` e `meu_banco_mig27_init` no container (não toca em `meu_banco`), monta o schema `reservation` ANTERIOR (`timestamp`, CHECK `capacity >= -1`, sem o índice)
+**com linhas** (horários conhecidos, `NULL`, microssegundos e um horário que não existe em `America/New_York`) e prova: (1) com `capacity = 0` a migração aborta
+com a contagem e nada muda; (2) a 1ª aplicação, em sessão **não-UTC** (`America/Sao_Paulo`), dá `novo = antigo AT TIME ZONE 'UTC'` linha a linha, com tipos, CHECK (definição e
+regra), índice e dono `admin`; (3) a 2ª aplicação (sessão `America/New_York`) só emite NOTICEs e não muda valor; (4) o estado migrado tem a mesma forma (colunas, constraints, índices,
+donos) de um banco novo montado pelo `13-reservation.sql`; (5) o rollback do cabeçalho da migração (extraído do próprio arquivo) devolve tipos, CHECK, índice e os valores originais.
+Exit `!= 0` se algo falhar.
 
 **Os scripts de init só rodam na PRIMEIRA criação do volume `supabase-db-data`** (inclusive o `_supabase`/`_supavisor` do pooler; num volume antigo, recrie-o). Depois disso são
 ignorados. Para reaplicar do zero:

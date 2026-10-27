@@ -132,17 +132,28 @@ public class EventCapRepository implements CapacityReserver {
      * A nova quantidade disponível acompanha a variação de capacidade
      * ({@code quant += novaCapacidade - capacidadeAtual}); se isso deixaria {@code quant}
      * negativo (reduzir abaixo do que já foi vendido), a operação é rejeitada.
+     * Ilimitado -> limitado (issue #56): {@code quant = novaCapacidade - ativas}, com {@code ativas} = reservas
+     * {@code pending} + {@code confirmed} do evento contadas no MESMO statement do {@code UPDATE}; capacidade menor
+     * que as ativas viola o CHECK e a operação é rejeitada sem alterar nada.
+     *
+     * <p><b>Janela de corrida (documentada, não tratada):</b> a reserva de evento ilimitado roda sem CAS e não trava
+     * a linha de {@code eventcap}. A janela vai da leitura da política (feita fora da transação da reserva) até o commit
+     * da reserva: uma reserva em voo cujo commit venha DEPOIS do {@code count} deste statement não é contada, e
+     * {@code quant} fica acima do real (overselling de no máximo as reservas em voo na conversão). O caso inverso é o
+     * lado seguro: cancelamento ou expiração em voo durante a conversão (já contados como ativos no {@code count}) pode
+     * deixar {@code quant} 1 abaixo do real, ou seja, uma vaga a menos, nunca a mais.</p>
      * @return {@code false} se o evento não tem {@code eventcap} (nada atualizado)
      */
     public boolean updatePolicy(Long eventId, Integer newCapacity, LocalDateTime buyTimeLimit) {
         // quant novo:
         //   nova capacidade -1 (ilimitado)           -> -1
-        //   era ilimitado e virou limitado           -> nova capacidade (todas as vagas livres)
+        //   era ilimitado e virou limitado           -> nova capacidade menos as reservas ativas (#56)
         //   limitado -> limitado                     -> acompanha a variação da capacidade
         String sql = "UPDATE reservation.eventcap "
                 + "SET capacity = ?, "
                 + "    quant = CASE WHEN ? = -1 THEN -1 "
-                + "                 WHEN capacity = -1 THEN ? "
+                + "                 WHEN capacity = -1 THEN ? - (SELECT count(*) FROM reservation.walletevent w "
+                + "                      WHERE w.event_id = eventcap.event_id AND w.status IN ('pending', 'confirmed')) "
                 + "                 ELSE quant + (? - capacity) END, "
                 + "    buy_time_limit = ?, "
                 + "    updated_at = CURRENT_TIMESTAMP "
