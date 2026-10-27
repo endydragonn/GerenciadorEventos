@@ -186,7 +186,7 @@ fi
 
 echo "==> a) cadastro em duas fases (o codigo vem do BANCO, o e-mail nao e lido)"
 code="$(curl -s -o "$TMP/req.json" -w '%{http_code}' -X POST "$BASE_URL/bff/users/request-verification" -H 'Content-Type: application/json' \
-    -d "{\"name\":\"Smoke36 Novo $SUFIXO\",\"email\":\"$EMAIL_NOVO\",\"password\":\"senha123\",\"fone\":\"$FONE_NOVO\",\"birthDate\":\"1990-01-15\"}")"
+    -d "{\"name\":\"Smoke36 Novo $SUFIXO\",\"email\":\"$EMAIL_NOVO\",\"password\":\"senha123\",\"fone\":\"$FONE_NOVO\",\"birthdate\":\"1990-01-15\"}")"
 confere "POST /bff/users/request-verification" 201 "$code"
 CODIGO="$(psql_db "SELECT verification_code FROM identity.pending_verifications WHERE email = '$EMAIL_NOVO'" | tr -d '[:space:]')"
 confere "codigo de 6 digitos em identity.pending_verifications" sim "$([[ "$CODIGO" =~ ^[0-9]{6}$ ]] && echo sim || echo nao)"
@@ -236,8 +236,8 @@ code="$(curl -s -o "$TMP/me.json" -w '%{http_code}' "$BASE_URL/bff/users/me" -H 
 confere "GET /bff/users/me com o token" 200 "$code"
 confere "/me devolve o usuario do uid" sim "$(grep -qF "\"$EMAIL_NOVO\"" "$TMP/me.json" && echo sim || echo nao)"
 confere "GET /bff/users/me sem token" 401 "$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/bff/users/me")"
-confere "GET /bff/events com bearer lixo (rota publica segue anonima)" 200 \
-    "$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/bff/events" -H 'Authorization: Bearer isto.nao.e-jwt')"
+confere "GET /bff/events/search?term= com bearer lixo (rota publica segue anonima)" 200 \
+    "$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/bff/events/search?term=smoke36" -H 'Authorization: Bearer isto.nao.e-jwt')"
 confere "GET /bff/users/me com bearer lixo (rota protegida)" 401 \
     "$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/bff/users/me" -H 'Authorization: Bearer isto.nao.e-jwt')"
 
@@ -311,10 +311,10 @@ confere "POST /bff/users/login com o identity parado" 503 \
     "$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST "$BASE_URL/bff/users/login" -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL_NOVO\",\"password\":\"senha123\"}")"
 confere "POST /bff/users/request-verification com o identity parado" 503 \
     "$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST "$BASE_URL/bff/users/request-verification" -H 'Content-Type: application/json' \
-        -d "{\"name\":\"Smoke36 Fora $SUFIXO\",\"email\":\"smoke36-$SUFIXO-fora@example.com\",\"password\":\"senha123\",\"fone\":\"11999990000\",\"birthDate\":\"1990-01-15\"}")"
+        -d "{\"name\":\"Smoke36 Fora $SUFIXO\",\"email\":\"smoke36-$SUFIXO-fora@example.com\",\"password\":\"senha123\",\"fone\":\"11999990000\",\"birthdate\":\"1990-01-15\"}")"
 confere "GET /bff/users/me com o identity parado (token valido)" 503 \
     "$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$BASE_URL/bff/users/me" -H "Authorization: Bearer $TOKEN_LOGIN")"
-confere "GET /bff/events com o identity parado (nao depende dele)" 200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$BASE_URL/bff/events")"
+confere "GET /bff/events/search?term= com o identity parado (nao depende dele)" 200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$BASE_URL/bff/events/search?term=smoke36")"
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST "$BASE_URL/bff/event-wallets" \
     -H "Authorization: Bearer $TOKEN_LOGIN" -H 'Content-Type: application/json' -d "{\"userId\":$UID_NOVO,\"eventId\":$EVENT_B}")"
 confere "POST /bff/event-wallets com o identity parado (token valido pelo JWKS em cache)" 201 "$code"
