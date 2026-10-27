@@ -103,9 +103,9 @@ while [ "$DURACAO_S" -eq 0 ] || [ "$(date +%s)" -lt "$FIM" ]; do
     t0=$(date +%s%3N)
     banco="$(psql_db "$SQL_AMOSTRA" 2>/dev/null | head -1)"
     [ -n "$banco" ] || banco="-1,-1,-1,-1,-1,-1,-1,-1,-1"
-    l1="$(dexec exec "$CONTAINER_RPK" rpk group describe reservation 2>/dev/null | lag_do_rpk)"
-    l2="$(dexec exec "$CONTAINER_RPK" rpk group describe reservation-catalog 2>/dev/null | lag_do_rpk)"
-    l3="$(dexec exec "$CONTAINER_RPK" rpk group describe notification 2>/dev/null | lag_do_rpk)"
+    l1="$(dexec exec "$CONTAINER_RPK" timeout 3 rpk group describe reservation 2>/dev/null | lag_do_rpk)"
+    l2="$(dexec exec "$CONTAINER_RPK" timeout 3 rpk group describe reservation-catalog 2>/dev/null | lag_do_rpk)"
+    l3="$(dexec exec "$CONTAINER_RPK" timeout 3 rpk group describe notification 2>/dev/null | lag_do_rpk)"
     IFS=, read -r proj resto <<< "$banco"
     echo "$t0,$proj,$l1,$l2,$l3,$resto" >> "$CSV"
     resta=$(( INTERVALO_S * 1000 - ($(date +%s%3N) - t0) ))
