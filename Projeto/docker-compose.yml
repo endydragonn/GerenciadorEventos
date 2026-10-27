@@ -90,21 +90,23 @@ services:
       # os testes (run-tests.sh) seguem direto no db, pela URL do Projeto/.env.
       SPRING_DATASOURCE_URL: jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}.gerenciador-eventos
-      RECAPTCHA_SECRET_KEY: ${RECAPTCHA_SECRET_KEY}
       RECAPTCHA_SITE_KEY: ${RECAPTCHA_SITE_KEY}
+      # O reCAPTCHA (RECAPTCHA_SECRET_KEY) e a assinatura do JWT (chave RSA gerada e guardada no volume identity-keys) saíram do backend
+      # na #36: o env_file entrega o .env inteiro, então a chave secreta e o JWT_SECRET (que ninguém lê mais) são sobrepostos por vazio.
+      RECAPTCHA_SECRET_KEY: ""
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_SECRET: ""
       # O e-mail saiu do monólito (issue #32, serviço notification): o env_file ./.env entrega o arquivo inteiro, então
       # as credenciais SMTP são sobrepostas por vazio aqui para o backend não recebê-las sem precisar.
       MAIL_USERNAME: ""
       MAIL_PASSWORD: ""
-      # Backbone de eventos (issue #27): o broker interno do compose. Relay (outbox -> broker) ligado: o identity appenda
-      # eventos (#32; o catalog saiu na #35 e tem o relay dele). Desde a #33 o monólito NÃO tem consumer: a projeção de
-      # disponibilidade (braço naive) é do serviço reservation.
+      # Backbone de eventos (issue #27): o broker interno do compose. Desde a #36 o monólito NÃO appenda evento nenhum (o identity.notification
+      # passou ao serviço identity, como o catalog e o reservation têm os deles), então o relay fica DESLIGADO; e desde a #33 ele não tem
+      # consumer (a projeção de disponibilidade do braço naive é do serviço reservation).
       SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
-      EVENTS_RELAY_ENABLED: "true"
+      EVENTS_RELAY_ENABLED: "false"
       EVENTS_CONSUMER_ENABLED: "false"
       # Serviço reservation (issue #33): API interna HTTP, só na rede gerenciador-net. O gateway (este container) chama o
       # reservation para reservar/confirmar/cancelar. O braço da reserva
@@ -119,9 +121,22 @@ services:
       # gerenciador-net. Pool >= threads do Tomcat (300); resposta 15 s, sem retry (default no application.properties).
       CATALOG_SERVICE_URL: http://catalog:8083
       CATALOG_CLIENT_MAX_CONNECTIONS: ${CATALOG_CLIENT_MAX_CONNECTIONS:-400}
+      # Serviço identity (issue #36): usuários, login, cadastro, MFA, reCAPTCHA e a emissão do JWT RS256 por HTTP, só na rede
+      # gerenciador-net. O gateway só VALIDA o JWT (JWKS em IDENTITY_SERVICE_URL/.well-known/jwks.json, cache de 24 h). Pool >= threads
+      # do Tomcat (300); resposta 5 s, sem retry (default no application.properties). Hikari do monólito: 10 (só health).
+      IDENTITY_SERVICE_URL: http://identity:8084
+      IDENTITY_CLIENT_MAX_CONNECTIONS: ${IDENTITY_CLIENT_MAX_CONNECTIONS:-400}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
 
     ports:
       - "8081:8081"
+    healthcheck:
+      # /actuator/health (depende do banco). Sem curl na imagem: GET HTTP/1.0 cru por bash /dev/tcp, esperando "200" na 1ª linha.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8081 && printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
     depends_on:
       supabase-pooler:
         condition: service_healthy
@@ -131,6 +146,54 @@ services:
         condition: service_healthy
       catalog:
         condition: service_healthy
+      identity:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Serviço identity (issue #36, Fase 7: quarta extração): dono de users/mywallet/pending_verifications (CRUD, schema `identity`),
+  # do login (BCrypt), do cadastro em duas fases, do MFA, do reCAPTCHA e da EMISSÃO do JWT (RS256 + JWKS em /.well-known/jwks.json),
+  # com event store/outbox próprios (streams identity.notification, congelado, e identity.user). Imagem e processo próprios
+  # (Backend/identity/Dockerfile). API interna (/internal/**, porta 8084) SÓ na rede gerenciador-net: SEM porta no host. Não usa
+  # env_file: recebe só o que precisa, pelo NOME (senha do banco e RECAPTCHA_SECRET_KEY do Projeto/.env), sem JWT_SECRET (o JWT é
+  # assimétrico: a chave RSA é gerada no 1º boot e persistida no volume identity-keys, sobrevive a restart/rebuild; `down -v` a apaga e
+  # todo token antigo vira 401) e sem SMTP.
+  # Pool: Hikari 100, pelo Supavisor (mesmo tenant e usuário dos outros: o pool real 45 / 245 NÃO cresce); soma dos Hikari =
+  # 1000 (reservation) + 10 (backend) + 3 (notification) + 100 (catalog) + 100 (identity) = 1213 <= POOLER_MAX_CLIENT_CONN 1500.
+  # NÃO SOBE com a migração 20261028 pendente (PublicSchemaGuard: public.users ainda existe).
+  identity:
+    build:
+      context: ./Backend
+      dockerfile: identity/Dockerfile
+    container_name: gerenciador-identity
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}.gerenciador-eventos
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "100"
+      SERVER_TOMCAT_THREADS_MAX: ${SERVER_TOMCAT_THREADS_MAX:-300}
+      # Token de serviço exigido em toda requisição (401 sem/errado, menos o JWKS). SEM default: falha no boot sem ele.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?defina INTERNAL_API_TOKEN no Projeto/.env}
+      # A chave secreta do reCAPTCHA v3 é só deste serviço; a validade do JWT (exp) também.
+      RECAPTCHA_SECRET_KEY: ${RECAPTCHA_SECRET_KEY}
+      JWT_EXPIRATION_SECONDS: ${JWT_EXPIRATION_SECONDS:-36000}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      # Relay do outbox do SERVIÇO (identity.event_outbox -> tópicos identity.notification, que o notification consome, e identity.user).
+      # OBRIGATÓRIO: sem ele nenhum e-mail de cadastro/MFA sai.
+      EVENTS_RELAY_ENABLED: "true"
+    volumes:
+      - identity-keys:/var/lib/identity
+    healthcheck:
+      # sem HTTP de saúde nem curl na imagem: "a porta aceita conexão" (bash /dev/tcp; o /bin/sh da imagem é dash)
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8084"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    depends_on:
+      supabase-pooler:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
     restart: unless-stopped
 
   # Serviço catalog (issue #35, Fase 7: terceira extração): dono de event/eventpresenter (CQRS + event sourcing, stream
@@ -138,7 +201,7 @@ services:
   # (Backend/catalog/Dockerfile). API interna (/internal/events/**, porta 8083) SÓ na rede gerenciador-net: SEM porta no host. Não
   # usa env_file: recebe só o que precisa, pelo NOME (senha do banco do Projeto/.env), sem JWT_SECRET/reCAPTCHA/SMTP.
   # Pool: Hikari 100, pelo Supavisor (mesmo tenant e usuário dos outros: o pool real 45 / 245 NÃO cresce); soma dos Hikari =
-  # 1000 (reservation) + 350 (backend) + 3 (notification) + 100 (catalog) = 1453 <= POOLER_MAX_CLIENT_CONN 1500.
+  # 1000 (reservation) + 10 (backend) + 3 (notification) + 100 (catalog) + 100 (identity) = 1213 <= POOLER_MAX_CLIENT_CONN 1500.
   # Chama o reservation (eventcap) por HTTP, mas NÃO depende dele no boot: com o reservation fora a criação de evento segue e o
   # eventcap vem pela reconciliação do EventCreated (tópico catalog.event, publicado pelo relay daqui).
   catalog:
@@ -179,7 +242,7 @@ services:
   # no host. Não usa env_file: recebe só o que precisa, pelo NOME (senha do banco do Projeto/.env), sem JWT_SECRET/reCAPTCHA/SMTP.
   # É o CAMINHO QUENTE do experimento: mesmos valores que o monólito tinha no ponto 2 (Tomcat 300, Hikari 1000, virtual threads
   # desligadas). Fala com o Postgres pelo Supavisor, mesmo tenant e mesmo usuário do backend e do notification, então o pool real
-  # (45 / 245) NÃO cresce; a conta dos Hikari (1000 + 350 + 3 + 100 do catalog <= POOLER_MAX_CLIENT_CONN 1500) está no Backend/CLAUDE.md.
+  # (45 / 245) NÃO cresce; a conta dos Hikari (1000 + 10 + 3 + 100 do catalog + 100 do identity = 1213 <= POOLER_MAX_CLIENT_CONN 1500) está no Backend/CLAUDE.md.
   reservation:
     build:
       context: ./Backend
@@ -236,12 +299,47 @@ services:
       MAIL_USERNAME: ${MAIL_USERNAME}
       MAIL_PASSWORD: ${MAIL_PASSWORD}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      # SMTP: sem MAIL_HOST/MAIL_PORT/MAIL_SMTP_AUTH/MAIL_STARTTLS valem os defaults do application.properties (Gmail 587, auth,
+      # STARTTLS obrigatório); a suíte e2e (e2e/docker-compose.e2e.yml) os sobrepõe para um captador de e-mail.
+    healthcheck:
+      # sem HTTP: "o consumer está ligado ao broker" = há conexão TCP ESTABELECIDA (estado 01) para a porta 9092 (hex 2384) em
+      # /proc/net/tcp e tcp6 (o Java abre socket dual-stack: a conexão IPv4 aparece em tcp6) (a imagem não tem curl nem rpk; bash/awk existem).
+      test: ["CMD", "bash", "-c", "awk '$$4==\"01\" && $$3 ~ /:2384$$/ {ok=1} END {exit !ok}' /proc/net/tcp /proc/net/tcp6"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
     depends_on:
       supabase-pooler:
         condition: service_healthy
       redpanda:
         condition: service_healthy
+      notification-seek:
+        condition: service_completed_successfully
     restart: unless-stopped
+
+  # Group `notification` no 1º up (issue #37): o consumer começa em `earliest`; um group NOVO releria o log inteiro do tópico (evento
+  # de teste antigo, de uma stack apagada e recriada, viraria e-mail). One-shot SÓ se o group ainda não existe: move-o para o fim
+  # do tópico (o tópico inexistente não falha: --allow-new-topics). Group já existente (stack que reinicia, e-mail legítimo pendente
+  # com o notification parado) fica intocado. Termina com 0; o notification só sobe depois (service_completed_successfully).
+  notification-seek:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.4
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -eo pipefail
+        export RPK_BROKERS=redpanda:9092
+        # falha do rpk (broker fora) ABORTA aqui (set -e): nunca cai no seek por "não consegui listar"
+        grupos="$$(rpk group list)"
+        if awk 'NR > 1 && $$2 == "notification" {achou=1} END {exit !achou}' <<<"$$grupos"; then
+          echo "group notification já existe: offsets mantidos"
+        else
+          rpk group seek notification --to end --topics identity.notification --allow-new-topics
+        fi
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: "no"
 
   frontend:
     build:
@@ -252,8 +350,16 @@ services:
     container_name: gerenciador-frontend
     ports:
       - "8088:80"
+    healthcheck:
+      # nginx:alpine-slim traz o wget do busybox
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
@@ -263,6 +369,9 @@ volumes:
   db-config:
     driver: local
   redpanda-data:
+    driver: local
+  # Chave de assinatura do JWT do identity (JWK privada + pública, arquivo 600). Sobrevive a restart/rebuild; `down -v` a apaga.
+  identity-keys:
     driver: local
 
 networks:

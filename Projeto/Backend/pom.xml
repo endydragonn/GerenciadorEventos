@@ -17,19 +17,24 @@
     <!-- Multi-módulo (issue #32, Fase 7): cada serviço é um módulo com o próprio jar e o próprio Dockerfile;
          o que é comum vive nas libs (sem spring-boot-maven-plugin: não são executáveis): "shared" (conexão e infra de
          event sourcing), desde a #33 "reservation-client" (contrato HTTP do serviço reservation: DTOs + cliente) e, desde a
-         #35, "catalog-client" (contrato HTTP do serviço catalog). -->
+         #35, "catalog-client" (contrato HTTP do serviço catalog) e, desde a #36, "identity-client" (contrato HTTP do serviço identity). -->
     <modules>
         <module>shared</module>
         <module>reservation-client</module>
         <module>catalog-client</module>
+        <module>identity-client</module>
         <module>monolito</module>
         <module>notification</module>
         <module>reservation</module>
         <module>catalog</module>
+        <module>identity</module>
     </modules>
 
     <properties>
         <java.version>21</java.version>
+        <!-- Nimbus JOSE+JWT: o BOM do Spring Boot NÃO gerencia esta lib. 9.37.4 é a versão que o spring-security-oauth2-jose 6.5.6 (Boot 3.5.7)
+             declara; identity (assina) e gateway (valida, fatia 3) resolvem a MESMA por aqui. -->
+        <nimbus-jose-jwt.version>9.37.4</nimbus-jose-jwt.version>
     </properties>
 
     <dependencyManagement>
@@ -48,6 +53,16 @@
                 <groupId>com.example.demo</groupId>
                 <artifactId>catalog-client</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.example.demo</groupId>
+                <artifactId>identity-client</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.nimbusds</groupId>
+                <artifactId>nimbus-jose-jwt</artifactId>
+                <version>${nimbus-jose-jwt.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

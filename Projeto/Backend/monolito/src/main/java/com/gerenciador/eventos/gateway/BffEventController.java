@@ -20,8 +20,8 @@ import org.springframework.web.bind.annotation.RestController;
 import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.catalogclient.api.EventApi;
-import com.gerenciador.eventos.identity.api.HostAuthorizationApi;
-import com.gerenciador.eventos.identity.api.UserApi;
+import com.gerenciador.eventos.gateway.security.HostAuthorizationApi;
+import com.gerenciador.eventos.identityclient.api.UserApi;
 
 /**
  * Camada BFF única para eventos: CRUD, validate, search e upload/serve de imagem.

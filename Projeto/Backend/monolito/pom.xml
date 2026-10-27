@@ -8,7 +8,7 @@
     </parent>
     <artifactId>monolito</artifactId>
     <name>monolito</name>
-    <description>Monólito: identity e gateway (/bff/**). O e-mail saiu para o serviço notification (issue 32), a reserva para o serviço reservation (issue 33) e os eventos para o serviço catalog (issue 35)</description>
+    <description>Monólito: só o gateway (/bff/**) e a validação do JWT. O e-mail saiu para o serviço notification (issue 32), a reserva para o reservation (33), os eventos para o catalog (35) e usuários/login para o identity (36)</description>
     <dependencies>
         <!-- Lib comum: DatabaseConnection + infra de event sourcing (shared.events) -->
         <dependency>
@@ -27,6 +27,12 @@
             <groupId>com.example.demo</groupId>
             <artifactId>catalog-client</artifactId>
         </dependency>
+        <!-- Contrato HTTP do serviço identity (issue #36): User, MyWallet, LoginResult, UserApi e demais interfaces, exceções.
+             O gateway fala com o serviço pelo IdentityClient (IdentityClientConfig); o código do serviço (módulo identity) NÃO está no classpath. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>identity-client</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
@@ -40,27 +46,25 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
-        <!-- Segurança e JWT -->
+        <!-- Segurança: o gateway só VALIDA o JWT RS256 que o serviço identity assina (issue #36): filtro próprio com
+             NimbusJwtDecoder + JWKSource explícito (spring-security-oauth2-jose) e JwtAuthenticationToken
+             (spring-security-oauth2-resource-server; sem o starter e sem oauth2ResourceServer(): bearer inválido em rota pública
+             segue anônimo). O jjwt saiu. A nimbus-jose-jwt é a 9.37.4 do pom pai (a mesma do identity, que assina). -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-api</artifactId>
-            <version>0.11.5</version>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-jose</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-impl</artifactId>
-            <version>0.11.5</version>
-            <scope>runtime</scope>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-resource-server</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-jackson</artifactId>
-            <version>0.11.5</version>
-            <scope>runtime</scope>
+            <groupId>com.nimbusds</groupId>
+            <artifactId>nimbus-jose-jwt</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -62,7 +62,7 @@ limpar() {
         psql_db "DELETE FROM reservation.walletevent WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name = 'Smoke33 $SUFIXO');
                  DELETE FROM reservation.eventcap WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name = 'Smoke33 $SUFIXO');
                  DELETE FROM catalog.event WHERE event_name = 'Smoke33 $SUFIXO';
-                 DELETE FROM users WHERE email LIKE 'smoke33-$SUFIXO-%@example.com';" >/dev/null 2>&1 || true
+                 DELETE FROM identity.users WHERE email LIKE 'smoke33-$SUFIXO-%@example.com';" >/dev/null 2>&1 || true
     fi
     rm -rf "$TMP"
 }
@@ -94,7 +94,7 @@ if [ "$code" = "404" ]; then
 fi
 declare -a UID_
 for i in $(seq 1 "$USUARIOS"); do
-    UID_[$i]="$(psql_db "SELECT user_id FROM users WHERE email = 'smoke33-$SUFIXO-$i@example.com'" | tr -d '[:space:]')"
+    UID_[$i]="$(psql_db "SELECT user_id FROM identity.users WHERE email = 'smoke33-$SUFIXO-$i@example.com'" | tr -d '[:space:]')"
 done
 curl -s -X POST "$BASE_URL/bff/seed" -H 'Content-Type: application/json' \
     -d "{\"events\":[{\"creator_id\":${UID_[1]},\"event_name\":\"Smoke33 $SUFIXO\",\"is_EAD\":true,\"event_date\":\"2035-12-01T14:00:00\",\"lot_quantity\":$CAPACIDADE,\"description\":\"smoke\"}]}" >/dev/null

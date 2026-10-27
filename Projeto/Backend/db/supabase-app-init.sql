@@ -31,15 +31,14 @@ ALTER DATABASE :"app_db" OWNER TO :"app_user";
 
 SET ROLE :"app_user";
 
-\i /app-init/01-functions.sql
-\i /app-init/02-users.sql
-\i /app-init/06-mywallet.sql
-\i /app-init/08-pending-verifications.sql
 \i /app-init/11-event-store.sql
 \i /app-init/12-notification.sql
 \i /app-init/13-reservation.sql
 -- catalog (#35): event/eventpresenter e o event store do serviço, no schema catalog (substituiu o 03-event e o 05-eventpresenter)
 \i /app-init/14-catalog.sql
+-- identity (#36): users/mywallet/pending_verifications + event store do serviço, no schema identity (substituiu o 01-functions,
+-- 02-users, 06-mywallet e 08-pending-verifications: nenhum usuário mora mais em public)
+\i /app-init/15-identity.sql
 \i /app-init/99-tests.sql
 
 RESET ROLE;

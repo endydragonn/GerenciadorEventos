@@ -33,8 +33,6 @@ public class SchemaValidationTest {
 
     @Test
     void shouldHaveRequiredTables() throws Exception {
-        assertTrue(tableExists("public.users"), "Tabela 'users' não existe");
-        assertTrue(tableExists("public.mywallet"), "Tabela 'mywallet' não existe");
         assertTrue(tableExists("public.event_store"), "Tabela 'public.event_store' não existe");
         assertTrue(tableExists("public.event_outbox"), "Tabela 'public.event_outbox' não existe");
         assertTrue(tableExists("public.event_snapshot"), "Tabela 'public.event_snapshot' não existe");
@@ -47,21 +45,6 @@ public class SchemaValidationTest {
     void processedEventTableShouldHaveKeyColumns() throws Exception {
         assertColumns("processed_event", "event_id", "event_type", "processed_at");
         assertEquals(List.of("event_id"), constraintColumns("processed_event", 'p'), "PK de processed_event");
-    }
-
-    @Test
-    void usersTableShouldHaveKeyColumns() throws Exception {
-        assertColumns("users",
-            "user_id", "user_name", "email", "fone", "password", "birthdate",
-            "admin", "isactive", "created_at", "updated_at"
-        );
-    }
-
-    @Test
-    void myWalletTableShouldHaveKeyColumns() throws Exception {
-        assertColumns("mywallet",
-            "user_id", "created_at", "updated_at"
-        );
     }
 
     /** Issue #27: envelope do evento no event_store; a PK é a global_position e o UNIQUE dá a concorrência otimista. */
@@ -151,7 +134,7 @@ public class SchemaValidationTest {
     /**
      * Issue #35 (Fase 7, cutover): {@code event} e {@code eventpresenter} SAÍRAM de {@code public} para o schema {@code catalog}
      * (do serviço catalog, validado no módulo dele: colunas, chaves, cascata), e não restou FK cruzando o schema {@code catalog}
-     * (a {@code Event_creator_id_fkey} para {@code users} caiu); a {@code mywallet_user_id_fkey} do {@code identity} continua.
+     * (a {@code Event_creator_id_fkey} para {@code users} caiu).
      */
     @Test
     void catalogTablesLeftPublicAndNoFkCrossesTheCatalogSchema() throws Exception {
@@ -164,9 +147,31 @@ public class SchemaValidationTest {
             + "join pg_namespace rn on rn.oid = r.relnamespace "
             + "where c.contype = 'f' and n.nspname <> rn.nspname and 'catalog' in (n.nspname, rn.nspname)"),
             "nenhuma FK cross-schema envolvendo catalog");
+    }
+
+    /**
+     * Issue #36 (Fase 7, cutover): {@code users}, {@code mywallet} e {@code pending_verifications} SAÍRAM de {@code public} para o
+     * schema {@code identity} (do serviço identity, validado no módulo dele), com o trigger 1:1 da carteira e a
+     * {@code mywallet_user_id_fkey} DENTRO do schema novo, e não restou FK cruzando o schema {@code identity}. O stream
+     * {@code identity.notification} também saiu do event store de {@code public}.
+     */
+    @Test
+    void identityTablesLeftPublicAndNoFkCrossesTheIdentitySchema() throws Exception {
+        for (String t : List.of("users", "mywallet", "pending_verifications")) {
+            assertTrue(!tableExists("public." + t), "public." + t + " deveria ter ido para o schema identity (migração 20261028)");
+            assertTrue(tableExists("identity." + t), "identity." + t + " não existe");
+        }
+        assertEquals(0, contar("select count(*) from pg_constraint c join pg_class t on t.oid = c.conrelid "
+            + "join pg_namespace n on n.oid = t.relnamespace join pg_class r on r.oid = c.confrelid "
+            + "join pg_namespace rn on rn.oid = r.relnamespace "
+            + "where c.contype = 'f' and n.nspname <> rn.nspname and 'identity' in (n.nspname, rn.nspname)"),
+            "nenhuma FK cross-schema envolvendo identity");
         assertEquals(1, contar("select count(*) from pg_constraint where conname = 'mywallet_user_id_fkey' "
-            + "and conrelid = 'public.mywallet'::regclass and confrelid = 'public.users'::regclass"),
-            "a FK mywallet -> users (identity) não é cross-schema e continua");
+            + "and conrelid = 'identity.mywallet'::regclass and confrelid = 'identity.users'::regclass"),
+            "a FK mywallet -> users mora dentro do schema identity");
+        assertEquals(0, contar("select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace "
+            + "where n.nspname = 'public' and p.proname in ('create_wallet_for_user', 'cleanup_expired_verifications', "
+            + "'trigger_cleanup_on_insert')"), "as funções de usuário saíram de public");
     }
 
     /**
