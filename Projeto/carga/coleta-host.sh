@@ -13,7 +13,7 @@
 #                                     intervalo (-1 = nada aplicado no intervalo)
 #      lag_reservation, lag_reservation_catalog, lag_notification
 #                                     lag do consumer (TOTAL-LAG do rpk group describe; -1 = grupo ausente)
-#      outbox_reservation, outbox_catalog, outbox_public
+#      outbox_reservation, outbox_catalog, outbox_identity
 #                                     linhas pendentes nos event_outbox (relay atrasado)
 #      pg_conexoes, pg_ativas, pg_idle, pg_idle_tx, pg_espera_lock
 #                                     lado servidor do pooler: conexoes que o Supavisor (e os testes)
@@ -32,7 +32,7 @@ CONTAINER_DB="${CONTAINER_DB:-gerenciador-db}"
 CONTAINER_RPK="${CONTAINER_RPK:-gerenciador-redpanda}"
 PG_ADMIN="${PG_ADMIN:-supabase_admin}"
 GRUPOS="reservation reservation-catalog notification"
-CABECALHO="epoch_ms,lag_projecao_ms,lag_reservation,lag_reservation_catalog,lag_notification,outbox_reservation,outbox_catalog,outbox_public,pg_conexoes,pg_ativas,pg_idle,pg_idle_tx,pg_espera_lock"
+CABECALHO="epoch_ms,lag_projecao_ms,lag_reservation,lag_reservation_catalog,lag_notification,outbox_reservation,outbox_catalog,outbox_identity,pg_conexoes,pg_ativas,pg_idle,pg_idle_tx,pg_espera_lock"
 
 # TOTAL-LAG da saida do "rpk group describe" (stdin); -1 se nao houver.
 lag_do_rpk() { awk '$1=="TOTAL-LAG"{v=$2} END{print (v=="" ? -1 : v)}'; }
@@ -76,7 +76,7 @@ psql_db "CREATE EXTENSION IF NOT EXISTS pg_stat_statements; SELECT pg_stat_state
 SQL_AMOSTRA="SELECT
   COALESCE((SELECT round(MAX(EXTRACT(EPOCH FROM (applied_at - last_occurred_at)) * 1000)) FROM reservation.event_availability
             WHERE applied_at > now() - interval '${INTERVALO_S} seconds'), -1),
-  (SELECT count(*) FROM reservation.event_outbox), (SELECT count(*) FROM catalog.event_outbox), (SELECT count(*) FROM public.event_outbox),
+  (SELECT count(*) FROM reservation.event_outbox), (SELECT count(*) FROM catalog.event_outbox), (SELECT count(*) FROM identity.event_outbox),
   count(*), count(*) FILTER (WHERE state = 'active'), count(*) FILTER (WHERE state = 'idle'),
   count(*) FILTER (WHERE state LIKE 'idle in transaction%'), count(*) FILTER (WHERE wait_event_type = 'Lock')
 FROM pg_stat_activity WHERE datname = 'meu_banco' AND pid <> pg_backend_pid();"

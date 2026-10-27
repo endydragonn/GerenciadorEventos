@@ -127,7 +127,7 @@ faltar) e grava, a cada `INTERVALO_S` (1 s), `results\coleta-host-<rótulo>-<dat
 - `lag_projecao_ms`: write → projeção, `MAX(applied_at - last_occurred_at)` de `reservation.event_availability` nas linhas aplicadas no
   intervalo (-1 = nada aplicado);
 - `lag_reservation`, `lag_reservation_catalog`, `lag_notification`: lag do consumer (`TOTAL-LAG` do `rpk group describe`; -1 = grupo ausente);
-- `outbox_reservation`, `outbox_catalog`, `outbox_public`: pendentes nos `event_outbox` (relay atrasado);
+- `outbox_reservation`, `outbox_catalog`, `outbox_identity`: pendentes nos `event_outbox` (relay atrasado);
 - `pg_conexoes`, `pg_ativas`, `pg_idle`, `pg_idle_tx`, `pg_espera_lock`: o lado servidor do pooler, as conexões que o Supavisor mantém no
   `meu_banco` por estado (`pg_stat_activity`). Não se lê o endpoint de métricas do Supavisor: ele exige um JWT assinado com segredo do
   `supabase/.env`.
