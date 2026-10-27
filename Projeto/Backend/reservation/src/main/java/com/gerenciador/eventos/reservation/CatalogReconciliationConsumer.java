@@ -78,6 +78,9 @@ public class CatalogReconciliationConsumer {
             }
         }
         int capacity = p.get("capacity").asInt();
+        if (capacity != EventCap.UNLIMITED && capacity < 1) { // viola eventcap_capacity_valid: SQLException seria retentada sem limite
+            throw new InvalidEventMessageException("EventCreated com capacity inválida (" + capacity + "): esperado >= 1 ou -1", null);
+        }
         boolean criou = eventCapRepository.create(new EventCap(p.get("eventId").asLong(), capacity, capacity, janela));
         if (criou) {
             log.warn("[CatalogReconciliation] eventcap do evento {} criado pelo EventCreated: a criação síncrona do catalog "

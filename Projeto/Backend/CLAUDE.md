@@ -136,7 +136,9 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   calculados (o `EventUpdated` não carrega capacidade), evento pré-ES (`version = 0`) recusado, backfill da migração
   `20261022` aplicado 2× (um `EventCreated` v1, replay == viva), conflito de versão (transitório: o command repete; permanente: esgota as tentativas e não grava nada),
   8 updates concorrentes no mesmo evento (log contíguo, sem versão perdida) e `DELETE` que falha por FK desfazendo o
-  `EventCancelled`.
+  `EventCancelled`. `EventUpdateAtomicoTest` (issue #60): `updatePolicy` recusado (400, 409, 5xx) ou o fallback de criar o `eventcap`
+  falhando não grava nada no catalog; falha na transação do catalog (spy na projeção) não deixa metadados nem apresentadores pela
+  metade e o reservation já tem a capacidade nova (a janela documentada); sucesso com versões contíguas e replay == viva.
 - Reservation em event sourcing (issue #29; ver "Reservation em event sourcing"): `ReservationEventSourcingTest` (o ciclo
   reserva / confirma / cancela / reserva de novo / expira gera os 4 eventos no mesmo stream com versões contíguas vindas da
   guarda; payload sem dado pessoal; transição que a guarda não aceita não gera evento; conflito de versão no append faz
@@ -202,7 +204,7 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   e só uma no cas; "lotado" já na 1ª chamada; repetição com chave do cliente devolve o resultado salvo; mapeamento 400/422/409;
   **criação do `eventcap` idempotente por `event_id`**; lote/inexistente; `updatePolicy`; apagar recusado com reserva),
   `CatalogReconciliationTest` (**reconciliação pelo `EventCreated`** do tópico: cria o que faltava, repetição/reentrega não altera,
-  `eventcap` da chamada síncrona não é sobrescrito, tipos que não são `EventCreated` ignorados, payload inválido rejeitado) e
+  `eventcap` da chamada síncrona não é sobrescrito, tipos que não são `EventCreated` ignorados, payload inválido rejeitado; `capacity` 0 ou < -1 — que o CHECK `eventcap_capacity_valid` recusaria, #58 — também é payload inválido e vai ao DLT em vez de travar a partição) e
   `ReservationConfigTest` (Tomcat 300, keep-alive, virtual threads off, Hikari 1000, `events.schema=reservation`). **Módulo
   `monolito`**: `EventWalletGatewayCasTest` / `EventWalletGatewayNaiveTest` (o gateway decide o braço: cas = UMA chamada
   `POST /internal/reservations`; naive = `GET .../availability` e DEPOIS `POST`, na ordem, sem a 2ª quando a disponibilidade é 0; carteira e
@@ -611,8 +613,7 @@ sem mudança de expectativa).
   nunca entram. **Capacidade é estado de `reservation`, não do stream `catalog`**: `eventcap` é o agregado relacional/CAS
   e não é projetado aqui. Só o `EventCreated` leva `capacity`/`buyTimeLimit` (valores iniciais), porque o `eventcap` nasce
   logo depois do commit, por chamada síncrona ao `reservation` (#33), e o `reservation` o reconcilia a partir deste mesmo evento se a
-  chamada falhar. Mudanças de capacidade (`updatePolicy`, outra transação, com `CHECK` que pode recusá-la
-  depois do append) **não** entram no `EventUpdated`: o log imutável e o tópico nunca registram uma capacidade que o
+  chamada falhar. Mudanças de capacidade (`updatePolicy`, no reservation ANTES da transação do catalog, com `CHECK` que pode recusá-la) **não** entram no `EventUpdated`: o log imutável e o tópico nunca registram uma capacidade que o
   `eventcap` não aceitou (nem divergem em PUTs concorrentes). O histórico de capacidade, se for preciso, é do módulo `reservation`.
 - **`image_data` fica FORA do ES.** É blob (até 5 MB, base64 no JSON inflaria o `event_store` imutável), servido por
   `/bff/events/{id}/image`. Não entra em payload nenhum; a coluna é gravada direto na linha viva (`EventRepository.gravarImagem`:
@@ -640,10 +641,16 @@ sem mudança de expectativa).
     `lot_quantity`/`quantity` da requisição, loga ERROR) e o reservation cria o `eventcap` sozinho pelo `EventCreated` do tópico
     `catalog.event` quando voltar (`CatalogReconciliationConsumer`); reservar nesse intervalo falha com "Capacidade do evento não
     configurada". Um `EventCreated` replicado depois de o evento sumir não ressuscita nada (group com `auto.offset.reset=latest`).
-  - `updateEvent` **continua em 3 transações** (issue #60, não consertada aqui): (1) `EventUpdated` + `event` (só metadados; `image_data` não é tocada);
-    (2) `updatePolicy` (agora `PATCH /internal/eventcaps/{id}/policy` no reservation, HTTP; sem `eventcap` => 404 e o catalog o cria; **não** gera evento de `catalog`: a capacidade é do
-    `eventcap`, e uma recusa do `CHECK`, HTTP 400, não deixa rastro no log; a não atomicidade com (1) é a de antes, #60); (3) `trocarApresentadores`: 1 `PresenterRemoved`/`PresenterAdded` por diferença
-    (nomes aparados, sem vazios/repetidos; sem diferença não appenda). O append está sempre na transação da escrita que ele descreve.
+  - `updateEvent` (issue #60: **reservation primeiro, sem saga**): (1) existência e TODAS as validações, antes de qualquer escrita; (2)
+    `updatePolicy` (`PATCH /internal/eventcaps/{id}/policy` no reservation, HTTP; sem `eventcap` => 404 e o catalog o cria pelo PUT idempotente
+    com os valores novos; **não** gera evento de `catalog`: a capacidade é do `eventcap`); (3) UMA transação do catalog (`EventRepository.update`,
+    um command do `CatalogEventWriter`): `EventUpdated` + a diferença de apresentadores (`CatalogEventWriter.trocarApresentadores(tx, ...)`:
+    1 `PresenterRemoved`/`PresenterAdded` por diferença, nomes aparados, sem vazios/repetidos; sem diferença não appenda), com versões
+    contíguas; falha em qualquer ponto desfaz os dois. Recusa do reservation no passo 2 (400 capacidade abaixo do reservado; 409, que vira
+    `EventoEmConflitoException`; serviço fora, 5xx, ou a criação do fallback falhando) interrompe tudo **antes** de gravar no catalog: nem
+    `EventUpdated` nem apresentadores. **Janela de falha restante (sem compensação):** o reservation já atualizou e a transação do catalog
+    falha (banco fora, conflito de versão esgotado, evento pré-ES): o `eventcap` fica com a capacidade/janela NOVAS e o catalog com
+    metadados e apresentadores ANTIGOS; repetir o PUT converge (`updatePolicy` é idempotente), exceto no evento pré-ES (`version = 0`), que antes precisa do backfill da migração `20261022`. Coberto por `EventUpdateAtomicoTest`.
   - `delete`: `EventCancelled` appendado e, **na mesma transação**, a projeção faz o `DELETE` de `event` que sempre existiu
     (`eventpresenter` cai por `CASCADE`). O `eventcap` e o `walletevent` não têm mais FK (outro schema): `EventService.delete` chama
     `DELETE /internal/eventcaps/{id}` **antes** da transação, fora dela (sem segurar conexão nem lock durante a rede), e o serviço recusa com
