@@ -3,9 +3,9 @@ package com.gerenciador.eventos.gateway;
 import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -49,7 +49,7 @@ import com.gerenciador.eventos.identity.api.UserApi;
 @RequestMapping("/bff/users")
 public class BffUserController {
 
-    private static final Logger logger = Logger.getLogger(BffUserController.class.getName());
+    private static final Logger logger = LoggerFactory.getLogger(BffUserController.class);
     private static final String RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify";
     private static final double RECAPTCHA_SCORE_THRESHOLD = 0.7;
 
@@ -77,7 +77,8 @@ public class BffUserController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Erro ao criar usuário: " + e.getMessage());
+            logger.error("Erro ao criar usuário", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -110,7 +111,8 @@ public class BffUserController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Erro ao atualizar usuário: " + e.getMessage());
+            logger.error("Erro ao atualizar usuário", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -136,7 +138,8 @@ public class BffUserController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Erro ao alterar senha: " + e.getMessage());
+            logger.error("Erro ao alterar senha", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -146,7 +149,8 @@ public class BffUserController {
             userService.deactivateUser(id);
             return ResponseEntity.noContent().build();
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Erro ao deletar usuário: " + e.getMessage());
+            logger.error("Erro ao deletar usuário", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -189,8 +193,9 @@ public class BffUserController {
             }
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Não autenticado");
         } catch (Exception e) {
+            logger.error("Erro ao buscar usuário", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Erro ao buscar usuário: " + e.getMessage());
+                    .body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -237,8 +242,9 @@ public class BffUserController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (SQLException e) {
+            logger.error("Erro ao solicitar verificação", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Erro ao solicitar verificação: " + e.getMessage());
+                    .body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -269,8 +275,9 @@ public class BffUserController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (SQLException e) {
+            logger.error("Erro ao verificar email", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Erro ao verificar email: " + e.getMessage());
+                    .body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -292,8 +299,9 @@ public class BffUserController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (SQLException e) {
+            logger.error("Erro ao reenviar código", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Erro ao reenviar código: " + e.getMessage());
+                    .body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -312,8 +320,9 @@ public class BffUserController {
         } catch (RuntimeException e) {
             return ResponseEntity.notFound().build();
         } catch (Exception e) {
+            logger.error("Erro ao requisitar MFA", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body("Erro ao requisitar MFA: " + e.getMessage());
+                .body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -335,8 +344,9 @@ public class BffUserController {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Código MFA inválido ou expirado");
             }
         } catch (Exception e) {
+            logger.error("Erro ao validar MFA", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body("Erro ao validar MFA: " + e.getMessage());
+                .body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -362,8 +372,9 @@ public class BffUserController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
+            logger.error("Erro ao alterar senha com MFA", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body("Erro ao alterar senha: " + e.getMessage());
+                .body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -373,7 +384,7 @@ public class BffUserController {
     public ResponseEntity<?> verifyRecaptcha(@RequestBody RecaptchaRequest request) {
         try {
             if (recaptchaSecretKey == null || recaptchaSecretKey.isEmpty()) {
-                logger.warning("RECAPTCHA_SECRET_KEY não configurada no .env");
+                logger.warn("RECAPTCHA_SECRET_KEY não configurada no .env");
                 return ResponseEntity.status(500).body(Map.of("success", false, "error", "reCAPTCHA não configurado"));
             }
 
@@ -398,7 +409,7 @@ public class BffUserController {
             );
 
             if (response == null) {
-                logger.warning("Resposta nula do Google reCAPTCHA");
+                logger.warn("Resposta nula do Google reCAPTCHA");
                 return ResponseEntity.status(500).body(Map.of("success", false, "error", "Resposta inválida do reCAPTCHA"));
             }
 
@@ -422,11 +433,11 @@ public class BffUserController {
             return ResponseEntity.ok(result);
 
         } catch (RestClientException e) {
-            logger.log(Level.SEVERE, "Erro ao conectar ao reCAPTCHA", e);
+            logger.error("Erro ao conectar ao reCAPTCHA", e);
             return ResponseEntity.status(500).body(Map.of("success", false, "error", "Erro de conexão com reCAPTCHA"));
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Erro ao validar reCAPTCHA", e);
-            return ResponseEntity.status(500).body(Map.of("success", false, "error", e.getMessage()));
+            logger.error("Erro ao validar reCAPTCHA", e);
+            return ResponseEntity.status(500).body(Map.of("success", false, "error", ErroInterno.MENSAGEM));
         }
     }
 
