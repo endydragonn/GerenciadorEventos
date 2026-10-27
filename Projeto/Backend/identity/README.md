@@ -18,5 +18,8 @@ CRUD, **não** event sourcing), do login (BCrypt), do cadastro em duas fases, do
 - **Testes** (Postgres e Redpanda reais): `IdentityApiE2ETest` (IdentityClient real × serviço real), `JwtSigningKeyTest`,
   `IdentityConfigTest`, `SchemaValidationTest`, `UserLifecycleEventsTest`, `UserTest`, `MyWalletTest`, `IdentityNotificationEventsTest`,
   `NotificationEventRetentionTest`. Chave de assinatura temporária por JVM e reCAPTCHA falso (`TestSupport/IdentityTestSession`).
-- **Fatia 2**: o monólito AINDA tem o pacote `identity` e `public.users`; o cutover (migração `20261028`, gateway com `IdentityClient`, guarda
-  de boot) é a fatia 3.
+- **Cutover (fatia 3, feito)**: o monólito não tem mais o pacote `identity` nem `public.users`; o gateway fala com este serviço pelo `IdentityClient` e valida o JWT pelo JWKS
+  (migração `20261028`, guarda de boot `PublicSchemaGuard`). Operação e docs completas: `Projeto/Backend/CLAUDE.md` ("Serviço identity"), smoke
+  `docs/testes-manuais/smoke-identity-servico-separado.sh`.
+- **`uid` reciclado**: `TRUNCATE ... RESTART IDENTITY` em `identity.users` exige apagar a chave do volume `identity-keys` e reiniciar este serviço E o backend (cache de JWKS do gateway); o
+  `run-tests.sh` e o `limpar-banco.sh` da carga fazem isso.

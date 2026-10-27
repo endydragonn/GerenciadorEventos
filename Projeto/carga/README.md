@@ -11,7 +11,7 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **`READPATH` / `RESERVATION_READPATH`** vai para o **backend** (o gateway decide o fluxo): `cas` = 1 chamada ao `reservation`; `naive` = 2
 >   (GET da disponibilidade e depois POST da reserva). A conferência é `docker exec gerenciador-backend printenv RESERVATION_READPATH`.
 > - **Relay, consumer, Hikari 1000 e Tomcat 300 do caminho quente estão no `reservation`** (`docker exec gerenciador-reservation printenv
->   EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`); o backend tem Hikari 350. `POOL_HIKARI` do
+>   EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`); o backend tem Hikari 350 (10 desde a #36). `POOL_HIKARI` do
 >   `make test-degraus` rotula o do **reservation**. O `LOGGING_LEVEL_EVENTS_LAG=DEBUG` também é do `reservation`.
 > - **Consultas de banco** (psql do gerador e verificações do host) leem `reservation.eventcap`, `reservation.walletevent`,
 >   `reservation.event_availability`, `reservation.event_outbox`. O consumer group da projeção é `reservation` (`docker exec
@@ -27,7 +27,7 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **`INTERNAL_API_TOKEN`** precisa estar no `Projeto/.env` do HOST (o compose o repassa ao `backend`, ao `reservation` e ao `catalog`, que
 >   não sobem sem ele). O gerador não precisa dele: o k6 só fala `/bff/**`.
 > - **Pool do Supavisor não cresce** (mesmo tenant e usuário de todos os serviços); a soma dos Hikari de cliente é
->   1000 + 350 + 3 + 100 (catalog) = 1453 <= 1500.
+>   1000 + 350 + 3 + 100 (catalog) = 1453 <= 1500 na #35 (1213 desde a #36, abaixo).
 >
 > **Desde a issue #35 os eventos são o serviço `catalog`** (container `gerenciador-catalog`, `:8083` só na rede, schema `catalog`):
 >
@@ -38,6 +38,22 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **Salto novo**: o gateway confere o evento da reserva por HTTP no `catalog` (`exists`, com cache positivo de 30 s no gateway);
 >   ler/listar/buscar evento passa por gateway → catalog → reservation (capacidade). Com o `catalog` fora, `/bff/events/**` e a reserva
 >   respondem 503 (na reserva, um positivo de `exists` ainda no cache de 30 s deixa a reserva seguir).
+>
+> **Desde a issue #36 o `identity` é o serviço `gerenciador-identity`** (`:8084` só na rede, schema `identity`; JWT RS256 com JWKS):
+>
+> - **Alvo HTTP igual**: o k6 continua em `/bff/**`; `POST /bff/users/login` devolve o mesmo `{user, token}`, agora com um token RS256 emitido pelo identity
+>   (o k6 só guarda e reenvia o bearer). Tokens antigos (HS256) viram 401: o kit já re-semeia e reloga a cada bloco.
+> - **Reserva sem consulta ao banco por usuário**: o gateway lê `uid` e `isHost` do token (sem `LOWER(email)` por reserva, sem conferir a carteira); a reserva
+>   com token válido **não depende do identity** (JWKS em cache no gateway). Uma rodada de carga **antes da #36** pagava essa consulta a mais por reserva e não é
+>   comparável com as de depois.
+> - **Consultas de banco** sobre usuários leem `identity.users` / `identity.mywallet` (`public.users` não existe mais).
+> - **Limpeza do banco entre blocos** (`limpar-banco.sh`): trunca também o schema `identity` e, como o `TRUNCATE ... RESTART IDENTITY` recicla o `user_id` e o JWT é
+>   validado sem estado, **apaga a chave de assinatura do volume `identity-keys`** (com o identity parado, ANTES do TRUNCATE; se falhar, aborta sem religar nada), sobe o identity, espera `healthy` e só então religa o `backend`
+>   (cache de JWKS vazio). Sem isso um token do bloco anterior valeria como o usuário novo com o mesmo `uid`.
+> - **Smoke antes de medir**: `docs/testes-manuais/smoke-identity-servico-separado.sh` (cadastro, token RS256, `/internal/**` com token, reserva `cas` com overselling 0,
+>   identity parado e `restart`).
+> - **`INTERNAL_API_TOKEN`** também vai para o `identity` (mesmo valor). **Pool do Supavisor** (mesmo tenant): o Hikari do backend é 10 (o gateway não toca em tabela de
+>   domínio) e o do identity 100; soma 1000 + 10 + 3 + 100 + 100 = **1213** <= 1500 (o override de carga mantém o backend em 10).
 
 Duas máquinas: o **host** (roda a stack, o alvo do teste) e o **gerador** (roda o k6).
 O k6 **nunca** roda no host: competiria por CPU/rede com o backend e invalidaria as latências.
@@ -331,7 +347,7 @@ seed usam bcrypt, caro) geram milhares de reservas sem duplicidade.
 
 ### Por que `MAX_CONN` importa
 
-O caminho quente (o serviço `reservation`) usa pool HikariCP (`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`, default 1000; o backend/gateway usa 350; o pool
+O caminho quente (o serviço `reservation`) usa pool HikariCP (`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`, default 1000; o backend/gateway usa 10 desde a #36 (350 até a #35); o pool
 cresce só sob demanda a partir de `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, default 5). Com
 `MAX_CONN=100` (padrão do Postgres) o pool de 1000 pode pedir mais conexões do que o Postgres
 aceita → `too many clients` → HTTP 500; para esse caso reduza o pool por env (ex.: 50). Com

@@ -18,15 +18,20 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
   API interna na `:8083` **só na rede**; entrypoint `com.gerenciador.eventos.catalog.CatalogApplication`, `catalog/Dockerfile`. O `backend`
   também depende dele (`service_healthy`); com ele parado `/bff/events/**` e a reserva respondem 503 (na reserva, um positivo de `exists`
   ainda no cache de 30 s do gateway deixa a reserva seguir). Ver "Serviço catalog".
-- Local: `cd Projeto/Backend && mvn -pl monolito -am spring-boot:run` (ou `mvn -pl notification -am spring-boot:run`,
+- Serviço `identity` (issue #36): `docker compose -f Projeto/docker-compose.yml up -d --build identity` — container `gerenciador-identity`,
+  API interna na `:8084` **só na rede**; entrypoint `com.gerenciador.eventos.identity.IdentityApplication`, `identity/Dockerfile`. Gera (1º boot) e
+  guarda a chave de assinatura do JWT no volume `identity-keys`. O `backend` **depende dele** (`service_healthy`); com ele parado login, cadastro,
+  `/bff/users/**` e `/bff/my-wallets/**` respondem 503, mas quem tem token válido segue reservando (JWKS em cache no gateway). **Não sobe** com a
+  migração `20261028` pendente (`PublicSchemaGuard`). Ver "Serviço identity".
+- Local: `cd Projeto/Backend && mvn -pl monolito -am spring-boot:run` (ou `mvn -pl notification -am spring-boot:run`, `mvn -pl identity -am spring-boot:run`,
   `mvn -pl reservation -am spring-boot:run`) — precisa de um Postgres em `localhost:5433` (e, para a reserva, do `reservation` em
-  `localhost:8082`, o default de `RESERVATION_SERVICE_URL`). `application.properties` de cada módulo tem defaults de dev para as vars do `.env`,
+  `localhost:8082`, o default de `RESERVATION_SERVICE_URL`; para login, do `identity` em `localhost:8084`, o de `IDENTITY_SERVICE_URL`). `application.properties` de cada módulo tem defaults de dev para as vars do `.env`,
   **exceto** `MAIL_USERNAME`/`MAIL_PASSWORD` do `notification` (sem default de propósito: não vai e-mail pessoal no código):
   para rodar o serviço local, exporte as duas.
 - Entrypoint do jar do monólito: `com.gerenciador.eventos.Main` (fixado em `monolito/pom.xml` e `monolito/Dockerfile`); o do
   `notification`: `com.gerenciador.eventos.notification.NotificationApplication`; o do `reservation`:
-  `com.gerenciador.eventos.reservation.ReservationApplication`.
-- Build da imagem: um Dockerfile por serviço (`monolito/Dockerfile`, `notification/Dockerfile`, `reservation/Dockerfile`), contexto = `Projeto/Backend/`
+  `com.gerenciador.eventos.reservation.ReservationApplication`; o do `identity`: `com.gerenciador.eventos.identity.IdentityApplication`.
+- Build da imagem: um Dockerfile por serviço (`monolito/Dockerfile`, `notification/Dockerfile`, `reservation/Dockerfile`, `catalog/Dockerfile`, `identity/Dockerfile`), contexto = `Projeto/Backend/`
   (a raiz do multi-módulo); multi-stage — compila com `maven:3.9.7-temurin-21` (`-pl <serviço> -am`), roda em `temurin:25-jre`.
 
 ## Layout multi-módulo Maven — issue #32 (Fase 7)
@@ -45,7 +50,7 @@ Backend/
   reservation-client/    LIB (#33): contrato HTTP do serviço reservation — DTOs (EventWallet, EventCap), IdempotencyConflictException,
                          as interfaces EventWalletApi/EventCapacityApi e o ReservationClient (pool de conexões). Usada pelo monólito
                          (inteira) e pelo reservation (DTOs + testes ponta a ponta)
-  monolito/              identity, gateway (/bff/**), CorsConfig/SchedulingConfig; src/, Dockerfile, pom.xml (o catalog saiu na #35)
+  monolito/              o gateway: gateway/ (/bff/**) + gateway/security (JWT RS256 por JWKS), CorsConfig/SchedulingConfig; src/, Dockerfile, pom.xml (catalog saiu na #35, identity na #36)
   notification/          serviço extraído (README.md próprio); src/, Dockerfile, pom.xml
   reservation/           serviço extraído (README.md próprio): eventcap/CAS, walletevent/ES, API interna; src/, Dockerfile, pom.xml
   catalog-client/        LIB (#35): contrato HTTP do serviço catalog — Event, EventApi, EventoNaoEncontradoException,
@@ -53,12 +58,12 @@ Backend/
                          testes ponta a ponta) e pelo gateway (desde o cutover, fatia 3 da #35)
   identity-client/       LIB (#36, fatia 1; README.md próprio com o contrato /internal/**): User, MyWallet, LoginResult, RecaptchaResponse,
                          UserApi/EmailVerificationApi/MyWalletApi/RecaptchaApi, IdentityUnavailableException, IdentityNaoEncontradoException e o
-                         IdentityClient (pool). O monólito importa os tipos dela; o bean do IdentityClient só entra no cutover (fatia 3)
+                         IdentityClient (pool). O gateway (monólito) usa o IdentityClient pelo IdentityClientConfig (desde o cutover, fatia 3)
   catalog/               serviço extraído (#35, README.md próprio): eventos em CQRS + ES no schema catalog, API interna
                          /internal/events/**; src/, Dockerfile, pom.xml. Chamado pelo gateway por HTTP (CatalogClient)
-  identity/              serviço extraído (#36, fatia 2; README.md próprio): usuários, carteira, cadastro, MFA, reCAPTCHA e emissão do JWT RS256
-                         (+ JWKS) no schema `identity`, API interna /internal/** na :8084; src/, Dockerfile, pom.xml. O monólito ainda tem o pacote
-                         `identity` até o cutover (fatia 3)
+  identity/              serviço extraído (#36; README.md próprio): usuários, carteira, cadastro, MFA, reCAPTCHA e emissão do JWT RS256
+                         (+ JWKS) no schema `identity`, API interna /internal/** na :8084; src/, Dockerfile, pom.xml. Chamado pelo gateway por HTTP (IdentityClient);
+                         o monólito NÃO tem mais o pacote `identity`
   db/                    schema (fora do Maven)
 ```
 
@@ -93,8 +98,9 @@ migrado (`db/migrations/20261026-catalog-schema.sql`): o script ABORTA se `publi
 aplica o `14-catalog.sql`, que num banco não migrado criaria `catalog.event` vazia ao lado de `public.event`), e aborta se o
 `gerenciador-catalog` estiver rodando (o relay dele drenaria o `catalog.event_outbox` dos testes). Antes disso apaga `target/surefire-reports` sozinho, então o total do
 resumo reflete só os testes desta rodada — não precisa limpar na mão; os relatórios de todos os módulos são copiados para
-`Backend/target/surefire-reports` (nomes de classe únicos). **Serviço `identity` (#36, fatia 2):** o script **aborta** se o `gerenciador-identity` estiver rodando (`docker stop gerenciador-identity`; o relay dele drenaria o
-`identity.event_outbox` dos testes) e **aborta se o banco ainda tiver `public.users` ou não tiver `identity.users`** (migração `db/migrations/20261028-identity-schema.sql` pendente: backup `pg_dump -h localhost -U admin --clean --if-exists -n public meu_banco`, backend e identity parados; o script NÃO aplica o `15-identity.sql`, que num banco não migrado criaria tabelas vazias ao lado de `public.users`; bancos novos já nascem certos). Banco verificado por `db/migrations/verify-20261028-migration.sh` (bancos descartáveis: sem o 15, com o 15 vazio, guardas, rollback, init completo). Desde o cutover o monólito não tem mais `public.users`/`mywallet`/`pending_verifications`; o `FakeIdentityServer` (`TestSupport`, servido pelo `LauncherSessionListener` `IdentityFakeSession`, URL em `identity.service.url`) faz o papel do serviço nos testes do gateway. Detalhes e docs completas na fatia 4.
+`Backend/target/surefire-reports` (nomes de classe únicos). **Serviço `identity` (#36):** o script **aborta** se o `gerenciador-identity` estiver rodando (`docker stop gerenciador-identity`; o relay dele drenaria o
+`identity.event_outbox` dos testes) e **aborta se o banco ainda tiver `public.users` ou não tiver `identity.users`** (migração `db/migrations/20261028-identity-schema.sql` pendente: backup `pg_dump -h localhost -U admin --clean --if-exists -n public meu_banco`, backend e identity parados; o script NÃO aplica o `15-identity.sql`, que num banco não migrado criaria tabelas vazias ao lado de `public.users`; bancos novos já nascem certos). Banco verificado por `db/migrations/verify-20261028-migration.sh` (bancos descartáveis: sem o 15, com o 15 vazio, guardas, rollback, init completo). O monólito não tem mais `public.users`/`mywallet`/`pending_verifications`; o `FakeIdentityServer` (`TestSupport`, servido pelo `LauncherSessionListener` `IdentityFakeSession`, URL em `identity.service.url`) faz o papel do serviço nos testes do gateway.
+**Chave do JWT e `uid` reciclado:** os testes dão `TRUNCATE ... RESTART IDENTITY` em `identity.users` do `meu_banco` (o `user_id` volta a 1) e o JWT é validado sem estado pela claim `uid`; a chave de assinatura do identity de dev vive no volume `gerenciador-eventos_identity-keys` e sobreviveria à rodada, deixando um token antigo valer como o usuário novo com o mesmo uid. Por isso, **no INÍCIO e ao fim da rodada (verde ou vermelha) o script apaga `jwt-signing-key.json` desse volume** (identity e backend estão parados, pela guarda): o próximo boot do identity gera outra chave e todo token antigo vira 401 (relogar). O backend precisa ser (re)iniciado depois, porque o gateway guarda o JWKS em cache por até 24 h; parado durante os testes, ele sobe com o cache vazio. Se a remoção falhar, o script imprime o comando para rodar antes de subir identity e backend.
 Os testes do módulo `identity` usam uma chave de assinatura temporária por JVM e um reCAPTCHA falso
 (`TestSupport/IdentityTestSession`); a `RECAPTCHA_SECRET_KEY` real do `.env` nunca sai para o Google.
 **Pré-requisito do `notification` (#32):** o schema `notification`
@@ -123,20 +129,20 @@ passa `SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092` e `EVENTS_CONSUMER_GROUP=ge
 de teste (group próprio: os testes nunca entram no group do backend vivo que consome do mesmo Redpanda).
 
 - `monolito/src/test/.../SchemaValidationTest` valida o schema real contra o esperado (`public`, `notification.processed_event`, e que
-  `eventcap`/`walletevent`/`event_availability`/`idempotency_key` SAÍRAM de `public` sem FK cross-schema); o do módulo `reservation`
+  `eventcap`/`walletevent`/`event_availability`/`idempotency_key` SAÍRAM de `public` e `users`/`mywallet`/`pending_verifications` foram para `identity`, sem FK cross-schema); o do módulo `reservation`
   (`reservation/src/test/.../SchemaValidationTest`) valida o schema `reservation` (tabelas, colunas, chaves, sem FK, event store próprio).
   Desde a #59 também há asserções **negativas** (`assertColumns` é "contém" e não pega coluna que volta): o do monólito exige que nenhuma tabela de `public` tenha
   `capacity`/`quant`/`buy_time_limit`/`lot_quantity`/`max_time_in_line`, e o do `catalog` que `event`/`eventpresenter` não as tenham. A migração `20261027` tem o harness
   `db/migrations/verify-20261027-migration.sh` (ver `db/CLAUDE.md`).
 - `TestSupport/GlobalDbTruncator` dá `TRUNCATE` (início/fim da suíte) em **todas** as tabelas dos
   schemas configurados, descobertas por catálogo (`TestSupport/TestSchemas`) — não há mock de banco.
-  Schemas alvo: propriedade `test.db.schemas` (lista separada por vírgula, default `public,notification,reservation,catalog` no monólito desde a #35, só `reservation`/`catalog` no módulo de cada serviço; vale
+  Schemas alvo: propriedade `test.db.schemas` (lista separada por vírgula, default `public,notification,reservation,catalog,identity` no monólito (o `identity` entrou na #36), só o schema do serviço no módulo de cada um (`reservation`, `catalog`, `identity`); vale
   também via env `TEST_DB_SCHEMAS` ou `-Dtest.db.schemas=`), usada também por `SchemaValidationTest`
   (`table_schema = any(?)`). Nomes validados por `[a-z_][a-z0-9_]*` (identificador não é
   parametrizável em SQL). **O default só lista schemas do app** (`TestSchemas.DEFAULT`): os schemas do Supabase (`auth`, `storage`,
   `extensions`...) vivem no mesmo banco e não podem ser truncados nem validados. Cada serviço extraído acrescenta o seu schema
-  ao default (Fase 7: `notification`, `reservation`, `catalog`). O `GlobalDbTruncator` do monólito também zera o estado do `FakeReservationServer`
-  e do `FakeCatalogServer`
+  ao default (Fase 7: `notification`, `reservation`, `catalog`, `identity`). O `GlobalDbTruncator` do monólito também zera o estado do `FakeReservationServer`,
+  do `FakeCatalogServer` e do `FakeIdentityServer`
   (os ids de evento voltam a 1 com `RESTART IDENTITY`). O `run-tests.sh` roda o mvn num
   container com env fixo (`--env-file ../.env`): para mudar `test.db.schemas` por ali, passe
   `-e TEST_DB_SCHEMAS=...` no `docker run` do script. Coberto por `TestSchemasTest`.
@@ -289,76 +295,63 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
     (não precisa do container `db`, mesmo comando funciona no container Maven efêmero do
     `run-tests.sh`).
 
-## Módulos (pacote `com.gerenciador.eventos`) — issues #23 e #25
-> **Desatualizado desde o cutover da #36:** o monólito NÃO tem mais o pacote `identity` (nem `identity/security`): só `gateway/` (com `gateway/security`) e `shared`; o resto da lista abaixo que cita `identity/` é histórico. Ver "Serviço identity".
+## Módulos (pacote `com.gerenciador.eventos`) — issues #23, #25 e #36
 
-Pacotes-por-serviço, no mesmo processo/deploy/banco (schema `public`) do monólito: é a preparação da
-Fase 5 para a decomposição em microsserviços (CQRS/ES na Fase 6, extração na Fase 7: o `notification` saiu na #32 e o `reservation`
-na #33 — os dois NÃO estão em `monolito/`; o que sobrou lá é `identity`, `catalog` e `gateway`). Dentro de
-cada módulo as classes ficam **planas** (sem `POJO/`/`Repository/`/`Service/`), mais o subpacote
-`api`: as **interfaces e DTOs públicos** que os outros módulos podem usar.
+Na Fase 5 o monólito foi dividido em pacotes-por-serviço (mesmo processo, deploy e banco), preparando a decomposição em microsserviços
+(CQRS/ES na Fase 6, extração na Fase 7). **Hoje, depois da #36, só sobrou o `gateway` no monólito (`monolito/`)**: o `notification` saiu na #32, o
+`reservation` na #33, o `catalog` na #35 e o `identity` na #36 — cada um é um módulo Maven/serviço próprio (ver "Layout multi-módulo Maven"). O
+monólito fala com os três últimos por HTTP (libs `*-client`) e com o `notification` só por evento no backbone. Dentro de cada módulo as classes ficam
+**planas** (sem `POJO/`/`Repository/`/`Service/`), mais o subpacote `api`: as **interfaces e DTOs públicos** que os outros módulos podem usar.
 
 ```
-Main.java        entrypoint @SpringBootApplication (único; o component scan cobre os subpacotes)
-identity/        UserService, UserRepository, EmailVerificationService, PendingVerification(+Repository),
-                 IdentityNotifications (#32: appenda o evento que pede o e-mail; o monólito não envia mais),
-                 security/ (JwtUtil, JwtAuthenticationFilter, AuthorizationUtil, SecurityConfig)
-                 MyWalletService + MyWalletRepository (#33: a carteira é extensão 1:1 de `users`, criada por trigger; ficou em `public`)
-  api/           HostAuthorizationApi (#36 fatia 1: User/UserApi/EmailVerificationApi/MyWallet/MyWalletApi/LoginResult moraram aqui e foram para a lib
-                 `identity-client`, pacote `identityclient.api`; `TokenApi` saiu: o `UserService`/`EmailVerificationService` emitem o token pelo `JwtUtil`
-                 e devolvem `LoginResult`; o `HostAuthorizationApi` vai para `gateway/security` na fatia 3)
-identityclient/  (lib `identity-client`, #36) IdentityClient (HTTP, pool; sem @Configuration até o cutover)
-  api/           User, MyWallet, LoginResult, RecaptchaResponse, UserApi, EmailVerificationApi, MyWalletApi (`walletExists`, não `exists`: o cliente
-                 implementa as duas interfaces), RecaptchaApi, IdentityUnavailableException, IdentityNaoEncontradoException
-catalog/         (#35: SAIU do monólito, é o módulo Maven/serviço `catalog/` — ver "Serviço catalog")
-                 EventService, EventRepository, EventPresenterRepository, CatalogEventWriter, CatalogEventProjection, EventPayloads,
-                 EventController + InternalApiExceptionHandler (API interna HTTP)
-catalogclient/   (lib `catalog-client`, #35) CatalogClient (HTTP, pool), CatalogClientConfig (o bean, no monólito)
-  api/           Event, EventApi, EventoNaoEncontradoException, EventoEmConflitoException, CatalogUnavailableException
-reservation/     (#33: SAIU do monólito, é o módulo Maven/serviço `reservation/` — ver "Serviço reservation")
-                 EventWalletService, ReservationExpiryService, IdempotencyKeyRetentionService (job de retenção, #130),
-                 EventCapRepository, EventWalletRepository, EventAvailabilityRepository, IdempotencyKeyRepository,
-                 CapacityReserver + ReservationWriter (interfaces internas, #24), ReservationEvents (stream reservation.wallet, #29),
-                 EventAvailabilityProjection + EventAvailabilityConsumer (#29), CatalogReconciliationConsumer (#33),
-                 ReservationController + EventCapController + InternalApiExceptionHandler (API interna HTTP, #33)
-reservationclient/ (lib `reservation-client`, #33) ReservationClient (HTTP, pool), ReservationClientConfig (o bean, no monólito)
-  api/           EventCap, EventWallet, IdempotencyConflictException (DTOs/erros do contrato), EventCapacityApi, EventWalletApi
-shared/          DatabaseConnection (módulo `shared`, lib), CorsConfig, SchedulingConfig (monólito) (infra sem domínio)
-  events/        (módulo `shared`) infra de event sourcing sem domínio (#27): EventEnvelope, NovoEvento, EventStore, OutboxRelay,
-                 IdempotentConsumer + Projection, EventReplay, EventSnapshots/Snapshot, EventsKafkaConfig,
-                 NotificationEvents (#32: contrato do stream identity.notification)
+Main.java        entrypoint @SpringBootApplication (único no monólito; o component scan cobre os subpacotes)
 gateway/         BffUserController, BffEventController, BffEventWalletController, BffMyWalletController,
                  BffSeedController (@RestController, paths /bff/**) + SeedData; roteia e agrega, sem domínio.
-                 EventWalletGateway (#33): confere carteira/evento NO monólito e chama o reservation por HTTP; decide o braço cas/naive
+                 EventWalletGateway (#33): decide o braço cas/naive e chama o reservation por HTTP (desde a #36 NÃO confere mais a carteira)
                  CatalogIndisponivelHandler (#35): catalog fora => 503 genérico; CreatorNames (creator_name por composição)
+                 IdentityIndisponivelHandler (#36): identity fora => 503 genérico (log só da classe)
+  security/      (#36) SecurityConfig (cadeia deny-by-default de /bff/**), JwtAuthenticationFilter (filtro próprio, bearer inválido em rota
+                 pública segue anônimo), JwtDecoderConfig (NimbusJwtDecoder + JWKSource montado à mão), JwtAuthorization, HostAuthorizationApi
+                 (currentUserId() = claim `uid`; ensureUserIsHost() = claim `isHost`; sem consulta)
+shared/          CorsConfig, SchedulingConfig (monólito); DatabaseConnection e shared.events (módulo `shared`, lib): infra de event sourcing sem
+                 domínio (#27): EventEnvelope, NovoEvento, EventStore, OutboxRelay, IdempotentConsumer + Projection, EventReplay,
+                 EventSnapshots/Snapshot, EventsKafkaConfig, NotificationEvents (#32: contrato do stream identity.notification)
+identityclient/  (lib `identity-client`, #36) IdentityClient (HTTP, pool), IdentityClientConfig (o bean, no monólito)
+  api/           User, MyWallet, LoginResult, RecaptchaResponse, UserApi, EmailVerificationApi, MyWalletApi (`walletExists`, não `exists`: o cliente
+                 implementa as duas interfaces), RecaptchaApi, IdentityUnavailableException, IdentityNaoEncontradoException
+catalogclient/   (lib `catalog-client`, #35) CatalogClient (HTTP, pool), CatalogClientConfig (o bean, no monólito)
+  api/           Event, EventApi, EventoNaoEncontradoException, EventoEmConflitoException, CatalogUnavailableException
+reservationclient/ (lib `reservation-client`, #33) ReservationClient (HTTP, pool), ReservationClientConfig (o bean, no monólito)
+  api/           EventCap, EventWallet, IdempotencyConflictException (DTOs/erros do contrato), EventCapacityApi, EventWalletApi
 ```
 
-- **Regra de fronteira**: um módulo (e o `gateway`) só enxerga outro módulo pelo pacote `<modulo>.api`;
+Os pacotes `identity`, `catalog`, `reservation` e `notification` NÃO estão em `monolito/`; o código deles mora nos módulos de mesmo nome:
+`identity/` (UserService, UserRepository, EmailVerificationService, PendingVerification(+Repository), MyWalletService/Repository,
+IdentityNotifications e IdentityEvents, JwtSigningKey + JwtIssuer, RecaptchaService, controllers internos — ver "Serviço identity"),
+`catalog/` (EventService, CatalogEventWriter... — "Serviço catalog"), `reservation/` (EventWalletService, CAS, expiração, projeção... — "Serviço
+reservation") e `notification/` (consumer + e-mail — "Serviço notification").
+
+- **Regra de fronteira**: um módulo (e o `gateway`) só enxerga outro módulo pelo pacote `<modulo>.api` (ou pela lib `*-client`);
   nunca importa `Repository`/`Service`/config interno de outro. `shared` não depende de módulo de
   domínio (módulos dependem dele). Dado de outro módulo entra por id ou DTO da `api`. Travado por
-  `ModuleBoundaryArchTest` (ver "Quality gates"); as FKs do SQL ficam como estão (schema é Fase 7).
-- **Grafo de dependências** (sempre via `api`):
-  `gateway → identity` e, por **HTTP**, os serviços `reservation` (`reservationclient`) e `catalog` (`catalogclient`, #35);
-  (`identity → notification` acabou na #32: o `notification` é outro processo e se fala com ele só por evento no backbone);
-  `catalog → identity` acabou na #35 (fatia 1: quem valida o `creator_id` com `UserApi.exists` é o `gateway`) e `catalog → reservation` por **HTTP**
-  (`EventCapacityApi` da lib `reservation-client`: criar a capacidade DEPOIS do commit do evento, `updatePolicy`, hidratar
-  `lot_quantity`/`quantity` — `findByCreatorId` e a busca em UMA chamada em lote —, remover no cancelamento). O ciclo `catalog ↔ reservation` acabou na #33: o `reservation` não enxerga o
-  catálogo (a existência do evento é o `eventcap` dele, mais a conferência do gateway), só recebe o `EventCreated` do tópico.
-- **`gateway` é módulo, não container (issue #25)**: o antigo pacote `bff` virou `gateway` (roteamento +
-  agregação) **dentro do mesmo processo/deploy do monólito**; container próprio só na Fase 7. Os paths HTTP
-  continuam `/bff/**` (o contrato do Flutter não mudou; `HttpContractTest` é o juiz). Os controllers só
-  roteiam e agregam via `*.api`: a orquestração do reset de senha com MFA (gerar o código + enviar o
-  e-mail) mora em `UserApi.requestPasswordResetMfa` (`identity`), não no `BffUserController`. As regras de
-  rota/segurança de `/bff/**` **continuam em `identity/security/SecurityConfig`** (única cadeia
-  deny-by-default, auditável num arquivo só; movê-las pro `gateway` exigiria um contrato de
-  "contribuição de rotas" com bean/interface novos sem mudar comportamento).
-- **Serviço fora do monólito não volta a ser pacote**: `nada_depende_do_codigo_do_servico_reservation` (ArchUnit) trava.
-- **Decisões**: `SecurityConfig` fica em `identity/security` (conhece as rotas e o filtro JWT, não é
-  infra pura — em `shared` violaria a regra); `SeedData` fica em `gateway` (é o corpo do
-  `POST /bff/seed` e agrega `User`+`Event`+`EventWallet` de três módulos); o envio de e-mail saiu
-  de `EmailVerificationService` para `notification` (#23) e, na #32, de dentro do monólito (o cadastro em duas fases continua em
-  `identity`, que agora só publica o evento); as `*Api` são implementadas pelas classes que já existiam (`UserService implements
-  UserApi`, `EventCapRepository implements EventCapacityApi`...), sem classe nova de adaptação.
+  `ModuleBoundaryArchTest` (ver "Quality gates"). Desde a #33/#35/#36 a fronteira é também física: o monólito não tem o código dos serviços
+  no classpath e **nenhum serviço lê tabela de outro nem há FK cross-schema**.
+- **Grafo de dependências**: `gateway →` (por **HTTP**) `reservation` (`reservationclient`), `catalog` (`catalogclient`, #35) e `identity`
+  (`identityclient`, #36); `catalog → reservation` por **HTTP** (`EventCapacityApi` da lib `reservation-client`: criar a capacidade DEPOIS do
+  commit do evento, `updatePolicy`, hidratar `lot_quantity`/`quantity` — `findByCreatorId` e a busca em UMA chamada em lote —, remover no
+  cancelamento); `identity → notification` só por evento (`identity.notification`, congelado). O `reservation` não enxerga o catálogo (a existência
+  do evento é o `eventcap` dele, mais a conferência do gateway), só recebe o `EventCreated` do tópico. Quem valida o `creator_id` com
+  `UserApi.exists` é o `gateway` (o `catalog` não conhece usuário).
+- **`gateway` é módulo, não container (issue #25)**: o antigo pacote `bff` virou `gateway` (roteamento + agregação). Desde a #36 ele é tudo o que
+  resta no container `gerenciador-backend`. Os paths HTTP continuam `/bff/**` (o contrato do Flutter não mudou; `HttpContractTest` é o juiz). Os controllers só
+  roteiam e agregam via `*.api`. As regras de rota/segurança de `/bff/**` ficam em `gateway/security/SecurityConfig` (única cadeia
+  deny-by-default, auditável num arquivo só).
+- **Serviço fora do monólito não volta a ser pacote**: `nada_depende_do_codigo_do_servico_reservation` (e os equivalentes do catalog e do identity,
+  ArchUnit) trava.
+- **Decisões**: `SeedData` fica em `gateway` (é o corpo do `POST /bff/seed` e agrega `User`+`Event`+`EventWallet` de três serviços); o envio de
+  e-mail saiu de `EmailVerificationService` para `notification` (#23) e, na #32, de dentro do monólito (o cadastro em duas fases fica no `identity`,
+  que só publica o evento); as `*Api` são implementadas pelas classes dos serviços (`UserService implements UserApi`, `EventService
+  implements EventApi`...) e pelos clientes HTTP (`IdentityClient implements UserApi`...), sem classe de adaptação.
 - Módulo novo ou chamada entre módulos nova → exponha só o necessário em `<modulo>.api`.
 
 ## Persistência — JDBC puro, não JPA
@@ -368,7 +361,7 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
 - `DatabaseConnection` delega ao `DataSource` do Spring (pool **HikariCP**, issue #96), não a
   `DriverManager`: `close()` devolve a conexão ao pool. Tamanho do pool:
   `spring.datasource.hikari.maximum-pool-size` (env `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`,
-  default 1000; o Hikari pede conexões ao **pooler** (não ao Postgres), então quem limita o Postgres é
+  default 1000 no reservation, 10 no monólito desde a #36 e 100 no catalog e no identity; o Hikari pede conexões ao **pooler** (não ao Postgres), então quem limita o Postgres é
   `POOLER_DEFAULT_POOL_SIZE` (ver "Pooler"). Em conexão direta (testes), o `db` do compose padrão tem
   100, então lá reduza o pool por env) e
   `spring.datasource.hikari.minimum-idle` (env `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, default 5:
@@ -401,15 +394,15 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
   que precisam ser atômicos com `walletevent` recebem a `Connection` da transação do service. (Desde a #33 isso é do **serviço reservation**, schema `reservation`.)
   Para evento ilimitado (`capacity = -1`) `tryReserve`/`release` são no-op e
   `EventWalletService` trata a reserva como sempre permitida.
-- Nomes de tabela em minúsculas. **`public`** (monólito): `users`, `mywallet`, `pending_verifications`,
-  `event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint`. **`catalog`** (#35): `event`, `eventpresenter` e o event
+- Nomes de tabela em minúsculas. **`public`** (monólito): só a infra da lib `shared` (`event_store`, `event_outbox`, `event_snapshot`,
+  `projection_checkpoint`; usada pelos testes de `shared.events`; o monólito não tem tabela de domínio). **`identity`** (#36): `users`, `mywallet`,
+  `pending_verifications` e o event store próprio (`identity.notification` e `identity.user`). **`catalog`** (#35): `event`, `eventpresenter` e o event
   store próprio. **`reservation`** (#33): `eventcap`, `walletevent`,
   `event_availability`, `idempotency_key` e o event store próprio (`event_store`, `event_outbox`, `event_snapshot`,
   `projection_checkpoint`). **`notification`** (#32): `processed_event`. Sempre qualificar com o schema nas queries (nada de
   `search_path`: o Supavisor em transaction mode proíbe).
 
 ### Pooler (Supavisor, transaction mode) — issue #19
-> **Desatualizado desde o cutover da #36:** o Hikari do monólito é **10** (não 350) e a soma dos Hikari no Supavisor é **1213** (1000 reservation + 10 + 3 + 100 catalog + 100 identity). Ver "Serviço identity".
 
 O backend **em Docker** fala com o Postgres pelo Supavisor, não direto: no `environment:` do
 `backend` em `Projeto/docker-compose.yml`,
@@ -442,17 +435,17 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
   estado de sessão (`SET`, advisory lock de sessão, `LISTEN`, temp table, prepared statement
   nomeado): em transaction mode ele vaza entre clientes ou some.
 - **Dimensionamento** (números literais em `Projeto/supabase/docker-compose.pooler.yml`): `POOLER_MAX_CLIENT_CONN=1500` tem de ser >= a
-  SOMA dos Hikari de todos os serviços no tenant (senão o Supavisor recusa cliente): **reservation 1000 + monólito 350 + notification 3
-  + catalog 100 = 1453** (1353 na #33, +100 do catalog na #35; antes era um Hikari de 1000 só, no monólito). Conexões reais ao Postgres: `POOLER_DEFAULT_POOL_SIZE=45` para o `max_connections=100`
+  SOMA dos Hikari de todos os serviços no tenant (senão o Supavisor recusa cliente): **reservation 1000 + monólito (gateway) 10 + notification 3
+  + catalog 100 + identity 100 = 1213** (1353 na #33, 1453 na #35, 1213 na #36: o gateway deixou de tocar em tabela de domínio e caiu de 350 para 10, e o identity entrou com 100; antes era um Hikari de 1000 só, no monólito). O override de carga (`carga/docker-compose.carga.yml`) mantém o backend em 10 (com 350 a soma seria 1553 > 1500). Conexões reais ao Postgres: `POOLER_DEFAULT_POOL_SIZE=45` para o `max_connections=100`
   do compose padrão (+ `DB_POOL_SIZE=5` do próprio Supavisor, 3 reservadas do superuser,
   testes e psql); com `carga/rpm` (`max_connections=300`) o pool vai para 245 sozinho (override + `subir-host-rpm.ps1`). Ou seja,
   o `too many clients` não vem mais do Hikari, e sim do pool do Supavisor + o resto passar do
   `max_connections`.
-- **Outros clientes do pooler** (#32, #33): o `notification` (Hikari 3) e o `reservation` (Hikari 1000) entram pelo **mesmo tenant e o mesmo
-  usuário** do monólito e NÃO aumentam o pool real (a conta está em "Serviço notification" e "Serviço reservation"). Todo serviço novo
+- **Outros clientes do pooler** (#32, #33, #35, #36): o `notification` (Hikari 3), o `reservation` (Hikari 1000), o `catalog` (100) e o `identity` (100) entram pelo **mesmo tenant e o mesmo
+  usuário** do monólito e NÃO aumentam o pool real (a conta está em "Serviço notification", "Serviço reservation", "Serviço catalog" e "Serviço identity"). Todo serviço novo
   divide esses mesmos 45/245: documente o Hikari dele e refaça a conta antes de subir.
 - **Threads do Tomcat** (issue #124): `server.tomcat.threads.max` = 300 (env `SERVER_TOMCAT_THREADS_MAX`;
-  o default do Spring Boot é 200), **no monólito/gateway e no reservation**. Na configuração de carga o caminho quente é o `reservation`:
+  o default do Spring Boot é 200), **no monólito/gateway, no reservation, no catalog e no identity**. Na configuração de carga o caminho quente é o `reservation`:
   Tomcat 300, Hikari 1000, pool do Supavisor 245 (a tabela por serviço está em "Serviço reservation"). Os testes de 2026-10-17 pelo pooler deram o mesmo teto de vazão com 200, 300 e 400 threads, mas 300
   teve o menor p95 (matriz CAS N=200: 155 → 114 ms; escada 50k–70k: 180–319 ms contra 192–392 ms com 200).
   **Virtual threads ficam desligadas** (padrão; não há `spring.threads.virtual.enabled`): sobem a vazão
@@ -476,7 +469,7 @@ o monólito; `reservation` no `reservation/application.properties`). `EventStore
 e **nenhum serviço lê a tabela de outro** (o consumer do `reservation` não olharia o `public.event_store` do catalog). O **advisory lock do relay é
 por schema** (`OutboxRelay.lockKey`: `public` mantém `LOCK_KEY`; os outros derivam do nome), senão os relays de serviços diferentes se
 serializariam (o lock é do BANCO) e inflariam o lag medido. Streams: `identity.notification` (#32; ver "Serviço
-notification": a única exceção à regra de não pôr dado pessoal no payload) em `public.event_store`; `reservation.wallet` em
+notification": a única exceção à regra de não pôr dado pessoal no payload) em `identity.event_store` (desde a #36; a migração `20261028` move os que já existiam de `public`) ao lado do `identity.user` (ciclo de vida, só ids); `reservation.wallet` em
 `reservation.event_store` (a migração `20261025` move os que já existiam); `catalog.event` em `catalog.event_store` (#35; a migração
 `20261026` move os que já existiam). Registrado também na ADR do backbone.
 Esta infra vive no módulo Maven `shared` (lib); os testes dela, em `monolito/src/test` (schema `public`) e, para o schema `reservation`, nos do módulo `reservation`.
@@ -611,7 +604,7 @@ O `gateway` e o contrato `/bff/**` não mudaram.
   carga) que o monólito já usa: o teto **não cresce** (nem consome a folga do `max_connections`, que é para superuser, Supavisor,
   suíte e `psql`). No transaction mode as 3 conexões de cliente só pegam uma conexão real durante a transação (1 em regime, segurada
   durante o SMTP; 3 no pior caso) e a devolvem no commit; ou seja, no máximo 1 dos 245 fica ocupado por ele de cada vez, o que
-  tira uma conexão do monólito só enquanto o e-mail sai. O `POOLER_MAX_CLIENT_CONN` (1500) cobre a soma dos Hikari (1453 desde a #35: 1000 do `reservation` + 350 do monólito + 3 + 100 do `catalog`; ver a seção do `reservation`).
+  tira uma conexão do monólito só enquanto o e-mail sai. O `POOLER_MAX_CLIENT_CONN` (1500) cobre a soma dos Hikari (1213 desde a #36: 1000 do `reservation` + 10 do gateway + 3 + 100 do `catalog` + 100 do `identity`; era 1453 na #35; ver a seção do `reservation`).
   **Não aumente** esse Hikari sem refazer a conta: ele divide o pool com o monólito, que é o que a carga mede.
 - **Config do serviço** (todas por env var, mesmos nomes do monólito; valores reais em `Projeto/.env`, nunca imprimir):
   `SPRING_DATASOURCE_URL`/`_USERNAME`/`_PASSWORD`, `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`/`_MINIMUM_IDLE`,
@@ -717,7 +710,6 @@ endpoint `/validate` correspondente (valida sem persistir). Fluxo típico de `cr
 `applyDefaults` → `validateRequired` → `validateRules` → `validateDuplicates*` → `repository.save`.
 Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 
-> **Desatualizado desde o cutover da #36:** o filtro JWT, o `SecurityConfig` e a autorização por host vivem em `gateway/security` (RS256 validado pelo JWKS do identity; `currentUserId()` = claim `uid`, host = claim `isHost`, sem consulta ao banco; o "Temporário até a #36" abaixo acabou). Ver "Serviço identity".
 ## Rotas e segurança
 
 - **Superfície HTTP única sob `/bff/**`** (issue #78): `gateway/BffUserController` (users — CRUD,
@@ -731,7 +723,7 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 - **Nginx do frontend faz proxy de `/bff/` → `backend:8081/bff/` sem rewrite/strip**
   (`nginx.conf`): o path chega igual no backend. Em acesso direto ao backend (dev sem
   Nginx), use o mesmo path `/bff/...`.
-- `identity/security/SecurityConfig`: stateless, CSRF off. Desde o PR #79 (issue #78), deny-by-default também
+- `gateway/security/SecurityConfig`: stateless, CSRF off. Desde o PR #79 (issue #78), deny-by-default também
   dentro de `/bff/**` — só a lista abaixo é pública, todo o resto exige
   `Authorization: Bearer <jwt>` (401 fixo via `HttpStatusEntryPoint`, sem token/token
   inválido numa rota protegida).
@@ -754,18 +746,26 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
     mesmo sem essa regra (verificado empiricamente, ver
     `HttpContractTest#corsPreflight_onProtectedRoute_isNotBlockedByAuth`); a regra explícita
     protege contra reordenar filtros ou remover `.cors(...)` no futuro.
-- `JwtAuthenticationFilter` valida o token e põe o e-mail como `subject`/username. Não há
-  roles dinâmicas no token (authority fixa `USER`).
-- `identity/security/AuthorizationUtil.isCurrentUserHost()` lê `users.host` (coluna criada sem aspas
-  no DDL como `Host`, então o Postgres dobra pra minúsculas — `UserRepository` lê/grava com
-  `host` minúsculo, igual `isactive`). Desde o PR #79 (issue #78), `gateway/BffEventController.createEvent`
-  /`updateEvent`/`deleteEvent` chamam `ensureUserIsHost()` (IllegalArgumentException → HTTP
-  400, padrão do projeto); leitura (get/search/list/validate) e a imagem não ganham esse
-  gate. **Nenhuma rota promove um usuário a host** (de propósito — `UserRepository.save`/
-  `update` não persistem `host`, só o leem, pra não abrir auto-promoção via
-  `PUT /bff/users/{id}`); hoje só existe host via SQL direto/seed manual. Promover host por
-  um fluxo de produto (ex.: endpoint de admin) é gap conhecido, não resolvido nesta issue.
-- **Dono do evento (issue #35, fatia 1)**: o `creator_id` é amarrado ao token no `gateway` (`HostAuthorizationApi.currentUserId()`).
+- **JWT RS256 validado sem estado (issue #36)**: o `identity` assina e o gateway só verifica. `gateway/security/JwtAuthenticationFilter` (filtro
+  próprio; **não** usa `oauth2ResourceServer()`, que daria 401 a bearer inválido até em rota pública) decodifica com o `NimbusJwtDecoder` de
+  `JwtDecoderConfig` (só RS256; `exp`, `nbf` e `iss` = `gerenciador-identity`) e põe o `sub` (e-mail) como username; authority fixa `USER`. Bearer
+  ausente, inválido, vencido, HS256, de outra chave ou sem `uid` numérico => anônimo: **200 em rota pública, 401 (`HttpStatusEntryPoint`) em rota
+  protegida**. O `JWKSource` é montado à mão (`JWKSourceBuilder`): `GET {IDENTITY_SERVICE_URL}/.well-known/jwks.json` (connect 2 s / read 3 s),
+  cache de **24 h** (`JWT_JWKS_CACHE_TTL_MS`), refetch por `kid` desconhecido com no máximo **1 fetch a cada 30 s**
+  (`JWT_JWKS_MIN_REFRESH_INTERVAL_MS`; `kid` aleatório num bearer nunca vira um fetch por requisição) e tolerância a queda de 24 h
+  (`JWT_JWKS_OUTAGE_TOLERANCE_MS`): identity fora não derruba quem já tem a chave em cache. Cache frio + identity fora => token não valida (rota
+  protegida 401, pública anônima; nunca 500 nem thread presa além de 3 s). Efeito colateral aceito: se a 1ª busca (cache frio) falhar, as rotas
+  protegidas dão 401 por até 30 s. Cobertura: `JwtDecoderConfigTest` e os casos de token do `HttpContractTest`.
+- **Principal por claim, sem consulta (issue #36)**: `HostAuthorizationApi.currentUserId()` = claim `uid` (some a consulta `LOWER(email)` por reserva
+  da #57) e `ensureUserIsHost()` = claim `isHost` (lido do banco **na emissão** do token). Desde o PR #79 (issue #78),
+  `gateway/BffEventController.createEvent`/`updateEvent`/`deleteEvent` chamam `ensureUserIsHost()` (IllegalArgumentException → HTTP
+  400, padrão do projeto); leitura (get/search/list/validate) e a imagem não ganham esse gate. **Nenhuma rota promove um usuário a host** (de
+  propósito — o `identity` não persiste `host` em `POST`/`PUT /internal/users`, só o lê, pra não abrir auto-promoção via `PUT /bff/users/{id}`);
+  hoje só existe host via SQL direto/seed manual (`UPDATE identity.users SET host = true`, e o usuário precisa **logar de novo**: a claim vale
+  para tokens novos). Promover host por um fluxo de produto (ex.: endpoint de admin) é gap conhecido. **Consequências da validação sem
+  estado**: desativar a conta, trocar a senha ou mudar `host` só valem para tokens NOVOS (um token emitido vale até `exp`, `JWT_EXPIRATION_SECONDS`,
+  36000 s por padrão); um `uid` que não existe mais não dá 401 em `event-wallets` (o teste da #57 mudou); `/bff/users/me` resolve pelo `uid`
+  (`findById`), não pelo e-mail do `sub`.
   `POST /bff/events` grava o usuário do token (o `creator_id` do corpo é ignorado); `PUT` ignora o do corpo e usa o gravado;
   `PUT`, `DELETE` e `POST /{id}/image` exigem o dono (`creator_id` do evento == usuário do token) → **403**; id inexistente → **404**
   (o `DELETE` dava 204). A checagem de dono lê só o criador (`EventApi.findCreatorId`: `SELECT creator_id`, sem blob nem
@@ -775,12 +775,11 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 - **Dono da inscrição (issue #57)**: em `/bff/event-wallets/**` (`addLink`, `confirm`, `/validate`, `removeLink`, `listByUser`) o `userId`
   vem do token (`HostAuthorizationApi.currentUserId()`, o mesmo do `BffEventController`), nunca do corpo/query/path. Ele é **opcional**
   nesses três lugares: ausente => vale o do token; igual ao do token => segue; **diferente => 403** (corpo "Acesso negado: ...", antes
-  de qualquer outra validação ou chamada ao reservation, e sem revelar se o outro usuário existe). Usuário do token que não existe mais
-  => 401. A API interna do `reservation` segue recebendo `userId` explícito, agora sempre o do token. **Temporário até a #36:**
-  `currentUserId()` faz 1 consulta e-mail -> `user_id` por requisição (`UserRepository.findByEmail`, sem cache); a #36 (JWT assimétrico)
-  troca isso pelo claim `uid` do token e a consulta some do caminho quente. A consulta é `LOWER(email) = LOWER(?)` sem índice funcional (seq scan em `users`): uma rodada de carga **antes da #36** paga
-  esse custo a mais por reserva e não é comparável com as anteriores. Fora desta issue: o mesmo IDOR em `BffMyWalletController`
-  (`/{userId}`, `/ensure/{userId}`).
+  de qualquer outra validação ou chamada ao reservation, e sem revelar se o outro usuário existe). Desde a #36 o `userId` do token é a claim
+  `uid` (sem consulta): um `uid` que não existe mais **não dá mais 401** (o 401 de "usuário do token inexistente" era da #57, que consultava o
+  banco). A API interna do `reservation` segue recebendo `userId` explícito, agora sempre o do token. A uma rodada de carga anterior à #36 pagava
+  `LOWER(email) = LOWER(?)` (seq scan em `users`) por reserva; depois da #36 esse custo some (não comparável com as anteriores). Fora desta
+  issue (#166): o mesmo IDOR em `BffMyWalletController` (`/{userId}`, `/ensure/{userId}`) e em `GET/PUT/DELETE /bff/users/{id}`.
 - **Resposta de `Event` (issue #35)**: ganha `creator_name` (somente-leitura no DTO; composto no gateway por `gateway/CreatorNames`:
   `UserApi.findNames(ids)` em lote, só `isactive = true` → conta desativada = `creator_name` nulo; Caffeine com TTL 45 s ±20% por
   entrada, ~10k entradas, sem cache negativo; **falha do `findNames` não falha a resposta**: o nome sai nulo, sem cache, e a próxima
@@ -788,7 +787,7 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
   coluna); ela continua no `GET /{id}` e em `/{id}/image`. A imagem tem métodos próprios (`EventApi.findImage`/`saveImage`): o
   `updateEvent` não toca mais nela (antes um `PUT` sem `image_data` apagava a imagem). `exists(eventId)` é `SELECT 1` e o
   `EventWalletGateway` guarda o positivo por 30 s (Caffeine; negativo e falha nunca entram no cache).
-- Senhas: `BCryptPasswordEncoder` (bean em `SecurityConfig`). Nunca gravar senha em claro
+- Senhas: `BCryptPasswordEncoder` (bean em `identity/PasswordEncoderConfig`, no serviço identity; o gateway não toca em senha). Nunca gravar senha em claro
   (o seed SQL grava em claro só para dados de teste — não replicar em código de produção).
 - CORS tem **um único ponto de configuração** (#133): o bean `CorsConfigurationSource` de
   `shared.CorsConfig`, que o `SecurityConfig` injeta em `.cors(...)` (o filtro do Spring Security responde
@@ -1063,20 +1062,21 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   | serviço | Tomcat (threads) | Hikari (max / min idle) | virtual threads | cliente HTTP |
   |---|---|---|---|---|
   | `reservation` (caminho quente) | **300** | **1000** / 5 | desligadas | — |
-  | `monolito` (gateway + identity) | 300 | **350** / 5 | desligadas | pool 400, resp. 10 s (reservation) · pool 400, resp. 15 s (catalog, #35) |
+  | `monolito` (gateway; até a #35 também identity, Hikari 350) | 300 | **10** / 5 desde a #36 (350 na Rodada 3) | desligadas | pool 400, resp. 10 s (reservation) · pool 400, resp. 15 s (catalog, #35) · pool 400, resp. 5 s (identity, #36) |
+  | `identity` (#36) | 300 | **100** / 5 (timeout 5 s) | desligadas | — (recebe do gateway; fala só com o banco e o broker) |
   | `catalog` (#35) | 300 | **100** / 5 (timeout 5 s) | desligadas | pool 100, resp. 10 s (reservation) |
   | `notification` | sem HTTP | 3 / 1 | — | — |
 
-  O monólito só faz as pré-checagens curtas (carteira, evento: uma conexão por vez por requisição, 300 threads + as do scheduler = 350) e
+  O monólito (na Rodada 3, com Hikari 350) só fazia as pré-checagens curtas (carteira, evento: uma conexão por vez por requisição, 300 threads + as do scheduler = 350); desde a #36 o gateway não toca em tabela de domínio (Hikari 10, só `actuator/health`) e
   segura a thread durante a chamada HTTP; o `docker stats` dos dois na escada da Rodada 3 mostra se ele virou gargalo.
 - **A conta do pool do Supavisor.** Os três serviços usam o **mesmo tenant e o mesmo usuário** (`${POSTGRES_USER}.gerenciador-eventos`), então
   todos consomem do MESMO pool real de conexões ao Postgres (`POOLER_DEFAULT_POOL_SIZE` = 45 no compose padrão, 245 na configuração de carga =
   `max_connections` 300 − 55): ele **não cresce** por causa do `reservation` (outro usuário/tenant abriria outro pool e a soma teria de caber em
   `max_connections − 55`; por isso não foi feito). Já as conexões de CLIENTE ao Supavisor somam os Hikari: **1000 (reservation) + 350 (monólito)
   + 3 (notification) = 1353 <= `POOLER_MAX_CLIENT_CONN` 1500** na #33 (que tirou 650 do Hikari do monólito, que era 1000 sozinho); com o
-  `catalog` (#35, Hikari 100) a soma é **1453**. Subir qualquer um
+  `catalog` (#35, Hikari 100) a soma é **1453**; na #36 o gateway cai para 10 e entra o `identity` (Hikari 100): **1000 + 10 + 3 + 100 + 100 = 1213**. Subir qualquer um
   desses Hikari exige refazer esta conta.
-- **Custo por requisição (para a Rodada 3, vs. o ponto 2)**: `cas` — gateway: JWT + 2 SELECT curtos (carteira, evento) no Postgres do monólito
+- **Custo por requisição (para a Rodada 3, vs. o ponto 2; antes da #36)**: `cas` — gateway: JWT + 2 SELECT curtos (carteira, evento) no Postgres do monólito (desde a #36 nenhum: `uid` do claim, sem conferir a carteira)
   + **1 chamada HTTP**; reservation: 1 SELECT `eventcap`, 1 SELECT `existsActive` e a transação (`claim`, CAS, `reservePending`, append) —
   as mesmas do ponto 2, menos carteira/evento que agora são do gateway. `naive` — gateway: os 2 SELECT + **2 chamadas HTTP**; reservation: GET =
   1 SELECT `eventcap LEFT JOIN event_availability`; POST = SELECT `eventcap`, `existsActive` e a transação sem CAS. A rejeição "lotado" do naive
@@ -1163,7 +1163,7 @@ O monólito NÃO tem mais o pacote `catalog` (nem `public.event`): o `gateway` u
   `event`/`eventpresenter` — a identity de `event_id` vai junto, sem `setval` —, derruba só as FKs que saem de `catalog.*` para fora e ABORTA se houver FK de fora apontando para `event`/`eventpresenter`
   (banco sem a `20261025`), move os
   streams `catalog.event` de `public` preservando `global_position` e ajusta só a sequence de `global_position`). Pool no compose: Hikari 100
-  (1000 + 350 + 3 + 100 = 1453 <= `POOLER_MAX_CLIENT_CONN` 1500), relay LIGADO (`EVENTS_RELAY_ENABLED=true`: sem ele o outbox cresce e a
+  (1000 + 350 + 3 + 100 = 1453 <= `POOLER_MAX_CLIENT_CONN` 1500 na #35; 1213 desde a #36), relay LIGADO (`EVENTS_RELAY_ENABLED=true`: sem ele o outbox cresce e a
   reconciliação do `eventcap` no reservation nunca recebe o `EventCreated`).
 - **Testes do módulo `catalog`** (pacote `com.gerenciador.eventos.catalog`, nomes de relatório únicos; Postgres real, reservation =
   `TestSupport/FakeEventCapServer`, só `/internal/eventcaps`, subido pelo `LauncherSessionListener` `EventCapFakeSession`; `TestSchemas`
@@ -1179,41 +1179,108 @@ O monólito NÃO tem mais o pacote `catalog` (nem `public.event`): o `gateway` u
   `illegalStateQueNaoEConflitoDa500ComCorpoGenerico` e a limpeza da linha crua em `violacaoDeOutraUniqueNaoViraNomeDuplicado`;
   `CatalogClientIndisponivelTest`, o 404 sem/com o marcador.
 
-## Serviço identity — issue #36 (Fase 7: quarta extração; cutover feito na fatia 3)
+## Serviço identity — issue #36 (Fase 7: quarta extração)
 
-Módulo `Backend/identity/` (README próprio; entrypoint `com.gerenciador.eventos.identity.IdentityApplication`, porta **8084**, `identity/Dockerfile`): o código do pacote
-`identity` do monólito com **toda query qualificada `identity.`** (schema `identity`, `db/init-scripts/15-identity.sql`, que convive com o `02/06/08` até o cutover) e
-`events.schema=identity`. Contrato `/internal/**` (users, registrations, wallets, recaptcha) tabelado em `identity-client/README.md`; filtro `InternalTokenFilter`
-(`X-Internal-Token` em tudo, **menos** `GET /.well-known/jwks.json`, só a URI exata). Pontos que a fatia 2 fixou:
-- **JWT RS256** (`JwtSigningKey` + `JwtIssuer`, Nimbus JOSE+JWT 9.37.4, a do Spring Security 6.5.6, pela propriedade `nimbus-jose-jwt.version` do pom pai: o BOM do Boot não a gerencia): chave RSA 2048 gerada no 1º boot e persistida em `JWT_SIGNING_KEY_PATH`; `kid` = thumbprint SHA-256;
-  `isHost` lido do banco na emissão; login e verify-email devolvem `{user, token}`. `host` **não** é gravável (`PUT/POST /internal/users` ignoram).
-- **Erros**: 400 texto de regra; 401 de credenciais SEMPRE com `X-Identity-Credenciais-Invalidas` (login e verify-MFA, inclusive usuário inexistente e código nulo);
-  404 com `X-Identity-Nao-Encontrado`; 500 genérico. reCAPTCHA: sempre 200 com o envelope `{status, body}`; `RECAPTCHA_VERIFY_URL` (property) e timeouts 2 s/5 s.
-- **Cadastro**: `verify-email` consome uma tentativa por chamada (`UPDATE ... WHERE attempts < max_attempts`, atômico); depois de `max_attempts` até o código certo é recusado; o reenvio zera.
-  O fim do `pending_verifications`, o `INSERT` em `users` (a carteira nasce pelo trigger) e o `UserRegistered` entram na MESMA transação.
-- **Eventos de ciclo de vida** (`IdentityEvents`): stream `identity.user` (um por usuário), payload só com ids, na transação da escrita; `identity.notification` inalterado.
-- **Pool**: Hikari 100 / Tomcat 300 (`IdentityConfigTest`); a soma dos Hikari no Supavisor (1000 + 10 + 3 + 100 + 100 = 1213 <= 1500) vale depois do cutover.
-- **Cutover (fatia 3, feito)**: o gateway (monólito) não tem mais o pacote `identity` (nem jjwt): `IdentityClient` (bean em `identityclient/IdentityClientConfig`, `IDENTITY_SERVICE_URL`) para tudo, validação do JWT RS256 em `gateway/security` (`JwtAuthenticationFilter` próprio + `NimbusJwtDecoder` com `JWKSource` montado à mão: cache 24 h, UM fetch por 30 s com limitador próprio — o do Nimbus deixou passar 2 por janela —, tolerância a queda; `currentUserId()` = claim `uid`, host = claim `isHost`, sem consulta), `IdentityIndisponivelHandler` (503 genérico, log só da classe), `EventWalletGateway` sem conferir carteira, Hikari do monólito 10, relay do monólito desligado. Serviço: `PublicSchemaGuard` (não sobe com `public.users`). Banco: migração `20261028` + `verify-20261028-migration.sh`; `01/02/06/08` saíram dos init-scripts (fixture dos verifys antigos em `db/migrations/legacy-fixtures/`). Compose: serviço `identity` (volume `identity-keys`), `backend` depende dele. Docs completas (arquitetura, smoke, kit de carga) na fatia 4.
+O monólito NÃO tem mais o pacote `identity` (nem `public.users`/`mywallet`/`pending_verifications`, nem o jjwt): o `gateway` usa o `IdentityClient`
+(lib `identity-client`) contra o serviço `identity` (container `gerenciador-identity`, `:8084` só na rede `gerenciador-net`, `identity/Dockerfile`; o
+`backend` depende dele `service_healthy`). Os dados estão no schema `identity` (`db/init-scripts/15-identity.sql`; migração
+`db/migrations/20261028-identity-schema.sql` em banco existente; `01/02/06/08` saíram do repo, o fixture dos verifys antigos está em
+`db/migrations/legacy-fixtures/`). Spec: `docs/superpowers/specs/2026-10-26-identity-servico-design.md`; diagrama em
+[`docs/arquitetura/fase7-servicos.md`](../../docs/arquitetura/fase7-servicos.md); README do módulo em `identity/README.md`, contrato `/internal/**` tabelado em
+`identity-client/README.md`.
+
+- **Serviço** (`Backend/identity/`; entrypoint `com.gerenciador.eventos.identity.IdentityApplication`, porta **8084**): o código do pacote `identity` do
+  monólito com **toda query qualificada `identity.`** e `events.schema=identity` (event store, outbox, snapshot e checkpoint próprios). É dono de
+  `users`, `mywallet` (junto de `users`: a FK `mywallet_user_id_fkey` e o trigger 1:1 `create_wallet_for_user` não cruzam schema), `pending_verifications`,
+  do login (BCrypt), do cadastro em duas fases, do reset de senha com MFA, da troca de senha, do reCAPTCHA (`RECAPTCHA_SECRET_KEY` **só** aqui) e da
+  emissão do JWT. CRUD relacional, **não** event sourcing. Scan: `identity` e `shared` (o `identityclient` fica FORA: sem cliente de si mesmo).
+  `UserService implements UserApi`; o gateway usa `IdentityClient implements UserApi`/`EmailVerificationApi`/`MyWalletApi`/`RecaptchaApi`.
+- **JWT RS256** (`JwtSigningKey` + `JwtIssuer`, Nimbus JOSE+JWT 9.37.4, a do Spring Security 6.5.6, pela propriedade `nimbus-jose-jwt.version` do pom pai):
+  chave RSA 2048 gerada no **1º boot** e persistida em `JWT_SIGNING_KEY_PATH` (default `/var/lib/identity/jwt-signing-key.json`, volume nomeado
+  `identity-keys` no compose; 600 quando o FS suporta). **Nenhuma variável nova no `.env`** e `JWT_SECRET` deixou de ser lido por qualquer serviço.
+  Header `kid` = thumbprint SHA-256 da JWK pública (RFC 7638); claims `sub` (e-mail), `uid` (long), `isHost` (boolean, lido do banco **na emissão**),
+  `iss` = `gerenciador-identity`, `iat`, `exp` (`JWT_EXPIRATION_SECONDS`, 36000). **Todo** token (login e verify-email) leva `uid` e `isHost`. Arquivo
+  ilegível ou corrompido = **falha no boot** (nunca regera por cima: tokens válidos sumiriam em silêncio). Sobrevive a `docker restart`/`up --build`;
+  `docker compose down -v` apaga o volume (todo token vira 401: relogar). Rotação = apagar o arquivo e reiniciar (não automatizada). `GET /.well-known/jwks.json`
+  devolve só a parte pública; o `InternalTokenFilter` isenta **somente a URI exata com GET** (`/.well-known/jwks.json;x` cai no filtro: 401).
+- **`uid` reciclado (operação)**: `TRUNCATE ... RESTART IDENTITY` em `identity.users` (testes, limpeza do banco entre blocos da carga) devolve o `user_id` a 1, e o JWT
+  é validado sem estado: um token emitido antes passaria a valer como o usuário novo com o mesmo id (reservar, criar evento como host se `isHost`). Regra: **sempre que
+  truncar `identity.users` fora de um teste unitário, apague a chave do volume e reinicie o identity E o backend** (o gateway guarda o JWKS em cache por até 24 h; só
+  reiniciar o identity não basta). O `run-tests.sh` apaga a chave no início e ao fim da rodada (identity e backend parados); o `limpar-banco.sh` da carga (`E:\TCC\carga-overrides`,
+  fora do repo) também: logo depois de parar os serviços e ANTES do TRUNCATE apaga o arquivo do volume (se falhar, aborta sem religar identity nem backend), sobe o identity, espera `healthy` e só então religa o backend. Manual:
+  `docker run --rm -v gerenciador-eventos_identity-keys:/k maven:3.9.7-eclipse-temurin-21-jammy rm -f /k/jwt-signing-key.json` com o identity parado.
+- **API interna** `/internal/**` (`InternalTokenFilter` com `X-Internal-Token`; 401 em TODA requisição sem/errado, inclusive `/internal;x=1/...`):
+  `/internal/users/**` (espelha o `UserApi`: create, `{id}`, `by-email`, update, deactivate, validate, `login`, `password`, `password-reset-mfa` (+ `/verify`),
+  `password-with-mfa`, `exists`, `names` em lote), `/internal/registrations` (+ `/verify`, `/resend`), `/internal/wallets/{userId}` (+ `/exists`),
+  `POST /internal/recaptcha/verify`. **Login e verify-email devolvem `{user, token}`** (o gateway não assina nada). Erros: **400** texto de regra
+  (`IllegalArgumentException`; pedido malformado também, nunca o JSON padrão do Spring); **401** de credenciais SEMPRE com `X-Identity-Credenciais-Invalidas`
+  (login e verify-MFA, inclusive usuário inexistente e código nulo; o 401 do `InternalTokenFilter` NÃO leva o marcador, para um `INTERNAL_API_TOKEN` errado virar
+  503 e não "senha errada"); **404** com `X-Identity-Nao-Encontrado`; **500** genérico (detalhe só no log). reCAPTCHA: sempre 200 com o envelope `{status, body}`
+  (`status` 200 + `{success, score, action}`, ou 500 + `{success:false, error}`); `RECAPTCHA_VERIFY_URL` (property, default a URL do Google; o teste aponta para um fake local),
+  timeouts 2 s/5 s. `POST`/`PUT /internal/users` gravam `admin` como sempre e **nunca `host`** (senão o IDOR #166 viraria auto-promoção a host).
+- **Cadastro**: `verify-email` consome uma tentativa por chamada (`UPDATE ... WHERE attempts < max_attempts`, atômico); depois de `max_attempts` até o código certo é
+  recusado; o reenvio gera código novo e zera o contador. O fim do `pending_verifications`, o `INSERT` em `users` (a carteira nasce pelo trigger) e o `UserRegistered` entram na
+  MESMA transação.
+- **Eventos** (`IdentityEvents`, relay ligado no compose; sem ele nenhum e-mail de cadastro/MFA sai): `identity.notification` (pedido de e-mail; contrato e tópico
+  **congelados**, o `notification` não muda; leva e-mail e código, apagado pelo `NotificationEventRetentionService` depois de 30 s) e `identity.user` (um stream por usuário,
+  `UserRegistered`/`UserUpdated`/`UserDeactivated`/`UserPasswordChanged`, **payload só com ids**, na transação da escrita; sem consumer nesta issue, logo sem group novo para o
+  `run-tests.sh` mover).
+- **Cliente** (`IdentityClient`, lib `identity-client`; bean em `identityclient/IdentityClientConfig`, no gateway): HttpClient 5 como o `CatalogClient`, pool
+  `IDENTITY_CLIENT_MAX_CONNECTIONS` (default 400, >= as 300 threads do Tomcat do gateway), conectar 2 s, pool 5 s, **resposta 5 s**, evict 20 s, **sem retry**; URL
+  `IDENTITY_SERVICE_URL` (default `http://localhost:8084`; `http://identity:8084` no compose). 400 → `IllegalArgumentException`, 404 COM marcador →
+  `IdentityNaoEncontradoException`, 401 COM marcador → `null`/`false` (só login e MFA); rede, timeout, 5xx, 404/401 SEM marcador e qualquer outro status →
+  `IdentityUnavailableException` → **503 genérico** no gateway (`gateway/IdentityIndisponivelHandler`, log só da classe). `exists` nunca devolve `false` por falha. O
+  `CreatorNames` segue tolerante (nome nulo).
+- **Gateway** (cutover, fatia 3): validação do JWT e autorização por claim em `gateway/security` (ver "Rotas e segurança"); `EventWalletGateway` **não confere mais a carteira**
+  (ela nasce no mesmo `INSERT` do usuário, nenhuma rota apaga usuário ou carteira e o `uid` vem assinado; conferir seria um salto HTTP por reserva); `/bff/my-wallets/**` chama
+  `/internal/wallets/**`; relay do monólito desligado (`EVENTS_RELAY_ENABLED=false`, não há mais o que publicar) e Hikari 10 (só `actuator/health`). Identity fora: login,
+  cadastro (request-verification, verify-email, resend), MFA, troca de senha, `/bff/users/**` (inclusive `/me`) e `/bff/my-wallets/**` → **503** (nunca 401/500); reserva e leitura de
+  evento com token válido **seguem** (JWKS em cache). Contrato `/bff/**` igual (`HttpContractTest`), com as mudanças: token RS256 (os HS256 antigos viram 401, relogar uma vez),
+  `uid` inexistente sem 401 em `event-wallets`, bearer lixo em rota pública continua 200.
+- **Guarda de boot**: `PublicSchemaGuard` (`@PostConstruct`) recusa subir se `to_regclass('public.users')` não for nulo (migração `20261028` pendente): senão rodaria sobre
+  tabelas novas vazias e o 1º cadastro herdaria `user_id` 1 de outro usuário. O `run-tests.sh` aborta pelo mesmo motivo. Enquanto a migração não é aplicada o container
+  fica em crash-loop (`restart: unless-stopped`) e o `backend` não sobe (espera o identity `healthy`).
+- **Pool (a conta do Supavisor)**: identity Hikari **100** (`connection-timeout` 5 s), Tomcat 300, virtual threads off (`IdentityConfigTest`); gateway Hikari **10**. Todos usam o
+  MESMO tenant e usuário do Supavisor, então o pool real (45 / 245) não cresce. Soma dos Hikari de cliente: 1000 (reservation) + 10 (gateway) + 3 (notification) + 100 (catalog) +
+  100 (identity) = **1213 <= `POOLER_MAX_CLIENT_CONN` 1500**. O override de carga mantém o backend em 10 (com o 350 antigo seriam 1553). Subir qualquer um exige refazer a conta.
+- **Token interno**: segue **um** `INTERNAL_API_TOKEN` para todos os serviços (todos usam o mesmo usuário de banco, então tokens por serviço não isolariam nada). O `identity` não usa
+  `env_file`: recebe só banco, `INTERNAL_API_TOKEN`, `RECAPTCHA_SECRET_KEY` e `JWT_EXPIRATION_SECONDS`; o `backend` segue com `env_file` (CORS etc.) mas não lê mais `JWT_SECRET` nem
+  `RECAPTCHA_SECRET_KEY` (sobrepostos por vazio no compose).
+- **Testes**: no módulo `identity` (Postgres e Redpanda reais; chave de assinatura temporária por JVM e reCAPTCHA falso em `TestSupport/IdentityTestSession`): `IdentityApiE2ETest`
+  (**cliente real × serviço real**: login RS256 com `kid` no JWKS e claims, cadastro em duas fases, tentativas, MFA, troca de senha, CRUD/nomes/carteira, reCAPTCHA com o fake,
+  401 sem/errado em toda rota interna e JWKS só pela URI exata, `PUT` com `isHost:true` não promove), `JwtSigningKeyTest` (restart: mesma chave e token antigo válido; corrompido =
+  falha no boot), `IdentityConfigTest`, `PublicSchemaGuardTest`, `SchemaValidationTest`, `IdentitySchemaConstraintsTest`, `UserLifecycleEventsTest`, `UserTest`, `MyWalletTest`,
+  `IdentityNotificationEventsTest`, `NotificationEventRetentionTest`. No monólito: `FakeIdentityServer` (JDK `HttpServer`, `LauncherSessionListener` `IdentityFakeSession`, assina com uma
+  chave RSA de teste e serve o JWKS dela; `foraDoAr(true)` = container parado), `HttpContractTest` (bearer lixo em rota pública = 200; token de outra chave, HS256, sem `uid` ou vencido
+  = 401; identity fora = 503 em `/bff/users/me` e a reserva com token válido segue), `JwtDecoderConfigTest` (cache, 1 fetch por janela, tolerância a queda), `ModuleBoundaryArchTest`
+  (nada depende do código do serviço `identity`), `IdentityClientIndisponivelTest` (lib), `ConnectionPoolSizeTest`.
+- **Operação**: smoke da stack real `docs/testes-manuais/smoke-identity-servico-separado.sh` (com o override de carga, que liga o seed: cadastro com o código lido do banco, token RS256,
+  login e `/me`, `/internal/**` 401 sem `X-Internal-Token` e sem porta no host, reserva no braço `cas` com overselling 0, `gerenciador-identity` parado → 503 e reserva com token válido
+  201, volta, `docker restart` com o mesmo `kid` e token antigo válido; para o `gerenciador-notification` durante a execução para não mandar e-mail real). Migração verificada por
+  `db/migrations/verify-20261028-migration.sh`. Lag do relay do identity: `identity.event_outbox`.
+- **Fora de escopo / pendências conhecidas**: #166 (IDOR pré-existente em `GET/PUT/DELETE /bff/users/{id}` e `/bff/my-wallets/{userId}`; a superfície não mudou); revogação de token /
+  lista negra; rotação automática da chave; consumer dos eventos de ciclo de vida; remover o datasource do gateway (Hikari 10 só para o `actuator/health`).
 
 ## Cadastro em duas fases + e-mail
 
-1. `POST /bff/users/request-verification` grava em `pending_verifications` (hash da senha +
+1. `POST /bff/users/request-verification` (gateway -> identity) grava em `identity.pending_verifications` (hash da senha +
    código de 6 dígitos, expira em 5 min — ver `application.properties`).
-2. `POST /bff/users/verify-email` confere o código e só então insere em `users`.
-3. `identity/EmailVerificationService` grava o código e, na mesma transação, appenda o evento `VerificationCodeRequested`
+2. `POST /bff/users/verify-email` confere o código (com contador de tentativas) e só então insere em `identity.users`, devolvendo `{user, token}` (o token já vem assinado pelo identity).
+3. `identity/EmailVerificationService` (no serviço identity) grava o código e, na mesma transação, appenda o evento `VerificationCodeRequested`
    (`IdentityNotifications`); o **serviço `notification`** (processo à parte, #32) consome o tópico e manda o código via SMTP
    Gmail (`spring-boot-starter-mail` só nele), templates em `notification/EmailTemplates`. O monólito não envia e-mail. O
    `POST /bff/users/request-verification` responde igual; o e-mail chega de forma assíncrona (com o serviço fora, só depois que
    ele voltar). O MFA do reset de senha segue o mesmo caminho (`PasswordResetMfaRequested`).
 4. reCAPTCHA v3: `POST /bff/users/verify-recaptcha` (em `gateway/BffUserController`) valida o
-   token com a Google usando `RECAPTCHA_SECRET_KEY`.
+   token com a Google usando `RECAPTCHA_SECRET_KEY`, mas quem fala com a Google é o serviço identity (`POST /internal/recaptcha/verify`); a chave secreta só existe nele.
 
 ## Config
 
 - `application.properties` lê tudo de env var com default de dev:
-  `SPRING_DATASOURCE_*` (inclui `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` e
-  `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`), `JWT_SECRET`, `JWT_EXPIRATION_SECONDS`,
-  `RECAPTCHA_*` (`MAIL_*` saiu do monólito na #32: é do serviço `notification`), `SERVER_TOMCAT_THREADS_MAX` (default `300`),
+  `SPRING_DATASOURCE_*` (inclui `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`, default 10 no gateway, e
+  `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`), `IDENTITY_SERVICE_URL`, `IDENTITY_CLIENT_*` (cliente HTTP do gateway; ver "Serviço identity"),
+  `JWT_ISSUER`, `JWT_JWKS_CACHE_TTL_MS`, `JWT_JWKS_MIN_REFRESH_INTERVAL_MS`, `JWT_JWKS_OUTAGE_TOLERANCE_MS` (validação do JWT no gateway; `JWT_SECRET` e `JWT_EXPIRATION_SECONDS` deixaram de ser lidos aqui na #36),
+  (`RECAPTCHA_SECRET_KEY` saiu do monólito na #36: é do serviço `identity`; `MAIL_*` saiu na #32: é do serviço `notification`), `SERVER_TOMCAT_THREADS_MAX` (default `300`),
   `RESERVATION_READPATH` (default `cas`; `naive` = braço de controle do experimento; lido pelo **gateway**, no monólito),
   `RESERVATION_SERVICE_URL` e `RESERVATION_CLIENT_*` (cliente HTTP do gateway, ver "Serviço reservation"),
   **do serviço `reservation`** (mesmos nomes de antes, valores no `reservation/application.properties`): `SPRING_DATASOURCE_*` (Hikari default 1000),
@@ -1236,14 +1303,17 @@ Módulo `Backend/identity/` (README próprio; entrypoint `com.gerenciador.evento
   partir daí cada tentativa do retry transitório ilimitado loga em ERROR), `EVENTS_CONSUMER_BATCH_SIZE` (`500`, #146; tamanho máximo
   do lote do listener da projeção de disponibilidade, o `max.poll.records` dele; o compose o repassa), `EVENTS_SNAPSHOT_EVERY` (`100`). Sem segredo novo. As flags
   `EVENTS_RELAY_ENABLED`/`EVENTS_CONSUMER_ENABLED` têm default `false` (os testes ligam por `@SpringBootTest(properties=...)`); o
-  `docker-compose.yml` passa `EVENTS_RELAY_ENABLED=true` ao monólito desde a #28 (o `catalog` appendava eventos; desde a #35 o relay do monólito
-  só publica o `identity.notification` e o `catalog` tem o dele) e, desde a #33, ao `reservation` (relay do
+  `docker-compose.yml` passou `EVENTS_RELAY_ENABLED=true` ao monólito desde a #28 (o `catalog` appendava eventos; desde a #35 o relay do monólito
+  só publicava o `identity.notification` e o `catalog` tem o dele; desde a #36 o monólito volta a `false` e o `identity` liga o dele) e, desde a #33, ao `reservation` (relay do
   outbox dele) junto com `EVENTS_CONSUMER_ENABLED=true` (projeção assíncrona de disponibilidade, #29); o monólito passou a `EVENTS_CONSUMER_ENABLED=false`.
-  **Aviso:** com o `gerenciador-backend`, o `gerenciador-reservation` ou o `gerenciador-catalog` no ar, o relay deles drena o `event_outbox` do
+  **Aviso:** com o `gerenciador-backend`, o `gerenciador-reservation`, o `gerenciador-catalog` ou o `gerenciador-identity` no ar, o relay deles drena o `event_outbox` do
   mesmo banco que o `run-tests.sh` usa e o consumer move `ativos`: o `run-tests.sh` **aborta** se algum dos containers estiver
-  rodando (`docker stop gerenciador-backend gerenciador-reservation gerenciador-catalog gerenciador-notification` antes).
+  rodando (`docker stop gerenciador-backend gerenciador-reservation gerenciador-catalog gerenciador-identity gerenciador-notification` antes).
 - Serviço catalog e seed (#35): `CATALOG_SERVICE_URL` e `CATALOG_CLIENT_MAX_CONNECTIONS` (cliente HTTP do gateway, ver "Serviço catalog"),
   `SEED_ENABLED` (`seed.enabled`, default `false`: `POST /bff/seed` responde 404; só o override de carga liga).
+- Serviço identity (#36), variáveis do SERVIÇO (`identity/application.properties`): `SPRING_DATASOURCE_*` (Hikari 100), `SERVER_TOMCAT_THREADS_MAX` (300), `INTERNAL_API_TOKEN` (sem default),
+  `JWT_SIGNING_KEY_PATH` (default `/var/lib/identity/jwt-signing-key.json`), `JWT_EXPIRATION_SECONDS` (36000), `RECAPTCHA_SECRET_KEY` e `RECAPTCHA_VERIFY_URL`, `EVENTS_RELAY_ENABLED` (`true` no compose),
+  `NOTIFICATION_EVENTS_RETENTION_SCAN_MS`. Nenhuma variável nova no `.env`; `JWT_SECRET` não é lido por ninguém.
 - Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto
   (`management.endpoints.web.exposure.include=health`); `GET /actuator/health` público devolve
   `{"status":"UP"}` (depende do Postgres). O health do mail deixou de existir com o `spring-boot-starter-mail` (#32).
@@ -1263,3 +1333,6 @@ Módulo `Backend/identity/` (README próprio; entrypoint `com.gerenciador.evento
   issue #11) e o `frontend/CLAUDE.md`.
 - Nova query → JDBC parametrizado (`?`), nunca concatenar string em SQL.
 - Rode `./run-tests.sh` (com `db` no ar) antes de dar por pronto.
+- Mudou a API interna do `identity` (`/internal/**`) → atualize o `IdentityClient` (lib `identity-client`, com o `identity-client/README.md`), o
+  `IdentityApiE2ETest` (cliente real × serviço real) **e** o `FakeIdentityServer` dos testes do monólito. Mudou claim do JWT (`uid`, `isHost`...) → atualize o `JwtIssuer`,
+  o `gateway/security` e o `FakeIdentityServer` (que assina com uma chave de teste).

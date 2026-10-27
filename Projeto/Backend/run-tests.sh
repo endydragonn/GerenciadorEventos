@@ -113,6 +113,27 @@ if [ -n "$(docker ps -q -f name=^gerenciador-identity$)" ]; then
     exit 1
 fi
 
+# Os testes dão TRUNCATE ... RESTART IDENTITY em identity.users do meu_banco (GlobalDbTruncator): o user_id volta a 1. A chave de assinatura
+# do JWT do identity vive no volume identity-keys e SOBREVIVE à rodada, então um token emitido antes (localStorage do Flutter, kit de
+# carga) passaria a valer como o usuário novo que ganhar o mesmo uid. Apaga a chave no INÍCIO (cobre uma rodada interrompida antes do fim)
+# e de novo ao FIM (verde ou vermelha). O identity e o backend estão parados, pelas guardas acima: o próximo boot do identity gera outra
+# chave, e o backend, que guarda o JWKS em cache por até 24 h, já está parado (cache vazio quando subir). Sem volume (stack nunca subiu) não
+# há o que apagar.
+VOLUME_CHAVES="gerenciador-eventos_identity-keys"
+apagar_chave_identity() {
+    if docker volume inspect "$VOLUME_CHAVES" >/dev/null 2>&1; then
+        if docker run --rm -v "$VOLUME_CHAVES":/k maven:3.9.7-eclipse-temurin-21-jammy rm -f /k/jwt-signing-key.json >/dev/null 2>&1; then
+            echo "✅ Chave de assinatura do identity apagada do volume $VOLUME_CHAVES (tokens antigos deixam de valer; relogue depois de subir a stack)."
+        else
+            echo "⚠️  Não consegui apagar a chave do identity. ANTES de subir identity e backend, rode:"
+            echo "   docker run --rm -v $VOLUME_CHAVES:/k maven:3.9.7-eclipse-temurin-21-jammy rm -f /k/jwt-signing-key.json"
+        fi
+    fi
+}
+
+# Início da rodada: tokens de antes dela não podem valer depois do TRUNCATE dos testes.
+apagar_chave_identity
+
 # Schema do serviço catalog (#35): bancos novos já nascem com ele (supabase-app-init.sql); um volume existente precisa da migração
 # 20261026 (move public.event/eventpresenter e o stream catalog.event para o schema catalog, preservando a identity de event_id).
 # O script NÃO aplica o 14-catalog.sql: num banco não migrado ele criaria catalog.event vazia ao lado de public.event. Só confere o
@@ -238,6 +259,8 @@ for GRUPO_TOPICO in "reservation:reservation.wallet" "reservation-catalog:catalo
         echo "   docker exec gerenciador-redpanda rpk group seek $GRUPO --to end --topics $TOPICO --allow-new-topics"
     fi
 done
+
+apagar_chave_identity
 
 echo ""
 echo "=================================================="
