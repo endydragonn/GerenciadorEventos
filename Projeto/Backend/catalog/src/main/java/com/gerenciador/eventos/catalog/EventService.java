@@ -41,9 +41,6 @@ public class EventService implements EventApi {
     @Autowired
     private EventPresenterRepository eventPresenterRepository;
 
-    @Autowired
-    private CatalogEventWriter eventWriter;
-
     public Event createEvent(Event e) {
         applyDefaults(e);
         validateRequired(e);
@@ -75,6 +72,21 @@ public class EventService implements EventApi {
         }
     }
 
+    /**
+     * Atualiza o evento. Ordem (issue #60, decisão do usuário: reservation primeiro, sem saga): (1) existência e TODAS as
+     * validações, antes de qualquer escrita; (2) {@code updatePolicy} no reservation (capacidade e janela de venda; o
+     * {@code EventUpdated} não leva {@code capacity}/{@code buyTimeLimit}), com o fallback de criar o {@code eventcap} quando
+     * o evento está sem ele; (3) UMA transação do catalog ({@link EventRepository#update}): {@code EventUpdated} + apresentadores,
+     * com versões contíguas. A recusa do reservation (400 capacidade abaixo do reservado; 409; serviço fora ou a criação do
+     * fallback falhando) interrompe tudo ANTES da transação do catalog: nada é gravado lá, nem metadados nem apresentadores. Um 409
+     * do reservation vira {@link EventoEmConflitoException}, como no {@link #delete}.
+     *
+     * <p><b>Janela de falha documentada:</b> se o reservation já atualizou e a transação do catalog falha em seguida (banco fora,
+     * conflito de versão esgotado, evento pré-ES), o {@code eventcap} fica com a capacidade/janela NOVAS e o catalog com os
+     * metadados e apresentadores ANTIGOS; repetir o mesmo PUT converge (o {@code updatePolicy} é idempotente), exceto no evento pré-ES ({@code version = 0}), que
+     * antes precisa do backfill da migração {@code 20261022}. Sem compensação
+     * (o {@code updatePolicy} não tem desfazer) e sem rastro no log do catalog, pois a capacidade não é do stream.</p>
+     */
     public Event updateEvent(Event e) {
         if (e.getEvent_id() == null) {
             throw new IllegalArgumentException("event_id é obrigatório");
@@ -87,21 +99,18 @@ public class EventService implements EventApi {
         validateRules(e);
         validateDuplicatesOnUpdate(e);
 
-        Event updated = eventRepository.update(e); // transação 1: EventUpdated + event (só metadados)
-
-        // Transação 2: updatePolicy (chamada HTTP ao serviço reservation; o EventUpdated não leva capacity/buyTimeLimit).
-        // Transação 3: PresenterAdded/PresenterRemoved + eventpresenter. As 3 seguem separadas como antes (issue #60).
-        if (e.getLot_quantity() != null
-                && !eventCapacityApi.updatePolicy(e.getEvent_id(), e.getLot_quantity(), e.getBuy_time_limit())) {
-            // o evento está sem eventcap (a criação síncrona falhou e a reconciliação ainda não rodou): cria-o JÁ com os
-            // valores novos (idempotente por event_id) em vez de perder a edição; a reconciliação, se vier depois, é no-op
-            eventCapacityApi.create(new EventCap(e.getEvent_id(), e.getLot_quantity(), e.getLot_quantity(),
-                    e.getBuy_time_limit()));
+        try {
+            if (e.getLot_quantity() != null
+                    && !eventCapacityApi.updatePolicy(e.getEvent_id(), e.getLot_quantity(), e.getBuy_time_limit())) {
+                // o evento está sem eventcap (a criação síncrona falhou e a reconciliação ainda não rodou): cria-o JÁ com os
+                // valores novos (idempotente por event_id) em vez de perder a edição; a reconciliação, se vier depois, é no-op
+                eventCapacityApi.create(new EventCap(e.getEvent_id(), e.getLot_quantity(), e.getLot_quantity(),
+                        e.getBuy_time_limit()));
+            }
+        } catch (ReservationConflictException ex) {
+            throw new EventoEmConflitoException(ex.getMessage());
         }
-        if (e.getPresenters() != null) {
-            eventWriter.trocarApresentadores(e.getEvent_id(), e.getPresenters());
-        }
-        return hydrate(updated);
+        return hydrate(eventRepository.update(e)); // EventUpdated + apresentadores, uma transação
     }
 
     @Override
