@@ -3,6 +3,8 @@ package com.gerenciador.eventos.gateway;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -35,6 +37,8 @@ import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictExceptio
 @RequestMapping("/bff/event-wallets")
 public class BffEventWalletController {
 
+    private static final Logger log = LoggerFactory.getLogger(BffEventWalletController.class);
+
     private final EventWalletGateway eventWalletService;
 
     public BffEventWalletController(EventWalletGateway eventWalletService) {
@@ -60,7 +64,8 @@ public class BffEventWalletController {
         } catch (CatalogUnavailableException ex) {
             throw ex; // a conferência do evento (exists) falhou: 503 genérico, nunca "Evento não encontrado"
         } catch (RuntimeException ex) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
+            log.error("Erro ao reservar userId={} eventId={}", ew.getUserId(), ew.getEventId(), ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -76,7 +81,8 @@ public class BffEventWalletController {
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
         } catch (RuntimeException ex) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
+            log.error("Erro ao confirmar reserva userId={} eventId={}", ew.getUserId(), ew.getEventId(), ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
         }
     }
 

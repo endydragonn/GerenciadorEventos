@@ -215,8 +215,12 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   HTTP real (inclusive `SecurityConfig`), não MockMvc. Desde a #32 não há mock de `JavaMailSender` (o monólito
   não tem SMTP); `RECAPTCHA_SECRET_KEY` é forçada vazia via `@TestPropertySource` para não depender do Google real. **Sem mudança de
   expectativa na #33**: as chamadas de reserva/capacidade vão ao `FakeReservationServer` (HTTP de verdade).
-- Não há testes unitários isolados; tudo é de integração com banco (exceto os mocks pontuais
-  do `HttpContractTest` para dependências externas).
+- `gateway/ErroInternoNoCorpoTest` (issue #89): todo 500 do `gateway/*` devolve o corpo genérico `ErroInterno.MENSAGEM` (o `Map` do reCAPTCHA
+  mantém `success`/`error`) e a mensagem da exceção (detalhe de SQL/infra) vai só para o log SLF4J (`log.error("...", ex)`, com stack trace).
+  MockMvc standalone com as dependências mockadas falhando, sem Spring/banco. Os 400 de negócio continuam com a mensagem da exceção (é contrato
+  que o Flutter mostra). Controller novo no `gateway`: nunca ecoe `getMessage()` num 500.
+- Quase tudo é teste de integração com banco (exceto os mocks pontuais do `HttpContractTest` para dependências externas
+  e o `ErroInternoNoCorpoTest`, MockMvc standalone sem Spring/banco).
 - `LayerBoundaryArchTest` e `ModuleBoundaryArchTest` (ArchUnit) são a exceção: não usam Spring/banco, só analisam bytecode.
   Roda em qualquer `mvn test`, com ou sem `db` no ar.
 

@@ -83,7 +83,8 @@ public class BffEventController {
         } catch (CatalogUnavailableException ex) { // timeout pode ser depois do commit: o evento talvez exista
             return CatalogIndisponivelHandler.resposta(ex, CatalogIndisponivelHandler.CRIACAO_INCERTA);
         } catch (RuntimeException ex) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
+            log.error("Erro ao criar evento", ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -155,8 +156,7 @@ public class BffEventController {
             // mensagem de erro SQL) -- achado da review automática do Gemini na PR #88.
             // Log completo fica só no servidor; o chamador recebe mensagem genérica.
             log.error("Erro ao atualizar evento id={}", id, ex);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Erro interno ao atualizar evento");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -179,7 +179,8 @@ public class BffEventController {
         } catch (CatalogUnavailableException ex) {
             throw ex; // 503 genérico (CatalogIndisponivelHandler), nunca o 404/500 abaixo
         } catch (RuntimeException ex) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
+            log.error("Erro ao excluir evento id={}", id, ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
         }
     }
 
@@ -239,8 +240,8 @@ public class BffEventController {
         } catch (RuntimeException ex) {
             return ResponseEntity.notFound().build();
         } catch (Exception ex) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Erro ao carregar imagem: " + ex.getMessage());
+            log.error("Erro ao carregar imagem do evento id={}", id, ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
         }
     }
 
