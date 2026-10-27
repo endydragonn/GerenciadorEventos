@@ -947,6 +947,107 @@ public class HttpContractTest {
     }
 
     /**
+     * Issue #57 (IDOR): o usuário vem do token, nunca do corpo/query/path. O token do usuário A com {@code userId} do B
+     * (corpo, query ou path) dá 403 nos 5 endpoints e não mexe na inscrição do B; o 403 vale mesmo com o B inexistente.
+     * Mudança de contrato registrada aqui: antes a requisição passava com o userId que o cliente mandasse.
+     */
+    @Test
+    public void eventWallet_tokenDeAnaoAgeEmNomeDeBeto_returns403NosEndpoints() {
+        User host = createHostUser("idor-host");
+        String hostToken = loginAndGetToken(host.getEmail(), "senha123");
+        User ana = createUser("idor-ana");
+        String anaToken = loginAndGetToken(ana.getEmail(), "senha123");
+        User beto = createUser("idor-beto");
+        String betoToken = loginAndGetToken(beto.getEmail(), "senha123");
+        Event event = createEvent(host.getId(), "Evento IDOR " + System.nanoTime(), 5, hostToken);
+        long eventId = event.getEvent_id();
+
+        // o Beto se inscreve (pending) e a Ana tenta agir em nome dele
+        EventWallet doBeto = new EventWallet(beto.getId(), eventId);
+        assertEquals(HttpStatus.CREATED, restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                new HttpEntity<>(doBeto, authHeaders(betoToken)), String.class).getStatusCode());
+
+        HttpEntity<EventWallet> comoAna = new HttpEntity<>(doBeto, authHeaders(anaToken));
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST, comoAna,
+                String.class).getStatusCode(), "addLink");
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(url("/bff/event-wallets/confirm"), HttpMethod.POST,
+                comoAna, String.class).getStatusCode(), "confirm");
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(url("/bff/event-wallets/validate"), HttpMethod.POST,
+                comoAna, String.class).getStatusCode(), "validate");
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(
+                url("/bff/event-wallets?userId=" + beto.getId() + "&eventId=" + eventId), HttpMethod.DELETE,
+                new HttpEntity<>(authHeaders(anaToken)), String.class).getStatusCode(), "removeLink");
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(url("/bff/event-wallets/user/" + beto.getId()),
+                HttpMethod.GET, new HttpEntity<>(authHeaders(anaToken)), String.class).getStatusCode(), "listByUser");
+        // userId inexistente: continua 403 (a negação não depende do alvo existir)
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(url("/bff/event-wallets/user/999999999"),
+                HttpMethod.GET, new HttpEntity<>(authHeaders(anaToken)), String.class).getStatusCode());
+
+        // nada mudou para o Beto: segue pending (não confirmou nem cancelou) e a Ana não ganhou inscrição
+        ResponseEntity<EventWallet[]> listaBeto = restTemplate.exchange(url("/bff/event-wallets/user/" + beto.getId()),
+                HttpMethod.GET, new HttpEntity<>(authHeaders(betoToken)), EventWallet[].class);
+        assertEquals(1, listaBeto.getBody().length);
+        assertEquals("pending", listaBeto.getBody()[0].getStatus());
+        ResponseEntity<EventWallet[]> listaAna = restTemplate.exchange(url("/bff/event-wallets/user/" + ana.getId()),
+                HttpMethod.GET, new HttpEntity<>(authHeaders(anaToken)), EventWallet[].class);
+        assertEquals(0, listaAna.getBody().length);
+    }
+
+    /** Issue #57: o próprio usuário segue funcionando com o userId (igual ao do token) e sem ele (o do token). */
+    @Test
+    public void eventWallet_proprioUsuario_comESemUserId() {
+        User host = createHostUser("idor-ok-host");
+        String hostToken = loginAndGetToken(host.getEmail(), "senha123");
+        User ana = createUser("idor-ok-ana");
+        String token = loginAndGetToken(ana.getEmail(), "senha123");
+        Event e1 = createEvent(host.getId(), "Evento IDOR ok 1 " + System.nanoTime(), 5, hostToken);
+        Event e2 = createEvent(host.getId(), "Evento IDOR ok 2 " + System.nanoTime(), 5, hostToken);
+        HttpHeaders h = authHeaders(token);
+
+        // sem userId no corpo: vale o do token, e a resposta traz o dono real
+        Map<String, Object> semUserId = Map.of("eventId", e1.getEvent_id());
+        assertEquals(HttpStatus.OK, restTemplate.exchange(url("/bff/event-wallets/validate"), HttpMethod.POST,
+                new HttpEntity<>(semUserId, h), String.class).getStatusCode());
+        ResponseEntity<EventWallet> criada = restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                new HttpEntity<>(semUserId, h), EventWallet.class);
+        assertEquals(HttpStatus.CREATED, criada.getStatusCode());
+        assertEquals(ana.getId(), criada.getBody().getUserId());
+        ResponseEntity<EventWallet> confirmada = restTemplate.exchange(url("/bff/event-wallets/confirm"),
+                HttpMethod.POST, new HttpEntity<>(semUserId, h), EventWallet.class);
+        assertEquals(HttpStatus.OK, confirmada.getStatusCode());
+        assertEquals("confirmed", confirmada.getBody().getStatus());
+        assertEquals(HttpStatus.OK, restTemplate.exchange(url("/bff/event-wallets?eventId=" + e1.getEvent_id()),
+                HttpMethod.DELETE, new HttpEntity<>(h), Void.class).getStatusCode());
+
+        // com userId igual ao do token: segue como antes
+        EventWallet proprio = new EventWallet(ana.getId(), e2.getEvent_id());
+        assertEquals(HttpStatus.CREATED, restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                new HttpEntity<>(proprio, h), String.class).getStatusCode());
+        assertEquals(HttpStatus.OK, restTemplate.exchange(url("/bff/event-wallets?userId=" + ana.getId()
+                + "&eventId=" + e2.getEvent_id()), HttpMethod.DELETE, new HttpEntity<>(h), Void.class).getStatusCode());
+        assertEquals(HttpStatus.OK, restTemplate.exchange(url("/bff/event-wallets/user/" + ana.getId()),
+                HttpMethod.GET, new HttpEntity<>(h), String.class).getStatusCode());
+    }
+
+    /** Issue #57 (regressão): sem token, 401 nos 4 endpoints (e no validate), antes de qualquer lógica do controller. */
+    @Test
+    public void eventWallet_semToken_returns401NosEndpoints() {
+        HttpHeaders semAuth = new HttpHeaders();
+        semAuth.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<EventWallet> corpo = new HttpEntity<>(new EventWallet(1L, 1L), semAuth);
+        assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST, corpo,
+                String.class).getStatusCode(), "addLink");
+        assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.exchange(url("/bff/event-wallets/confirm"), HttpMethod.POST,
+                corpo, String.class).getStatusCode(), "confirm");
+        assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.exchange(url("/bff/event-wallets/validate"), HttpMethod.POST,
+                corpo, String.class).getStatusCode(), "validate");
+        assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.exchange(url("/bff/event-wallets?userId=1&eventId=1"),
+                HttpMethod.DELETE, new HttpEntity<>(semAuth), String.class).getStatusCode(), "removeLink");
+        assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.exchange(url("/bff/event-wallets/user/1"), HttpMethod.GET,
+                new HttpEntity<>(semAuth), String.class).getStatusCode(), "listByUser");
+    }
+
+    /**
      * Issue #24: {@code Idempotency-Key} é aditiva. Sem o header o servidor gera uma e devolve no header
      * da resposta (corpo igual ao de sempre); com o mesmo header a repetição devolve 201 e o mesmo corpo
      * sem reservar de novo; a mesma chave com outro evento dá 422.
