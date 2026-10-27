@@ -40,6 +40,9 @@ SET ROLE :"app_user";
 \i /app-init/13-reservation.sql
 -- catalog (#35): event/eventpresenter e o event store do serviço, no schema catalog (substituiu o 03-event e o 05-eventpresenter)
 \i /app-init/14-catalog.sql
+-- identity (#36, fatia 2): users/mywallet/pending_verifications + event store do serviço, no schema identity (convive com o
+-- 02/06/08 até o cutover, fatia 3)
+\i /app-init/15-identity.sql
 \i /app-init/99-tests.sql
 
 RESET ROLE;

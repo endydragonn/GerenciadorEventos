@@ -22,16 +22,16 @@ erro = texto puro com a mensagem. JSON dos DTOs como o `/bff` de hoje (`User`: `
 
 | Método da lib | Requisição | Sucesso | Erros |
 |---|---|---|---|
-| `UserApi.createUser` | `POST /internal/users` corpo `User` | 201 `User` | 400 regra |
+| `UserApi.createUser` | `POST /internal/users` corpo `User` (**`host` NÃO é gravado**; `admin` é gravado como sempre foi: nenhum código autoriza por `admin`) | 201 `User` | 400 regra |
 | `UserApi.findById` | `GET /internal/users/{id}` | 200 `User` | 404 + `X-Identity-Nao-Encontrado` |
 | `UserApi.findByEmail` | `GET /internal/users/by-email?email=` (query: `@`/`.`/`+` não cabem bem em path) | 200 `User` | 404 + marcador |
-| `UserApi.updateUser` | `PUT /internal/users/{id}` corpo `User` (o `id` do path vale; **`host` NÃO é gravado**) | 200 `User` | 400 regra |
+| `UserApi.updateUser` | `PUT /internal/users/{id}` corpo `User` (o `id` do path vale; **`host` NÃO é gravado**, `admin` como sempre; a resposta é a linha como ficou no banco) | 200 `User` | 400 regra |
 | `UserApi.deactivateUser` | `DELETE /internal/users/{id}` | 204 | |
 | `UserApi.getValidationErrors` | `POST /internal/users/validate` corpo `User` | 200 texto (`""` = válido) | |
-| `UserApi.login` | `POST /internal/users/login` corpo `{email, password}` | 200 `{user, token}` | **401 + `X-Identity-Credenciais-Invalidas`** => `null` |
+| `UserApi.login` | `POST /internal/users/login` corpo `{email, password}` | 200 `{user, token}` (RS256, `uid`, `isHost` do banco) | **401 + `X-Identity-Credenciais-Invalidas`** => `null` (senha errada, e-mail inexistente, e-mail ou senha nulos) |
 | `UserApi.changePassword` | `PUT /internal/users/{id}/password` corpo `{oldPassword, newPassword}` | 200 JSON boolean | 400 regra (senha atual errada, nova curta, usuário inexistente) |
 | `UserApi.requestPasswordResetMfa` | `POST /internal/users/{id}/password-reset-mfa` | 200 `User` (o gateway usa o e-mail) | 404 + marcador |
-| `UserApi.verifyPasswordResetMfaCode` | `POST /internal/users/{id}/password-reset-mfa/verify` corpo `{mfaCode}` | 200 (sem corpo) => `true` | **401 + `X-Identity-Credenciais-Invalidas`** => `false` |
+| `UserApi.verifyPasswordResetMfaCode` | `POST /internal/users/{id}/password-reset-mfa/verify` corpo `{mfaCode}` | 200 (sem corpo) => `true` | **401 + `X-Identity-Credenciais-Invalidas`** => `false` (código errado/expirado/nulo **e usuário inexistente**: nunca 404) |
 | `UserApi.changePasswordWithMfa` | `PUT /internal/users/{id}/password-with-mfa` corpo `{newPassword, mfaCode}` | 204 | 400 (código inválido/expirado, senha curta) |
 | `UserApi.exists` | `GET /internal/users/{id}/exists` | 200 JSON boolean | |
 | `UserApi.findNames` | `POST /internal/users/names` corpo `[1,2,3]` (ids) | 200 `{"1":"Ana"}` (só contas ativas) | |

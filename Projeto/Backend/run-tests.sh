@@ -10,7 +10,7 @@
 #    então usamos "pwd -W" (-> "E:/...") e desligamos a conversão de path do MSYS.
 #
 # Roda o REACTOR inteiro (issues #32, #33, #35 e #36, Fase 7): shared + reservation-client + catalog-client + identity-client + monolito + notification +
-# reservation + catalog, um `mvn clean test` na raiz do Backend/.
+# reservation + catalog + identity, um `mvn clean test` na raiz do Backend/.
 # Os relatórios Surefire de todos os módulos são copiados para Backend/target/surefire-reports (nomes de classe únicos).
 #
 # Pré-requisito: a stack no ar pra existir a rede, o banco e o broker (Redpanda; os testes do backbone de
@@ -104,6 +104,15 @@ if [ -n "$(docker ps -q -f name=^gerenciador-catalog$)" ]; then
     exit 1
 fi
 
+# O serviço identity (#36) tem relay do identity.event_outbox ligado no compose (drenaria o outbox dos testes do módulo identity) e divide o
+# banco deles. Falha cedo, como nos outros serviços.
+if [ -n "$(docker ps -q -f name=^gerenciador-identity$)" ]; then
+    echo "❌ O container gerenciador-identity está rodando: o relay dele disputa o banco e o Redpanda dos testes."
+    echo "   Pare-o antes: docker stop gerenciador-identity"
+    echo ""
+    exit 1
+fi
+
 # Schema do serviço catalog (#35): bancos novos já nascem com ele (supabase-app-init.sql); um volume existente precisa da migração
 # 20261026 (move public.event/eventpresenter e o stream catalog.event para o schema catalog, preservando a identity de event_id).
 # O script NÃO aplica o 14-catalog.sql: num banco não migrado ele criaria catalog.event vazia ao lado de public.event. Só confere o
@@ -115,6 +124,15 @@ if [ "$ESTADO_CATALOG" != "t|t" ]; then
     echo "   Pare o backend e o catalog, faça o backup e aplique a migração (ver o cabeçalho do arquivo):"
     echo "   docker exec -i gerenciador-db psql -h localhost -U supabase_admin -d meu_banco -v ON_ERROR_STOP=1 \\"
     echo "     < Projeto/Backend/db/migrations/20261026-catalog-schema.sql"
+    echo ""
+    exit 1
+fi
+
+# Schema do serviço identity (#36, fatia 2): o 15-identity.sql é IDEMPOTENTE (só IF NOT EXISTS / CREATE OR REPLACE) e CONVIVE com o
+# 02/06/08 até o cutover (fatia 3): aqui só garante que o schema identity existe para os testes do módulo identity (banco já existente
+# criado antes da fatia 2). Não toca em public. Quando a migração 20261028 mover as tabelas, este passo deixa de ser necessário.
+if ! docker exec -i gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d meu_banco -v ON_ERROR_STOP=1 -q'         < "$SCRIPT_DIR/db/init-scripts/15-identity.sql" >/dev/null 2>&1; then
+    echo "❌ Não consegui aplicar o db/init-scripts/15-identity.sql (schema do serviço identity) no banco meu_banco."
     echo ""
     exit 1
 fi

@@ -37,7 +37,7 @@ serviço é um módulo com o próprio jar e Dockerfile; o que é comum é uma li
 
 ```
 Backend/
-  pom.xml                agregador (módulos: shared, reservation-client, catalog-client, identity-client, monolito, notification, reservation, catalog)
+  pom.xml                agregador (módulos: shared, reservation-client, catalog-client, identity-client, monolito, notification, reservation, catalog, identity)
   checkstyle*.xml        um só para todos os módulos (${maven.multiModuleProjectDirectory})
   run-tests.sh           roda o reactor inteiro
   shared/                LIB (jar simples, sem repackage): DatabaseConnection + shared.events (EventStore, relay, consumer,
@@ -56,6 +56,9 @@ Backend/
                          IdentityClient (pool). O monólito importa os tipos dela; o bean do IdentityClient só entra no cutover (fatia 3)
   catalog/               serviço extraído (#35, README.md próprio): eventos em CQRS + ES no schema catalog, API interna
                          /internal/events/**; src/, Dockerfile, pom.xml. Chamado pelo gateway por HTTP (CatalogClient)
+  identity/              serviço extraído (#36, fatia 2; README.md próprio): usuários, carteira, cadastro, MFA, reCAPTCHA e emissão do JWT RS256
+                         (+ JWKS) no schema `identity`, API interna /internal/** na :8084; src/, Dockerfile, pom.xml. O monólito ainda tem o pacote
+                         `identity` até o cutover (fatia 3)
   db/                    schema (fora do Maven)
 ```
 
@@ -85,12 +88,16 @@ Backend/
 `./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`
 (URL direta `db:5432`, **sem passar pelo pooler**),
 e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `catalog-client`, `identity-client`, `monolito`, `notification`,
-`reservation`, `catalog`; `-fae` = um módulo vermelho não esconde o resultado dos outros). **Pré-requisito do `catalog` (#35):** o banco
+`reservation`, `catalog`, `identity`; `-fae` = um módulo vermelho não esconde o resultado dos outros). **Pré-requisito do `catalog` (#35):** o banco
 migrado (`db/migrations/20261026-catalog-schema.sql`): o script ABORTA se `public.event` ainda existe ou `catalog.event` não existe (não
 aplica o `14-catalog.sql`, que num banco não migrado criaria `catalog.event` vazia ao lado de `public.event`), e aborta se o
 `gerenciador-catalog` estiver rodando (o relay dele drenaria o `catalog.event_outbox` dos testes). Antes disso apaga `target/surefire-reports` sozinho, então o total do
 resumo reflete só os testes desta rodada — não precisa limpar na mão; os relatórios de todos os módulos são copiados para
-`Backend/target/surefire-reports` (nomes de classe únicos). **Pré-requisito do `notification` (#32):** o schema `notification`
+`Backend/target/surefire-reports` (nomes de classe únicos). **Serviço `identity` (#36, fatia 2):** o script **aborta** se o `gerenciador-identity` estiver rodando (`docker stop gerenciador-identity`; o relay dele drenaria o
+`identity.event_outbox` dos testes) e **aplica o `db/init-scripts/15-identity.sql`** (idempotente, só `IF NOT EXISTS`/`CREATE OR REPLACE`; cria o schema `identity` ao lado do
+`public.users` do monólito, que segue em uso até o cutover). Os testes do módulo `identity` usam uma chave de assinatura temporária por JVM e um reCAPTCHA falso
+(`TestSupport/IdentityTestSession`); a `RECAPTCHA_SECRET_KEY` real do `.env` nunca sai para o Google.
+**Pré-requisito do `notification` (#32):** o schema `notification`
 no banco (`db/migrations/20261024-notification-schema.sql`, num volume antigo; bancos novos já nascem com ele). **Pare também o
 `gerenciador-notification`** (`docker stop gerenciador-notification`): o relay dos testes do monólito publica em
 `identity.notification` e um notification vivo mandaria e-mail de verdade (SMTP real) para os endereços de teste; o script aborta
@@ -1168,6 +1175,23 @@ O monólito NÃO tem mais o pacote `catalog` (nem `public.event`): o `gateway` u
   `catalog`, consumer desligado, sem bean do próprio cliente). Fatia 3: `CatalogApiE2ETest` ganhou
   `illegalStateQueNaoEConflitoDa500ComCorpoGenerico` e a limpeza da linha crua em `violacaoDeOutraUniqueNaoViraNomeDuplicado`;
   `CatalogClientIndisponivelTest`, o 404 sem/com o marcador.
+
+## Serviço identity — issue #36 (Fase 7: quarta extração; fatia 2 = o serviço, o cutover é a fatia 3)
+
+Módulo `Backend/identity/` (README próprio; entrypoint `com.gerenciador.eventos.identity.IdentityApplication`, porta **8084**, `identity/Dockerfile`): o código do pacote
+`identity` do monólito com **toda query qualificada `identity.`** (schema `identity`, `db/init-scripts/15-identity.sql`, que convive com o `02/06/08` até o cutover) e
+`events.schema=identity`. Contrato `/internal/**` (users, registrations, wallets, recaptcha) tabelado em `identity-client/README.md`; filtro `InternalTokenFilter`
+(`X-Internal-Token` em tudo, **menos** `GET /.well-known/jwks.json`, só a URI exata). Pontos que a fatia 2 fixou:
+- **JWT RS256** (`JwtSigningKey` + `JwtIssuer`, Nimbus JOSE+JWT 9.37.4, a do Spring Security 6.5.6, pela propriedade `nimbus-jose-jwt.version` do pom pai: o BOM do Boot não a gerencia): chave RSA 2048 gerada no 1º boot e persistida em `JWT_SIGNING_KEY_PATH`; `kid` = thumbprint SHA-256;
+  `isHost` lido do banco na emissão; login e verify-email devolvem `{user, token}`. `host` **não** é gravável (`PUT/POST /internal/users` ignoram).
+- **Erros**: 400 texto de regra; 401 de credenciais SEMPRE com `X-Identity-Credenciais-Invalidas` (login e verify-MFA, inclusive usuário inexistente e código nulo);
+  404 com `X-Identity-Nao-Encontrado`; 500 genérico. reCAPTCHA: sempre 200 com o envelope `{status, body}`; `RECAPTCHA_VERIFY_URL` (property) e timeouts 2 s/5 s.
+- **Cadastro**: `verify-email` consome uma tentativa por chamada (`UPDATE ... WHERE attempts < max_attempts`, atômico); depois de `max_attempts` até o código certo é recusado; o reenvio zera.
+  O fim do `pending_verifications`, o `INSERT` em `users` (a carteira nasce pelo trigger) e o `UserRegistered` entram na MESMA transação.
+- **Eventos de ciclo de vida** (`IdentityEvents`): stream `identity.user` (um por usuário), payload só com ids, na transação da escrita; `identity.notification` inalterado.
+- **Pool**: Hikari 100 / Tomcat 300 (`IdentityConfigTest`); a soma dos Hikari no Supavisor (1000 + 10 + 3 + 100 + 100 = 1213 <= 1500) vale depois do cutover.
+- **Fora desta fatia** (fatia 3): migração `20261028`, guarda de boot (`public.users` presente = não sobe), cutover do gateway (`IdentityClient`, validação por JWKS), compose,
+  `HttpContractTest`, ArchUnit, `FakeIdentityServer`. Hoje o monólito ainda assina HS256 com `JwtUtil`.
 
 ## Cadastro em duas fases + e-mail
 

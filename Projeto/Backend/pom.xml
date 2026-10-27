@@ -27,10 +27,14 @@
         <module>notification</module>
         <module>reservation</module>
         <module>catalog</module>
+        <module>identity</module>
     </modules>
 
     <properties>
         <java.version>21</java.version>
+        <!-- Nimbus JOSE+JWT: o BOM do Spring Boot NÃO gerencia esta lib. 9.37.4 é a versão que o spring-security-oauth2-jose 6.5.6 (Boot 3.5.7)
+             declara; identity (assina) e gateway (valida, fatia 3) resolvem a MESMA por aqui. -->
+        <nimbus-jose-jwt.version>9.37.4</nimbus-jose-jwt.version>
     </properties>
 
     <dependencyManagement>
@@ -54,6 +58,11 @@
                 <groupId>com.example.demo</groupId>
                 <artifactId>identity-client</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.nimbusds</groupId>
+                <artifactId>nimbus-jose-jwt</artifactId>
+                <version>${nimbus-jose-jwt.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
