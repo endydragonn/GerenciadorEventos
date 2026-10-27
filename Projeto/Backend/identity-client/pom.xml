@@ -11,9 +11,9 @@
     <description>Contrato HTTP do serviço identity (issue 36): DTOs User/MyWallet/LoginResult, UserApi e demais interfaces, exceções e o cliente que o gateway usa</description>
 
     <!-- Lib, não executável (sem spring-boot-maven-plugin), como a catalog-client. O serviço identity (fatia 2) depende dela
-         pelo contrato e a usa nos testes ponta a ponta; o monólito (gateway) passa a usar o IdentityClient no cutover (fatia 3).
-         Nenhum dos dois enxerga o código do outro: a fronteira física é o HTTP. Sem @Configuration aqui de propósito: o bean
-         do IdentityClient só nasce no cutover (senão haveria dois UserApi no contexto do monólito). -->
+         pelo contrato e a usa nos testes ponta a ponta; o monólito (gateway) monta o IdentityClient (IdentityClientConfig, cutover da
+         fatia 3). Nenhum dos dois enxerga o código do outro: a fronteira física é o HTTP. O serviço identity não escaneia o pacote
+         identityclient (senão haveria um cliente de si mesmo no contexto). -->
     <dependencies>
         <dependency>
             <groupId>org.springframework.boot</groupId>

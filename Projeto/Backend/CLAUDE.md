@@ -94,8 +94,8 @@ aplica o `14-catalog.sql`, que num banco não migrado criaria `catalog.event` va
 `gerenciador-catalog` estiver rodando (o relay dele drenaria o `catalog.event_outbox` dos testes). Antes disso apaga `target/surefire-reports` sozinho, então o total do
 resumo reflete só os testes desta rodada — não precisa limpar na mão; os relatórios de todos os módulos são copiados para
 `Backend/target/surefire-reports` (nomes de classe únicos). **Serviço `identity` (#36, fatia 2):** o script **aborta** se o `gerenciador-identity` estiver rodando (`docker stop gerenciador-identity`; o relay dele drenaria o
-`identity.event_outbox` dos testes) e **aplica o `db/init-scripts/15-identity.sql`** (idempotente, só `IF NOT EXISTS`/`CREATE OR REPLACE`; cria o schema `identity` ao lado do
-`public.users` do monólito, que segue em uso até o cutover). Os testes do módulo `identity` usam uma chave de assinatura temporária por JVM e um reCAPTCHA falso
+`identity.event_outbox` dos testes) e **aborta se o banco ainda tiver `public.users` ou não tiver `identity.users`** (migração `db/migrations/20261028-identity-schema.sql` pendente: backup `pg_dump -h localhost -U admin --clean --if-exists -n public meu_banco`, backend e identity parados; o script NÃO aplica o `15-identity.sql`, que num banco não migrado criaria tabelas vazias ao lado de `public.users`; bancos novos já nascem certos). Banco verificado por `db/migrations/verify-20261028-migration.sh` (bancos descartáveis: sem o 15, com o 15 vazio, guardas, rollback, init completo). Desde o cutover o monólito não tem mais `public.users`/`mywallet`/`pending_verifications`; o `FakeIdentityServer` (`TestSupport`, servido pelo `LauncherSessionListener` `IdentityFakeSession`, URL em `identity.service.url`) faz o papel do serviço nos testes do gateway. Detalhes e docs completas na fatia 4.
+Os testes do módulo `identity` usam uma chave de assinatura temporária por JVM e um reCAPTCHA falso
 (`TestSupport/IdentityTestSession`); a `RECAPTCHA_SECRET_KEY` real do `.env` nunca sai para o Google.
 **Pré-requisito do `notification` (#32):** o schema `notification`
 no banco (`db/migrations/20261024-notification-schema.sql`, num volume antigo; bancos novos já nascem com ele). **Pare também o
@@ -290,6 +290,7 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
     `run-tests.sh`).
 
 ## Módulos (pacote `com.gerenciador.eventos`) — issues #23 e #25
+> **Desatualizado desde o cutover da #36:** o monólito NÃO tem mais o pacote `identity` (nem `identity/security`): só `gateway/` (com `gateway/security`) e `shared`; o resto da lista abaixo que cita `identity/` é histórico. Ver "Serviço identity".
 
 Pacotes-por-serviço, no mesmo processo/deploy/banco (schema `public`) do monólito: é a preparação da
 Fase 5 para a decomposição em microsserviços (CQRS/ES na Fase 6, extração na Fase 7: o `notification` saiu na #32 e o `reservation`
@@ -408,6 +409,7 @@ gateway/         BffUserController, BffEventController, BffEventWalletController
   `search_path`: o Supavisor em transaction mode proíbe).
 
 ### Pooler (Supavisor, transaction mode) — issue #19
+> **Desatualizado desde o cutover da #36:** o Hikari do monólito é **10** (não 350) e a soma dos Hikari no Supavisor é **1213** (1000 reservation + 10 + 3 + 100 catalog + 100 identity). Ver "Serviço identity".
 
 O backend **em Docker** fala com o Postgres pelo Supavisor, não direto: no `environment:` do
 `backend` em `Projeto/docker-compose.yml`,
@@ -715,6 +717,7 @@ endpoint `/validate` correspondente (valida sem persistir). Fluxo típico de `cr
 `applyDefaults` → `validateRequired` → `validateRules` → `validateDuplicates*` → `repository.save`.
 Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 
+> **Desatualizado desde o cutover da #36:** o filtro JWT, o `SecurityConfig` e a autorização por host vivem em `gateway/security` (RS256 validado pelo JWKS do identity; `currentUserId()` = claim `uid`, host = claim `isHost`, sem consulta ao banco; o "Temporário até a #36" abaixo acabou). Ver "Serviço identity".
 ## Rotas e segurança
 
 - **Superfície HTTP única sob `/bff/**`** (issue #78): `gateway/BffUserController` (users — CRUD,
@@ -1176,7 +1179,7 @@ O monólito NÃO tem mais o pacote `catalog` (nem `public.event`): o `gateway` u
   `illegalStateQueNaoEConflitoDa500ComCorpoGenerico` e a limpeza da linha crua em `violacaoDeOutraUniqueNaoViraNomeDuplicado`;
   `CatalogClientIndisponivelTest`, o 404 sem/com o marcador.
 
-## Serviço identity — issue #36 (Fase 7: quarta extração; fatia 2 = o serviço, o cutover é a fatia 3)
+## Serviço identity — issue #36 (Fase 7: quarta extração; cutover feito na fatia 3)
 
 Módulo `Backend/identity/` (README próprio; entrypoint `com.gerenciador.eventos.identity.IdentityApplication`, porta **8084**, `identity/Dockerfile`): o código do pacote
 `identity` do monólito com **toda query qualificada `identity.`** (schema `identity`, `db/init-scripts/15-identity.sql`, que convive com o `02/06/08` até o cutover) e
@@ -1190,8 +1193,7 @@ Módulo `Backend/identity/` (README próprio; entrypoint `com.gerenciador.evento
   O fim do `pending_verifications`, o `INSERT` em `users` (a carteira nasce pelo trigger) e o `UserRegistered` entram na MESMA transação.
 - **Eventos de ciclo de vida** (`IdentityEvents`): stream `identity.user` (um por usuário), payload só com ids, na transação da escrita; `identity.notification` inalterado.
 - **Pool**: Hikari 100 / Tomcat 300 (`IdentityConfigTest`); a soma dos Hikari no Supavisor (1000 + 10 + 3 + 100 + 100 = 1213 <= 1500) vale depois do cutover.
-- **Fora desta fatia** (fatia 3): migração `20261028`, guarda de boot (`public.users` presente = não sobe), cutover do gateway (`IdentityClient`, validação por JWKS), compose,
-  `HttpContractTest`, ArchUnit, `FakeIdentityServer`. Hoje o monólito ainda assina HS256 com `JwtUtil`.
+- **Cutover (fatia 3, feito)**: o gateway (monólito) não tem mais o pacote `identity` (nem jjwt): `IdentityClient` (bean em `identityclient/IdentityClientConfig`, `IDENTITY_SERVICE_URL`) para tudo, validação do JWT RS256 em `gateway/security` (`JwtAuthenticationFilter` próprio + `NimbusJwtDecoder` com `JWKSource` montado à mão: cache 24 h, UM fetch por 30 s com limitador próprio — o do Nimbus deixou passar 2 por janela —, tolerância a queda; `currentUserId()` = claim `uid`, host = claim `isHost`, sem consulta), `IdentityIndisponivelHandler` (503 genérico, log só da classe), `EventWalletGateway` sem conferir carteira, Hikari do monólito 10, relay do monólito desligado. Serviço: `PublicSchemaGuard` (não sobe com `public.users`). Banco: migração `20261028` + `verify-20261028-migration.sh`; `01/02/06/08` saíram dos init-scripts (fixture dos verifys antigos em `db/migrations/legacy-fixtures/`). Compose: serviço `identity` (volume `identity-keys`), `backend` depende dele. Docs completas (arquitetura, smoke, kit de carga) na fatia 4.
 
 ## Cadastro em duas fases + e-mail
 

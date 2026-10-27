@@ -13,8 +13,8 @@ import java.util.regex.Pattern;
  */
 public final class TestSchemas {
 
-    /** Default do harness: o monólito (public) e os schemas dos serviços extraídos (notification, #32; reservation, #33; catalog, #35). Cada serviço extraído acrescenta o seu. */
-    public static final String DEFAULT = "public,notification,reservation,catalog";
+    /** Default do harness: o monólito (public) e os schemas dos serviços extraídos (notification, #32; reservation, #33; catalog, #35; identity, #36). Cada serviço extraído acrescenta o seu. */
+    public static final String DEFAULT = "public,notification,reservation,catalog,identity";
 
     public static final String PROPERTY = "${test.db.schemas:" + DEFAULT + "}";
 

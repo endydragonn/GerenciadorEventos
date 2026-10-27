@@ -17,7 +17,7 @@ import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.catalogclient.api.EventApi;
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.gateway.EventWalletGateway;
-import com.gerenciador.eventos.identity.UserService;
+import com.gerenciador.eventos.identityclient.api.UserApi;
 import com.gerenciador.eventos.identityclient.api.User;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 
@@ -32,7 +32,7 @@ import com.gerenciador.eventos.reservationclient.api.EventWallet;
 @Import(GlobalDbTruncator.class)
 public class EventWalletGatewayNaiveTest {
 
-    @Autowired private UserService userService;
+    @Autowired private UserApi userService;
     @Autowired private EventApi eventService;
     @Autowired private EventWalletGateway gateway;
 
@@ -83,16 +83,13 @@ public class EventWalletGatewayNaiveTest {
         assertEquals(2, reservation.reservasAtivas(e.getEvent_id()), "2 reservas para 1 vaga: overselling do braço de controle");
     }
 
-    /** Carteira e evento são conferidos NO monólito, antes de qualquer chamada ao serviço. */
+    /** O evento é conferido NO monólito, antes de qualquer chamada ao serviço (a carteira não: #36). */
     @Test
-    void carteiraEEventoInexistentesNaoChegamAoServico() {
+    void eventoInexistenteNaoChegaAoServico() {
         User u = usuario("gw-naive-5");
         Event e = evento(u.getId(), "GW Naive pre-checagem", 2);
         reservation.limparChamadas();
 
-        assertEquals("Carteira do usuário não encontrada",
-                assertThrows(IllegalArgumentException.class,
-                        () -> gateway.addLink(new EventWallet(987_654L, e.getEvent_id()), null)).getMessage());
         assertEquals("Evento não encontrado",
                 assertThrows(IllegalArgumentException.class,
                         () -> gateway.addLink(new EventWallet(u.getId(), 987_654L), null)).getMessage());

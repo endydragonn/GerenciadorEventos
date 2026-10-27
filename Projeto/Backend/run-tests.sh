@@ -128,11 +128,19 @@ if [ "$ESTADO_CATALOG" != "t|t" ]; then
     exit 1
 fi
 
-# Schema do serviço identity (#36, fatia 2): o 15-identity.sql é IDEMPOTENTE (só IF NOT EXISTS / CREATE OR REPLACE) e CONVIVE com o
-# 02/06/08 até o cutover (fatia 3): aqui só garante que o schema identity existe para os testes do módulo identity (banco já existente
-# criado antes da fatia 2). Não toca em public. Quando a migração 20261028 mover as tabelas, este passo deixa de ser necessário.
-if ! docker exec -i gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d meu_banco -v ON_ERROR_STOP=1 -q'         < "$SCRIPT_DIR/db/init-scripts/15-identity.sql" >/dev/null 2>&1; then
-    echo "❌ Não consegui aplicar o db/init-scripts/15-identity.sql (schema do serviço identity) no banco meu_banco."
+# Schema do serviço identity (#36): bancos novos já nascem com ele (supabase-app-init.sql); um volume existente precisa da migração
+# 20261028 (move public.users/mywallet/pending_verifications e o stream identity.notification para o schema identity, preservando os
+# user_id e a identity). O script NÃO aplica o 15-identity.sql: num banco não migrado ele criaria identity.users vazia ao lado de
+# public.users (e o serviço identity, que também recusa subir assim, rodaria os testes sobre tabelas que não são as do app). Só confere o
+# estado e aborta com o caminho da migração; a saída do psql entra na mensagem (nada de esconder o erro).
+ESTADO_IDENTITY="$(echo "SELECT to_regclass('public.users') IS NULL, to_regclass('identity.users') IS NOT NULL;" \
+    | docker exec -i gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d meu_banco -At' 2>&1)"
+if [ "$ESTADO_IDENTITY" != "t|t" ]; then
+    echo "❌ O banco não está no schema do serviço identity (public.users ainda existe ou identity.users não existe; psql: $ESTADO_IDENTITY)."
+    echo "   Pare o backend e o identity, faça o backup e aplique a migração (ver o cabeçalho do arquivo):"
+    echo "   docker exec gerenciador-db pg_dump -h localhost -U admin --clean --if-exists -n public meu_banco > <fora do repo>/meu_banco-public.sql"
+    echo "   docker exec -i gerenciador-db psql -h localhost -U supabase_admin -d meu_banco -v ON_ERROR_STOP=1 \\"
+    echo "     < Projeto/Backend/db/migrations/20261028-identity-schema.sql"
     echo ""
     exit 1
 fi

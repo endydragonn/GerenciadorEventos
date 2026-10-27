@@ -19,7 +19,7 @@ import org.springframework.http.ResponseEntity;
 
 import com.gerenciador.eventos.TestSupport.FakeCatalogServer;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.identity.UserService;
+import com.gerenciador.eventos.identityclient.api.UserApi;
 import com.gerenciador.eventos.identityclient.api.User;
 
 /**
@@ -34,7 +34,7 @@ public class SeedDesligadoTest {
 
     @LocalServerPort private int port;
     @Autowired private TestRestTemplate restTemplate;
-    @Autowired private UserService userService;
+    @Autowired private UserApi userService;
 
     @Test
     void seedSemAFlagDa404ENaoCriaNada() {

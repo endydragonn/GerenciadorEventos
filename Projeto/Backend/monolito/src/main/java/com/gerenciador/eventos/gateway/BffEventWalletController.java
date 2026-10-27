@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
-import com.gerenciador.eventos.identity.api.HostAuthorizationApi;
+import com.gerenciador.eventos.gateway.security.HostAuthorizationApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictException;
 
@@ -33,10 +33,10 @@ import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictExceptio
  * <p>Issue #57 (IDOR): o {@code userId} é o do token ({@link HostAuthorizationApi#currentUserId()}), nunca o do
  * corpo/query/path. Nesses três lugares ele é opcional: ausente vale o do token, igual segue e <b>diferente é 403</b>,
  * antes de qualquer validação ou chamada ao reservation (a negação não revela se o outro usuário existe). Vale para
- * addLink, confirm, validate, removeLink e listByUser. A consulta e-mail -> {@code user_id} por requisição é temporária:
- * a #36 (JWT assimétrico) a troca pelo claim {@code uid}. O mesmo IDOR em {@code BffMyWalletController} é outra issue.</p>
+ * addLink, confirm, validate, removeLink e listByUser. Desde a #36 o {@code userId} é o claim {@code uid} do JWT do identity (sem consulta
+ * ao banco): um {@code uid} sem usuário não dá mais 401 aqui. O mesmo IDOR em {@code BffMyWalletController} é outra issue.</p>
  *
- * <p>Desde a #33 a reserva é do serviço {@code reservation}: o {@link EventWalletGateway} confere carteira/evento e chama
+ * <p>Desde a #33 a reserva é do serviço {@code reservation}: o {@link EventWalletGateway} confere o evento e chama
  * a API interna dele por HTTP; o contrato deste controller não mudou.</p>
  */
 @RestController
@@ -145,7 +145,7 @@ public class BffEventWalletController {
 
     /**
      * Issue #57: grava em {@code ew} o usuário do token. Devolve a resposta de recusa (403 se o {@code userId} informado
-     * difere do dono do token; 401 se o usuário do token já não existe) ou {@code null} quando pode seguir.
+     * difere do dono do token; 401 se o token não traz usuário) ou {@code null} quando pode seguir.
      */
     private ResponseEntity<String> amarrarAoToken(EventWallet ew) {
         Long doToken;

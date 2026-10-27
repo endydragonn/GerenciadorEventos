@@ -1,4 +1,4 @@
-package com.gerenciador.eventos;
+package com.gerenciador.eventos.identity;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -24,7 +24,8 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**
  * Trava em teste, contra o Postgres real, os invariantes de constraint do schema criados
- * na implementação EventCap/CAS de 2026-09-01 (issue #7 — verificação):
+ * na implementação EventCap/CAS de 2026-09-01 (issue #7 — verificação); desde o cutover do identity (#36) mora no módulo identity,
+ * contra o schema {@code identity}:
  *
  * <ul>
  *   <li><b>A)</b> UNIQUE em {@code users(email)} e {@code users(fone)}
@@ -46,7 +47,7 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 @SpringBootTest
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Import(GlobalDbTruncator.class)
-public class SchemaConstraintsTest {
+public class IdentitySchemaConstraintsTest {
 
     @Autowired private DatabaseConnection databaseConnection;
 
@@ -54,15 +55,15 @@ public class SchemaConstraintsTest {
 
     @Test
     void usersEmailTemConstraintUniquePelaColunaEmail() throws Exception {
-        assertUniqueConstraintColumns("Users_email_key", "public.users", "email");
+        assertUniqueConstraintColumns("Users_email_key", "identity.users", "email");
     }
 
     @Test
     void usersFoneEhUniqueENotNull() throws Exception {
         // fone é OBRIGATÓRIO e único (decisão do usuário em 2026-09-03, issue #7 critério 2):
         // o schema real, o UserService.validateRequired e o frontend já tratam assim.
-        assertUniqueConstraintColumns("Users_fone_key", "public.users", "fone");
-        assertColunaNotNull("public.users", "fone");
+        assertUniqueConstraintColumns("Users_fone_key", "identity.users", "fone");
+        assertColunaNotNull("identity.users", "fone");
     }
 
     @Test
@@ -133,11 +134,11 @@ public class SchemaConstraintsTest {
         }
     }
 
-    /** INSERT cru em public.users (contorna o pré-check de duplicidade do UserService). */
+    /** INSERT cru em identity.users (contorna o pré-check de duplicidade do UserService). */
     private void inserirUsuarioCru(Connection conn, String nome, String email, String fone)
             throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
-                "INSERT INTO users (user_name, email, fone, password, birthdate) "
+                "INSERT INTO identity.users (user_name, email, fone, password, birthdate) "
               + "VALUES (?, ?, ?, 'x', DATE '2000-01-01')")) {
             ps.setString(1, nome);
             ps.setString(2, email);

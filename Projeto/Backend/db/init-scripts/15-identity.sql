@@ -7,8 +7,8 @@
 -- ciclo de vida, payload só com ids). Todas as queries do serviço qualificam com "identity." (o Supavisor em transaction mode
 -- proíbe search_path).
 --
--- FATIA 2 da #36: este script CONVIVE com o 02/06/08 (o monólito ainda usa public.users até o cutover, fatia 3). No cutover, o
--- 02/06/08 saem do supabase-app-init.sql e, num banco EXISTENTE, quem move os dados é a migração 20261028-identity-schema.sql
+-- Cutover da #36 (fatia 3): este script é o ÚNICO dono dessas tabelas (o 01/02/06/08 saíram do supabase-app-init.sql e do repo; bancos
+-- novos já nascem sem public.users). Num banco EXISTENTE quem move os dados é a migração 20261028-identity-schema.sql
 -- (ela derruba as tabelas identity.* que ESTE script tenha criado, SÓ se vazias: nunca recicla user_id).
 --
 -- SEM FK cross-schema: a única FK é interna (mywallet -> users, ON DELETE CASCADE; é por ela e pelo trigger 1:1 que mywallet mora

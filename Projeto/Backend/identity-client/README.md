@@ -4,13 +4,12 @@ Lib (jar simples, sem repackage) com o **contrato HTTP** do serviço `identity` 
 `RecaptchaResponse`, as interfaces `UserApi`, `EmailVerificationApi`, `MyWalletApi` e `RecaptchaApi`, as exceções
 `IdentityUnavailableException` e `IdentityNaoEncontradoException` e o `IdentityClient`.
 
-- **Quem usa:** o monólito (`gateway`) importa os tipos de `identityclient.api` desde a fatia 1; o `UserService`,
-  `EmailVerificationService` e `MyWalletService` (pacote `identity` do monólito) os implementam enquanto o identity não sai do processo.
-  No cutover (fatia 3) o gateway passa a usar o `IdentityClient` (o bean entra então: **esta lib não tem `@Configuration` de
-  propósito**, senão haveria dois `UserApi` no contexto do monólito) e o serviço `identity` (fatia 2) implementa os mesmos endpoints.
+- **Quem usa:** o gateway (monólito) monta o `IdentityClient` pelo `IdentityClientConfig` (desde o cutover, fatia 3) e o injeta como
+  `UserApi`/`EmailVerificationApi`/`MyWalletApi`/`RecaptchaApi`; o serviço `identity` implementa os mesmos endpoints e NÃO escaneia o
+  pacote `identityclient` (só usa os tipos do contrato e o cliente nos testes ponta a ponta).
 - **`IdentityClient`:** uma chamada HTTP por método, header `X-Internal-Token` em TODA chamada (sem token a construção falha). Apache
   HttpClient 5 com pool (padrão 400 no total e por rota), keep-alive, conectar 2 s, esperar conexão do pool 5 s, **resposta 5 s**,
-  `evict-idle` 20 s e **sem retry automático**. URL: `IDENTITY_SERVICE_URL` (default `http://localhost:8084`; o bean lê no cutover).
+  `evict-idle` 20 s e **sem retry automático**. URL: `IDENTITY_SERVICE_URL` (default `http://localhost:8084`; o `IdentityClientConfig` lê).
 - **`MyWalletApi.walletExists`** (não `exists`): o `IdentityClient` implementa `UserApi` e `MyWalletApi` na mesma classe e as duas tinham
   `boolean exists(Long)`.
 

@@ -6,16 +6,8 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -24,11 +16,14 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestTemplate;
 
+import com.gerenciador.eventos.gateway.security.HostAuthorizationApi;
 import com.gerenciador.eventos.identityclient.api.EmailVerificationApi;
+import com.gerenciador.eventos.identityclient.api.IdentityNaoEncontradoException;
+import com.gerenciador.eventos.identityclient.api.IdentityUnavailableException;
 import com.gerenciador.eventos.identityclient.api.LoginResult;
+import com.gerenciador.eventos.identityclient.api.RecaptchaApi;
+import com.gerenciador.eventos.identityclient.api.RecaptchaResponse;
 import com.gerenciador.eventos.identityclient.api.User;
 import com.gerenciador.eventos.identityclient.api.UserApi;
 
@@ -37,31 +32,28 @@ import com.gerenciador.eventos.identityclient.api.UserApi;
  * ({@code /me}), cadastro em duas fases (request-verification / verify-email /
  * resend-verification-code), reset de senha com MFA e validação do reCAPTCHA v3.
  *
- * <p>Antes desta issue (#78) essas responsabilidades estavam espalhadas entre
- * {@code bff.BffApplication.UserBffController} (login/me/CRUD, sob {@code /bff/users}),
- * {@code Controller.BffUserController} (login/me duplicados, sob {@code /api/bff/users},
- * inalcançável pelo frontend) e {@code Controller.UserController} +
- * {@code Controller.RecaptchaController} (cadastro/reCAPTCHA, sob {@code /api/users}).
- * O comportamento de cada endpoint aqui é o que já estava em produção (o que o Flutter
- * efetivamente chama) — nenhuma lógica de negócio mudou, só o pacote/path.</p>
+ * <p>Desde a #36 o gateway não tem domínio de usuário: cada rota chama o serviço identity pelo {@code IdentityClient}
+ * (contrato {@code identityclient.api}). O token do login/cadastro é emitido pelo identity (RS256); o gateway só o devolve.
+ * {@link IdentityUnavailableException} (identity fora/lento) é <b>503</b> genérico no {@link IdentityIndisponivelHandler}: os
+ * {@code catch (RuntimeException)}/{@code catch (Exception)} abaixo a relançam antes, senão ela viraria 404/400/500.</p>
  */
 @RestController
 @RequestMapping("/bff/users")
 public class BffUserController {
 
     private static final Logger logger = LoggerFactory.getLogger(BffUserController.class);
-    private static final String RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify";
-    private static final double RECAPTCHA_SCORE_THRESHOLD = 0.7;
 
     private final UserApi userService;
     private final EmailVerificationApi emailVerificationService;
+    private final RecaptchaApi recaptchaService;
+    private final HostAuthorizationApi authorization;
 
-    @Value("${RECAPTCHA_SECRET_KEY:}")
-    private String recaptchaSecretKey;
-
-    public BffUserController(UserApi userService, EmailVerificationApi emailVerificationService) {
+    public BffUserController(UserApi userService, EmailVerificationApi emailVerificationService, RecaptchaApi recaptchaService,
+            HostAuthorizationApi authorization) {
         this.userService = userService;
         this.emailVerificationService = emailVerificationService;
+        this.recaptchaService = recaptchaService;
+        this.authorization = authorization;
     }
 
     // ======================= CRUD =======================
@@ -73,6 +65,8 @@ public class BffUserController {
             return ResponseEntity.status(HttpStatus.CREATED).body(created);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (IdentityUnavailableException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Erro ao criar usuário", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
@@ -84,6 +78,8 @@ public class BffUserController {
         try {
             User user = userService.findById(id);
             return ResponseEntity.ok(user);
+        } catch (IdentityUnavailableException e) {
+            throw e;
         } catch (RuntimeException e) {
             return ResponseEntity.notFound().build();
         }
@@ -94,6 +90,8 @@ public class BffUserController {
         try {
             User user = userService.findByEmail(email);
             return ResponseEntity.ok(user);
+        } catch (IdentityUnavailableException e) {
+            throw e;
         } catch (RuntimeException e) {
             return ResponseEntity.notFound().build();
         }
@@ -107,6 +105,8 @@ public class BffUserController {
             return ResponseEntity.ok(updated);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (IdentityUnavailableException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Erro ao atualizar usuário", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
@@ -134,6 +134,8 @@ public class BffUserController {
             }
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (IdentityUnavailableException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Erro ao alterar senha", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
@@ -145,6 +147,8 @@ public class BffUserController {
         try {
             userService.deactivateUser(id);
             return ResponseEntity.noContent().build();
+        } catch (IdentityUnavailableException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Erro ao deletar usuário", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
@@ -175,19 +179,19 @@ public class BffUserController {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Credenciais inválidas");
     }
 
+    /**
+     * Usuário do token, resolvido pelo {@code uid} (claim assinado pelo identity), não pelo e-mail do {@code sub}: depois de trocar o
+     * e-mail o mesmo token não vira duas identidades. Sem usuário autenticado, ou {@code uid} que não existe mais: 401.
+     */
     @GetMapping("/me")
     public ResponseEntity<?> getCurrentUser() {
         try {
-            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-
-            if (auth != null && auth.isAuthenticated() && !"anonymousUser".equals(auth.getPrincipal())) {
-                String email = auth.getName();
-                User user = userService.findByEmail(email);
-                if (user != null) {
-                    return ResponseEntity.ok(user);
-                }
-            }
+            Long uid = authorization.currentUserId();
+            return ResponseEntity.ok(userService.findById(uid));
+        } catch (IllegalArgumentException | IdentityNaoEncontradoException e) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Não autenticado");
+        } catch (IdentityUnavailableException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Erro ao buscar usuário", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -311,6 +315,8 @@ public class BffUserController {
             response.put("email", user.getEmail());
             return ResponseEntity.ok(response);
 
+        } catch (IdentityUnavailableException e) {
+            throw e;
         } catch (RuntimeException e) {
             return ResponseEntity.notFound().build();
         } catch (Exception e) {
@@ -337,6 +343,8 @@ public class BffUserController {
             } else {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Código MFA inválido ou expirado");
             }
+        } catch (IdentityUnavailableException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Erro ao validar MFA", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -365,6 +373,8 @@ public class BffUserController {
 
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (IdentityUnavailableException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Erro ao alterar senha com MFA", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -374,61 +384,18 @@ public class BffUserController {
 
     // ======================= reCAPTCHA v3 =======================
 
+    /**
+     * A verificação (chave secreta, chamada ao Google e limiar de score) é do identity (#36). O serviço devolve o MESMO status e
+     * corpo de antes (200 com {@code success/score/action}; 500 com {@code success=false} e {@code error}); só indisponibilidade do
+     * identity vira 503.
+     */
     @PostMapping("/verify-recaptcha")
     public ResponseEntity<?> verifyRecaptcha(@RequestBody RecaptchaRequest request) {
         try {
-            if (recaptchaSecretKey == null || recaptchaSecretKey.isEmpty()) {
-                logger.warn("RECAPTCHA_SECRET_KEY não configurada no .env");
-                return ResponseEntity.status(500).body(Map.of("success", false, "error", "reCAPTCHA não configurado"));
-            }
-
-            RestTemplate restTemplate = new RestTemplate();
-
-            // Google exige form-urlencoded, não JSON
-            MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
-            body.add("secret", recaptchaSecretKey);
-            body.add("response", request.getToken());
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-            HttpEntity<MultiValueMap<String, String>> entity = new HttpEntity<>(body, headers);
-
-            logger.info("Enviando requisição para Google reCAPTCHA API...");
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> response = restTemplate.postForObject(
-                RECAPTCHA_VERIFY_URL,
-                entity,
-                Map.class
-            );
-
-            if (response == null) {
-                logger.warn("Resposta nula do Google reCAPTCHA");
-                return ResponseEntity.status(500).body(Map.of("success", false, "error", "Resposta inválida do reCAPTCHA"));
-            }
-
-            boolean success = Boolean.TRUE.equals(response.get("success"));
-            double score = ((Number) response.getOrDefault("score", 0.0)).doubleValue();
-            String action = (String) response.getOrDefault("action", "");
-
-            logger.info(String.format("Resposta Google reCAPTCHA: Success=%b, Score=%.2f, Action=%s, ErrorCodes=%s",
-                success, score, action, response.getOrDefault("error-codes", "none")));
-
-            boolean isValid = success && score >= RECAPTCHA_SCORE_THRESHOLD && action.equals(request.getAction());
-
-            logger.info(String.format("Validação Final: isValid=%b (success=%b, score>=%.2f=%b, action_match=%b)",
-                isValid, success, RECAPTCHA_SCORE_THRESHOLD, score >= RECAPTCHA_SCORE_THRESHOLD, action.equals(request.getAction())));
-
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", isValid);
-            result.put("score", score);
-            result.put("action", action);
-
-            return ResponseEntity.ok(result);
-
-        } catch (RestClientException e) {
-            logger.error("Erro ao conectar ao reCAPTCHA", e);
-            return ResponseEntity.status(500).body(Map.of("success", false, "error", "Erro de conexão com reCAPTCHA"));
+            RecaptchaResponse r = recaptchaService.verify(request.getToken(), request.getAction());
+            return ResponseEntity.status(r.status()).body(r.body());
+        } catch (IdentityUnavailableException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Erro ao validar reCAPTCHA", e);
             return ResponseEntity.status(500).body(Map.of("success", false, "error", ErroInterno.MENSAGEM));

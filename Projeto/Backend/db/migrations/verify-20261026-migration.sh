@@ -28,7 +28,10 @@ MIG_DB="meu_banco_mig"
 INIT_DB="meu_banco_init_check"
 REMOTE_DIR="/tmp/catalog_mig_check"
 # init-scripts atuais (o 03-event e o 05-eventpresenter saíram no cutover; o 14-catalog cria o schema catalog)
-INIT_SCRIPTS="01-functions 02-users 06-mywallet 08-pending-verifications 11-event-store 12-notification 13-reservation 14-catalog"
+# 01/02/06/08 saíram na #36 (viraram o 15-identity.sql): o estado pré-cutover de users/mywallet/pending_verifications em public vem do
+# fixture legacy-fixtures/public-identity-pre-20261028.sql. O 15 só é copiado (o supabase-app-init.sql do caso 8 o inclui).
+LEGACY_FIXTURE="public-identity-pre-20261028"
+INIT_SCRIPTS="11-event-store 12-notification 13-reservation 14-catalog"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "$(uname -s)" in
@@ -72,9 +75,10 @@ trap limpar EXIT
 echo ""
 echo "==> Copiando scripts para o container em $REMOTE_DIR"
 docker exec -i "$CONTAINER" sh -c "rm -rf '$REMOTE_DIR' && mkdir -p '$REMOTE_DIR/init'"
-for f in $INIT_SCRIPTS 99-tests; do
+for f in $INIT_SCRIPTS 15-identity 99-tests; do
     docker cp "$DB_DIR/init-scripts/$f.sql" "$CONTAINER:$REMOTE_DIR/init/$f.sql"
 done
+docker cp "$DB_DIR/migrations/legacy-fixtures/$LEGACY_FIXTURE.sql" "$CONTAINER:$REMOTE_DIR/init/$LEGACY_FIXTURE.sql"
 docker cp "$DB_DIR/supabase-app-init.sql" "$CONTAINER:$REMOTE_DIR/supabase-app-init.sql"
 docker cp "$DB_DIR/migrations/20261026-catalog-schema.sql" "$CONTAINER:$REMOTE_DIR/20261026-catalog-schema.sql"
 docker cp "$DB_DIR/migrations/verify-20261026-migration.sql" "$CONTAINER:$REMOTE_DIR/verify.sql"
@@ -89,6 +93,8 @@ drop_dbs # sobra de uma rodada interrompida
 como_admin_supabase "-d postgres -c 'CREATE DATABASE $MIG_DB;'"
 # dono = o usuário do app, como o meu_banco (supabase-app-init.sql): ele cria os schemas e é dono das tabelas
 docker exec -i "$CONTAINER" sh -c 'psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d postgres -c "ALTER DATABASE '"$MIG_DB"' OWNER TO \"$APP_DB_USER\";"'
+echo "    - $LEGACY_FIXTURE.sql (users/mywallet/pending_verifications em public)"
+como_app "-d $MIG_DB -f $REMOTE_DIR/init/$LEGACY_FIXTURE.sql" >/dev/null
 for f in $INIT_SCRIPTS; do
     echo "    - $f.sql"
     como_app "-d $MIG_DB -f $REMOTE_DIR/init/$f.sql" >/dev/null
