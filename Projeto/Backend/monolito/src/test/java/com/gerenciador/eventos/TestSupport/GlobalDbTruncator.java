@@ -38,6 +38,10 @@ public class GlobalDbTruncator {
         if (catalog != null) {
             catalog.reset();
         }
+        FakeIdentityServer identity = FakeIdentityServer.get(); // usuários do identity falso (#36), em memória
+        if (identity != null) {
+            identity.reset();
+        }
         String truncateSQL = null;
         try (Connection conn = databaseConnection.getConnection();
              Statement stmt = conn.createStatement()) {

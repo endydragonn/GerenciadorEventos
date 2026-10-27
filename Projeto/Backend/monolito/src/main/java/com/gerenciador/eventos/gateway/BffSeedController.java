@@ -16,8 +16,9 @@ import org.springframework.web.bind.annotation.RestController;
 import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.catalogclient.api.EventApi;
-import com.gerenciador.eventos.identity.api.User;
-import com.gerenciador.eventos.identity.api.UserApi;
+import com.gerenciador.eventos.identityclient.api.IdentityUnavailableException;
+import com.gerenciador.eventos.identityclient.api.User;
+import com.gerenciador.eventos.identityclient.api.UserApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 
 /**
@@ -105,6 +106,8 @@ public class BffSeedController {
                 } catch (IllegalArgumentException e) {
                     // Usuário já existe ou erro de validação - registrar mas continuar
                     warnings.add("Usuário '" + user.getEmail() + "': " + e.getMessage());
+                } catch (IdentityUnavailableException e) { // a mensagem traz URI com e-mail: fica fora da resposta
+                    errors.add("Erro ao criar usuário '" + user.getEmail() + "': " + IdentityIndisponivelHandler.INDISPONIVEL);
                 } catch (Exception e) {
                     errors.add("Erro ao criar usuário '" + user.getEmail() + "': " + e.getMessage());
                 }
@@ -126,6 +129,8 @@ public class BffSeedController {
                     warnings.add("Evento '" + event.getEvent_name() + "': " + e.getMessage());
                 } catch (CatalogUnavailableException e) { // a mensagem traz URL interna: fica no log, não na resposta
                     errors.add("Erro ao criar evento '" + event.getEvent_name() + "': " + CatalogIndisponivelHandler.INDISPONIVEL);
+                } catch (IdentityUnavailableException e) { // a mensagem traz URI com e-mail: fica fora da resposta e do log
+                    errors.add("Erro ao criar evento '" + event.getEvent_name() + "': " + IdentityIndisponivelHandler.INDISPONIVEL);
                 } catch (Exception e) {
                     errors.add("Erro ao criar evento '" + event.getEvent_name() + "': " + e.getMessage());
                 }

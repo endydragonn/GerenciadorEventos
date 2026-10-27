@@ -6,7 +6,8 @@
 #
 # - backend (monolito/gateway): RESERVATION_READPATH decide o fluxo: cas (default, 1 chamada ao reservation, nunca oversella)
 #   ou naive (braco de controle, 2 chamadas: GET da disponibilidade + POST da reserva). Lido na subida do backend.
-#   Hikari 350 (suficiente para as pre-checagens curtas; NAO e o caminho quente) e Tomcat 300 (compose/application.properties).
+#   Hikari 10 (desde a #36 o gateway nao toca em tabela de dominio: so health; soma no Supavisor = 1213 <= 1500) e Tomcat 300
+#   (compose/application.properties). O identity (JWT RS256, login, cadastro) e outro servico: ver o compose normal.
 # - reservation: o CAMINHO QUENTE. Hikari 1000, Tomcat 300 e virtual threads desligadas, como o monolito no ponto 2
 #   (SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE / _MINIMUM_IDLE chegam aqui, issue #96). Relay e consumer ligados no compose.
 # - O lag do caminho naive deixou de ser um knob (issue #29): e o lag REAL do consumer da projecao
@@ -23,7 +24,7 @@ services:
     environment:
       RESERVATION_READPATH: ${RESERVATION_READPATH:-cas}
       SEED_ENABLED: "true"
-      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${BACKEND_HIKARI_MAXIMUM_POOL_SIZE:-350}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${BACKEND_HIKARI_MAXIMUM_POOL_SIZE:-10}
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-5}
       SPRING_JPA_SHOW_SQL: "false"
       LOGGING_LEVEL_ORG_HIBERNATE_SQL: "INFO"

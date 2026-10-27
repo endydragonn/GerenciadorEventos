@@ -45,17 +45,18 @@ public class TestSchemasTest {
     void defaultCobreSoPublicEIncluiTabelasDoApp() throws Exception {
         try (Connection c = databaseConnection.getConnection()) {
             List<String> tabelas = TestSchemas.tabelas(c, TestSchemas.parse("public"));
-            assertTrue(tabelas.containsAll(List.of("public.users", "public.mywallet", "public.event_store")));
+            assertTrue(tabelas.containsAll(List.of("public.event_store", "public.event_outbox")));
             assertTrue(tabelas.stream().allMatch(t -> t.startsWith("public.")));
+            assertFalse(tabelas.contains("public.users"), "users saiu de public na #36 (schema identity)");
             assertFalse(tabelas.contains("public.eventcap"), "eventcap saiu de public na #33");
             assertFalse(tabelas.contains("public.event"), "event saiu de public na #35 (schema catalog)");
         }
     }
 
-    /** Fase 7 (#32, #33, #35): os schemas dos serviços notification, reservation e catalog entram no harness (truncate + validação) por padrão. */
+    /** Fase 7 (#32, #33, #35, #36): os schemas dos serviços notification, reservation, catalog e identity entram no harness (truncate + validação) por padrão. */
     @Test
-    void defaultDoHarnessCobrePublicNotificationReservationECatalog() throws Exception {
-        assertEquals(List.of("public", "notification", "reservation", "catalog"), TestSchemas.parse(TestSchemas.DEFAULT));
+    void defaultDoHarnessCobrePublicNotificationReservationCatalogEIdentity() throws Exception {
+        assertEquals(List.of("public", "notification", "reservation", "catalog", "identity"), TestSchemas.parse(TestSchemas.DEFAULT));
         try (Connection c = databaseConnection.getConnection()) {
             List<String> tabelas = TestSchemas.tabelas(c, TestSchemas.parse(TestSchemas.DEFAULT));
             assertTrue(tabelas.contains("notification.processed_event"), "tabelas: " + tabelas);
@@ -64,7 +65,8 @@ public class TestSchemasTest {
                     "tabelas: " + tabelas);
             assertTrue(tabelas.containsAll(List.of("catalog.event", "catalog.eventpresenter", "catalog.event_store")),
                     "tabelas: " + tabelas);
-            assertTrue(tabelas.contains("public.users"));
+            assertTrue(tabelas.containsAll(List.of("identity.users", "identity.mywallet", "identity.pending_verifications",
+                    "identity.event_store")), "tabelas: " + tabelas);
         }
     }
 
@@ -78,7 +80,7 @@ public class TestSchemasTest {
 
                 List<String> comTmp = TestSchemas.tabelas(c, TestSchemas.parse("public," + SCHEMA_TMP));
                 assertTrue(comTmp.contains(SCHEMA_TMP + ".t"));
-                assertTrue(comTmp.contains("public.users"));
+                assertTrue(comTmp.contains("public.event_store"));
                 assertFalse(TestSchemas.tabelas(c, TestSchemas.parse("public")).contains(SCHEMA_TMP + ".t"));
 
                 // truncate só do schema extra (não apaga dados de public no meio da suíte)

@@ -18,8 +18,8 @@ import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.catalogclient.api.EventApi;
 import com.gerenciador.eventos.gateway.EventWalletGateway;
-import com.gerenciador.eventos.identity.UserService;
-import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.identityclient.api.UserApi;
+import com.gerenciador.eventos.identityclient.api.User;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 
 /**
@@ -32,7 +32,7 @@ import com.gerenciador.eventos.reservationclient.api.EventWallet;
 @Import(GlobalDbTruncator.class)
 public class EventWalletGatewayCasTest {
 
-    @Autowired private UserService userService;
+    @Autowired private UserApi userService;
     @Autowired private EventApi eventService;
     @Autowired private EventWalletGateway gateway;
 
@@ -62,7 +62,7 @@ public class EventWalletGatewayCasTest {
         assertEquals("Evento lotado", ex.getMessage());
     }
 
-    /** A validação do endpoint {@code /validate}: carteira + evento (daqui) + "Vínculo já existente" (do serviço). */
+    /** A validação do endpoint {@code /validate}: evento (daqui; a carteira não é mais conferida, #36) + "Vínculo já existente" (do serviço). */
     @Test
     void validacaoComponheOsErrosNaMesmaOrdemDeAntes() {
         User u = usuario("gw-cas-4");
@@ -71,7 +71,7 @@ public class EventWalletGatewayCasTest {
         assertEquals("", gateway.getValidationErrors(new EventWallet(u.getId(), e.getEvent_id())));
         gateway.addLink(new EventWallet(u.getId(), e.getEvent_id()), null);
         assertEquals("Vínculo já existente.", gateway.getValidationErrors(new EventWallet(u.getId(), e.getEvent_id())));
-        assertEquals("Carteira não encontrada. Evento não encontrado.",
+        assertEquals("Evento não encontrado.",
                 gateway.getValidationErrors(new EventWallet(987_654L, 987_655L)));
         assertTrue(gateway.getValidationErrors(new EventWallet(null, 0L)).startsWith("user_id é obrigatório"));
     }

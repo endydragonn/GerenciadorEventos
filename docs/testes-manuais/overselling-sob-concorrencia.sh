@@ -136,7 +136,7 @@ limpar() {
     psql_db "DELETE FROM reservation.walletevent WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name LIKE 'Evento Overselling %${SUFIXO}');" >/dev/null 2>&1 || true
     psql_db "DELETE FROM reservation.eventcap WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name LIKE 'Evento Overselling %${SUFIXO}');" >/dev/null 2>&1 || true
     psql_db "DELETE FROM catalog.event WHERE event_name LIKE 'Evento Overselling %${SUFIXO}';" >/dev/null 2>&1 || true
-    psql_db "DELETE FROM users WHERE email LIKE 'oversell-%-${SUFIXO}@example.com';" >/dev/null 2>&1 || true
+    psql_db "DELETE FROM identity.users WHERE email LIKE 'oversell-%-${SUFIXO}@example.com';" >/dev/null 2>&1 || true
     echo "    dados do sufixo $SUFIXO removidos"
     rm -rf "$TMP"
 }

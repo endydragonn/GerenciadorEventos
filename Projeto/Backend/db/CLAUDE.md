@@ -40,7 +40,7 @@ não há migração via ORM. Leia também o CLAUDE.md da raiz e o de `Backend/`.
 ## Inspeção visual (Supabase Studio)
 
 Com a stack no ar, o Studio fica em `http://localhost:8000` (via Kong; login com `DASHBOARD_USERNAME` e
-`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`). Table Editor → schemas `public` (`users`, `mywallet`...), `catalog` (`event`, `eventpresenter`; #35) e `reservation` (`eventcap`,
+`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`). Table Editor → schemas `identity` (`users`, `mywallet`...; #36), `catalog` (`event`, `eventpresenter`; #35) e `reservation` (`eventcap`,
 `walletevent`...) mostram as tabelas do app; o SQL Editor roda consultas em `meu_banco`. Studio e `meta` conectam como
 `supabase_admin`, não como `admin`: é leitura/edição manual de apoio, o backend continua usando só JDBC.
 Detalhes e limites (sem GoTrue/PostgREST/Realtime/Storage/functions) em `Projeto/supabase/README.md`.
@@ -74,14 +74,11 @@ como `supabase_admin` (um `psql` por arquivo, ordem lexical, no `POSTGRES_DB`). 
 
 | Arquivo | Conteúdo |
 |---|---|
-| `01-functions.sql` | `create_wallet_for_user()` (usada pelo trigger de `users`) |
-| `02-users.sql` | tabela `users` + trigger `trigger_create_wallet` |
-| `06-mywallet.sql` | tabela `mywallet` (FK `user_id → users`, `ON DELETE CASCADE`) |
-| `08-pending-verifications.sql` | tabela + funções/trigger de limpeza de códigos expirados |
-| `11-event-store.sql` | `event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint` — infra de event sourcing da Fase 6 (#27), sem FK |
+| `11-event-store.sql` | `event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint` em `public` — infra de event sourcing da Fase 6 (#27), sem FK (desde a #36 só a infra da lib `shared`: cada serviço tem o seu conjunto) |
 | `13-reservation.sql` | schema **`reservation`** (dono `admin`; #33, Fase 7) — `eventcap` (`capacity = -1 OR >= 1`, CHECK `0<=quant<=capacity`, `buy_time_limit` `timestamptz`), `walletevent` (PK composta, `status`, `expires_at` `timestamptz`, índice `idx_walletevent_event_id`, `version` do stream `reservation.wallet`), `event_availability` (projeção assíncrona, `ativos` por evento, lida pelo braço `naive`), `idempotency_key` e o event store do serviço (`event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint`). **Sem nenhuma FK.** Substituiu os antigos `04-eventcap`, `07-walletevent`, `09-event-availability` e `10-idempotency-key` (no histórico do git) |
 | `12-notification.sql` | schema **`notification`** (dono `admin`) + `notification.processed_event` — checkpoint de idempotência do serviço `notification` (#32, Fase 7) |
 | `14-catalog.sql` | schema **`catalog`** (dono `admin`; #35) — `event` (só metadados + `version`, projeção inline do stream `catalog.event`; `creator_id` integer **sem FK**, índice `idx_event_creator_id`), `eventpresenter` (`eventpresenter_event_id_fkey` → `catalog.event` `ON DELETE CASCADE`, a única FK) e o event store do serviço. Substituiu o `03-event.sql` e o `05-eventpresenter.sql` (no histórico do git; saíram no cutover, fatia 3). Idempotente (só `IF NOT EXISTS`), mas é para banco NOVO: banco existente usa a migração `20261026-catalog-schema.sql` (move de `public`; ver `Backend/CLAUDE.md`, "Serviço catalog"), verificada por `migrations/verify-20261026-migration.sh` |
+| `15-identity.sql` | schema **`identity`** (dono `admin`; #36) — `users`, `mywallet` (`mywallet_user_id_fkey` → `identity.users` `ON DELETE CASCADE`, a única FK), `pending_verifications`, as funções/triggers com `identity.` fixo (`create_wallet_for_user`, `cleanup_expired_verifications`, `trigger_cleanup_on_insert`) e o event store do serviço (`event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint`). Substituiu o `01-functions`, `02-users`, `06-mywallet` e `08-pending-verifications` (no histórico do git; saíram no cutover). Idempotente (só `IF NOT EXISTS`/`CREATE OR REPLACE`), mas é para banco NOVO: banco existente usa a migração `20261028-identity-schema.sql` (move de `public`: users/mywallet/pending_verifications com ids e identity preservados, recria funções/triggers, move os streams `identity.notification` com a `global_position`; aborta se qualquer das 7 tabelas `identity.*` tiver linha ou houver FK de fora), verificada por `migrations/verify-20261028-migration.sh`; o `run-tests.sh` NÃO o aplica (só confere o estado). Nada de FK cross-schema |
 | `99-tests.sql` | suíte de sanidade em `DO $$ ... $$` (trigger, CAS, CHECK, N:N, cascata de `eventpresenter`, projeção de disponibilidade, `walletevent.version`, event store/outbox/checkpoint, TRUNCATE; as tabelas de reserva em `reservation.*` e as de evento em `catalog.*`, #35) |
 
 `db/migrations/` guarda scripts de migração idempotentes para bancos já existentes
@@ -94,7 +91,7 @@ sentinela `-1/-1` de evento ilimitado). Coberto, ponta a ponta, pelo harness `mi
 
 `migrations/verify-20260901-migration.sh` (harness da issue #6, cross-platform como
 `run-tests.sh`): cria um banco **descartável** `eventcap_mig_check` no container, aplica os
-init-scripts do schema novo (`01`, `02`, `06`, `08`, `11`, `13`, `14`), roda `99-tests.sql`, depois roda o harness SQL
+fixture legado (`legacy-fixtures/public-identity-pre-20261028.sql`: users/mywallet/pending_verifications em `public`, o que o `01/02/06/08` criavam) e os init-scripts do schema novo (`11`, `13`, `14`, `15`), roda `99-tests.sql`, depois roda o harness SQL
 `verify-20260901-migration.sql` — que reconstrói o schema ANTIGO **com dados** (desde a #33 inclui recriar a `public.walletevent` legada
 e apagá-la no fim, e afastar o nome da constraint de `reservation.walletevent`; desde a #35, recriar a `public.event` legada), aplica a
 migração **2×** (idempotência) e checa colunas removidas/criadas, constraints, índice parcial,
@@ -115,6 +112,23 @@ regra), índice e dono `admin`; (3) a 2ª aplicação (sessão `America/New_York
 donos) de um banco novo montado pelo `13-reservation.sql`; (5) o rollback do cabeçalho da migração (extraído do próprio arquivo) devolve tipos, CHECK, índice e os valores originais.
 Exit `!= 0` se algo falhar.
 
+**Migração `20261028-identity-schema.sql` (issue #36)**, para banco existente, **com o backend e o identity parados** (reservation, catalog e notification podem ficar de pé) e **depois do backup
+`pg_dump -h localhost -U admin --clean --if-exists -n public meu_banco`** (backup, aplicação e rollback no cabeçalho do arquivo; pré-requisito: `20261025` e `20261026` já aplicadas, senão há FK de `walletevent`/`event`
+para `users` e a migração ABORTA sem alterar nada): cria o schema `identity` e move para ele `users`, `mywallet` e `pending_verifications` (`ALTER TABLE ... SET SCHEMA`: dados, índices, constraints e a identity de
+`user_id`/`id` vão juntos, **sem `setval`**: `max+1` reciclaria ids apagados e o usuário novo herdaria eventos e reservas antigos), recria as 3 funções (`create_wallet_for_user`,
+`cleanup_expired_verifications`, `trigger_cleanup_on_insert`) com `identity.` fixo e reaponta os 2 triggers, move os streams `identity.notification` do event store de `public` para o do serviço
+preservando `global_position` (event_store, outbox ainda não publicado, checkpoint, snapshot) e ajusta só a sequence de `global_position`. ABORTA se houver FK de fora de `identity` para as 3 tabelas ou
+se QUALQUER das 7 tabelas `identity.*` criadas pelo `15-identity.sql` (3 de usuário + 4 do event store) já tiver linha (as de usuário vazias são derrubadas, as do event store reaproveitadas); `lock_timeout`
+de 5 s; idempotente; roda como `supabase_admin`. Depois dela o monólito não tem mais `public.users`/`mywallet`/`pending_verifications`, e o `identity` (guarda de boot `PublicSchemaGuard`) e o `run-tests.sh` recusam
+subir/rodar se `public.users` ainda existir. `migrations/verify-20261028-migration.sh` (+ `verify-20261028-migration.sql`; cross-platform, bancos descartáveis `meu_banco_mig28*`, não toca em `meu_banco`) prova:
+[A] banco pré-cutover populado, migração 2×, ids/identity preservados, funções e triggers em `identity`, streams movidos com `global_position`, e o rollback do cabeçalho; [B] o mesmo banco com o `15` já aplicado (vazio);
+[C] as guardas; [D] o init completo num banco vazio (sem `public.users`, trigger criando a carteira em `identity.mywallet`). O estado pré-cutover vem do fixture
+`migrations/legacy-fixtures/public-identity-pre-20261028.sql` (o `01/02/06/08` saíram do repo).
+
+**`uid` reciclado:** `TRUNCATE ... RESTART IDENTITY` em `identity.users` (testes, limpeza entre blocos da carga) devolve o `user_id` a 1, e o JWT é validado sem estado (claim `uid`): um token emitido antes
+passaria a valer como o usuário novo com o mesmo id. Por isso, **sempre que truncar `identity.users` fora de um teste unitário**, apague também a chave de assinatura do volume `identity-keys` (com o identity
+parado) e reinicie o identity e o backend (o gateway guarda o JWKS em cache por até 24 h). O `run-tests.sh` apaga a chave ao fim da rodada; a limpeza entre blocos da carga (`limpar-banco.sh`, fora do repo) faz o roteiro inteiro.
+
 **Os scripts de init só rodam na PRIMEIRA criação do volume `supabase-db-data`** (inclusive o `_supabase`/`_supavisor` do pooler; num volume antigo, recrie-o). Depois disso são
 ignorados. Para reaplicar do zero:
 
@@ -128,13 +142,13 @@ docker compose -f Projeto/docker-compose.yml up -d --build
 
 ## Modelo atual
 
-- **`users`** — PK `user_id` (identity). `email`, `fone`, `user_name` são `UNIQUE` e
+- **`users`** — (schema `identity` desde a #36) PK `user_id` (identity). `email`, `fone`, `user_name` são `UNIQUE` e
   `NOT NULL`. Flags de papel: `admin` e **`Host`** — DDL declara `Host boolean` **sem aspas**
-  (`db/init-scripts/02-users.sql`), então o Postgres dobra o identificador para minúsculas:
+  (`db/init-scripts/15-identity.sql`; antes `02-users.sql`), então o Postgres dobra o identificador para minúsculas:
   a coluna real é `host`, acessada sem aspas em SQL (igual `isactive`). Campos de MFA de
   reset de senha: `password_reset_mfa_code`,
   `password_reset_mfa_expiration`. `created_at` / `updated_at` com default.
-  - Trigger `trigger_create_wallet` (`AFTER INSERT`): cria automaticamente a linha em
+  - Lido e escrito SÓ pelo serviço `identity`; qualificar sempre com `identity.` nas queries. Trigger `trigger_create_wallet` (`AFTER INSERT`): cria automaticamente a linha em
     `mywallet`. A aplicação **nunca** insere carteira à mão.
 - **`event`** — (schema `catalog` desde a #35) PK `event_id`. `creator_id` integer **sem FK** para `users` (referência solta; a
   `Event_creator_id_fkey` caiu na migração `20261026`; quem confere o criador é o gateway). Migração a quente
@@ -160,8 +174,8 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   desenho de `public`) moram aqui e são lidos e escritos SÓ pelo serviço `reservation`. **Nenhuma FK cross-schema — e nenhuma FK nas tabelas
   do schema** (nem para `users` nem para `event`): o que `ON DELETE CASCADE` (eventcap) e `ON DELETE RESTRICT` (walletevent) garantiam virou
   chamada: o catalog remove o `eventcap` por `DELETE /internal/eventcaps/{id}`, que recusa (409) se existe `walletevent` do evento; e o gateway
-  confere carteira/evento antes de reservar. `mywallet` NÃO veio (extensão 1:1 de `users`, trigger): fica em `public`. `event_store` e
-  cia. existem em cada schema de serviço: `public.*` guarda `identity.notification`; `reservation.*` guarda `reservation.wallet`;
+  confere o evento antes de reservar (a carteira nasce com o usuário e o `uid` vem assinado no token). `mywallet` NÃO veio para cá (extensão 1:1 de `users`, FK + trigger): mora no schema `identity` (#36). `event_store` e
+  cia. existem em cada schema de serviço: `identity.*` guarda `identity.notification` (congelado) e `identity.user` (#36); `public.*` ficou só com a infra da lib `shared` (testes); `reservation.*` guarda `reservation.wallet`;
   `catalog.*` guarda `catalog.event` (#35).
   Migração a quente: `db/migrations/20261025-reservation-schema.sql` (idempotente; `docker exec -i gerenciador-db psql -h localhost -U
   supabase_admin -d meu_banco < ...`; **pare o backend e o reservation**: `lock_timeout` de 5 s no `SET SCHEMA`) — move as quatro tabelas
@@ -184,7 +198,7 @@ docker compose -f Projeto/docker-compose.yml up -d --build
     `+ 1 ... WHERE capacity <> -1 AND quant < capacity`.
 - **`eventpresenter`** — (schema `catalog` desde a #35) apresentadores por evento. PK composta `(event_id, presenter_name)`,
   FK `→ catalog.event` `ON DELETE CASCADE` (a única FK do schema). Substitui o antigo campo único `presenters`.
-- **`mywallet`** — PK `user_id`, FK `→ users` `ON DELETE CASCADE`.
+- **`mywallet`** — (schema `identity` desde a #36, junto com `users`: a FK e o trigger 1:1 não cruzam schema) PK `user_id`, FK `→ identity.users` `ON DELETE CASCADE`.
 - **`walletevent`** — (schema `reservation`) inscrição/reserva N:N. PK composta `(user_id, event_id)`. **Sem FK** (antes para
   `users`/`event`, `ON DELETE RESTRICT`, até a #33). `status` (`confirmed`|`pending`|`expired`|
   `cancelled`, default `confirmed`, CHECK) + `expires_at` (`timestamptz`, só quando `pending`; `timestamp` até a #58). Índice parcial
@@ -194,9 +208,9 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   evento só é appendado quando a guarda afeta 1 linha, na mesma transação. Reservar de novo uma cancelada/expirada continua o
   mesmo stream. `0` = linha anterior ao ES (sem eventos no log). Não aparece no JSON de `EventWallet`. Migração a quente:
   `db/migrations/20261023-wallet-es-projecao.sql`.
-- **`pending_verifications`** — cadastro pré-confirmação (`email` `UNIQUE`, `password_hash`,
+- **`pending_verifications`** — (schema `identity` desde a #36) cadastro pré-confirmação (`email` `UNIQUE`, `password_hash`,
   `verification_code`, `expires_at`, `attempts`/`max_attempts`). Trigger
-  `trigger_cleanup_on_create_verification` + função `cleanup_expired_verifications()`
+  `trigger_cleanup_on_create_verification` (chama `identity.trigger_cleanup_on_insert()`) + função `identity.cleanup_expired_verifications()`
   removem expirados a cada INSERT e no startup.
 - **`event_availability`** — (schema `reservation`) **projeção assíncrona** (issue #29; ADR "Event-Backbone-Event-Store") alimentada pelo consumer
   do tópico `reservation.wallet`; lida só pelo "caminho ingênuo" de reserva (`reservation.readpath=naive`), braço de
@@ -254,7 +268,7 @@ docker compose -f Projeto/docker-compose.yml up -d --build
     `stream_type`, `stream_id`, `version`, `event_type`, `schema_version`, `occurred_at` (`timestamptz`, default
     `clock_timestamp()`: instante do append, não o início da transação), `payload`/`metadata` (`jsonb`; **sem dado
     pessoal**: a tabela é imutável por convenção. Única exceção, decisão do usuário de 2026-10-21 (#32): o stream
-    `identity.notification` leva e-mail e código, e o `NotificationEventRetentionService` do monólito apaga essas linhas
+    `identity.notification` leva e-mail e código, e o `NotificationEventRetentionService` do `identity` (antes do monólito) apaga essas linhas
     quando o código venceu há mais de 30 s e a linha já saiu do `event_outbox`) e `partition_key` (chave da mensagem no tópico: o id do evento de domínio).
   - **`event_outbox`** — só `global_position` (PK), sem FK de propósito. Inserida na mesma transação do append e **apagada**
     pelo relay depois do ack do broker. `INSERT`+`DELETE` contínuo = tuplas mortas, por isso

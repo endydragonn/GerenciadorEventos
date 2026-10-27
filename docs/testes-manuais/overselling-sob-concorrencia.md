@@ -91,7 +91,7 @@ Variáveis de ambiente (todas opcionais):
   `event.event_name` são `UNIQUE` e o backend rejeita duplicados — sem o sufixo a
   segunda execução falharia em "já existente".
 - O script tem **rotina de limpeza** no `trap EXIT`: remove `reservation.walletevent` e
-  `reservation.eventcap` (do serviço `reservation`, sem FK desde a #33) → `event` → `users`
+  `reservation.eventcap` (do serviço `reservation`, sem FK desde a #33) → `catalog.event` → `identity.users`
   (o `mywallet` cai por `CASCADE`). As queries do roteiro leem `reservation.eventcap` e `reservation.walletevent`.
 - Roda **duas vezes seguidas** sem falhar (verificado).
 - Limpeza manual alternativa:

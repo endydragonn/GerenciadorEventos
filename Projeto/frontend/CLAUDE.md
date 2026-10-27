@@ -72,7 +72,7 @@ referência** — não é compilado, não edite.
 ## reCAPTCHA v3
 
 `widgets/recaptcha_widget.dart` + `config/recaptcha_config.dart`. A **site key** entra por
-`--dart-define=RECAPTCHA_SITE_KEY`; o backend valida o token contra a Google. Site key é
+`--dart-define=RECAPTCHA_SITE_KEY`; o backend (serviço identity) valida o token contra a Google. Site key é
 pública, mas mesmo assim não hardcode — mantenha via dart-define.
 
 ## Ao mexer aqui

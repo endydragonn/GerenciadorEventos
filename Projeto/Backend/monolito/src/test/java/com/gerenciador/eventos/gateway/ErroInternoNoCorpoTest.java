@@ -3,6 +3,7 @@ package com.gerenciador.eventos.gateway;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -21,10 +22,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.authority.AuthorityUtils;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.test.util.ReflectionTestUtils;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -41,10 +39,11 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
 import com.gerenciador.eventos.catalogclient.api.EventApi;
-import com.gerenciador.eventos.identity.api.EmailVerificationApi;
-import com.gerenciador.eventos.identity.api.HostAuthorizationApi;
-import com.gerenciador.eventos.identity.api.TokenApi;
-import com.gerenciador.eventos.identity.api.UserApi;
+import com.gerenciador.eventos.gateway.security.HostAuthorizationApi;
+import com.gerenciador.eventos.identityclient.api.EmailVerificationApi;
+import com.gerenciador.eventos.identityclient.api.IdentityUnavailableException;
+import com.gerenciador.eventos.identityclient.api.RecaptchaApi;
+import com.gerenciador.eventos.identityclient.api.UserApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 
 /**
@@ -61,6 +60,7 @@ public class ErroInternoNoCorpoTest {
 
     private UserApi userApi;
     private EmailVerificationApi emailApi;
+    private RecaptchaApi recaptchaApi;
     private EventApi eventApi;
     private HostAuthorizationApi hostApi;
     private EventWalletGateway walletGateway;
@@ -73,14 +73,15 @@ public class ErroInternoNoCorpoTest {
     void montar() {
         userApi = mock(UserApi.class);
         emailApi = mock(EmailVerificationApi.class);
+        recaptchaApi = mock(RecaptchaApi.class);
         eventApi = mock(EventApi.class);
         hostApi = mock(HostAuthorizationApi.class);
         walletGateway = mock(EventWalletGateway.class);
         when(hostApi.currentUserId()).thenReturn(5L);
-        userController = new BffUserController(userApi, mock(TokenApi.class), emailApi);
+        userController = new BffUserController(userApi, emailApi, recaptchaApi, hostApi);
         mvc = MockMvcBuilders.standaloneSetup(userController,
                 new BffEventController(eventApi, hostApi, userApi, mock(CreatorNames.class)),
-                new BffEventWalletController(walletGateway, hostApi)).build();
+                new BffEventWalletController(walletGateway, hostApi)).setControllerAdvice(new IdentityIndisponivelHandler()).build();
         logs = new ListAppender<>();
         logs.start();
         root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
@@ -122,9 +123,8 @@ public class ErroInternoNoCorpoTest {
 
     @Test
     void buscarUsuarioLogado() throws Exception {
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken("a@example.com", "x", AuthorityUtils.NO_AUTHORITIES));
-        when(userApi.findByEmail("a@example.com")).thenThrow(new RuntimeException(DETALHE));
+        // /me resolve pelo uid do token (hostApi.currentUserId() = 5), não pelo e-mail (#36)
+        when(userApi.findById(5L)).thenThrow(new RuntimeException(DETALHE));
         esperar500(get("/bff/users/me"));
     }
 
@@ -175,19 +175,73 @@ public class ErroInternoNoCorpoTest {
 
     @Test
     void recaptchaMantemOFormatoDoMapComErroGenerico() {
-        ReflectionTestUtils.setField(userController, "recaptchaSecretKey", "chave-de-teste");
-        BffUserController.RecaptchaRequest falha = new BffUserController.RecaptchaRequest("t", "login") {
-            @Override
-            public String getToken() {
-                throw new IllegalStateException(DETALHE);
-            }
-        };
+        when(recaptchaApi.verify(any(), any())).thenThrow(new IllegalStateException(DETALHE));
+        BffUserController.RecaptchaRequest falha = new BffUserController.RecaptchaRequest("t", "login");
 
         ResponseEntity<?> resposta = userController.verifyRecaptcha(falha);
 
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, resposta.getStatusCode());
         assertEquals(Map.of("success", false, "error", ErroInterno.MENSAGEM), resposta.getBody());
         assertTrue(detalheNoLog(), "o detalhe com stack trace tem de ir para o log");
+    }
+
+    // ------------------------------------------------------- identity indisponível (#36)
+
+    private static final String EMAIL_NA_URI = "ana.secreta@example.com";
+    private static final String MENSAGEM_DO_CLIENTE =
+            "I/O error on GET request for \"http://identity:8084/internal/users/by-email?email=ana.secreta%40example.com\": " + EMAIL_NA_URI;
+
+    /**
+     * {@link IdentityUnavailableException} carrega a URI chamada (e o e-mail, no {@code by-email}). Em TODA rota de usuário que tem
+     * {@code catch (RuntimeException)}/{@code catch (Exception)} ela tem de escapar até o advice: 503 genérico (nunca 404, 400 nem
+     * 500), sem a URI nem o e-mail no corpo, e SEM a mensagem crua no log (só a classe).
+     */
+    @Test
+    void identityForaViraTresZeroTresGenericoEmTodaRotaDeUsuarioESemVazarNoLog() throws Exception {
+        IdentityUnavailableException fora = new IdentityUnavailableException(MENSAGEM_DO_CLIENTE, new RuntimeException(EMAIL_NA_URI));
+        when(userApi.findByEmail(any())).thenThrow(fora);
+        when(userApi.findById(anyLong())).thenThrow(fora);
+        when(userApi.createUser(any())).thenThrow(fora);
+        when(userApi.updateUser(any())).thenThrow(fora);
+        when(userApi.changePassword(anyLong(), any(), any())).thenThrow(fora);
+        doThrow(fora).when(userApi).deactivateUser(anyLong());
+        when(userApi.requestPasswordResetMfa(anyLong())).thenThrow(fora);
+        when(userApi.verifyPasswordResetMfaCode(anyLong(), any())).thenThrow(fora);
+        doThrow(fora).when(userApi).changePasswordWithMfa(anyLong(), any(), any());
+        when(userApi.login(any(), any())).thenThrow(fora);
+        when(recaptchaApi.verify(any(), any())).thenThrow(fora);
+
+        List<MockHttpServletRequestBuilder> rotas = List.of(
+                get("/bff/users/email/" + EMAIL_NA_URI),
+                get("/bff/users/1"),
+                get("/bff/users/me"),
+                post("/bff/users").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"A\"}"),
+                put("/bff/users/1").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"A\"}"),
+                put("/bff/users/1/password").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"oldPassword\":\"a\",\"newPassword\":\"b\"}"),
+                delete("/bff/users/1"),
+                post("/bff/users/1/request-password-reset-mfa"),
+                post("/bff/users/1/verify-password-reset-mfa").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mfaCode\":\"123456\"}"),
+                put("/bff/users/1/password-with-mfa").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mfaCode\":\"123456\",\"newPassword\":\"nova123\"}"),
+                post("/bff/users/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"a@example.com\",\"password\":\"x\"}"),
+                post("/bff/users/verify-recaptcha").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\":\"t\",\"action\":\"login\"}"));
+        for (MockHttpServletRequestBuilder rota : rotas) {
+            String corpo = mvc.perform(rota).andExpect(status().isServiceUnavailable()).andReturn().getResponse()
+                    .getContentAsString(StandardCharsets.UTF_8);
+            assertEquals(IdentityIndisponivelHandler.INDISPONIVEL, corpo);
+        }
+
+        for (ILoggingEvent e : logs.list) {
+            String tudo = e.getFormattedMessage() + (e.getThrowableProxy() == null ? "" : e.getThrowableProxy().getMessage());
+            assertFalse(tudo.contains(EMAIL_NA_URI) || tudo.contains("identity:8084") || tudo.contains("/internal/"),
+                    "o log não pode carregar a mensagem crua da exceção do cliente: " + tudo);
+        }
+        assertTrue(logs.list.stream().anyMatch(e -> e.getFormattedMessage().contains("IdentityUnavailableException")),
+                "o 503 tem de ser logado (só a classe)");
     }
 
     // ------------------------------------------------------------------ evento

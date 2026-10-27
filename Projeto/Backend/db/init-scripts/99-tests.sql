@@ -9,7 +9,8 @@
 -- - Projecao assincrona event_availability (so ativos; disponibilidade calculada na leitura) e walletevent.version da guarda
 -- - event_store/event_outbox/event_snapshot/projection_checkpoint (concorrência otimista, outbox, checkpoint atômico)
 -- - TRUNCATE e revalidação pós-TRUNCATE
--- Desde a #35 event/eventpresenter estão no schema catalog (14-catalog.sql), sem FK para users; as de reserva, em reservation (#33).
+-- Desde a #35 event/eventpresenter estão no schema catalog (14-catalog.sql), sem FK para users; as de reserva, em reservation (#33);
+-- desde a #36 users/mywallet/pending_verifications estão no schema identity (15-identity.sql).
 
 \echo Iniciando testes minimos do banco...
 
@@ -30,22 +31,23 @@ BEGIN
     -- Baseline limpa
     TRUNCATE TABLE catalog.eventpresenter, catalog.event,
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
-                   public.mywallet, public.users,
+                   identity.mywallet, identity.users, identity.pending_verifications,
+                   identity.event_store, identity.event_outbox, identity.event_snapshot, identity.projection_checkpoint,
                    reservation.eventcap, reservation.event_availability, reservation.walletevent,
                    reservation.idempotency_key
       RESTART IDENTITY CASCADE;
 
     -- 1) Inserir usuario e validar trigger da carteira
-    INSERT INTO public.users (user_name, email, fone, password, birthdate)
+    INSERT INTO identity.users (user_name, email, fone, password, birthdate)
     VALUES ('teste_trigger', 'trigger@test.com', '5500000000', 'pw', '1990-01-01')
     RETURNING user_id INTO v_user1;
 
-    SELECT count(*) INTO v_count FROM public.mywallet WHERE user_id = v_user1;
+    SELECT count(*) INTO v_count FROM identity.mywallet WHERE user_id = v_user1;
     IF v_count <> 1 THEN
       RAISE EXCEPTION 'Falha: trigger nao criou mywallet (esperado 1, obtido %)', v_count;
     END IF;
 
-    INSERT INTO public.users (user_name, email, fone, password, birthdate)
+    INSERT INTO identity.users (user_name, email, fone, password, birthdate)
     VALUES ('teste_trigger2', 'trigger2@test.com', '6600000000', 'pw', '1992-02-02')
     RETURNING user_id INTO v_user2;
 
@@ -318,23 +320,25 @@ BEGIN
     -- 10) TRUNCATE e revalidacao do trigger
     TRUNCATE TABLE catalog.eventpresenter, catalog.event,
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
-                   public.mywallet, public.users,
+                   identity.mywallet, identity.users, identity.pending_verifications,
+                   identity.event_store, identity.event_outbox, identity.event_snapshot, identity.projection_checkpoint,
                    reservation.eventcap, reservation.event_availability, reservation.walletevent,
                    reservation.idempotency_key
       RESTART IDENTITY CASCADE;
 
-    SELECT count(*) INTO v_count FROM public.users;      IF v_count <> 0 THEN RAISE EXCEPTION 'users nao ficou vazio'; END IF;
+    SELECT count(*) INTO v_count FROM identity.users;      IF v_count <> 0 THEN RAISE EXCEPTION 'users nao ficou vazio'; END IF;
     SELECT count(*) INTO v_count FROM reservation.eventcap;   IF v_count <> 0 THEN RAISE EXCEPTION 'eventcap nao ficou vazio'; END IF;
 
-    INSERT INTO public.users (user_name, email, fone, password, birthdate)
+    INSERT INTO identity.users (user_name, email, fone, password, birthdate)
     VALUES ('teste_pos_truncate', 'postruncate@test.com', '7700000000', 'pw', '1995-05-05')
     RETURNING user_id INTO v_user1;
-    SELECT count(*) INTO v_count FROM public.mywallet WHERE user_id = v_user1;
+    SELECT count(*) INTO v_count FROM identity.mywallet WHERE user_id = v_user1;
     IF v_count <> 1 THEN RAISE EXCEPTION 'trigger nao criou mywallet apos TRUNCATE'; END IF;
 
     TRUNCATE TABLE catalog.eventpresenter, catalog.event,
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
-                   public.mywallet, public.users,
+                   identity.mywallet, identity.users, identity.pending_verifications,
+                   identity.event_store, identity.event_outbox, identity.event_snapshot, identity.projection_checkpoint,
                    reservation.eventcap, reservation.event_availability, reservation.walletevent,
                    reservation.idempotency_key
       RESTART IDENTITY CASCADE;
@@ -345,7 +349,8 @@ BEGIN
   -- Cleanup incondicional
   TRUNCATE TABLE catalog.eventpresenter, catalog.event,
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
-                   public.mywallet, public.users,
+                   identity.mywallet, identity.users, identity.pending_verifications,
+                   identity.event_store, identity.event_outbox, identity.event_snapshot, identity.projection_checkpoint,
                    reservation.eventcap, reservation.event_availability, reservation.walletevent,
                    reservation.idempotency_key
     RESTART IDENTITY CASCADE;
