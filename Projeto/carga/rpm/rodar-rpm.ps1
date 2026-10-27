@@ -21,19 +21,21 @@
   .\rpm\rodar-rpm.ps1 -HostIp 192.168.0.10                         # 10k RPM por 90 s
   .\rpm\rodar-rpm.ps1 -HostIp 192.168.0.10 -Rpm 2000 -Duracao 60   # aquecimento
   .\rpm\rodar-rpm.ps1 -HostIp 192.168.0.10 -PctConfirma 50          # confirma metade das aceitas
+  .\rpm\rodar-rpm.ps1 -HostIp 192.168.0.10 -Cenario leitura -Rpm 30000 -Duracao 600   # leitura sustentada do catalogo (#38)
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$HostIp,
     [int]$Porta = 8081,
     [int]$Rpm = 10000,
-    [ValidateRange(10, 110)][int]$Duracao = 90,
+    [ValidateRange(10, 3600)][int]$Duracao = 90,   # escrita: ate 110 s; leitura: ate 3600 s
     [int]$Usuarios = 200,
     [int]$Capacidade = 0,          # 0 = Usuarios/2
     [ValidateSet('cas', 'naive')][string]$Rotulo = 'cas',
     [int]$MaxConnections = 0,      # so para registrar no CSV (o gerador nao enxerga o host)
     [int]$RefreshMs = 0,   # obsoleto (#29), so rotula a coluna refresh_ms
-    [ValidateRange(0, 100)][int]$PctConfirma = 100
+    [ValidateRange(0, 100)][int]$PctConfirma = 100,
+    [ValidateSet('escrita', 'leitura')][string]$Cenario = 'escrita'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,6 +49,7 @@ function Info($m) { Write-Host "[rpm] $m" -ForegroundColor Cyan }
 function Ok($m)   { Write-Host "[ ok ] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "[aviso] $m" -ForegroundColor Yellow }
 function Fail($m) { Write-Host "[erro] $m" -ForegroundColor Red; exit 1 }
+if ($Cenario -eq 'escrita' -and $Duracao -gt 110) { Fail 'Escrita aceita no maximo 110 s (-Duracao); so a leitura vai ate 3600 s.' }
 
 if (-not (Get-Command k6 -ErrorAction SilentlyContinue)) { Fail 'k6 nao encontrado. Rode ..\setup-gerador.ps1 primeiro.' }
 try { Invoke-WebRequest -Uri "$Base/actuator/health" -UseBasicParsing -TimeoutSec 5 | Out-Null }
@@ -56,6 +59,7 @@ catch { Fail "Backend inacessivel em $Base." }
 
 $total = [int]($Rpm * $Duracao / 60)
 $eventos = [int][math]::Ceiling($total * 1.05 / $Usuarios)
+if ($Cenario -eq 'leitura') { $Usuarios = 1; $eventos = 50 }   # leitura: sem login; 50 eventos em rodizio
 $runId = [int]((Get-Date).ToUniversalTime() - [datetime]'2026-01-01').TotalSeconds % 1000000
 $prefixo = "Rpm-$runId"
 Info "Alvo: $Rpm RPM por $Duracao s = $total reservas; $Usuarios usuarios x $eventos eventos (capacidade $Capacidade/evento)."
@@ -73,7 +77,7 @@ Ok "Prefixo '$prefixo': $eventos eventos prontos."
 
 # ---- k6
 $env:BASE_URL = $Base; $env:RPM = "$Rpm"; $env:DURACAO_S = "$Duracao"
-$env:USERS_FILE = $uf; $env:EVENTS_FILE = $ef; $env:SUMMARY_FILE = $sf; $env:PCT_CONFIRMA = "$PctConfirma"
+$env:USERS_FILE = $uf; $env:EVENTS_FILE = $ef; $env:SUMMARY_FILE = $sf; $env:PCT_CONFIRMA = "$PctConfirma"; $env:CENARIO = $Cenario
 Info 'Disparando k6...'
 try {
     k6 run --quiet (Join-Path $PSScriptRoot 'carga-rpm.js')
@@ -87,7 +91,7 @@ if (-not (Test-Path $sf)) { Fail 'k6 nao gerou o resumo.' }
 $s = Get-Content $sf -Raw | ConvertFrom-Json
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
 if (-not (Test-Path $Csv)) {
-    'data,rotulo,refresh_ms,max_connections,rpm_alvo,rpm_real,duracao_s,usuarios,eventos,capacidade,aceitas,lotado,erros_5xx,outros,sem_login,descartadas,vus_max,p50_ms,p95_ms,p99_ms,max_ms,prefixo,pct_confirma,confirmadas,confirma_4xx_esperado,confirma_5xx,confirma_outros,confirma_p50_ms,confirma_p95_ms,confirma_p99_ms' |
+    'data,rotulo,refresh_ms,max_connections,rpm_alvo,rpm_real,duracao_s,usuarios,eventos,capacidade,aceitas,lotado,erros_5xx,outros,sem_login,descartadas,vus_max,p50_ms,p95_ms,p99_ms,max_ms,prefixo,pct_confirma,confirmadas,confirma_4xx_esperado,confirma_5xx,confirma_outros,confirma_p50_ms,confirma_p95_ms,confirma_p99_ms,cenario' |
         Set-Content -Path $Csv -Encoding UTF8
 } elseif ((Get-Content $Csv -TotalCount 1) -notmatch 'confirmadas') {
     # CSV criado antes das colunas de confirma: acrescenta os nomes ao cabecalho (linhas antigas ficam curtas).
@@ -95,12 +99,18 @@ if (-not (Test-Path $Csv)) {
     $linhas[0] += ',pct_confirma,confirmadas,confirma_4xx_esperado,confirma_5xx,confirma_outros,confirma_p50_ms,confirma_p95_ms,confirma_p99_ms'
     $linhas | Set-Content -Path $Csv -Encoding UTF8
 }
-[string]::Format($inv, '{0},{1},{2},{3},{4},{5:F0},{6:F1},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17:F1},{18:F1},{19:F1},{20:F1},{21},{22},{23},{24},{25},{26},{27:F1},{28:F1},{29:F1}',
+if ((Get-Content $Csv -TotalCount 1) -notmatch 'cenario') {
+    # CSV criado antes da coluna cenario (#38): acrescenta o nome; linhas antigas (sem valor) sao escrita.
+    $linhas = Get-Content $Csv
+    $linhas[0] += ',cenario'
+    $linhas | Set-Content -Path $Csv -Encoding UTF8
+}
+[string]::Format($inv, '{0},{1},{2},{3},{4},{5:F0},{6:F1},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17:F1},{18:F1},{19:F1},{20:F1},{21},{22},{23},{24},{25},{26},{27:F1},{28:F1},{29:F1},{30}',
     (Get-Date -Format s), $Rotulo, $RefreshMs, $MaxConnections, $s.rpm_alvo, $s.rpm_real, $s.duracao_s,
     $s.usuarios, $s.eventos, $Capacidade, $s.aceitas, $s.lotado, $s.erros_5xx, $s.outros, $s.sem_login,
     $s.descartadas, $s.vus_max, $s.p50_ms, $s.p95_ms, $s.p99_ms, $s.max_ms, $prefixo, $PctConfirma,
     $s.confirmadas, $s.confirma_4xx_esperado, $s.confirma_5xx, $s.confirma_outros, $s.confirma_p50_ms,
-    $s.confirma_p95_ms, $s.confirma_p99_ms) |
+    $s.confirma_p95_ms, $s.confirma_p99_ms, $Cenario) |
     Add-Content -Path $Csv -Encoding UTF8
 
 Write-Host ''

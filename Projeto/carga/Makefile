@@ -42,10 +42,13 @@ MAX_VUS        ?= 2000
 MAPEAMENTO     ?= sequencial
 POOL_HIKARI    ?= 1000
 CSV            ?=
+# harness definitivo (#38): CENARIO do test-rpm (escrita | leitura); COLETA_S = duracao da coleta do host (0 = ate o Ctrl+C)
+CENARIO        ?= escrita
+COLETA_S       ?= 0
 
 need_ip = $(if $(HOST_IP),,$(error Informe HOST_IP=<ip do host>))
 
-.PHONY: help setup-host setup-gerador host-rpm test-disputa test-rpm test-aleatorio test-disputa-real test-rpm-real test-aleatorio-real test-matriz test-matriz-cas test-matriz-naive report-matriz test-degraus report-degraus verificar-disputa verificar-rpm telemetria-host
+.PHONY: help setup-host setup-gerador host-rpm test-disputa test-rpm test-aleatorio test-disputa-real test-rpm-real test-aleatorio-real test-matriz test-matriz-cas test-matriz-naive report-matriz test-degraus report-degraus verificar-disputa verificar-rpm telemetria-host coleta-host
 .DEFAULT_GOAL := help
 
 help:
@@ -53,7 +56,8 @@ help:
 	@Write-Host '  make setup-host      [READPATH=cas|naive GERADOR_IP=<ip>]   (no HOST: sobe a stack com override de carga; firewall 8081; a 5433 so abre COM GERADOR_IP, restrita a ele, p/ a matriz)'
 	@Write-Host '  make setup-gerador   HOST_IP=<ip>                           (no GERADOR: k6 + latencia base)'
 	@Write-Host 'TESTE 1 - disputa de vagas (corretude, 1 evento, rajada)'
-	@Write-Host '  make test-disputa    HOST_IP=<ip> [VUS=50,100,200 CAPACIDADE=20 READPATH=cas PCT_CONFIRMA=100]'
+	@Write-Host '  make test-disputa    HOST_IP=<ip> [VUS=50,100,200 CAPACIDADE=20 READPATH=cas PCT_CONFIRMA=100 CENARIO=escrita|leitura]'
+	@Write-Host '  make coleta-host     [ROTULO=<nome> COLETA_S=0]              (no HOST: lags, outbox, pooler, pg_stat_statements; #38)'
 	@Write-Host '  make verificar-disputa EVENT_ID=<id>                        (no HOST)'
 	@Write-Host 'TESTE 2 - taxa fixa (RPM, varios eventos, saturacao)'
 	@Write-Host '  make host-rpm        [MAX_CONN=300 READPATH=cas]            (no HOST: stack + max_connections)'
@@ -94,7 +98,7 @@ host-rpm:
 
 test-rpm:
 	$(need_ip)
-	.\rpm\rodar-rpm.ps1 -HostIp $(HOST_IP) -Rpm $(RPM) -Duracao $(DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -PctConfirma $(PCT_CONFIRMA)
+	.\rpm\rodar-rpm.ps1 -HostIp $(HOST_IP) -Rpm $(RPM) -Duracao $(DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -PctConfirma $(PCT_CONFIRMA) -Cenario $(CENARIO)
 
 verificar-rpm:
 	$(if $(PREFIXO),,$(error Informe PREFIXO=Rpm-<id>))
@@ -136,6 +140,10 @@ test-degraus:
 # telemetria (CPU/freq/RAM a cada 1 s) do HOST durante a escada/matriz; o gerador grava a dele sozinho. Ctrl+C encerra.
 telemetria-host:
 	.\telemetria-host.ps1 $(if $(ROTULO),-Rotulo $(ROTULO))
+
+# metricas do banco/broker no HOST (lag projecao/consumer, outbox, conexoes do pooler, pg_stat_statements); Ctrl+C encerra
+coleta-host:
+	& "$$env:ProgramW6432\Git\bin\bash.exe" ./coleta-host.sh $(if $(ROTULO),$(ROTULO),rodada) $(COLETA_S)
 
 report-degraus:
 	$(if $(CSV),,$(error Informe CSV=results\degraus-<id>.csv))
