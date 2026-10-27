@@ -201,6 +201,8 @@ services:
       EVENTS_CONSUMER_ENABLED: "true"
       EVENTS_CONSUMER_BATCH_SIZE: ${EVENTS_CONSUMER_BATCH_SIZE:-500}
       RESERVATION_CATALOG_RECONCILIATION_ENABLED: "true"
+      # Tamanho do lote do job de expiração de reservas (#61).
+      RESERVATION_EXPIRY_BATCH_SIZE: ${RESERVATION_EXPIRY_BATCH_SIZE:-100}
     healthcheck:
       # sem HTTP de saúde nem curl na imagem: o healthcheck é "a porta aceita conexão" (bash /dev/tcp; o /bin/sh da imagem é dash e não tem /dev/tcp, por isso CMD com bash)
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8082"]

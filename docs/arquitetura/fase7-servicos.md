@@ -164,9 +164,11 @@ o gateway confere carteira e evento (no `catalog`) antes de reservar e confere o
   do evento na reserva nunca vira "Evento não encontrado"; um positivo de `exists` ainda no cache de 30 s deixa a reserva seguir). Criar
   evento com o catalog lento responde 503 "resultado incerto, confira em Meus eventos" (o timeout de 15 s pode vencer depois do commit).
   Login, cadastro, carteira e "minhas reservas" seguem.
-- **Editar evento com o `reservation` fora**: a transação do `EventUpdated` (metadados) já comitou quando o `PATCH` da capacidade falha, então
-  **os metadados ficam gravados e a capacidade não** (a #60, não consertada, já era não atômica). O `PATCH` num evento SEM `eventcap`
-  responde 404 e o catalog o cria com os valores novos, em vez de perder a edição para a reconciliação.
+- **Editar evento com o `reservation` fora** (#60): o `PATCH` da capacidade roda ANTES da transação do catalog; se falha (serviço fora, 400, 409),
+  **nada é gravado no catalog** (nem metadados nem apresentadores) e a edição inteira falha. Metadados e apresentadores entram numa única
+  transação do catalog. Janela restante: o reservation atualizou e a transação do catalog falhou (capacidade nova, metadados antigos; repetir o
+  PUT converge). O `PATCH` num evento SEM `eventcap` responde 404 e o catalog o cria com os valores novos, em vez de perder a edição para a
+  reconciliação.
 - **Apagar evento**: o catalog chama `DELETE /internal/eventcaps/{id}` ANTES da transação (sem segurar conexão nem lock durante o salto de
   rede; o 409 de evento com reserva acontece antes de qualquer escrita). Se o reservation apagou a capacidade e a transação do catalog falha em
   seguida, o evento fica sem `eventcap`.

@@ -54,6 +54,7 @@ public final class FakeEventCapServer {
     private final Set<Long> comReserva = ConcurrentHashMap.newKeySet();
     private final List<String> chamadas = new CopyOnWriteArrayList<>();
     private volatile boolean falharCriacao;
+    private volatile int statusPolitica;
 
     private FakeEventCapServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -72,11 +73,17 @@ public final class FakeEventCapServer {
         comReserva.clear();
         chamadas.clear();
         falharCriacao = false;
+        statusPolitica = 0;
     }
 
     /** Faz o {@code PUT /internal/eventcaps/{id}} responder 500 (o reservation "fora do ar" na criação do evento). */
     public void falharCriacao(boolean falhar) {
         this.falharCriacao = falhar;
+    }
+
+    /** Faz o {@code PATCH /internal/eventcaps/{id}/policy} responder esse status (ex.: 400 capacidade abaixo do reservado); 0 desliga. */
+    public void recusarPolitica(int status) {
+        this.statusPolitica = status;
     }
 
     /** "METODO /caminho" de cada chamada recebida, na ordem. */
@@ -138,6 +145,10 @@ public final class FakeEventCapServer {
             caps.remove(id);
             responder(ex, 204, null);
         } else if (p.length == 2 && "PATCH".equals(metodo)) {
+            if (statusPolitica != 0) {
+                responder(ex, statusPolitica, "política recusada (falha injetada)");
+                return;
+            }
             EventCap nova = JSON.readValue(ex.getRequestBody(), EventCap.class);
             EventCap atual = caps.get(id);
             if (atual == null) {

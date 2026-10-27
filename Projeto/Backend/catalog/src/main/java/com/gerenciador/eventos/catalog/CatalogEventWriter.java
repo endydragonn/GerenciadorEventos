@@ -149,40 +149,30 @@ public class CatalogEventWriter {
     }
 
     /**
-     * Troca a lista de apresentadores do evento: um {@code PresenterRemoved}/{@code PresenterAdded} por diferença
-     * (nomes aparados, sem vazios nem repetidos). Sem diferença não appenda nada.
+     * Troca a lista de apresentadores do evento NA TRANSAÇÃO do command (a linha de {@code event} já bloqueada por
+     * {@link Tx#bloquear}): um {@code PresenterRemoved}/{@code PresenterAdded} por diferença contra {@code eventpresenter}.
+     * {@code desejados} vem de {@link #normalizar} (nomes aparados, sem vazios nem repetidos). Sem diferença não appenda nada.
      */
-    public void trocarApresentadores(long eventId, List<String> novos) {
-        Set<String> desejados = normalizar(novos);
-        try {
-            executar(tx -> {
-                if (!tx.bloquear(eventId)) {
-                    return null;
+    static void trocarApresentadores(Tx tx, long eventId, Set<String> desejados) throws SQLException {
+        Set<String> atuais = new LinkedHashSet<>();
+        try (PreparedStatement ps = tx.conn().prepareStatement(
+                "SELECT presenter_name FROM catalog.eventpresenter WHERE event_id = ? ORDER BY presenter_name")) {
+            ps.setLong(1, eventId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    atuais.add(rs.getString(1));
                 }
-                Set<String> atuais = new LinkedHashSet<>();
-                try (PreparedStatement ps = tx.conn().prepareStatement(
-                        "SELECT presenter_name FROM catalog.eventpresenter WHERE event_id = ? ORDER BY presenter_name")) {
-                    ps.setLong(1, eventId);
-                    try (ResultSet rs = ps.executeQuery()) {
-                        while (rs.next()) {
-                            atuais.add(rs.getString(1));
-                        }
-                    }
-                }
-                for (String nome : atuais) {
-                    if (!desejados.contains(nome)) {
-                        tx.append("PresenterRemoved", EventPayloads.apresentador(eventId, nome));
-                    }
-                }
-                for (String nome : desejados) {
-                    if (!atuais.contains(nome)) {
-                        tx.append("PresenterAdded", EventPayloads.apresentador(eventId, nome));
-                    }
-                }
-                return null;
-            });
-        } catch (SQLException ex) {
-            throw new RuntimeException("Erro ao gravar apresentadores: " + ex.getMessage(), ex);
+            }
+        }
+        for (String nome : atuais) {
+            if (!desejados.contains(nome)) {
+                tx.append("PresenterRemoved", EventPayloads.apresentador(eventId, nome));
+            }
+        }
+        for (String nome : desejados) {
+            if (!atuais.contains(nome)) {
+                tx.append("PresenterAdded", EventPayloads.apresentador(eventId, nome));
+            }
         }
     }
 
