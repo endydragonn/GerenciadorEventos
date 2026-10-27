@@ -12,6 +12,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -72,7 +73,9 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Import(GlobalDbTruncator.class)
-@TestPropertySource(properties = {"RECAPTCHA_SECRET_KEY=", "seed.enabled=true"})
+@TestPropertySource(properties = {"RECAPTCHA_SECRET_KEY=", "seed.enabled=true",
+        // Fixa a lista de CORS (issue #133) para os testes não dependerem do CORS_ALLOWED_ORIGINS do .env
+        "CORS_ALLOWED_ORIGINS=http://localhost:8088,http://localhost:3000"})
 public class HttpContractTest {
 
     @LocalServerPort
@@ -768,18 +771,51 @@ public class HttpContractTest {
         // responde o preflight antes do AuthorizationFilter, então .authenticated() nunca
         // chega a barrar. A regra OPTIONS→permitAll continua sendo mantida como defesa em
         // profundidade (ver comentário em SecurityConfig), não como correção de um 401 real.
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("Origin", "http://localhost:9999");
-        headers.set("Access-Control-Request-Method", "DELETE");
-        headers.set("Access-Control-Request-Headers", "authorization,content-type");
-        HttpEntity<Void> preflight = new HttpEntity<>(headers);
-
-        ResponseEntity<String> resp = restTemplate.exchange(
-                url("/bff/my-wallets/1"), HttpMethod.OPTIONS, preflight, String.class);
+        //
+        // Issue #133: a origem é a do Flutter (:8088, default de CORS_ALLOWED_ORIGINS); com o
+        // bean "*" removido, uma origem qualquer deixou de ser aceita.
+        ResponseEntity<String> resp = preflight("http://localhost:8088", "/bff/my-wallets/1");
 
         assertTrue(!resp.getStatusCode().equals(HttpStatus.UNAUTHORIZED),
                 "preflight numa rota protegida não deve ser barrado por auth, veio " + resp.getStatusCode());
-        assertEquals("http://localhost:9999", resp.getHeaders().getFirst("Access-Control-Allow-Origin"));
+        assertEquals("http://localhost:8088", resp.getHeaders().getFirst("Access-Control-Allow-Origin"));
+        assertEquals("true", resp.getHeaders().getFirst("Access-Control-Allow-Credentials"));
+    }
+
+    @Test
+    public void corsPreflight_origemNegada_naoRecebeAllowOrigin() {
+        // Issue #133: origem fora de CORS_ALLOWED_ORIGINS. Conferir só o status não basta (o Spring
+        // responde 403 "Invalid CORS request"); o que protege é o header estar AUSENTE.
+        ResponseEntity<String> resp = preflight("http://localhost:9999", "/bff/my-wallets/1");
+
+        assertNull(resp.getHeaders().getFirst("Access-Control-Allow-Origin"),
+                "origem negada não pode receber Access-Control-Allow-Origin");
+        assertNull(resp.getHeaders().getFirst("Access-Control-Allow-Credentials"));
+    }
+
+    @Test
+    public void cors_respostaReal_expoeAuthorizationContentTypeEIdempotencyKey() {
+        // Issue #133: exposedHeaders vêm da config única. Rota protegida sem token = 401, e o
+        // CorsFilter (que roda antes da autorização) ainda anexa os headers de CORS à resposta.
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Origin", "http://localhost:8088");
+
+        ResponseEntity<String> resp = restTemplate.exchange(
+                url("/bff/my-wallets/1"), HttpMethod.GET, new HttpEntity<>(headers), String.class);
+
+        assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
+        assertEquals("http://localhost:8088", resp.getHeaders().getFirst("Access-Control-Allow-Origin"));
+        String expostos = String.join(",", resp.getHeaders().getOrEmpty("Access-Control-Expose-Headers")).toLowerCase();
+        assertTrue(expostos.contains("authorization") && expostos.contains("content-type")
+                && expostos.contains("idempotency-key"), "Access-Control-Expose-Headers = " + expostos);
+    }
+
+    private ResponseEntity<String> preflight(String origem, String caminho) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Origin", origem);
+        headers.set("Access-Control-Request-Method", "DELETE");
+        headers.set("Access-Control-Request-Headers", "authorization,content-type");
+        return restTemplate.exchange(url(caminho), HttpMethod.OPTIONS, new HttpEntity<Void>(headers), String.class);
     }
 
     // ======================= /actuator (issue #92) =======================
