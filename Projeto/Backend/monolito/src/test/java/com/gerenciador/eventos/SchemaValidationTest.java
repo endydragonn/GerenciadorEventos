@@ -169,6 +169,18 @@ public class SchemaValidationTest {
             "a FK mywallet -> users (identity) não é cross-schema e continua");
     }
 
+    /**
+     * Asserção NEGATIVA (issue #59): capacidade, vagas e janela de compra saíram de {@code event} (#5) e de {@code public}
+     * (#33/#35) e hoje são do {@code reservation.eventcap}. {@code assertColumns} é "contém" e não pega coluna que volta;
+     * nenhuma tabela de {@code public} pode tê-las.
+     */
+    @Test
+    void publicSchemaHasNoCapacityNorBuyWindowColumns() throws Exception {
+        assertEquals(0, contar("select count(*) from information_schema.columns where table_schema = 'public' "
+            + "and column_name in ('capacity', 'quant', 'buy_time_limit', 'lot_quantity', 'max_time_in_line')"),
+            "colunas de eventcap voltaram para public");
+    }
+
     private int contar(String sql) throws Exception {
         try (Connection c = databaseConnection.getConnection();
              PreparedStatement ps = c.prepareStatement(sql);
