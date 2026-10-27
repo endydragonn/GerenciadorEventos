@@ -115,6 +115,9 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
 - `monolito/src/test/.../SchemaValidationTest` valida o schema real contra o esperado (`public`, `notification.processed_event`, e que
   `eventcap`/`walletevent`/`event_availability`/`idempotency_key` SAÍRAM de `public` sem FK cross-schema); o do módulo `reservation`
   (`reservation/src/test/.../SchemaValidationTest`) valida o schema `reservation` (tabelas, colunas, chaves, sem FK, event store próprio).
+  Desde a #59 também há asserções **negativas** (`assertColumns` é "contém" e não pega coluna que volta): o do monólito exige que nenhuma tabela de `public` tenha
+  `capacity`/`quant`/`buy_time_limit`/`lot_quantity`/`max_time_in_line`, e o do `catalog` que `event`/`eventpresenter` não as tenham. A migração `20261027` tem o harness
+  `db/migrations/verify-20261027-migration.sh` (ver `db/CLAUDE.md`).
 - `TestSupport/GlobalDbTruncator` dá `TRUNCATE` (início/fim da suíte) em **todas** as tabelas dos
   schemas configurados, descobertas por catálogo (`TestSupport/TestSchemas`) — não há mock de banco.
   Schemas alvo: propriedade `test.db.schemas` (lista separada por vírgula, default `public,notification,reservation,catalog` no monólito desde a #35, só `reservation`/`catalog` no módulo de cada serviço; vale

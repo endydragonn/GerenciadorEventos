@@ -2,6 +2,7 @@
 -- Aplicável a quente num banco já existente, SEM recriar o volume, com o gerenciador-backend e o gerenciador-reservation PARADOS
 -- (a imagem antiga continua gravando/lendo o mesmo schema; o ALTER TYPE reescreve a tabela e pede ACCESS EXCLUSIVE).
 -- Pré-requisito: a 20261025 (schema reservation) já aplicada.
+-- Verificada por migrations/verify-20261027-migration.sh (banco descartável com linhas, sessão não-UTC, 2 aplicações, capacity = 0, rollback abaixo).
 --
 -- BACKUP antes (só vale até reabrir o tráfego; nunca dentro do repo):
 --   docker exec gerenciador-db pg_dump -h localhost -U admin --clean --if-exists -n reservation meu_banco > <fora do repo>/backup-reservation-pre-58.sql

@@ -1,9 +1,13 @@
 package com.gerenciador.eventos.reservation;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.time.LocalDateTime;
 import java.util.concurrent.CyclicBarrier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
@@ -18,6 +22,7 @@ import com.gerenciador.eventos.reservation.EventCapRepository;
 import com.gerenciador.eventos.reservation.EventWalletRepository;
 import com.gerenciador.eventos.reservation.EventWalletService;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
+import com.gerenciador.eventos.shared.DatabaseConnection;
 
 @SpringBootTest
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -26,25 +31,72 @@ public class EventWalletTest extends ReservationTestSupport {
     @Autowired private EventWalletService eventWalletService;
     @Autowired private EventCapRepository eventCapRepository;
     @Autowired private EventWalletRepository eventWalletRepository;
+    @Autowired private DatabaseConnection databaseConnection;
 
     @Test
-    public void testReserveConfirmDecrementsAndConfirms() {
+    public void reservaDebitaUmaVagaEFicaPending() {
         Usuario u = novoUsuario("rc-owner@example.com");
         Evento e = novoEvento(u.getId(), "Evento RC", 5);
 
         EventWallet reserved = eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
+
         assertEquals("pending", reserved.getStatus());
         assertNotNull(reserved.getExpiresAt());
+        assertEquals("pending", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
+        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "reserva deve debitar 1 vaga");
+    }
 
-        EventCap cap = eventCapRepository.findByEventId(e.getEvent_id());
-        assertEquals(4, cap.getQuant(), "reserva deve debitar 1 vaga");
+    @Test
+    public void confirmTransformaPendingEmConfirmedSemMexerNaVaga() {
+        Usuario u = novoUsuario("rc-confirm@example.com");
+        Evento e = novoEvento(u.getId(), "Evento RC Confirm", 5);
+        eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
 
         EventWallet confirmed = eventWalletService.confirm(u.getId(), e.getEvent_id());
-        assertEquals("confirmed", confirmed.getStatus());
 
-        // reserva duplicada é rejeitada
-        assertThrows(IllegalArgumentException.class,
+        assertEquals("confirmed", confirmed.getStatus());
+        assertEquals("confirmed", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
+        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "confirmar não debita de novo");
+    }
+
+    @Test
+    public void reservaDuplicadaEhRejeitadaSemDebitarOutraVaga() {
+        Usuario u = novoUsuario("rc-dup@example.com");
+        Evento e = novoEvento(u.getId(), "Evento RC Dup", 5);
+        eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
+        eventWalletService.confirm(u.getId(), e.getEvent_id());
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id())));
+
+        assertEquals("Vínculo já existente", ex.getMessage());
+        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "a duplicada não debita vaga");
+    }
+
+    /** Reserva depois do {@code buy_time_limit}: 400 (IllegalArgumentException), sem vaga debitada, sem linha, sem evento. */
+    @Test
+    public void janelaDeCompraEncerradaRecusaAReservaSemTocarNada() throws Exception {
+        Usuario u = novoUsuario("janela-u@example.com");
+        Evento e = novoEvento(u.getId(), "Evento Janela Encerrada", 5, LocalDateTime.now().minusMinutes(1));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id())));
+
+        assertEquals("Janela de compra encerrada para este evento", ex.getMessage());
+        assertEquals(5, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "eventcap intocado");
+        assertNull(eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()), "nenhuma walletevent");
+        assertEquals(0, eventosNoStream(u.getId(), e.getEvent_id()), "nenhum evento no event_store");
+    }
+
+    @Test
+    public void janelaDeCompraAindaAbertaAceitaAReserva() {
+        Usuario u = novoUsuario("janela-aberta-u@example.com");
+        Evento e = novoEvento(u.getId(), "Evento Janela Aberta", 5, LocalDateTime.now().plusHours(1));
+
+        EventWallet r = eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
+
+        assertEquals("pending", r.getStatus());
+        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
     }
 
     @Test
@@ -158,5 +210,18 @@ public class EventWalletTest extends ReservationTestSupport {
                 "cancelar o mesmo vínculo 2x devolve no máximo 1 vaga (sem overselling)");
         assertEquals("cancelled",
                 eventWalletRepository.currentStatus(a.getId(), e.getEvent_id()));
+    }
+
+    private int eventosNoStream(Long userId, Long eventId) throws Exception {
+        try (Connection conn = databaseConnection.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "SELECT count(*) FROM reservation.event_store WHERE stream_type = ? AND stream_id = ?")) {
+            ps.setString(1, ReservationEvents.STREAM_TYPE);
+            ps.setString(2, ReservationEvents.streamId(userId, eventId));
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getInt(1);
+            }
+        }
     }
 }
