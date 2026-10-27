@@ -769,9 +769,16 @@ e do schema `reservation`. `EventWalletService` (módulo `reservation`):
    UPDATE afetou 1 linha — evita devolução dupla de vaga em cancelamento concorrente / corrida com o
    job. Reserva já `cancelled`/`expired`/inexistente ⇒ no-op silencioso (idempotente, sem evento).
 4. `reservation/ReservationExpiryService` — `@Scheduled` (a cada `reservation.expiry.scan.ms`,
-   default 30s; `@EnableScheduling` em `ReservationApplication`, desde a #33): varre `pending` vencidas e,
-   por transação, `expireIfStale` (condicional, não pisa em confirmação concorrente) + `release` + append de
-   `ReservationExpired` (um por linha expirada, na transação dela; erro numa linha não para as outras).
+   default 30s; `@EnableScheduling` em `ReservationApplication`, desde a #33): varre `pending` vencidas **em lotes** (#61;
+   `reservation.expiry.batch-size`, env `RESERVATION_EXPIRY_BATCH_SIZE`, default 100): cada lote é UMA transação que seleciona com
+   `ORDER BY expires_at LIMIT n FOR UPDATE SKIP LOCKED` (duas execuções concorrentes não pegam a mesma linha; o lock só vale dentro da
+   transação) e, por linha e num savepoint, `expireIfStale` (condicional, não pisa em confirmação concorrente) + `release` + append de
+   `ReservationExpired` (um por linha expirada; erro numa linha desfaz só ela, as outras seguem). Repete lotes até um voltar incompleto ou
+   sem nenhuma expirada (linha que falha sempre não prende o job). Testes: `ReservationExpiryBatchTest`.
+   O lote segura o lock das linhas de `eventcap` (a linha quente do CAS) que o `release` toca até o commit — por isso ele é limitado e
+   configurável (o compose repassa `RESERVATION_EXPIRY_BATCH_SIZE`, default 100). A ordem de lock é inversa à da reserva (reserva:
+   `eventcap` → `walletevent`; job: `walletevent` → `eventcap`), o que alarga a janela de deadlock: o Postgres aborta um dos dois, o
+   savepoint da linha desfaz só ela e o job segue (a reserva abortada devolve erro ao cliente).
 
 ### Reservation em event sourcing (híbrido) — issue #29 (ADR "Event-Backbone-Event-Store")
 
