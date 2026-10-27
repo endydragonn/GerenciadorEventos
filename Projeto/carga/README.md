@@ -102,6 +102,39 @@ ACPI) em CSV com `epoch_ms` UTC, para cruzar com os CSVs do k6 (colunas em `lib-
   consomem CPU. Em `pct_freq_max` uma queda sustentada sob carga já indica throttling de energia ou térmico.
 - Registre o pior caso de cada máquina junto do resultado (substitui o "CPU ≤ 73%" de observação do operador).
 
+## Harness definitivo (issue #38)
+
+O que roda numa rodada contra o sistema distribuído, sempre do **gerador** (k6) contra o **host** (stack):
+
+| Cenário | Comando (gerador) | Mede |
+|---|---|---|
+| Escrita: reserva + confirma | `make test-degraus HOST_IP=<ip> MAPEAMENTO=sequencial\|intercalado` (escada, limiar X) ou `make test-rpm HOST_IP=<ip>` (taxa fixa) | throughput sustentado (`rpm_efetivo`), p50/p95/p99, 5xx |
+| Leitura: catálogo | `make test-rpm HOST_IP=<ip> CENARIO=leitura RPM=<n> DURACAO=<s até 3600>` | o mesmo, para `GET /bff/events/{id}` (gateway → catalog → disponibilidade no reservation), sem login, em rodízio por 50 eventos semeados |
+
+Na escrita cada usuário semeado faz login no `/bff/users/login` antes da carga e reserva com **o próprio token** (o `userId` do corpo é o
+do dono do token, #57); o harness nunca assina JWT. A coluna `cenario` do `results\resultados-rpm.csv` separa as duas (linhas antigas sem
+valor são escrita); no cenário `leitura` as colunas `aceitas`/`erros_5xx`/`outros`/`p*_ms` são das leituras (200 / 5xx / outro).
+
+**No host**, junto com o `make telemetria-host`, ligue a coleta do banco/broker **antes** de disparar o gerador:
+
+```powershell
+make coleta-host ROTULO=<nome>            # Ctrl+C ao fim; COLETA_S=<s> para parar sozinho
+```
+
+`coleta-host.sh` (Git Bash; só `docker exec`, nenhum segredo) reseta o `pg_stat_statements` no início (cria a extensão no `meu_banco` se
+faltar) e grava, a cada `INTERVALO_S` (1 s), `results\coleta-host-<rótulo>-<data>.csv` com `epoch_ms` UTC (cruza com a telemetria):
+
+- `lag_projecao_ms`: write → projeção, `MAX(applied_at - last_occurred_at)` de `reservation.event_availability` nas linhas aplicadas no
+  intervalo (-1 = nada aplicado);
+- `lag_reservation`, `lag_reservation_catalog`, `lag_notification`: lag do consumer (`TOTAL-LAG` do `rpk group describe`; -1 = grupo ausente);
+- `outbox_reservation`, `outbox_catalog`, `outbox_identity`: pendentes nos `event_outbox` (relay atrasado);
+- `pg_conexoes`, `pg_ativas`, `pg_idle`, `pg_idle_tx`, `pg_espera_lock`: o lado servidor do pooler, as conexões que o Supavisor mantém no
+  `meu_banco` por estado (`pg_stat_activity`). Não se lê o endpoint de métricas do Supavisor: ele exige um JWT assinado com segredo do
+  `supabase/.env`.
+
+Ao fim grava `results\pgss-<rótulo>-<data>.csv` (top 25 do `pg_stat_statements` por tempo total) e imprime max e p95 de cada coluna.
+Selftest sem Docker: `bash coleta-host.selftest.sh`.
+
 ## Matriz do experimento (runner oficial)
 
 Para **um** braço por vez, roda a disputa de vagas (teste 1, `PCT_CONFIRMA=100`) para
