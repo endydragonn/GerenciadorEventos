@@ -16,8 +16,8 @@ final class EventPayloads {
 
     /**
      * Só os metadados do evento ({@code EventUpdated}). Capacidade/janela de venda NÃO entram: são estado de
-     * {@code reservation} ({@code eventcap}), mudam em outra transação ({@code updatePolicy}) e podem ser recusadas
-     * (CHECK) depois do append.
+     * {@code reservation} ({@code eventcap}), mudam no reservation ({@code updatePolicy}, chamado ANTES da transação do catalog)
+     * e podem ser recusadas (CHECK) lá.
      */
     static ObjectNode evento(long id, Event e) {
         ObjectNode p = JsonNodeFactory.instance.objectNode();
