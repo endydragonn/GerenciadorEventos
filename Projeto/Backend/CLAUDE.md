@@ -982,6 +982,15 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   criação idempotente por `event_id` sem checkpoint, só liga com `RESERVATION_CATALOG_RECONCILIATION_ENABLED`).
   Cancelar o evento chama `DELETE /internal/eventcaps/{id}` ANTES da transação do catalog, fora dela (409 se há reserva, o antigo
   `RESTRICT`, antes de qualquer escrita; a chamada de rede não segura conexão nem o lock da linha `event`).
+- **`updatePolicy` (`PATCH /internal/eventcaps/{id}/policy`) e a conversão ilimitado -> limitado (#56):** `quant = novaCapacidade - ativas`,
+  com `ativas` = reservas `pending` + `confirmed` do evento (`reservation.walletevent`) contadas num subselect do MESMO `UPDATE` (um statement,
+  atômico com a escrita); capacidade menor que as ativas viola `eventcap_quant_bounds` (23514) => `IllegalArgumentException` => **400** e nada muda.
+  Limitado -> limitado acompanha a variação (`quant += nova - atual`) e limitado -> ilimitado vira `-1`. **Janela de corrida conhecida, não
+  tratada:** a reserva de evento ilimitado roda sem CAS e não trava a linha de `eventcap`. A janela vai da leitura da política (fora da transação
+  da reserva) até o commit da reserva: uma reserva em voo que comite DEPOIS do `count` do `UPDATE` não é contada e `quant` fica acima do real
+  (overselling de no máximo as reservas em voo na conversão). Caso inverso, lado seguro: cancelamento/expiração em voo durante a conversão
+  (contados como ativos) pode deixar `quant` 1 abaixo do real (uma vaga a menos, nunca a mais). Fechá-la exigiria travar `eventcap` no caminho
+  quente da reserva ilimitada, o que ficou fora da #56.
 - **Jobs dentro do serviço**: `ReservationExpiryService` (`reservation.expiry.scan.ms`), `IdempotencyKeyRetentionService` (#130) e o relay do
   outbox do serviço; `@EnableScheduling` em `ReservationApplication`. Projeção `event_availability` + `EventAvailabilityConsumer` (lote da
   #146) no serviço, group `reservation` (antes `gerenciador-eventos`; `EVENTS_CONSUMER_GROUP`).
