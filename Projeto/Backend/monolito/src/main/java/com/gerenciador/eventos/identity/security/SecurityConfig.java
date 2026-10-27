@@ -1,7 +1,5 @@
 package com.gerenciador.eventos.identity.security;
 
-import java.util.List;
-
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -13,9 +11,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
-import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 @Configuration
 public class SecurityConfig {
@@ -32,9 +28,10 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http, CorsConfigurationSource corsConfigurationSource)
+            throws Exception {
         http
-            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+            .cors(cors -> cors.configurationSource(corsConfigurationSource))
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -43,13 +40,15 @@ public class SecurityConfig {
                 // pública (o que o Flutter chama sem login); todo o resto exige
                 // "Authorization: Bearer <jwt>" válido.
                 //
+                // CORS: o bean único é o shared/CorsConfig (issue #133, origens de CORS_ALLOWED_ORIGINS).
+                //
                 // Preflight CORS (OPTIONS) liberado explicitamente ANTES das regras por
                 // verbo. Verificado empiricamente (HttpContractTest#corsPreflight_...) que o
                 // CorsFilter que .cors(...) registra no filter chain já intercepta e responde
                 // o preflight ANTES do AuthorizationFilter — hoje um OPTIONS de preflight já
                 // não cai em .authenticated(), mesmo sem esta regra. Mantida do mesmo jeito
                 // como defesa em profundidade e documentação explícita da intenção: se algum
-                // dia o bean de CORS for removido/reordenado, esta linha continua garantindo
+                // dia o CORS for removido/reordenado, esta linha continua garantindo
                 // que o preflight não seja barrado por auth. OPTIONS nunca carrega
                 // credenciais/dados sensíveis, então liberar por verbo (não por path) é seguro.
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
@@ -72,18 +71,5 @@ public class SecurityConfig {
                 .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
             .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
-    }
-
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOriginPatterns(List.of("*"));
-        configuration.setAllowedMethods(List.of("GET","POST","PUT","DELETE","OPTIONS"));
-        configuration.setAllowedHeaders(List.of("*"));
-        configuration.setExposedHeaders(List.of("Idempotency-Key"));
-        configuration.setAllowCredentials(true);
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", configuration);
-        return source;
     }
 }
