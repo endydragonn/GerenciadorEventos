@@ -85,6 +85,28 @@ public class ReservationEventSourcingTest extends ReservationTestSupport {
         assertTrue(log.stream().allMatch(x -> x.chave().equals(String.valueOf(eid))));
     }
 
+    /** removeLink de reserva PENDING (nunca confirmada): vaga devolvida, status cancelled e ReservationCancelled appendado. */
+    @Test
+    public void cancelarReservaPendingDevolveAVagaMarcaCancelledEAppendaReservationCancelled() throws Exception {
+        Usuario creator = novoUsuario("es-pcancel-creator@example.com", "es-fone-20");
+        Evento e = novoEvento(creator.getId(), "ES Cancel Pending", 3);
+        Usuario u = novoUsuario("es-pcancel-u@example.com", "es-fone-21");
+        Long uid = u.getId();
+        Long eid = e.getEvent_id();
+        eventWalletService.addLink(new EventWallet(uid, eid));
+        assertEquals("pending", eventWalletRepository.currentStatus(uid, eid));
+        assertEquals(2, eventCapRepository.findByEventId(eid).getQuant());
+
+        eventWalletService.removeLink(uid, eid);
+
+        assertEquals("cancelled", eventWalletRepository.currentStatus(uid, eid));
+        assertEquals(3, eventCapRepository.findByEventId(eid).getQuant(), "a vaga da pending volta");
+        List<Ev> log = ler(uid, eid);
+        assertEquals(List.of("SlotReserved", "ReservationCancelled"), log.stream().map(Ev::tipo).toList());
+        assertEquals(2, log.get(1).version());
+        assertEquals(2, versaoDaLinha(uid, eid), "walletevent.version = versão do ReservationCancelled");
+    }
+
     @Test
     public void payloadNaoTemDadoPessoal() throws Exception {
         Usuario creator = novoUsuario("es-pii-creator@example.com", "es-fone-03");
