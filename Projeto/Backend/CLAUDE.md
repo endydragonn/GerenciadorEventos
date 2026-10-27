@@ -608,13 +608,14 @@ O `gateway` e o contrato `/bff/**` não mudaram.
   **Não aumente** esse Hikari sem refazer a conta: ele divide o pool com o monólito, que é o que a carga mede.
 - **Config do serviço** (todas por env var, mesmos nomes do monólito; valores reais em `Projeto/.env`, nunca imprimir):
   `SPRING_DATASOURCE_URL`/`_USERNAME`/`_PASSWORD`, `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`/`_MINIMUM_IDLE`,
-  `MAIL_USERNAME`/`MAIL_PASSWORD` (SMTP Gmail, `spring.mail.*` igual ao do monólito antigo), `SPRING_KAFKA_BOOTSTRAP_SERVERS`,
+  `MAIL_USERNAME`/`MAIL_PASSWORD` (SMTP Gmail, `spring.mail.*` igual ao do monólito antigo), `MAIL_HOST` (default `smtp.gmail.com`),
+  `MAIL_PORT` (`587`), `MAIL_SMTP_AUTH` (`true`) e `MAIL_STARTTLS` (`true`; liga `enable` e `required` juntos) — parametrizáveis na #37 só para a
+  suíte e2e apontar para um captador de e-mail (`NotificationMailConfigTest`), nada muda sem a variável —, `SPRING_KAFKA_BOOTSTRAP_SERVERS`,
   `NOTIFICATION_CONSUMER_GROUP` (default `notification`), `EVENTS_CONSUMER_RETRY_*`. O compose passa só esses nomes (interpolados do
   `.env`; **sem `env_file`**, para o serviço não receber `JWT_SECRET`/reCAPTCHA). O monólito não lê mais `MAIL_*`.
 - **Pendências conhecidas**: (a) `notification.processed_event` cresce sem limpeza (com a retenção de 15 min 30 s do tópico, linhas
   mais velhas que isso nunca mais serão reentregues e poderiam ser apagadas; `processed_event` não tem dado pessoal, só id e tipo);
-  (b) sem healthcheck no compose (o serviço não tem HTTP; `docker logs gerenciador-notification` e o lag do group `rpk group
-  describe notification` mostram a saúde); (c) o `backend` do compose recebe `MAIL_USERNAME`/`MAIL_PASSWORD` vazios (sobrepostos,
+  (b) o `backend` do compose recebe `MAIL_USERNAME`/`MAIL_PASSWORD` vazios (sobrepostos,
   porque o `env_file` entrega o `.env` inteiro).
 
 ## Catalog em CQRS + Event Sourcing — issue #28
@@ -1261,6 +1262,37 @@ O monólito NÃO tem mais o pacote `identity` (nem `public.users`/`mywallet`/`pe
 - **Fora de escopo / pendências conhecidas**: #166 (IDOR pré-existente em `GET/PUT/DELETE /bff/users/{id}` e `/bff/my-wallets/{userId}`; a superfície não mudou); revogação de token /
   lista negra; rotação automática da chave; consumer dos eventos de ciclo de vida; remover o datasource do gateway (Hikari 10 só para o `actuator/health`).
 
+## Suíte e2e da stack inteira — issue #37 (Fase 7)
+
+`Projeto/e2e/run-e2e.sh` sobe **tudo** (gateway, identity, catalog, reservation, notification, frontend, `supabase-*`, redpanda) num project
+compose TEMPORÁRIO (`gerenciador-e2e`), isolado da stack real, e prova pelo gateway: cadastro em duas fases (o código é lido do **e-mail no
+captador**, não do banco) → promover a host por SQL → login → criar evento → reservar (cas) → confirmar → e-mail; depois espera os outbox
+esvaziarem e o lag dos groups `reservation`/`reservation-catalog`/`notification` chegar a 0 e roda o **replay** dos streams `catalog.event` e
+`reservation.wallet` (`CatalogReplayE2eTest`, `ReservationReplayE2eTest`: `EventReplay.rebuild` + `divergentTables`, sombra == projeção viva;
+exigem `E2E_REPLAY=1`, ficam PULADAS no `run-tests.sh`, não truncam nada e reutilizam a projeção do `ReservationReplayTest`). Verde = saída 0.
+- **Isolamento** (`Projeto/e2e/docker-compose.e2e.yml`, sem tocar nos defaults do compose normal): `container_name: !reset null` e `ports: !reset []`
+  em TODOS os serviços (inclusive os dos includes do Supabase) e a rede `default` sem o nome fixo `gerenciador-net` (vira `<project>_default`;
+  na rede real `db`/`redpanda`/`supabase-pooler` resolveriam para os containers REAIS e o project escreveria no `meu_banco` de verdade).
+  O script confere isso com `config --format json` (filtrado: só nomes, nunca valores, porque o `config` resolve o `.env`) ANTES do `up` e
+  aborta se houver `container_name`, porta publicada, rede/volume sem o prefixo do project ou SMTP fora do captador. O project tem de se
+  chamar `gerenciador-e2e*` (o real, `gerenciador-eventos`, é recusado) e o `down -v` do fim (também com `trap`, salvo `MANTER=1`) repete a guarda.
+- **E-mail**: o override aponta o `notification` para o Mailpit (`axllent/mailpit`, versão fixada; `MAIL_HOST=mailpit MAIL_PORT=1025
+  MAIL_SMTP_AUTH=false MAIL_STARTTLS=false`, sem senha, remetente `e2e-notification@example.com` em `MAIL_USERNAME`: o captador recusa remetente vazio); o script aborta se o `MAIL_HOST` efetivo do container não for `mailpit` e exige
+  0 mensagens no captador depois do 1º `up`, **com prova do seek**: antes do `up` completo sobe só o redpanda e produz em `identity.notification` um
+  `VerificationCodeRequested` válido (pedido de e-mail "pendente" de um group novo); depois do `up` exige o group `notification` em
+  offset 1 / log-end 1 / lag 0 e 0 e-mails no captador (sem o seek o group novo, em `earliest`, o releria e mandaria o e-mail). O passo 5b roda o
+  one-shot de novo com o group já existente e exige "offsets mantidos". O Studio do project usa `tmpfs` em vez do bind gravável
+  `supabase/volumes/snippets` da stack real, e o validador rejeita qualquer bind mount gravável. Sem porta no host: as chamadas HTTP (gateway e API do captador) saem de um container auxiliar na rede do project.
+- **Seek one-shot no 1º `up`** (compose normal, serviço `notification-seek`, imagem do redpanda): SÓ se o group `notification` ainda não existe
+  (`rpk group list`), faz `rpk group seek notification --to end --topics identity.notification --allow-new-topics`; o `notification` depende dele
+  (`service_completed_successfully`). Group novo não relê o log (evento de teste de uma stack apagada não vira e-mail); group existente (e-mail
+  legítimo pendente com o serviço parado) fica intocado. Tópico inexistente não falha.
+- **Healthchecks** (#37): `backend` (GET cru em `/actuator/health` por `bash /dev/tcp`, espera `200`), `notification` (sem HTTP: há conexão TCP ESTABELECIDA ao broker :9092 em `/proc/net/tcp`/`tcp6`, consumer ligado; o lag do group segue sendo o sinal de que ele consome) e
+  `frontend` (`wget` do busybox do nginx); o `frontend` agora espera o `backend` `service_healthy`. `docker compose up -d --build --wait` termina com
+  todo serviço de longa duração `healthy` (o `notification-seek` termina com 0).
+- Pré-requisitos: `Projeto/.env` e `Projeto/supabase/.env`, python, e RAM para ~15 containers a mais (a stack real pode ficar no ar; se faltar,
+  `docker compose -p gerenciador-eventos stop`, nunca `down`). O 1º build (inclui o Flutter do frontend) leva vários minutos.
+
 ## Cadastro em duas fases + e-mail
 
 1. `POST /bff/users/request-verification` (gateway -> identity) grava em `identity.pending_verifications` (hash da senha +
@@ -1314,6 +1346,8 @@ O monólito NÃO tem mais o pacote `identity` (nem `public.users`/`mywallet`/`pe
 - Serviço identity (#36), variáveis do SERVIÇO (`identity/application.properties`): `SPRING_DATASOURCE_*` (Hikari 100), `SERVER_TOMCAT_THREADS_MAX` (300), `INTERNAL_API_TOKEN` (sem default),
   `JWT_SIGNING_KEY_PATH` (default `/var/lib/identity/jwt-signing-key.json`), `JWT_EXPIRATION_SECONDS` (36000), `RECAPTCHA_SECRET_KEY` e `RECAPTCHA_VERIFY_URL`, `EVENTS_RELAY_ENABLED` (`true` no compose),
   `NOTIFICATION_EVENTS_RETENTION_SCAN_MS`. Nenhuma variável nova no `.env`; `JWT_SECRET` não é lido por ninguém.
+- Suíte e2e (#37): `MAIL_HOST`/`MAIL_PORT`/`MAIL_SMTP_AUTH`/`MAIL_STARTTLS` do `notification` (defaults do Gmail; ver "Serviço notification") e `E2E_REPLAY`
+  (`1` liga as classes `*ReplayE2eTest`; sem ela ficam puladas). Variáveis do script: `E2E_PROJECT`, `MANTER`, `ESPERA_UP`.
 - Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto
   (`management.endpoints.web.exposure.include=health`); `GET /actuator/health` público devolve
   `{"status":"UP"}` (depende do Postgres). O health do mail deixou de existir com o `spring-boot-starter-mail` (#32).

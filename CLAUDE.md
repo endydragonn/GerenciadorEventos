@@ -125,6 +125,14 @@ commitar ou registrar em log.
   `gerenciador-catalog`, API interna `:8083` só na rede `gerenciador-net`) e o serviço `identity` (#36, container `gerenciador-identity`, API interna `:8084` só na rede, chave do JWT no volume `identity-keys`) também sobem junto, e o `backend` **depende dos três**
   (`service_healthy`). `POST /bff/seed` fica **desligado** (404) no compose normal; o override de carga (`carga/docker-compose.carga.yml`)
   liga `SEED_ENABLED=true`.
+- **Suíte e2e da stack inteira (#37):** `Projeto/e2e/run-e2e.sh` sobe tudo num project temporário `gerenciador-e2e` (rede e volumes próprios, sem
+  porta no host, e-mail num captador Mailpit — nenhum e-mail real), roda cadastro (código lido do e-mail) → evento → reserva → confirmação e o replay
+  de `catalog.event` e `reservation.wallet`, e derruba só esse project no fim (`MANTER=1` mantém). Confere o isolamento por `config` antes do `up`.
+  Detalhes no `Projeto/Backend/CLAUDE.md`, "Suíte e2e da stack inteira". Os serviços do compose agora têm healthcheck (`backend`, `notification`,
+  `frontend`), então `docker compose -f Projeto/docker-compose.yml up -d --build --wait` espera tudo ficar `healthy`.
+- **Primeiro `up` e o group `notification`:** o serviço one-shot `notification-seek` move o group `notification` para o fim de `identity.notification`
+  SÓ se o group ainda não existe (stack nova não manda e-mail de evento antigo); o `notification` espera ele terminar. O SMTP do `notification` é
+  parametrizável (`MAIL_HOST`/`MAIL_PORT`/`MAIL_SMTP_AUTH`/`MAIL_STARTTLS`; defaults = Gmail).
 - Relate o resultado real dos testes; se algo falhou ou foi pulado, diga.
 
 ## Documentação de arquitetura (vault Obsidian)
