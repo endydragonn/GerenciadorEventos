@@ -27,6 +27,11 @@
 #      podem vir do próprio host lento: VUs esgotados por latência alta; o 5xx é sinal do host)
 #    - nenhum degradou nem saturou -> "X acima do último degrau"
 #
+#  Colunas lidas por NOME. Obrigatórias: rpm_alvo, rpm_efetivo, reservas, taxa_5xx, p50, p95, p99, p95_max_janela_30s,
+#  throughput, iteracoes_descartadas. A coluna `mapeamento` (sequencial | intercalado; issue #113, última do CSV) é
+#  OPCIONAL: só aparece no subtítulo. CSV antigo, sem ela, continua valendo e mostra "mapeamento n/d" (não se assume
+#  "sequencial": há CSV histórico feito com o mapeamento intercalado por edição local do script).
+#
 #  Uso:  report-degraus.sh <degraus-<id>.csv> <saida.html>
 #  Roda em qualquer bash com awk (o Git Bash do gerador serve). Auto-teste: report-degraus-selftest.sh.
 #
@@ -327,6 +332,7 @@ function painel(id,   W, H, x0, x1, y0, y1, s, k, v, vmax, step, top, t, i, py, 
     if (("braco" in col) && braco == "") braco = trim($col["braco"])
     if (("max_connections" in col) && maxc == "") maxc = trim($col["max_connections"])
     if (("pool_hikari" in col) && pool == "") pool = trim($col["pool_hikari"])
+    if (("mapeamento" in col) && mapeamento == "") mapeamento = trim($col["mapeamento"])
     if (("commit" in col) && trim($col["commit"]) != "") { cm = trim($col["commit"]); if (!(cm in commitset)) { commitset[cm] = 1; ncommit++; commits = commits (commits == "" ? "" : ", ") cm } }
 }
 
@@ -360,6 +366,7 @@ END {
     if (maxc != "") sub_ = sub_ " · max_connections " esc(maxc)
     if (pool != "") sub_ = sub_ " · pool HikariCP " esc(pool)
     sub_ = sub_ " · commit " (commits == "" ? "n/d" : esc(commits))
+    sub_ = sub_ " · mapeamento " (mapeamento == "" ? "n/d" : esc(mapeamento))
     printf "<p class=\"subtitulo\">%s · gerado em %s</p>\n", sub_, gerado
     if (ncommit > 1) printf "<p class=\"aviso\">AVISO: o CSV mistura mais de um commit (%s): host e gerador devem estar no mesmo commit.</p>\n", esc(commits)
     if (noutros) printf "<p class=\"aviso\">AVISO: respostas inesperadas ou falhas de conexão (outros &gt; 0) em %d %s: não entram no critério de X; confira o resumo do k6 desses degraus.</p>\n", noutros, (noutros == 1 ? "degrau" : "degraus")

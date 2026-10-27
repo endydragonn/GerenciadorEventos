@@ -106,4 +106,35 @@ public class ReservationSchemaConstraintsTest {
                             + erro.getSQLState() + " / " + erro.getMessage());
         }
     }
+
+    // ===================== D) eventcap_capacity_valid =====================
+
+    /** Issue #58: capacity = -1 (ilimitado) ou >= 1; 0 (e < -1) é recusado com check_violation (23514). */
+    @Test
+    void capacityAceitaMenosUmEUmERecusaZeroEMenorQueMenosUm() throws Exception {
+        long evento = 7_100_000L;
+        try (Connection conn = databaseConnection.getConnection()) {
+            for (int valida : new int[] { -1, 1 }) {
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO reservation.eventcap (event_id, capacity, quant) VALUES (?, ?, ?)")) {
+                    ps.setLong(1, evento + valida);
+                    ps.setInt(2, valida);
+                    ps.setInt(3, valida);
+                    assertEquals(1, ps.executeUpdate(), "capacity " + valida + " deveria ser aceita");
+                }
+            }
+            for (int invalida : new int[] { 0, -2 }) {
+                SQLException erro = assertThrows(SQLException.class, () -> {
+                    try (PreparedStatement ps = conn.prepareStatement(
+                            "INSERT INTO reservation.eventcap (event_id, capacity, quant) VALUES (?, ?, 0)")) {
+                        ps.setLong(1, evento + 10 + invalida);
+                        ps.setInt(2, invalida);
+                        ps.executeUpdate();
+                    }
+                });
+                assertEquals("23514", erro.getSQLState(), "capacity " + invalida
+                        + " deveria violar eventcap_capacity_valid (23514), veio: " + erro.getSQLState() + " / " + erro.getMessage());
+            }
+        }
+    }
 }

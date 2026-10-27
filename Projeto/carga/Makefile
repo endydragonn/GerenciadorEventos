@@ -38,6 +38,8 @@ DEG_PASSO      ?= 4000
 DEG_MAX        ?= 40000
 DEG_DURACAO    ?= 60
 MAX_VUS        ?= 2000
+# MAPEAMENTO: sequencial (padrao; U reservas seguidas no mesmo evento = evento disputado) | intercalado (E reservas seguidas em eventos diferentes = capacidade do host)
+MAPEAMENTO     ?= sequencial
 POOL_HIKARI    ?= 1000
 CSV            ?=
 
@@ -69,7 +71,7 @@ help:
 	@Write-Host '  make test-matriz-naive HOST_IP=<ip>   (no GERADOR: rodada 1b, braco ingenuo: N=100,200 x 5 rep, capacity 20; host com READPATH=naive; lag_obs_* = lag real do consumer)'
 	@Write-Host '  make report-matriz                                          (no GERADOR: results\matriz.csv -> results\matriz.html, via Git Bash)'
 	@Write-Host 'ESCADA DE CARGA - limiar X preliminar (issue #14; degraus de taxa fixa a partir de 12k RPM; host com "make host-rpm MAX_CONN=<n>")'
-	@Write-Host '  make test-degraus    HOST_IP=<ip> [DEG_INICIO=12000 DEG_PASSO=4000 DEG_MAX=40000 DEG_DURACAO=60 MAX_CONN=300 POOL_HIKARI=1000 USUARIOS=200 MAX_VUS=2000]   (no GERADOR: results\degraus-<id>.csv; MAX_CONN/POOL_HIKARI = o que o host roda)'
+	@Write-Host '  make test-degraus    HOST_IP=<ip> [DEG_INICIO=12000 DEG_PASSO=4000 DEG_MAX=40000 DEG_DURACAO=60 MAX_CONN=300 POOL_HIKARI=1000 USUARIOS=200 MAX_VUS=2000 MAPEAMENTO=sequencial|intercalado]   (no GERADOR: results\degraus-<id>.csv; MAX_CONN/POOL_HIKARI = o que o host roda)'
 	@Write-Host '  make report-degraus  CSV=results\degraus-<id>.csv           (no GERADOR: curva latencia/throughput x carga + degrau X, via Git Bash -> results\degraus-<id>.html)'
 
 setup-host:
@@ -129,7 +131,7 @@ report-matriz:
 # ---- escada de carga (issue #14): um CSV por escada em results\degraus-<id>.csv; o limiar X sai do report
 test-degraus:
 	$(need_ip)
-	.\degraus\rodar-degraus.ps1 -HostIp $(HOST_IP) -RpmInicio $(DEG_INICIO) -RpmPasso $(DEG_PASSO) -RpmMax $(DEG_MAX) -Duracao $(DEG_DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -PoolHikari $(POOL_HIKARI) -PctConfirma $(PCT_CONFIRMA) -MaxVus $(MAX_VUS)
+	.\degraus\rodar-degraus.ps1 -HostIp $(HOST_IP) -RpmInicio $(DEG_INICIO) -RpmPasso $(DEG_PASSO) -RpmMax $(DEG_MAX) -Duracao $(DEG_DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -PoolHikari $(POOL_HIKARI) -PctConfirma $(PCT_CONFIRMA) -MaxVus $(MAX_VUS) -Mapeamento $(MAPEAMENTO)
 
 # telemetria (CPU/freq/RAM a cada 1 s) do HOST durante a escada/matriz; o gerador grava a dele sozinho. Ctrl+C encerra.
 telemetria-host:

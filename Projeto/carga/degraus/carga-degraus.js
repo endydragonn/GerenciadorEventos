@@ -2,7 +2,9 @@
 // constant-arrival-rate (modelo aberto) por degrau, em sequencia via startTime, numa UNICA execucao do k6
 // (seed e login uma vez so). Mede onde o fluxo sincrono (reserva + confirma) degrada: o limiar X.
 //
-// Cada iteracao e um par (usuario, evento) unico: i -> usuario i % U, evento floor(i / U), como no teste 2.
+// Cada iteracao e um par (usuario, evento) unico. MAPEAMENTO (lib-mapeamento.js) escolhe como o indice i vira o par:
+// sequencial (padrao, como no teste 2) = usuario i % U, evento floor(i / U) (evento disputado); intercalado = usuario
+// floor(i / E), evento i % E (E reservas seguidas em eventos diferentes: capacidade do host).
 // O k6 reinicia scenario.iterationInTest em 0 a CADA cenario, entao o degrau k usa a faixa de indices
 // [base_k, base_k + cota_k), com base_k = soma das cotas anteriores e cota = ceil(RPM * DURACAO_S / 60) + 1
 // (o executor pode emitir 1 iteracao a mais). Iteracoes alem da cota nao sao enviadas (contador
@@ -30,16 +32,19 @@
 //
 // Variaveis (passadas pelo rodar-degraus.ps1):
 //   BASE_URL, RPMS (lista crescente "12000,16000,..."), DURACAO_S (por degrau), USERS_FILE, EVENTS_FILE,
-//   SUMMARY_FILE, MAX_VUS (opcional, padrao 2000), PCT_CONFIRMA (0-100, padrao 100)
+//   SUMMARY_FILE, MAX_VUS (opcional, padrao 2000), PCT_CONFIRMA (0-100, padrao 100),
+//   MAPEAMENTO (opcional: sequencial, padrao | intercalado; outro valor aborta o setup)
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { Counter, Trend } from 'k6/metrics';
+import { erroMapeamento, parDe } from './lib-mapeamento.js';
 
 const BASE = __ENV.BASE_URL;
 const DURACAO_S = parseInt(__ENV.DURACAO_S, 10);
 const RPMS = __ENV.RPMS.split(',').map((r) => parseInt(r, 10));
 const MAX_VUS = parseInt(__ENV.MAX_VUS || '2000', 10);
 const PCT_CONFIRMA = parseInt(__ENV.PCT_CONFIRMA || '100', 10);
+const MAPEAMENTO = __ENV.MAPEAMENTO || 'sequencial';   // validado no setup() (antes do login)
 const GRACEFUL_S = 30;
 const ESPACO_S = GRACEFUL_S + 1;     // entre degraus (ver acima)
 const JANELA_MS = 30000;
@@ -131,6 +136,8 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
 // Login de todos os usuarios ANTES da carga (nao entra na medicao).
 export function setup() {
+  const erroMap = erroMapeamento(MAPEAMENTO);
+  if (erroMap) exec.test.abort(erroMap);
   if (MAX_PARES < TOTAL_PARES) {
     exec.test.abort(`Faltam pares unicos: ${USERS.length} usuarios x ${EVENTS.length} eventos = ${MAX_PARES} < ${TOTAL_PARES} (soma das cotas dos degraus). Semeie mais eventos.`);
   }
@@ -155,7 +162,7 @@ export function setup() {
   }
   const ok = sessoes.filter((s) => s).length;
   if (ok === 0) exec.test.abort('Nenhum login funcionou: confira usuarios semeados e BASE_URL.');
-  console.log(`setup: ${ok}/${USERS.length} logins ok; ${EVENTS.length} eventos; ${MAX_PARES} pares unicos; ${PLANO.length} degraus usam ${TOTAL_PARES}`);
+  console.log(`setup: ${ok}/${USERS.length} logins ok; ${EVENTS.length} eventos; ${MAX_PARES} pares unicos; ${PLANO.length} degraus usam ${TOTAL_PARES}; mapeamento ${MAPEAMENTO}`);
   return sessoes;
 }
 
@@ -205,12 +212,13 @@ export default function (sessoes) {
     return;
   }
   const i = p.base + j;
-  const s = sessoes[i % USERS.length];
+  const par = parDe(i, USERS.length, EVENTS.length, MAPEAMENTO);
+  const s = sessoes[par.u];
   if (!s) {
     semLogin.add(1);
     return;
   }
-  const eventId = EVENTS[Math.floor(i / USERS.length)];
+  const eventId = EVENTS[par.e];
   const envio = Date.now();   // instante de ENVIO: define a janela de 30 s da amostra
   const res = http.post(
     `${BASE}/bff/event-wallets`,
@@ -311,6 +319,7 @@ export function handleSummary(data) {
     max_vus: MAX_VUS,
     vus_max: ((data.metrics.vus_max || {}).values || {}).max || 0,
     pct_confirma: PCT_CONFIRMA,
+    mapeamento: MAPEAMENTO,
     degraus,
     faltando,
     inconsistencias,

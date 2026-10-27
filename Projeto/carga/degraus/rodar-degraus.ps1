@@ -29,6 +29,17 @@
   host: make host-rpm MAX_CONN=<n> (pool do SERVICO reservation, o caminho quente: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE, padrao 1000).
   Confira no host: docker exec gerenciador-reservation printenv SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE
 
+  -Mapeamento escolhe como a iteracao vira o par (usuario, evento) (degraus\lib-mapeamento.js; vai na ultima coluna do CSV):
+    sequencial (padrao) = usuario i % U, evento floor(i / U): U reservas seguidas no MESMO evento (evento disputado, linha
+                          quente do eventcap);
+    intercalado         = usuario floor(i / E), evento i % E: E reservas seguidas em eventos DIFERENTES (capacidade do host,
+                          sem a linha quente de um evento).
+  Nos dois modos cada par e unico dentro da escada e a conta Usuarios x Eventos >= soma das cotas vale igual.
+  Capacidade por evento (-Capacidade 0, o padrao): sequencial = Usuarios/2 (como o teste 2); intercalado = Usuarios. No
+  intercalado o evento recebe a u-esima reserva na "rodada" u, entao Usuarios/2 lotaria todos os eventos juntos no meio da
+  escada (segunda metade 100% "lotado", X inflado); com Usuarios cada evento aceita as U reservas (uma por usuario). A
+  capacidade usada aparece numa linha Info. Um -Capacidade explicito vale nos dois modos (no intercalado, < Usuarios avisa).
+
   Sem limite de duracao de 110 s do teste 2: aquele limite evita que reservas pending expirem e falseiem a
   conta de overselling; aqui nao se mede overselling e, com -PctConfirma 100 (padrao), nada fica pending.
 
@@ -38,6 +49,7 @@
 .EXAMPLE
   .\degraus\rodar-degraus.ps1 -HostIp 192.168.0.10 -MaxConnections 300 -PoolHikari 1000
   .\degraus\rodar-degraus.ps1 -HostIp 192.168.0.10 -MaxConnections 300 -PoolHikari 1000 -RpmInicio 12000 -RpmPasso 2000 -RpmMax 24000 -Duracao 90
+  .\degraus\rodar-degraus.ps1 -HostIp 192.168.0.10 -MaxConnections 300 -PoolHikari 1000 -Mapeamento intercalado
 #>
 [CmdletBinding()]
 param(
@@ -48,20 +60,21 @@ param(
     [ValidateRange(1, 1000000)][int]$RpmMax = 40000,
     [int]$Duracao = 60,
     [ValidateRange(1, 100000)][int]$Usuarios = 200,
-    [int]$Capacidade = 0,          # 0 = Usuarios/2 (como o teste 2)
+    [int]$Capacidade = 0,          # 0 = padrao por mapeamento (Get-CapacidadePadrao): sequencial Usuarios/2, intercalado Usuarios
     [ValidateSet('cas', 'naive')][string]$Rotulo = 'cas',
     [Parameter(Mandatory)][ValidateRange(1, 100000)][int]$MaxConnections,
     [Parameter(Mandatory)][ValidateRange(1, 100000)][int]$PoolHikari,
     [int]$RefreshMs = 0,   # obsoleto (#29): so rotula a coluna refresh_ms
     [ValidateRange(0, 100)][int]$PctConfirma = 100,
-    [ValidateRange(10, 20000)][int]$MaxVus = 2000
+    [ValidateRange(10, 20000)][int]$MaxVus = 2000,
+    [ValidateSet('sequencial', 'intercalado')][string]$Mapeamento = 'sequencial'   # ver .DESCRIPTION
 )
 
 $ErrorActionPreference = 'Stop'
 $Results = Join-Path (Split-Path $PSScriptRoot -Parent) 'results'
 New-Item -ItemType Directory -Force -Path $Results | Out-Null
 $Base = "http://${HostIp}:${Porta}"
-if ($Capacidade -le 0) { $Capacidade = [math]::Max(1, [int]($Usuarios / 2)) }
+$Mapeamento = $Mapeamento.ToLowerInvariant()   # ValidateSet ignora maiusculas; o k6 e o CSV exigem minusculas
 
 function Info($m) { Write-Host "[degraus] $m" -ForegroundColor Cyan }
 function Ok($m)   { Write-Host "[ ok ] $m" -ForegroundColor Green }
@@ -74,6 +87,7 @@ catch { Fail "Backend inacessivel em $Base." }
 
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib-seed.ps1')   # Invoke-Seed (seed unico: docs\carga\harness\setup.sh)
 . (Join-Path $PSScriptRoot 'lib-degraus.ps1')                      # plano da escada e linha do CSV
+if ($Capacidade -le 0) { $Capacidade = Get-CapacidadePadrao -Usuarios $Usuarios -Mapeamento $Mapeamento }
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib-telemetria.ps1')   # CPU/RAM do gerador durante a escada
 
 try { $plano = Get-PlanoEscada -RpmInicio $RpmInicio -RpmPasso $RpmPasso -RpmMax $RpmMax -DuracaoS $Duracao -Usuarios $Usuarios }
@@ -104,7 +118,9 @@ $TelCsv = Join-Path $Results "telemetria-gerador-$tag.csv"
 $tel = $null
 $totalS = $n * ($Duracao + 31) - 31
 Info ("Escada: {0} degraus de {1} s ({2}), ~{3} min no k6 + seed." -f $n, $Duracao, ($plano.Rpms -join ', '), [math]::Ceiling($totalS / 60.0))
+Info "Mapeamento: $Mapeamento ($(if ($Mapeamento -eq 'intercalado') { 'E reservas seguidas em eventos diferentes: capacidade do host' } else { 'U reservas seguidas no mesmo evento: evento disputado' }))."
 Info "Pares: $($plano.TotalPares) (soma das cotas ceil(RPM*$Duracao/60)+1); $Usuarios usuarios x $eventos eventos = $($Usuarios * $eventos) (capacidade $Capacidade/evento)."
+if ($Mapeamento -eq 'intercalado' -and $Capacidade -lt $Usuarios) { Warn "Mapeamento intercalado com capacidade $Capacidade < $Usuarios usuarios: cada evento recebe ate $Usuarios reservas (uma por usuario) e os eventos lotam juntos no meio da escada (segunda metade 'lotado', X inflado). Use -Capacidade 0 (padrao) ou >= $Usuarios." }
 $tolS = $MaxVus / ($plano.Rpms[-1] / 60.0)
 Info ("VUs: {0} pre-alocados (= maximo; ~1-2 MB cada: confira a RAM do gerador). So ha descarte se uma iteracao (reserva + confirma) passar de {1:N1} s no degrau de {2} RPM." -f $MaxVus, $tolS, $plano.Rpms[-1])
 if ($tolS -lt 2.5) { Warn "MaxVus cobre iteracoes de ate $([math]::Round($tolS, 1)) s no maior degrau: com p95 de 1 s por requisicao (reserva + confirma) o k6 pode descartar iteracoes antes de o p95 chegar a 1 s, e o report leria isso como saturacao do gerador. Aumente -MaxVus ou reduza -RpmMax." }
@@ -119,6 +135,7 @@ try {
     $env:BASE_URL = $Base; $env:RPMS = ($plano.Rpms -join ','); $env:DURACAO_S = "$Duracao"
     $env:USERS_FILE = $uf; $env:EVENTS_FILE = $ef; $env:SUMMARY_FILE = $sf
     $env:PCT_CONFIRMA = "$PctConfirma"; $env:MAX_VUS = "$MaxVus"
+    $env:MAPEAMENTO = $Mapeamento   # sempre setado (inclusive no padrao): nao herda valor de uma execucao anterior da sessao
     $tel = Start-Telemetria -Saida $TelCsv
     Info 'Disparando k6...'
     k6 run --quiet (Join-Path $PSScriptRoot 'carga-degraus.js')
@@ -141,7 +158,7 @@ try {
     $linhas = New-Object System.Collections.Generic.List[string]
     foreach ($d in $s.degraus) {
         $linhas.Add((Format-LinhaDegrau -Escada $escada -Degrau $d -DuracaoS $Duracao -Braco $Rotulo `
-            -MaxConnections $MaxConnections -PoolHikari $PoolHikari -Commit $commit))
+            -MaxConnections $MaxConnections -PoolHikari $PoolHikari -Commit $commit -Mapeamento $Mapeamento))
     }
     # UTF-8 sem BOM e LF: o report em bash le sem saneamento
     [System.IO.File]::WriteAllText($Csv, ($DegrausCabecalho + "`n" + ($linhas -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
