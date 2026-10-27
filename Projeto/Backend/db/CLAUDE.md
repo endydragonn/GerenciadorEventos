@@ -79,7 +79,7 @@ como `supabase_admin` (um `psql` por arquivo, ordem lexical, no `POSTGRES_DB`). 
 | `06-mywallet.sql` | tabela `mywallet` (FK `user_id → users`, `ON DELETE CASCADE`) |
 | `08-pending-verifications.sql` | tabela + funções/trigger de limpeza de códigos expirados |
 | `11-event-store.sql` | `event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint` — infra de event sourcing da Fase 6 (#27), sem FK |
-| `13-reservation.sql` | schema **`reservation`** (dono `admin`; #33, Fase 7) — `eventcap` (CHECK `0<=quant<=capacity`), `walletevent` (PK composta, `status`, `expires_at`, `version` do stream `reservation.wallet`), `event_availability` (projeção assíncrona, `ativos` por evento, lida pelo braço `naive`), `idempotency_key` e o event store do serviço (`event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint`). **Sem nenhuma FK.** Substituiu os antigos `04-eventcap`, `07-walletevent`, `09-event-availability` e `10-idempotency-key` (no histórico do git) |
+| `13-reservation.sql` | schema **`reservation`** (dono `admin`; #33, Fase 7) — `eventcap` (`capacity = -1 OR >= 1`, CHECK `0<=quant<=capacity`, `buy_time_limit` `timestamptz`), `walletevent` (PK composta, `status`, `expires_at` `timestamptz`, índice `idx_walletevent_event_id`, `version` do stream `reservation.wallet`), `event_availability` (projeção assíncrona, `ativos` por evento, lida pelo braço `naive`), `idempotency_key` e o event store do serviço (`event_store`, `event_outbox`, `event_snapshot`, `projection_checkpoint`). **Sem nenhuma FK.** Substituiu os antigos `04-eventcap`, `07-walletevent`, `09-event-availability` e `10-idempotency-key` (no histórico do git) |
 | `12-notification.sql` | schema **`notification`** (dono `admin`) + `notification.processed_event` — checkpoint de idempotência do serviço `notification` (#32, Fase 7) |
 | `14-catalog.sql` | schema **`catalog`** (dono `admin`; #35) — `event` (só metadados + `version`, projeção inline do stream `catalog.event`; `creator_id` integer **sem FK**, índice `idx_event_creator_id`), `eventpresenter` (`eventpresenter_event_id_fkey` → `catalog.event` `ON DELETE CASCADE`, a única FK) e o event store do serviço. Substituiu o `03-event.sql` e o `05-eventpresenter.sql` (no histórico do git; saíram no cutover, fatia 3). Idempotente (só `IF NOT EXISTS`), mas é para banco NOVO: banco existente usa a migração `20261026-catalog-schema.sql` (move de `public`; ver `Backend/CLAUDE.md`, "Serviço catalog"), verificada por `migrations/verify-20261026-migration.sh` |
 | `99-tests.sql` | suíte de sanidade em `DO $$ ... $$` (trigger, CAS, CHECK, N:N, cascata de `eventpresenter`, projeção de disponibilidade, `walletevent.version`, event store/outbox/checkpoint, TRUNCATE; as tabelas de reserva em `reservation.*` e as de evento em `catalog.*`, #35) |
@@ -100,6 +100,13 @@ e apagá-la no fim, e afastar o nome da constraint de `reservation.walletevent`;
 migração **2×** (idempotência) e checa colunas removidas/criadas, constraints, índice parcial,
 conversão de `quant` (limitado / esgotado-piso-0 / ilimitado) e **preservação dos dados**
 (contagem + identidade das linhas). Não toca em `meu_banco`. Exit `!= 0` se algo falhar.
+
+**Migração `20261027-reservation-timestamptz.sql` (issue #58)**, para banco existente, **com o backend e o reservation parados** e depois do backup
+`pg_dump -h localhost -U admin --clean --if-exists -n reservation meu_banco` (backup, aplicação e rollback no cabeçalho): `eventcap.buy_time_limit` e
+`walletevent.expires_at` viram `timestamptz` (`USING ... AT TIME ZONE 'UTC'` explícito: o Postgres e as JVMs do projeto rodam em UTC; um `mvn
+spring-boot:run` no host Windows grava em UTC-3 e exigiria trocar o fuso na migração), cria `idx_walletevent_event_id` e troca `eventcap_capacity_valid` para
+`capacity = -1 OR capacity >= 1` (aborta com a contagem se houver linha com `capacity = 0`). Idempotente (o 2º run só emite NOTICEs); roda como `supabase_admin`.
+O código Java não mudou (`LocalDateTime` ↔ `Timestamp` na JVM em UTC já roda contra `timestamptz`, como em `idempotency_key.expires_at`).
 
 **Os scripts de init só rodam na PRIMEIRA criação do volume `supabase-db-data`** (inclusive o `_supabase`/`_supavisor` do pooler; num volume antigo, recrie-o). Depois disso são
 ignorados. Para reaplicar do zero:
@@ -159,8 +166,9 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   `reservation.eventcap` quando existe e senão de `public.eventcap` (SQL dinâmico): o comportamento depende do estado do banco, e continua
   idempotente nos dois (o fluxo "carregar o `seed-data.sql` e reaplicar" segue valendo).
 - **`eventcap`** — (schema `reservation`) agregado ISOLADO de capacidade. PK `event_id`, **sem FK** (antes `→ event ON DELETE
-  CASCADE`, até a #33). `capacity` (`NOT NULL`), `quant` = vagas disponíveis (`NOT NULL`), `buy_time_limit`
-  (nullable), `max_time_in_line` (segundos, default 120).
+  CASCADE`, até a #33). `capacity` (`NOT NULL`; CHECK `eventcap_capacity_valid`: `-1` ou `>= 1`, **0 é recusado** desde a #58, igual à regra
+  `lot_quantity >= 1 ou -1` do catalog), `quant` = vagas disponíveis (`NOT NULL`), `buy_time_limit`
+  (`timestamptz`, nullable; `timestamp` até a #58), `max_time_in_line` (segundos, default 120).
   - **`capacity = -1` ⇒ sem limite de vendas** (evento ilimitado); nesse caso `quant = -1`
     também, o CHECK `eventcap_quant_bounds` (`capacity = -1 OR 0 <= quant <= capacity`) não
     restringe, e a reserva **não** passa pelo CAS — o serviço libera direto.
@@ -172,8 +180,8 @@ docker compose -f Projeto/docker-compose.yml up -d --build
 - **`mywallet`** — PK `user_id`, FK `→ users` `ON DELETE CASCADE`.
 - **`walletevent`** — (schema `reservation`) inscrição/reserva N:N. PK composta `(user_id, event_id)`. **Sem FK** (antes para
   `users`/`event`, `ON DELETE RESTRICT`, até a #33). `status` (`confirmed`|`pending`|`expired`|
-  `cancelled`, default `confirmed`, CHECK) + `expires_at` (só quando `pending`). Índice parcial
-  `idx_walletevent_pending_expires` para o job de expiração. **`version`** (issue #29; `integer NOT NULL DEFAULT 0`):
+  `cancelled`, default `confirmed`, CHECK) + `expires_at` (`timestamptz`, só quando `pending`; `timestamp` até a #58). Índice parcial
+  `idx_walletevent_pending_expires` para o job de expiração e `idx_walletevent_event_id` (btree em `event_id`, #58: a PK não serve busca só por evento). **`version`** (issue #29; `integer NOT NULL DEFAULT 0`):
   projeção inline do stream `reservation.wallet`; a versão do evento sai da própria guarda
   (`UPDATE ... SET version = version + 1 ... RETURNING version`; a 1ª reserva do par é a v1, `INSERT ... VALUES (..., 1)`) e o
   evento só é appendado quando a guarda afeta 1 linha, na mesma transação. Reservar de novo uma cancelada/expirada continua o
@@ -195,7 +203,7 @@ docker compose -f Projeto/docker-compose.yml up -d --build
   propósito**: qualquer violação no consumer é `SQLException`, retentada sem limite pela política de erro, e travaria a
   partição; `ativos` pode ficar negativo (um `Cancelled` sem `SlotReserved`, de uma linha anterior ao ES) e a leitura trata
   `ativos` negativo como 0 (`GREATEST(ativos, 0)`; sem isso a disponibilidade passaria da capacidade). O schema antigo (`available`, `refreshed_at`, `created_at`, FK com `CASCADE`, refresh por timer) saiu.
-  Usa `timestamptz` de propósito (código novo não propaga a dívida que a issue #58 corrige).
+  Usa `timestamptz` (como todo instante do schema `reservation` desde a #58).
   Migração a quente (histórica; roda ANTES da `20261025`, quando as tabelas ainda estão em `public`): `db/migrations/20261023-wallet-es-projecao.sql` (idempotente: cria `walletevent.version` e, **só se a
   tabela ainda tem o schema antigo**, derruba e recria `event_availability` com o baseline de `ativos` = reservas ativas que
   já existem em `walletevent`; roda como `supabase_admin`; pare o `gerenciador-backend` antes de migrar (a imagem antiga ainda faz `INSERT` nas colunas que a migração derruba; o `ALTER TABLE walletevent` tem `lock_timeout` de 5 s); a antiga `20260903-event-availability.sql` fica como histórico (superada: aplicada depois desta, falha, pois a tabela já não tem `available`). Coberta por

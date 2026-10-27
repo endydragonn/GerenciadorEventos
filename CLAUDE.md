@@ -108,8 +108,10 @@ commitar ou registrar em log.
   schemas novos: aplicar `Projeto/Backend/db/migrations/20261024-notification-schema.sql`, **com o backend e o reservation parados**
   `20261025-reservation-schema.sql` e, **com o backend e o catalog parados e depois do backup
   `pg_dump -h localhost -U admin --clean --if-exists -n public meu_banco`** (backup, migração e rollback no cabeçalho do arquivo),
-  `20261026-catalog-schema.sql` (move `event`/`eventpresenter` e o stream `catalog.event` para o schema `catalog`;
-  idempotentes; bancos novos já nascem com eles). O `run-tests.sh` **aborta** se o banco ainda tiver `public.event` (migração 20261026
+  `20261026-catalog-schema.sql` (move `event`/`eventpresenter` e o stream `catalog.event` para o schema `catalog`) e, **com o backend e o reservation parados e
+  depois do backup `pg_dump -h localhost -U admin --clean --if-exists -n reservation meu_banco`** (backup, migração e rollback no cabeçalho do arquivo),
+  `20261027-reservation-timestamptz.sql` (#58: `eventcap.buy_time_limit`/`walletevent.expires_at` em `timestamptz`, índice `idx_walletevent_event_id`,
+  `capacity = -1 OR >= 1`; aborta se houver `capacity = 0`); idempotentes; bancos novos já nascem com eles). O `run-tests.sh` **aborta** se o banco ainda tiver `public.event` (migração 20261026
   pendente) ou não tiver `catalog.event`.
 - **`INTERNAL_API_TOKEN` (desde a #33, volta 3):** as chamadas internas gateway → reservation e gateway → catalog (`/internal/**`; #35) exigem um token de serviço
   (header `X-Internal-Token`; 401 sem/errado). **Acrescente ao `Projeto/.env` (você mesmo; o repo nunca edita nem imprime o `.env`)**
