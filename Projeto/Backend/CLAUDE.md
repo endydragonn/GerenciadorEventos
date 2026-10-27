@@ -202,7 +202,7 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   e só uma no cas; "lotado" já na 1ª chamada; repetição com chave do cliente devolve o resultado salvo; mapeamento 400/422/409;
   **criação do `eventcap` idempotente por `event_id`**; lote/inexistente; `updatePolicy`; apagar recusado com reserva),
   `CatalogReconciliationTest` (**reconciliação pelo `EventCreated`** do tópico: cria o que faltava, repetição/reentrega não altera,
-  `eventcap` da chamada síncrona não é sobrescrito, tipos que não são `EventCreated` ignorados, payload inválido rejeitado) e
+  `eventcap` da chamada síncrona não é sobrescrito, tipos que não são `EventCreated` ignorados, payload inválido rejeitado; `capacity` 0 ou < -1 — que o CHECK `eventcap_capacity_valid` recusaria, #58 — também é payload inválido e vai ao DLT em vez de travar a partição) e
   `ReservationConfigTest` (Tomcat 300, keep-alive, virtual threads off, Hikari 1000, `events.schema=reservation`). **Módulo
   `monolito`**: `EventWalletGatewayCasTest` / `EventWalletGatewayNaiveTest` (o gateway decide o braço: cas = UMA chamada
   `POST /internal/reservations`; naive = `GET .../availability` e DEPOIS `POST`, na ordem, sem a 2ª quando a disponibilidade é 0; carteira e
