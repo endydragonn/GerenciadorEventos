@@ -755,9 +755,14 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
   `EventWalletGateway` guarda o positivo por 30 s (Caffeine; negativo e falha nunca entram no cache).
 - Senhas: `BCryptPasswordEncoder` (bean em `SecurityConfig`). Nunca gravar senha em claro
   (o seed SQL grava em claro só para dados de teste — não replicar em código de produção).
-- CORS está definido **duas vezes** (`shared.CorsConfig` e o bean em `SecurityConfig`, este
-  bem permissivo). Ao mexer em CORS, alinhe os dois e veja `CORS_CONFIG.md`. Os dois expõem o header
-  de resposta `Idempotency-Key` (#24).
+- CORS tem **um único ponto de configuração** (#133): o bean `CorsConfigurationSource` de
+  `shared.CorsConfig`, que o `SecurityConfig` injeta em `.cors(...)` (o filtro do Spring Security responde
+  o preflight antes dos controllers; não há `WebMvcConfigurer` nem outro bean). Origens EXATAS de
+  `CORS_ALLOWED_ORIGINS` (default `http://localhost:8088,http://localhost:3000`; `*` é recusado na subida, pois
+  as credenciais ficam habilitadas — origem fora da lista não recebe `Access-Control-Allow-Origin`).
+  `exposedHeaders`: `Authorization`, `Content-Type`, `Idempotency-Key` (#24). Outra origem = linha
+  `CORS_ALLOWED_ORIGINS=...` (lista completa) no `Projeto/.env`, que o `backend` herda por `env_file`.
+  Testes: `HttpContractTest#corsPreflight_*`/`cors_respostaReal_*` e `shared/CorsConfigTest`. Veja `CORS_CONFIG.md`.
 
 ## Inscrição em evento — reserva em duas fases (CAS)
 
