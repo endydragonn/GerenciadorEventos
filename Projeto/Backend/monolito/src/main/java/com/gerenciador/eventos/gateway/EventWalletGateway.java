@@ -24,8 +24,8 @@ import com.github.benmanes.caffeine.cache.Caffeine;
  *       {@code POST} da reserva sem CAS ({@code ReservationClient#addLink}). A ida e volta entre elas é a janela
  *       check-then-act do braço de controle do experimento. Oversella proporcional ao lag da projeção.</li>
  * </ul>
- * O {@code userId} segue vindo do corpo da requisição sem ser confrontado com o usuário autenticado (IDOR, issue #57,
- * fora desta issue): ele cruza a rede como parâmetro explícito, então a correção futura mexe só aqui.
+ * O {@code userId} que chega aqui já é o do token: o {@link BffEventWalletController} o tira do JWT e devolve 403 se o
+ * corpo/query/path trouxer outro (issue #57). Ele cruza a rede como parâmetro explícito para a API interna do reservation.
  *
  * <p>Ordem das mensagens de erro do {@code addLink}: carteira, evento (aqui) e depois as do reservation ("Capacidade do
  * evento não configurada", janela de compra, "Vínculo já existente", "Evento lotado"). No braço naive a disponibilidade

@@ -62,8 +62,8 @@ Arquivo: `Projeto/Backend/monolito/src/test/java/com/gerenciador/eventos/EventWa
 | corpo do POST de reserva | `{"userId": <id>, "eventId": <id>}` |
 | status da recusa | **HTTP 400** (o `BffEventWalletController` traduz `IllegalArgumentException` para `badRequest`); corpo = texto puro `Evento lotado`. |
 
-> **Nota (fora de escopo):** o `userId` vir do corpo em vez do JWT é o IDOR
-> tratado na **issue #57**. Este roteiro não tenta corrigir isso.
+> **Nota:** desde a **issue #57** o `userId` vem do JWT; um `userId` no corpo diferente do dono do
+> token dá **403**. Este roteiro já não roda desde a #78/#79 (cria usuário sem JWT).
 
 ## Como executar
 

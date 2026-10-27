@@ -219,7 +219,10 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   + forma de request/response de cada endpoint `/bff/**` que o Flutter consome — bate no
   HTTP real (inclusive `SecurityConfig`), não MockMvc. Desde a #32 não há mock de `JavaMailSender` (o monólito
   não tem SMTP); `RECAPTCHA_SECRET_KEY` é forçada vazia via `@TestPropertySource` para não depender do Google real. **Sem mudança de
-  expectativa na #33**: as chamadas de reserva/capacidade vão ao `FakeReservationServer` (HTTP de verdade).
+  expectativa na #33**: as chamadas de reserva/capacidade vão ao `FakeReservationServer` (HTTP de verdade). **Mudança de contrato na #57**
+  (IDOR em `/bff/event-wallets/**`): `userId` divergente do dono do token dá 403 nos 5 endpoints, e `userId` ausente vale o do token
+  (`eventWallet_tokenDeAnaoAgeEmNomeDeBeto_returns403NosEndpoints`, `eventWallet_proprioUsuario_comESemUserId`,
+  `eventWallet_semToken_returns401NosEndpoints`).
 - `gateway/ErroInternoNoCorpoTest` (issue #89): todo 500 do `gateway/*` devolve o corpo genérico `ErroInterno.MENSAGEM` (o `Map` do reCAPTCHA
   mantém `success`/`error`) e a mensagem da exceção (detalhe de SQL/infra) vai só para o log SLF4J (`log.error("...", ex)`, com stack trace).
   MockMvc standalone com as dependências mockadas falhando, sem Spring/banco. Os 400 de negócio continuam com a mensagem da exceção (é contrato
@@ -749,6 +752,15 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
   hidratação, nem chamada ao reservation). **Sem exceção de admin**: nenhum gate usa `users.admin` (gravável pelo próprio usuário em
   `PUT /bff/users/{id}`). O upload de imagem exige dono, não host. A existência do criador (`UserApi.exists`) é conferida pelo
   gateway (`/validate`, mesma mensagem; `POST /bff/seed`, que aceita o `creator_id` do corpo), não mais pelo `catalog`.
+- **Dono da inscrição (issue #57)**: em `/bff/event-wallets/**` (`addLink`, `confirm`, `/validate`, `removeLink`, `listByUser`) o `userId`
+  vem do token (`HostAuthorizationApi.currentUserId()`, o mesmo do `BffEventController`), nunca do corpo/query/path. Ele é **opcional**
+  nesses três lugares: ausente => vale o do token; igual ao do token => segue; **diferente => 403** (corpo "Acesso negado: ...", antes
+  de qualquer outra validação ou chamada ao reservation, e sem revelar se o outro usuário existe). Usuário do token que não existe mais
+  => 401. A API interna do `reservation` segue recebendo `userId` explícito, agora sempre o do token. **Temporário até a #36:**
+  `currentUserId()` faz 1 consulta e-mail -> `user_id` por requisição (`UserRepository.findByEmail`, sem cache); a #36 (JWT assimétrico)
+  troca isso pelo claim `uid` do token e a consulta some do caminho quente. A consulta é `LOWER(email) = LOWER(?)` sem índice funcional (seq scan em `users`): uma rodada de carga **antes da #36** paga
+  esse custo a mais por reserva e não é comparável com as anteriores. Fora desta issue: o mesmo IDOR em `BffMyWalletController`
+  (`/{userId}`, `/ensure/{userId}`).
 - **Resposta de `Event` (issue #35)**: ganha `creator_name` (somente-leitura no DTO; composto no gateway por `gateway/CreatorNames`:
   `UserApi.findNames(ids)` em lote, só `isactive = true` → conta desativada = `creator_name` nulo; Caffeine com TTL 45 s ±20% por
   entrada, ~10k entradas, sem cache negativo; **falha do `findNames` não falha a resposta**: o nome sai nulo, sem cache, e a próxima
@@ -970,7 +982,7 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   do `public.event_store`/outbox/checkpoint/snapshot** — sem isso o consumer acharia buraco em todo stream antigo —, `lock_timeout` 5 s; pare o
   backend e o reservation antes).
 - **API interna** (HTTP, `/internal/**`, só alcançável na rede `gerenciador-net`; o `userId` vai como **parâmetro
-  explícito** no corpo/query, a correção do IDOR #57 mexe só no gateway). **Autenticada por token de serviço compartilhado (volta 3 da #33):**
+  explícito** no corpo/query; desde a #57 o gateway passa o `userId` do TOKEN, nunca o que o cliente mandou). **Autenticada por token de serviço compartilhado (volta 3 da #33):**
   header `X-Internal-Token` com o valor de `INTERNAL_API_TOKEN`, enviado pelo `ReservationClient` em TODA chamada e exigido pelo
   `InternalTokenFilter` do reservation em TODA requisição do serviço (sem filtro por caminho: o serviço não tem rota pública, o healthcheck é TCP, e
   um teste do URI cru deixaria passar `/internal;x=1/...` e `/%69nternal/...`, que o Spring MVC normaliza) (comparação em tempo constante, `MessageDigest.isEqual`; **401** sem o header ou

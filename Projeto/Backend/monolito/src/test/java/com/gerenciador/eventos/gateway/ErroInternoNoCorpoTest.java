@@ -80,7 +80,7 @@ public class ErroInternoNoCorpoTest {
         userController = new BffUserController(userApi, mock(TokenApi.class), emailApi);
         mvc = MockMvcBuilders.standaloneSetup(userController,
                 new BffEventController(eventApi, hostApi, userApi, mock(CreatorNames.class)),
-                new BffEventWalletController(walletGateway)).build();
+                new BffEventWalletController(walletGateway, hostApi)).build();
         logs = new ListAppender<>();
         logs.start();
         root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
@@ -230,14 +230,14 @@ public class ErroInternoNoCorpoTest {
     void reservar() throws Exception {
         when(walletGateway.addLink(any(EventWallet.class), any())).thenThrow(new RuntimeException(DETALHE));
         esperar500(post("/bff/event-wallets").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"userId\":1,\"eventId\":2}"));
+                .content("{\"userId\":5,\"eventId\":2}"));
     }
 
     @Test
     void confirmarReserva() throws Exception {
         when(walletGateway.confirm(anyLong(), anyLong())).thenThrow(new RuntimeException(DETALHE));
         esperar500(post("/bff/event-wallets/confirm").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"userId\":1,\"eventId\":2}"));
+                .content("{\"eventId\":2}"));
     }
 
     // ------------------------------------------------------------------ comuns

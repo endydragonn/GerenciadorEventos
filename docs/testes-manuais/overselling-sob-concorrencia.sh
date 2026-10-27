@@ -254,8 +254,8 @@ ok "eventcap inicial: quant=$QUANT_INICIAL (esperado $CAPACIDADE)"
 # OBSOLETO; o nginx do frontend e que remove o prefixo /api). /bff/** e
 # permitAll no SecurityConfig -> sem JWT.
 # Corpo: {"userId": <id>, "eventId": <id>}.
-# (O userId vir do corpo em vez do JWT e o IDOR tratado na issue #57 -- fora
-#  do escopo deste roteiro.)
+# (Desde a #57 o userId vem do JWT: userId do corpo diferente do dono do token
+#  da 403. Este roteiro ja nao roda desde a #78/#79 -- cria usuario sem JWT.)
 echo ""
 echo "==> 3. Disparando 2 reservas concorrentes (u1 e u2)"
 

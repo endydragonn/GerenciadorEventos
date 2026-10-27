@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
+import com.gerenciador.eventos.identity.api.HostAuthorizationApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictException;
 
@@ -27,8 +28,13 @@ import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictExceptio
  * {@code bff.BffApplication.EventWalletBffController} (a que o Flutter efetivamente chamava)
  * e era duplicada em {@code Controller.EventWalletController} sob {@code /api/event-wallets}
  * (sem chamador no frontend). Desde o PR #79 (issue #78), {@code /bff/event-wallets/**} exige
- * autenticação (deny-by-default); segue tirando {@code userId} do corpo/query sem validar
- * contra o usuário autenticado (IDOR — issue #57 trata isso, ainda não resolvido).
+ * autenticação (deny-by-default).
+ *
+ * <p>Issue #57 (IDOR): o {@code userId} é o do token ({@link HostAuthorizationApi#currentUserId()}), nunca o do
+ * corpo/query/path. Nesses três lugares ele é opcional: ausente vale o do token, igual segue e <b>diferente é 403</b>,
+ * antes de qualquer validação ou chamada ao reservation (a negação não revela se o outro usuário existe). Vale para
+ * addLink, confirm, validate, removeLink e listByUser. A consulta e-mail -> {@code user_id} por requisição é temporária:
+ * a #36 (JWT assimétrico) a troca pelo claim {@code uid}. O mesmo IDOR em {@code BffMyWalletController} é outra issue.</p>
  *
  * <p>Desde a #33 a reserva é do serviço {@code reservation}: o {@link EventWalletGateway} confere carteira/evento e chama
  * a API interna dele por HTTP; o contrato deste controller não mudou.</p>
@@ -39,15 +45,24 @@ public class BffEventWalletController {
 
     private static final Logger log = LoggerFactory.getLogger(BffEventWalletController.class);
 
-    private final EventWalletGateway eventWalletService;
+    private static final ResponseEntity<String> NEGADO = ResponseEntity.status(HttpStatus.FORBIDDEN)
+            .body("Acesso negado: o usuário informado não é o usuário autenticado");
 
-    public BffEventWalletController(EventWalletGateway eventWalletService) {
+    private final EventWalletGateway eventWalletService;
+    private final HostAuthorizationApi authorizationUtil;
+
+    public BffEventWalletController(EventWalletGateway eventWalletService, HostAuthorizationApi authorizationUtil) {
         this.eventWalletService = eventWalletService;
+        this.authorizationUtil = authorizationUtil;
     }
 
     @PostMapping
     public ResponseEntity<?> addLink(@RequestBody EventWallet ew,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        ResponseEntity<String> barrado = amarrarAoToken(ew);
+        if (barrado != null) {
+            return barrado;
+        }
         List<String> errors = validateEventWalletBasic(ew);
         if (!errors.isEmpty()) {
             return ResponseEntity.badRequest().body(String.join("; ", errors));
@@ -71,6 +86,10 @@ public class BffEventWalletController {
 
     @PostMapping("/confirm")
     public ResponseEntity<?> confirmLink(@RequestBody EventWallet ew) {
+        ResponseEntity<String> barrado = amarrarAoToken(ew);
+        if (barrado != null) {
+            return barrado;
+        }
         List<String> errors = validateEventWalletBasic(ew);
         if (!errors.isEmpty()) {
             return ResponseEntity.badRequest().body(String.join("; ", errors));
@@ -88,6 +107,10 @@ public class BffEventWalletController {
 
     @PostMapping("/validate")
     public ResponseEntity<?> validateLink(@RequestBody EventWallet ew) {
+        ResponseEntity<String> barrado = amarrarAoToken(ew);
+        if (barrado != null) {
+            return barrado;
+        }
         List<String> errors = validateEventWalletBasic(ew);
         String serviceErrors = eventWalletService.getValidationErrors(ew);
         if (!serviceErrors.isBlank()) {
@@ -100,21 +123,46 @@ public class BffEventWalletController {
     }
 
     @DeleteMapping
-    public ResponseEntity<Void> removeLink(@RequestParam Long userId, @RequestParam Long eventId) {
-        eventWalletService.removeLink(userId, eventId);
+    public ResponseEntity<?> removeLink(@RequestParam(required = false) Long userId, @RequestParam Long eventId) {
+        EventWallet ew = new EventWallet(userId, eventId);
+        ResponseEntity<String> barrado = amarrarAoToken(ew);
+        if (barrado != null) {
+            return barrado;
+        }
+        eventWalletService.removeLink(ew.getUserId(), eventId);
         return ResponseEntity.ok().build();
     }
 
     @GetMapping("/user/{userId}")
-    public ResponseEntity<List<EventWallet>> listByUser(@PathVariable Long userId) {
-        return ResponseEntity.ok(eventWalletService.listByUser(userId));
+    public ResponseEntity<?> listByUser(@PathVariable Long userId) {
+        EventWallet ew = new EventWallet(userId, null);
+        ResponseEntity<String> barrado = amarrarAoToken(ew);
+        if (barrado != null) {
+            return barrado;
+        }
+        return ResponseEntity.ok(eventWalletService.listByUser(ew.getUserId()));
+    }
+
+    /**
+     * Issue #57: grava em {@code ew} o usuário do token. Devolve a resposta de recusa (403 se o {@code userId} informado
+     * difere do dono do token; 401 se o usuário do token já não existe) ou {@code null} quando pode seguir.
+     */
+    private ResponseEntity<String> amarrarAoToken(EventWallet ew) {
+        Long doToken;
+        try {
+            doToken = authorizationUtil.currentUserId();
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Usuário autenticado não encontrado");
+        }
+        if (ew.getUserId() != null && !ew.getUserId().equals(doToken)) {
+            return NEGADO;
+        }
+        ew.setUserId(doToken);
+        return null;
     }
 
     private List<String> validateEventWalletBasic(EventWallet ew) {
         List<String> errors = new ArrayList<>();
-        if (ew.getUserId() == null || ew.getUserId() <= 0) {
-            errors.add("user_id é obrigatório e deve ser positivo");
-        }
         if (ew.getEventId() == null || ew.getEventId() <= 0) {
             errors.add("event_id é obrigatório e deve ser positivo");
         }
