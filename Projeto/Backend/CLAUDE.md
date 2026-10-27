@@ -115,6 +115,9 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
 - `monolito/src/test/.../SchemaValidationTest` valida o schema real contra o esperado (`public`, `notification.processed_event`, e que
   `eventcap`/`walletevent`/`event_availability`/`idempotency_key` SAÍRAM de `public` sem FK cross-schema); o do módulo `reservation`
   (`reservation/src/test/.../SchemaValidationTest`) valida o schema `reservation` (tabelas, colunas, chaves, sem FK, event store próprio).
+  Desde a #59 também há asserções **negativas** (`assertColumns` é "contém" e não pega coluna que volta): o do monólito exige que nenhuma tabela de `public` tenha
+  `capacity`/`quant`/`buy_time_limit`/`lot_quantity`/`max_time_in_line`, e o do `catalog` que `event`/`eventpresenter` não as tenham. A migração `20261027` tem o harness
+  `db/migrations/verify-20261027-migration.sh` (ver `db/CLAUDE.md`).
 - `TestSupport/GlobalDbTruncator` dá `TRUNCATE` (início/fim da suíte) em **todas** as tabelas dos
   schemas configurados, descobertas por catálogo (`TestSupport/TestSchemas`) — não há mock de banco.
   Schemas alvo: propriedade `test.db.schemas` (lista separada por vírgula, default `public,notification,reservation,catalog` no monólito desde a #35, só `reservation`/`catalog` no módulo de cada serviço; vale
@@ -755,9 +758,14 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
   `EventWalletGateway` guarda o positivo por 30 s (Caffeine; negativo e falha nunca entram no cache).
 - Senhas: `BCryptPasswordEncoder` (bean em `SecurityConfig`). Nunca gravar senha em claro
   (o seed SQL grava em claro só para dados de teste — não replicar em código de produção).
-- CORS está definido **duas vezes** (`shared.CorsConfig` e o bean em `SecurityConfig`, este
-  bem permissivo). Ao mexer em CORS, alinhe os dois e veja `CORS_CONFIG.md`. Os dois expõem o header
-  de resposta `Idempotency-Key` (#24).
+- CORS tem **um único ponto de configuração** (#133): o bean `CorsConfigurationSource` de
+  `shared.CorsConfig`, que o `SecurityConfig` injeta em `.cors(...)` (o filtro do Spring Security responde
+  o preflight antes dos controllers; não há `WebMvcConfigurer` nem outro bean). Origens EXATAS de
+  `CORS_ALLOWED_ORIGINS` (default `http://localhost:8088,http://localhost:3000`; `*` é recusado na subida, pois
+  as credenciais ficam habilitadas — origem fora da lista não recebe `Access-Control-Allow-Origin`).
+  `exposedHeaders`: `Authorization`, `Content-Type`, `Idempotency-Key` (#24). Outra origem = linha
+  `CORS_ALLOWED_ORIGINS=...` (lista completa) no `Projeto/.env`, que o `backend` herda por `env_file`.
+  Testes: `HttpContractTest#corsPreflight_*`/`cors_respostaReal_*` e `shared/CorsConfigTest`. Veja `CORS_CONFIG.md`.
 
 ## Inscrição em evento — reserva em duas fases (CAS)
 
@@ -780,9 +788,16 @@ e do schema `reservation`. `EventWalletService` (módulo `reservation`):
    UPDATE afetou 1 linha — evita devolução dupla de vaga em cancelamento concorrente / corrida com o
    job. Reserva já `cancelled`/`expired`/inexistente ⇒ no-op silencioso (idempotente, sem evento).
 4. `reservation/ReservationExpiryService` — `@Scheduled` (a cada `reservation.expiry.scan.ms`,
-   default 30s; `@EnableScheduling` em `ReservationApplication`, desde a #33): varre `pending` vencidas e,
-   por transação, `expireIfStale` (condicional, não pisa em confirmação concorrente) + `release` + append de
-   `ReservationExpired` (um por linha expirada, na transação dela; erro numa linha não para as outras).
+   default 30s; `@EnableScheduling` em `ReservationApplication`, desde a #33): varre `pending` vencidas **em lotes** (#61;
+   `reservation.expiry.batch-size`, env `RESERVATION_EXPIRY_BATCH_SIZE`, default 100): cada lote é UMA transação que seleciona com
+   `ORDER BY expires_at LIMIT n FOR UPDATE SKIP LOCKED` (duas execuções concorrentes não pegam a mesma linha; o lock só vale dentro da
+   transação) e, por linha e num savepoint, `expireIfStale` (condicional, não pisa em confirmação concorrente) + `release` + append de
+   `ReservationExpired` (um por linha expirada; erro numa linha desfaz só ela, as outras seguem). Repete lotes até um voltar incompleto ou
+   sem nenhuma expirada (linha que falha sempre não prende o job). Testes: `ReservationExpiryBatchTest`.
+   O lote segura o lock das linhas de `eventcap` (a linha quente do CAS) que o `release` toca até o commit — por isso ele é limitado e
+   configurável (o compose repassa `RESERVATION_EXPIRY_BATCH_SIZE`, default 100). A ordem de lock é inversa à da reserva (reserva:
+   `eventcap` → `walletevent`; job: `walletevent` → `eventcap`), o que alarga a janela de deadlock: o Postgres aborta um dos dois, o
+   savepoint da linha desfaz só ela e o job segue (a reserva abortada devolve erro ao cliente).
 
 ### Reservation em event sourcing (híbrido) — issue #29 (ADR "Event-Backbone-Event-Store")
 
@@ -986,6 +1001,15 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   criação idempotente por `event_id` sem checkpoint, só liga com `RESERVATION_CATALOG_RECONCILIATION_ENABLED`).
   Cancelar o evento chama `DELETE /internal/eventcaps/{id}` ANTES da transação do catalog, fora dela (409 se há reserva, o antigo
   `RESTRICT`, antes de qualquer escrita; a chamada de rede não segura conexão nem o lock da linha `event`).
+- **`updatePolicy` (`PATCH /internal/eventcaps/{id}/policy`) e a conversão ilimitado -> limitado (#56):** `quant = novaCapacidade - ativas`,
+  com `ativas` = reservas `pending` + `confirmed` do evento (`reservation.walletevent`) contadas num subselect do MESMO `UPDATE` (um statement,
+  atômico com a escrita); capacidade menor que as ativas viola `eventcap_quant_bounds` (23514) => `IllegalArgumentException` => **400** e nada muda.
+  Limitado -> limitado acompanha a variação (`quant += nova - atual`) e limitado -> ilimitado vira `-1`. **Janela de corrida conhecida, não
+  tratada:** a reserva de evento ilimitado roda sem CAS e não trava a linha de `eventcap`. A janela vai da leitura da política (fora da transação
+  da reserva) até o commit da reserva: uma reserva em voo que comite DEPOIS do `count` do `UPDATE` não é contada e `quant` fica acima do real
+  (overselling de no máximo as reservas em voo na conversão). Caso inverso, lado seguro: cancelamento/expiração em voo durante a conversão
+  (contados como ativos) pode deixar `quant` 1 abaixo do real (uma vaga a menos, nunca a mais). Fechá-la exigiria travar `eventcap` no caminho
+  quente da reserva ilimitada, o que ficou fora da #56.
 - **Jobs dentro do serviço**: `ReservationExpiryService` (`reservation.expiry.scan.ms`), `IdempotencyKeyRetentionService` (#130) e o relay do
   outbox do serviço; `@EnableScheduling` em `ReservationApplication`. Projeção `event_availability` + `EventAvailabilityConsumer` (lote da
   #146) no serviço, group `reservation` (antes `gerenciador-eventos`; `EVENTS_CONSUMER_GROUP`).

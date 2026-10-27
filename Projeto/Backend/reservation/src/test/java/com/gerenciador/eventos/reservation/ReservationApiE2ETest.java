@@ -449,6 +449,29 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
         assertEquals(5, cliente.findByEventId(e.getEvent_id()).getCapacity(), "recusado: nada mudou");
     }
 
+    /** Issue #56: ilimitado -> limitado desconta as reservas ativas; abaixo delas é 400 pela API interna e nada muda. */
+    @Test
+    public void atualizarPoliticaDeIlimitadoParaLimitadoDescontaAsAtivasERecusaAbaixoDelas() {
+        Evento e = novoEvento(null, "E2E politica ilimitado", EventCap.UNLIMITED);
+        cliente.addLink(new EventWallet(novoUsuario("u1").getId(), e.getEvent_id()), null, false);
+        cliente.addLink(new EventWallet(novoUsuario("u2").getId(), e.getEvent_id()), null, false);
+
+        RestClient cru = RestClient.builder().baseUrl("http://localhost:" + porta)
+                .defaultHeader(ReservationClient.HEADER_TOKEN_INTERNO, tokenInterno).build();
+        int status = cru.patch().uri("/internal/eventcaps/{id}/policy", e.getEvent_id())
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("capacity", 1))
+                .exchange((req, resp) -> resp.getStatusCode().value());
+        assertEquals(400, status, "capacidade 1 < 2 reservas ativas");
+        EventCap intacto = cliente.findByEventId(e.getEvent_id());
+        assertEquals(EventCap.UNLIMITED, intacto.getCapacity(), "recusado: nada mudou");
+        assertEquals(EventCap.UNLIMITED, intacto.getQuant());
+
+        cliente.updatePolicy(e.getEvent_id(), 5, null);
+        EventCap cap = cliente.findByEventId(e.getEvent_id());
+        assertEquals(5, cap.getCapacity());
+        assertEquals(3, cap.getQuant(), "5 de capacidade - 2 reservas ativas");
+    }
+
     /** O antigo {@code ON DELETE RESTRICT}: com reserva (em qualquer status) o evento não perde o {@code eventcap}. */
     @Test
     public void apagarEventcapRecusaSeHaReservaESenaoRemove() {

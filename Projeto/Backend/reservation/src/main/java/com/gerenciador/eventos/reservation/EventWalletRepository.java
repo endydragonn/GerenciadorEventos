@@ -140,7 +140,34 @@ public class EventWalletRepository implements ReservationWriter {
         return "pending".equals(status) || "confirmed".equals(status);
     }
 
-    /** Reservas pending já vencidas — insumo do job de expiração. */
+    /**
+     * Um lote de reservas pending já vencidas, mais antigas primeiro, TRAVADAS ({@code FOR UPDATE SKIP LOCKED}) na
+     * transação do chamador: linha que outra transação (outra instância do job, um confirm) já segura é pulada, e a
+     * travada aqui só solta no commit/rollback do chamador, que expira/libera/appenda na MESMA transação. Em
+     * autocommit o lock acabaria junto com a consulta, por isso exige a {@link Connection} da transação.
+     * É o que o {@link ReservationExpiryService} usa.
+     */
+    public List<EventWallet> findExpiredPendingForUpdate(Connection conn, int limit) throws SQLException {
+        String sql = "SELECT user_id, event_id, status, expires_at, created_at, updated_at "
+                + "FROM reservation.walletevent "
+                + "WHERE status = 'pending' AND expires_at < CURRENT_TIMESTAMP "
+                + "ORDER BY expires_at LIMIT ? FOR UPDATE SKIP LOCKED";
+        List<EventWallet> out = new ArrayList<>();
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setInt(1, limit);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    out.add(map(rs));
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Reservas pending já vencidas, todas e sem lock — só leitura (testes). O job de expiração NÃO usa mais este
+     * método: usa {@link #findExpiredPendingForUpdate} (em lotes, travando as linhas).
+     */
     public List<EventWallet> findExpiredPending() {
         String sql = "SELECT * FROM reservation.walletevent WHERE status = 'pending' AND expires_at < CURRENT_TIMESTAMP";
         List<EventWallet> out = new ArrayList<>();
