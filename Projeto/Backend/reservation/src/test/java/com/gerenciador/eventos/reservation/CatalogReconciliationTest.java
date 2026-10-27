@@ -103,6 +103,15 @@ public class CatalogReconciliationTest extends ReservationTestSupport {
         assertNull(cap.getBuyTimeLimit());
     }
 
+    /** Issue #58: capacity 0 (ou < -1) viola o CHECK; sem tratar, seria SQLException retentada sem limite e travaria a partição. */
+    @Test
+    public void capacityInvalidaEhPayloadInvalidoENaoCriaEventcap() throws Exception {
+        long id = 2_100_000_005L;
+        assertThrows(InvalidEventMessageException.class, () -> consumer.reconciliar(eventCreated(id, 0, null)));
+        assertThrows(InvalidEventMessageException.class, () -> consumer.reconciliar(eventCreated(id, -2, null)));
+        assertNull(eventCapRepository.findByEventId(id));
+    }
+
     // ===================== helpers =====================
 
     private void reenviarAte(String mensagem, java.util.function.BooleanSupplier condicao) throws Exception {
