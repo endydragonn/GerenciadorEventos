@@ -72,7 +72,7 @@ estado vivo, nas colunas que o log determina (sem carimbos do banco, `image_data
 |---|---|---|---|
 | `EventCreated` | `catalog.event` | `EventRepository.save` (via `CatalogEventWriter.executar`) | `event` + `eventpresenter` (inline); `eventcap` nasce na mesma transação |
 | `EventUpdated` | `catalog.event` | `EventRepository.update` (via `CatalogEventWriter.executar`) | `event` (metadados, inline) |
-| `PresenterAdded` / `PresenterRemoved` | `catalog.event` | `CatalogEventWriter.trocarApresentadores` (um por diferença) | `eventpresenter` (inline) |
+| `PresenterAdded` / `PresenterRemoved` | `catalog.event` | `CatalogEventWriter.trocarApresentadores` (um por diferença, na mesma transação do `EventUpdated`) | `eventpresenter` (inline) |
 | `EventCancelled` | `catalog.event` | `EventRepository.delete` (via `CatalogEventWriter.executar`) | `DELETE` de `event` (inline; só `eventcap` cai por `CASCADE`; `event_availability` não tem FK desde a #29 e a linha fica órfã, inofensiva porque `findAvailable` parte de `eventcap LEFT JOIN`) |
 | `SlotReserved` | `reservation.wallet` | `EventWalletService.addLink` (braços `cas` e `naive`) | `walletevent` pending (inline); `event_availability.ativos` +1 (assíncrona) |
 | `ReservationConfirmed` | `reservation.wallet` | `EventWalletService.confirm` | `walletevent` confirmed (inline); `ativos` inalterado, mas `last_occurred_at` e `applied_at` andam |
