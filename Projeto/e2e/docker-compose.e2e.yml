@@ -1,0 +1,61 @@
+# Override da suíte e2e (issue #37), usado SÓ por e2e/run-e2e.sh:
+#   docker compose -p gerenciador-e2e -f docker-compose.yml -f e2e/docker-compose.e2e.yml up -d --build --wait
+# Sobe a stack inteira num project TEMPORÁRIO, isolado da stack real e sem mandar e-mail de verdade. Não altera nenhum default do
+# compose normal. O isolamento é conferido pelo run-e2e.sh (`config`) ANTES do `up`.
+
+services:
+  # Nenhum container_name fixo (dois projects com o mesmo nome de container não coexistem) e nenhuma porta publicada no host
+  # (8081, 8088, 5433, 8000 são da stack real). Vale também para os serviços dos includes do Supabase.
+  db: &isolado
+    container_name: !reset null
+    ports: !reset []
+  redpanda: *isolado
+  backend: *isolado
+  identity: *isolado
+  catalog: *isolado
+  reservation: *isolado
+  notification-seek: *isolado
+  frontend: *isolado
+  supabase-pooler: *isolado
+  meta: *isolado
+  kong: *isolado
+
+  # O Studio da stack real monta ./supabase/volumes/snippets (gravável) do host: o project temporário não pode escrever lá.
+  # Pasta de snippets em tmpfs (descartável).
+  studio:
+    <<: *isolado
+    volumes: !reset []
+    tmpfs:
+      - /app/snippets
+
+  # Captador de e-mail: SMTP 1025 e API/UI 8025, só na rede do project. Imagem fixada.
+  mailpit:
+    image: axllent/mailpit:v1.31.6
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: "no"
+
+  # O e-mail do cadastro vai para o captador, não para o Gmail: sem auth, sem STARTTLS, sem senha. O MAIL_USERNAME NÃO pode ficar
+  # vazio: o serviço o usa como remetente (From) e o captador recusa remetente vazio (SMTP rejeitaria o destinatário e o evento iria
+  # para o DLT); sem auth ele não é credencial de nada.
+  notification:
+    <<: *isolado
+    environment:
+      MAIL_HOST: mailpit
+      MAIL_PORT: "1025"
+      MAIL_SMTP_AUTH: "false"
+      MAIL_STARTTLS: "false"
+      MAIL_USERNAME: e2e-notification@example.com
+      MAIL_PASSWORD: ""
+    depends_on:
+      mailpit:
+        condition: service_healthy
+
+networks:
+  # Sem o nome fixo gerenciador-net: a rede passa a ser <project>_default. Na rede real, `db`, `redpanda` e `supabase-pooler`
+  # resolveriam para os containers REAIS (o project temporário escreveria no meu_banco de verdade).
+  default:
+    name: !reset null
