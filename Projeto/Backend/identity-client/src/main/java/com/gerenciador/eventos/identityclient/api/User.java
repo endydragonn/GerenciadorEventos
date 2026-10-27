@@ -1,4 +1,4 @@
-package com.gerenciador.eventos.identity.api;
+package com.gerenciador.eventos.identityclient.api;
 
 import java.time.LocalDateTime;
 

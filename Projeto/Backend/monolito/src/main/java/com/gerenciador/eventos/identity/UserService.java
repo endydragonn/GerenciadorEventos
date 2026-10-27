@@ -8,8 +8,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
-import com.gerenciador.eventos.identity.api.User;
-import com.gerenciador.eventos.identity.api.UserApi;
+import com.gerenciador.eventos.identity.security.JwtUtil;
+import com.gerenciador.eventos.identityclient.api.IdentityNaoEncontradoException;
+import com.gerenciador.eventos.identityclient.api.LoginResult;
+import com.gerenciador.eventos.identityclient.api.User;
+import com.gerenciador.eventos.identityclient.api.UserApi;
 
 /**
  * Service - lógica de negócio e validações
@@ -26,6 +29,10 @@ public class UserService implements UserApi {
 
     @Autowired
     private IdentityNotifications notifications;
+
+    /** Emite o token do login (fatia 1 da #36: ainda local; no serviço identity é ele quem assina). */
+    @Autowired
+    private JwtUtil jwtUtil;
 
     /**
      * Criar novo usuário com validações
@@ -96,7 +103,7 @@ public class UserService implements UserApi {
     public User findById(Long id) {
         User user = userRepository.findById(id);
         if (user == null) {
-            throw new RuntimeException("Usuário não encontrado com ID: " + id);
+            throw new IdentityNaoEncontradoException("Usuário não encontrado com ID: " + id);
         }
         return user;
     }
@@ -117,7 +124,7 @@ public class UserService implements UserApi {
     public User findByEmail(String email) {
         User user = userRepository.findByEmail(email);
         if (user == null) {
-            throw new RuntimeException("Usuário não encontrado com email: " + email);
+            throw new IdentityNaoEncontradoException("Usuário não encontrado com email: " + email);
         }
         return user;
     }
@@ -169,10 +176,11 @@ public class UserService implements UserApi {
         }
     }
 
-    public User login(String email, String password) {
+    /** Usuário + token (JWT do login, sem a claim {@code isHost}, como sempre foi), ou {@code null} se e-mail/senha não conferem. */
+    public LoginResult login(String email, String password) {
         User user = userRepository.findByEmail(email);
         if (user != null && passwordEncoder.matches(password, user.getPassword())) {
-            return user;
+            return new LoginResult(user, jwtUtil.generateToken(user.getEmail()));
         }
         return null; // ou lançar exceção
     }

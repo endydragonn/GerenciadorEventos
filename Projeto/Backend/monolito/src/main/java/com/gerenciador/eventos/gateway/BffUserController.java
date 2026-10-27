@@ -27,10 +27,10 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
-import com.gerenciador.eventos.identity.api.EmailVerificationApi;
-import com.gerenciador.eventos.identity.api.TokenApi;
-import com.gerenciador.eventos.identity.api.User;
-import com.gerenciador.eventos.identity.api.UserApi;
+import com.gerenciador.eventos.identityclient.api.EmailVerificationApi;
+import com.gerenciador.eventos.identityclient.api.LoginResult;
+import com.gerenciador.eventos.identityclient.api.User;
+import com.gerenciador.eventos.identityclient.api.UserApi;
 
 /**
  * Camada BFF única para tudo relacionado a usuário/autenticação: CRUD, login, sessão
@@ -54,16 +54,13 @@ public class BffUserController {
     private static final double RECAPTCHA_SCORE_THRESHOLD = 0.7;
 
     private final UserApi userService;
-    private final TokenApi jwtUtil;
     private final EmailVerificationApi emailVerificationService;
 
     @Value("${RECAPTCHA_SECRET_KEY:}")
     private String recaptchaSecretKey;
 
-    public BffUserController(UserApi userService, TokenApi jwtUtil,
-                              EmailVerificationApi emailVerificationService) {
+    public BffUserController(UserApi userService, EmailVerificationApi emailVerificationService) {
         this.userService = userService;
-        this.jwtUtil = jwtUtil;
         this.emailVerificationService = emailVerificationService;
     }
 
@@ -168,12 +165,11 @@ public class BffUserController {
 
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody User loginRequest) {
-        User user = userService.login(loginRequest.getEmail(), loginRequest.getPassword());
-        if (user != null) {
-            String token = jwtUtil.generateToken(user.getEmail());
+        LoginResult login = userService.login(loginRequest.getEmail(), loginRequest.getPassword());
+        if (login != null) {
             Map<String, Object> body = new HashMap<>();
-            body.put("user", user);
-            body.put("token", token);
+            body.put("user", login.user());
+            body.put("token", login.token());
             return ResponseEntity.ok(body);
         }
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Credenciais inválidas");
@@ -261,15 +257,13 @@ public class BffUserController {
                 return ResponseEntity.badRequest().body("Código de verificação é obrigatório");
             }
 
-            User createdUser = emailVerificationService.verifyEmailAndCreateUser(email, verificationCode);
-
-            // Gera token JWT para login automático (inclui status de host)
-            String token = jwtUtil.generateToken(createdUser.getEmail(), createdUser.getIsHost());
+            // usuário criado + token JWT do login automático (emitido pelo identity; inclui status de host)
+            LoginResult criado = emailVerificationService.verifyEmailAndCreateUser(email, verificationCode);
 
             Map<String, Object> response = new HashMap<>();
             response.put("message", "Email verificado com sucesso. Usuário criado!");
-            response.put("token", token);
-            response.put("user", createdUser);
+            response.put("token", criado.token());
+            response.put("user", criado.user());
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
 
         } catch (IllegalArgumentException e) {

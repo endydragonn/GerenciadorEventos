@@ -12,6 +12,7 @@ COPY catalog ./catalog
 COPY monolito/pom.xml ./monolito/pom.xml
 COPY notification/pom.xml ./notification/pom.xml
 COPY reservation/pom.xml ./reservation/pom.xml
+COPY identity-client/pom.xml ./identity-client/pom.xml
 RUN mvn -B -DskipTests -pl catalog -am clean package
 
 # Estágio runtime: imagem pequena apenas para executar o jar (Java 25)

@@ -11,8 +11,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
-import com.gerenciador.eventos.identity.api.EmailVerificationApi;
-import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.identity.security.JwtUtil;
+import com.gerenciador.eventos.identityclient.api.EmailVerificationApi;
+import com.gerenciador.eventos.identityclient.api.LoginResult;
+import com.gerenciador.eventos.identityclient.api.User;
 
 @Service
 public class EmailVerificationService implements EmailVerificationApi {
@@ -28,6 +30,10 @@ public class EmailVerificationService implements EmailVerificationApi {
 
     @Autowired
     private UserRepository userRepository;
+
+    /** Emite o token do login automático (fatia 1 da #36: ainda local; no serviço identity é ele quem assina). */
+    @Autowired
+    private JwtUtil jwtUtil;
 
     @Value("${verification.code.length:6}")
     private int codeLength;
@@ -73,9 +79,9 @@ public class EmailVerificationService implements EmailVerificationApi {
     }
 
     /**
-     * Verifica o código e cria o usuário se válido
+     * Verifica o código e cria o usuário se válido; devolve o usuário com o token do login automático (inclui a claim isHost)
      */
-    public User verifyEmailAndCreateUser(String email, String verificationCode) throws SQLException, IllegalArgumentException {
+    public LoginResult verifyEmailAndCreateUser(String email, String verificationCode) throws SQLException, IllegalArgumentException {
         
         // Busca registro pendente
         Optional<PendingVerification> pending = pendingVerificationRepository.findByEmailAndCode(email, verificationCode);
@@ -117,7 +123,7 @@ public class EmailVerificationService implements EmailVerificationApi {
         // Deleta registro pendente
         pendingVerificationRepository.delete(verification.getId());
 
-        return user;
+        return new LoginResult(user, jwtUtil.generateToken(user.getEmail(), user.getIsHost()));
     }
 
     /**

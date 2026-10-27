@@ -34,7 +34,8 @@ import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.identity.EmailVerificationService;
 import com.gerenciador.eventos.identity.IdentityNotifications;
 import com.gerenciador.eventos.identity.UserService;
-import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.identityclient.api.LoginResult;
+import com.gerenciador.eventos.identityclient.api.User;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 import com.gerenciador.eventos.shared.events.NotificationEvents;
 import com.gerenciador.eventos.shared.events.OutboxRelay;
@@ -197,9 +198,13 @@ public class IdentityNotificationEventsTest {
         String codigo = eventosDeNotificacao().get(0).get("payload").get(NotificationEvents.CODE).asText();
 
         // nenhum consumer do notification neste processo: nada além do monólito
-        User criado = verificacao.verifyEmailAndCreateUser(email, codigo);
+        LoginResult cadastro = verificacao.verifyEmailAndCreateUser(email, codigo);
+        User criado = cadastro.user();
         assertNotNull(criado.getId());
-        assertNotNull(userService.login(email, "senha123"), "login funciona com o notification fora do ar");
+        assertNotNull(cadastro.token(), "o cadastro devolve o token do login automático");
+        LoginResult login = userService.login(email, "senha123");
+        assertNotNull(login, "login funciona com o notification fora do ar");
+        assertNotNull(login.token());
 
         assertEquals(1, contar("SELECT count(*) FROM public.event_outbox"), "o evento espera no outbox");
         assertEquals(1, relay.drain());

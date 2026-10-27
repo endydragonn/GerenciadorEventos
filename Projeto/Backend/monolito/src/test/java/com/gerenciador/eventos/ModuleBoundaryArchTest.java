@@ -18,6 +18,8 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
  * (infra sem domínio); {@code gateway} é a borda HTTP (issue #25): roteia e agrega, sem domínio próprio. {@code reservation}
  * (#33) e {@code catalog} (#35) NÃO existem aqui (viraram serviços, outros processos): o monólito só tem os CLIENTES HTTP deles,
  * os pacotes {@code reservationclient} e {@code catalogclient} (libs {@code reservation-client}/{@code catalog-client}).
+ * {@code identityclient} (lib {@code identity-client}, #36) leva o contrato do identity (DTOs e {@code *Api}); na fatia 1 a
+ * implementação ainda é o pacote {@code identity} local, e {@code identity.api} só guarda o {@code HostAuthorizationApi}.
  *
  * <p>Regra: um módulo só enxerga outro módulo pelo pacote {@code <modulo>.api} (interfaces e
  * DTOs públicos); nunca por {@code Repository}/{@code Service}/config internos. {@code shared}
@@ -35,18 +37,18 @@ public class ModuleBoundaryArchTest {
             .should().resideInAnyPackage(
                 "com.gerenciador.eventos",
                 RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "reservationclient..",
-                RAIZ + "shared..", RAIZ + "gateway..")
+                RAIZ + "identityclient..", RAIZ + "shared..", RAIZ + "gateway..")
             .because("o layout por camadas (POJO/Repository/Service/config/security) foi trocado "
                 + "por pacotes-por-serviço (issue #23)");
 
     @ArchTest
     static final ArchRule identity_so_usa_outros_modulos_pela_api =
-        soPelaApi("identity", "catalogclient", "gateway");
+        soPelaApi("identity", "catalogclient", "identityclient", "gateway");
 
     /** O gateway só chama o catalog pelo contrato ({@code catalogclient.api}), nunca pelo {@code CatalogClient} concreto. */
     @ArchTest
     static final ArchRule gateway_so_usa_modulos_pela_api =
-        soPelaApi("gateway", "identity", "catalogclient");
+        soPelaApi("gateway", "identity", "catalogclient", "identityclient");
 
     /**
      * O que SAIU do monólito na #33 não volta: nada aqui depende do pacote do serviço reservation (o código dele mora no
@@ -72,7 +74,7 @@ public class ModuleBoundaryArchTest {
         noClasses()
             .that().resideInAPackage(RAIZ + "reservationclient..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "gateway..")
+                RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "identityclient..", RAIZ + "gateway..")
             .because("reservation-client é uma lib de contrato HTTP, usada também pelo serviço reservation");
 
     @ArchTest
@@ -80,8 +82,17 @@ public class ModuleBoundaryArchTest {
         noClasses()
             .that().resideInAPackage(RAIZ + "catalogclient..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                RAIZ + "identity..", RAIZ + "reservationclient..", RAIZ + "gateway..")
+                RAIZ + "identity..", RAIZ + "reservationclient..", RAIZ + "identityclient..", RAIZ + "gateway..")
             .because("catalog-client é uma lib de contrato HTTP, usada também pelo serviço catalog");
+
+    /** A lib do identity (#36) também é só contrato e transporte: nada do monólito nem das outras libs. */
+    @ArchTest
+    static final ArchRule identityclient_nao_depende_de_modulo_do_monolito =
+        noClasses()
+            .that().resideInAPackage(RAIZ + "identityclient..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "reservationclient..", RAIZ + "gateway..")
+            .because("identity-client é uma lib de contrato HTTP, usada também pelo serviço identity");
 
     /**
      * O envio de e-mail saiu do monólito na #32 (virou o serviço {@code notification}): nada aqui pode depender do
@@ -108,7 +119,8 @@ public class ModuleBoundaryArchTest {
         noClasses()
             .that().resideInAPackage(RAIZ + "shared..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "reservationclient..", RAIZ + "gateway..")
+                RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "reservationclient..",
+                RAIZ + "identityclient..", RAIZ + "gateway..")
             .because("shared é infra sem domínio: módulos dependem dele, nunca o contrário");
 
     /** O contrato público não pode vazar classe interna (de nenhum módulo): só {@code *.api}, shared e libs. */
@@ -116,8 +128,8 @@ public class ModuleBoundaryArchTest {
     static final ArchRule api_nao_depende_de_classe_interna =
         noClasses()
             .that().resideInAnyPackage(
-                RAIZ + "identity.api..", RAIZ + "catalogclient.api..")
-            .should().dependOnClassesThat(internoDe("identity", "catalogclient", "gateway"))
+                RAIZ + "identity.api..", RAIZ + "catalogclient.api..", RAIZ + "identityclient.api..")
+            .should().dependOnClassesThat(internoDe("identity", "catalogclient", "identityclient", "gateway"))
             .because("o pacote api é o contrato público: só pode depender de outros *.api, de shared e "
                 + "de libs, nunca de Service/Repository/config interno (issue #23)");
 

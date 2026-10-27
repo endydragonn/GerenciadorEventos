@@ -7,7 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.gerenciador.eventos.catalogclient.api.EventApi;
-import com.gerenciador.eventos.identity.api.MyWalletApi;
+import com.gerenciador.eventos.identityclient.api.MyWalletApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.EventWalletApi;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -70,7 +70,7 @@ public class EventWalletGateway {
 
     public EventWallet addLink(EventWallet ew, String idempotencyKey) {
         validateBasic(ew);
-        if (!myWalletApi.exists(ew.getUserId())) {
+        if (!myWalletApi.walletExists(ew.getUserId())) {
             throw new IllegalArgumentException("Carteira do usuário não encontrada");
         }
         if (!eventoExiste(ew.getEventId())) {
@@ -100,7 +100,7 @@ public class EventWalletGateway {
         boolean eventOk = ew.getEventId() != null && ew.getEventId() > 0;
         if (!userOk) sb.append("user_id é obrigatório e deve ser positivo. ");
         if (!eventOk) sb.append("event_id é obrigatório e deve ser positivo. ");
-        if (userOk && !myWalletApi.exists(ew.getUserId())) sb.append("Carteira não encontrada. ");
+        if (userOk && !myWalletApi.walletExists(ew.getUserId())) sb.append("Carteira não encontrada. ");
         if (eventOk && !eventoExiste(ew.getEventId())) sb.append("Evento não encontrado. ");
         if (userOk && eventOk && reservation.existsActive(ew.getUserId(), ew.getEventId())) {
             sb.append("Vínculo já existente. ");

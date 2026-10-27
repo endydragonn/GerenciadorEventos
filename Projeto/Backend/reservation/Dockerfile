@@ -11,6 +11,7 @@ COPY reservation ./reservation
 COPY monolito/pom.xml ./monolito/pom.xml
 COPY notification/pom.xml ./notification/pom.xml
 COPY catalog-client/pom.xml ./catalog-client/pom.xml
+COPY identity-client/pom.xml ./identity-client/pom.xml
 COPY catalog/pom.xml ./catalog/pom.xml
 RUN mvn -B -DskipTests -pl reservation -am clean package
 

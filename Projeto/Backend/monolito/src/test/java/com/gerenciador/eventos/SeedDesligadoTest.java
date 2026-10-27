@@ -20,7 +20,7 @@ import org.springframework.http.ResponseEntity;
 import com.gerenciador.eventos.TestSupport.FakeCatalogServer;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.identity.UserService;
-import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.identityclient.api.User;
 
 /**
  * Caso 4 do spec (issue #35, aceite 7): sem {@code SEED_ENABLED} ({@code seed.enabled}, default {@code false}) o

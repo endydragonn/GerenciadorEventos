@@ -3,8 +3,9 @@ package com.gerenciador.eventos.identity;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import com.gerenciador.eventos.identity.api.MyWallet;
-import com.gerenciador.eventos.identity.api.MyWalletApi;
+import com.gerenciador.eventos.identityclient.api.IdentityNaoEncontradoException;
+import com.gerenciador.eventos.identityclient.api.MyWallet;
+import com.gerenciador.eventos.identityclient.api.MyWalletApi;
 
 @Service
 public class MyWalletService implements MyWalletApi {
@@ -15,7 +16,7 @@ public class MyWalletService implements MyWalletApi {
     public MyWallet getByUserId(Long userId) {
         validateUserId(userId);
         MyWallet w = myWalletRepository.findByUserId(userId);
-        if (w == null) throw new RuntimeException("Carteira não encontrada para user_id=" + userId);
+        if (w == null) throw new IdentityNaoEncontradoException("Carteira não encontrada para user_id=" + userId);
         return w;
     }
 
@@ -25,7 +26,7 @@ public class MyWalletService implements MyWalletApi {
         return myWalletRepository.ensureExists(userId);
     }
 
-    public boolean exists(Long userId) {
+    public boolean walletExists(Long userId) {
         validateUserId(userId);
         return myWalletRepository.existsByUserId(userId);
     }

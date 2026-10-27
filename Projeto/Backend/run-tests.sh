@@ -9,7 +9,7 @@
 #  - no Git Bash o binário do Docker é nativo do Windows e não entende "/e/...",
 #    então usamos "pwd -W" (-> "E:/...") e desligamos a conversão de path do MSYS.
 #
-# Roda o REACTOR inteiro (issues #32, #33 e #35, Fase 7): shared + reservation-client + catalog-client + monolito + notification +
+# Roda o REACTOR inteiro (issues #32, #33, #35 e #36, Fase 7): shared + reservation-client + catalog-client + identity-client + monolito + notification +
 # reservation + catalog, um `mvn clean test` na raiz do Backend/.
 # Os relatórios Surefire de todos os módulos são copiados para Backend/target/surefire-reports (nomes de classe únicos).
 #

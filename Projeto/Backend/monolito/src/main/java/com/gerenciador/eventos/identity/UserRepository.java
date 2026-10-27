@@ -19,7 +19,7 @@ import org.springframework.stereotype.Repository;
 
 import com.gerenciador.eventos.shared.DatabaseConnection;
 import com.gerenciador.eventos.shared.events.NotificationEvents;
-import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.identityclient.api.User;
 
 /**
  * Repository - responsável pelo acesso ao banco de dados

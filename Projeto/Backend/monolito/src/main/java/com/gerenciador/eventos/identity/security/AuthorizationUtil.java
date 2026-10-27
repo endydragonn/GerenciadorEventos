@@ -6,7 +6,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Component;
 
 import com.gerenciador.eventos.identity.api.HostAuthorizationApi;
-import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.identityclient.api.User;
 import com.gerenciador.eventos.identity.UserRepository;
 
 /**

@@ -10,7 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
 import com.gerenciador.eventos.shared.DatabaseConnection;
-import com.gerenciador.eventos.identity.api.MyWallet;
+import com.gerenciador.eventos.identityclient.api.MyWallet;
 
 /**
  * Repository JDBC para tabela mywallet.

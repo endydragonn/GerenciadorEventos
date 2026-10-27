@@ -37,7 +37,7 @@ serviço é um módulo com o próprio jar e Dockerfile; o que é comum é uma li
 
 ```
 Backend/
-  pom.xml                agregador (módulos: shared, reservation-client, catalog-client, monolito, notification, reservation, catalog)
+  pom.xml                agregador (módulos: shared, reservation-client, catalog-client, identity-client, monolito, notification, reservation, catalog)
   checkstyle*.xml        um só para todos os módulos (${maven.multiModuleProjectDirectory})
   run-tests.sh           roda o reactor inteiro
   shared/                LIB (jar simples, sem repackage): DatabaseConnection + shared.events (EventStore, relay, consumer,
@@ -51,6 +51,9 @@ Backend/
   catalog-client/        LIB (#35): contrato HTTP do serviço catalog — Event, EventApi, EventoNaoEncontradoException,
                          EventoEmConflitoException, CatalogUnavailableException e o CatalogClient (pool). Usada pelo catalog (contrato +
                          testes ponta a ponta) e pelo gateway (desde o cutover, fatia 3 da #35)
+  identity-client/       LIB (#36, fatia 1; README.md próprio com o contrato /internal/**): User, MyWallet, LoginResult, RecaptchaResponse,
+                         UserApi/EmailVerificationApi/MyWalletApi/RecaptchaApi, IdentityUnavailableException, IdentityNaoEncontradoException e o
+                         IdentityClient (pool). O monólito importa os tipos dela; o bean do IdentityClient só entra no cutover (fatia 3)
   catalog/               serviço extraído (#35, README.md próprio): eventos em CQRS + ES no schema catalog, API interna
                          /internal/events/**; src/, Dockerfile, pom.xml. Chamado pelo gateway por HTTP (CatalogClient)
   db/                    schema (fora do Maven)
@@ -81,7 +84,7 @@ Backend/
 
 `./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`
 (URL direta `db:5432`, **sem passar pelo pooler**),
-e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `catalog-client`, `monolito`, `notification`,
+e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `catalog-client`, `identity-client`, `monolito`, `notification`,
 `reservation`, `catalog`; `-fae` = um módulo vermelho não esconde o resultado dos outros). **Pré-requisito do `catalog` (#35):** o banco
 migrado (`db/migrations/20261026-catalog-schema.sql`): o script ABORTA se `public.event` ainda existe ou `catalog.event` não existe (não
 aplica o `14-catalog.sql`, que num banco não migrado criaria `catalog.event` vazia ao lado de `public.event`), e aborta se o
@@ -229,6 +232,8 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   que o Flutter mostra). Controller novo no `gateway`: nunca ecoe `getMessage()` num 500.
 - Quase tudo é teste de integração com banco (exceto os mocks pontuais do `HttpContractTest` para dependências externas
   e o `ErroInternoNoCorpoTest`, MockMvc standalone sem Spring/banco).
+- `identity-client` (#36): `IdentityClientIndisponivelTest` (sem Spring/banco, servidores HTTP do JDK: porta morta, 500 e resposta lenta →
+  `IdentityUnavailableException`, uma chamada por falha, sem retry; 404 e 401 com/sem marcador; 400; construção sem token; contrato feliz).
 - `LayerBoundaryArchTest` e `ModuleBoundaryArchTest` (ArchUnit) são a exceção: não usam Spring/banco, só analisam bytecode.
   Roda em qualquer `mvn test`, com ou sem `db` no ar.
 
@@ -291,7 +296,12 @@ identity/        UserService, UserRepository, EmailVerificationService, PendingV
                  IdentityNotifications (#32: appenda o evento que pede o e-mail; o monólito não envia mais),
                  security/ (JwtUtil, JwtAuthenticationFilter, AuthorizationUtil, SecurityConfig)
                  MyWalletService + MyWalletRepository (#33: a carteira é extensão 1:1 de `users`, criada por trigger; ficou em `public`)
-  api/           User, UserApi, EmailVerificationApi, TokenApi, HostAuthorizationApi, MyWallet, MyWalletApi
+  api/           HostAuthorizationApi (#36 fatia 1: User/UserApi/EmailVerificationApi/MyWallet/MyWalletApi/LoginResult moraram aqui e foram para a lib
+                 `identity-client`, pacote `identityclient.api`; `TokenApi` saiu: o `UserService`/`EmailVerificationService` emitem o token pelo `JwtUtil`
+                 e devolvem `LoginResult`; o `HostAuthorizationApi` vai para `gateway/security` na fatia 3)
+identityclient/  (lib `identity-client`, #36) IdentityClient (HTTP, pool; sem @Configuration até o cutover)
+  api/           User, MyWallet, LoginResult, RecaptchaResponse, UserApi, EmailVerificationApi, MyWalletApi (`walletExists`, não `exists`: o cliente
+                 implementa as duas interfaces), RecaptchaApi, IdentityUnavailableException, IdentityNaoEncontradoException
 catalog/         (#35: SAIU do monólito, é o módulo Maven/serviço `catalog/` — ver "Serviço catalog")
                  EventService, EventRepository, EventPresenterRepository, CatalogEventWriter, CatalogEventProjection, EventPayloads,
                  EventController + InternalApiExceptionHandler (API interna HTTP)

@@ -41,10 +41,9 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
 import com.gerenciador.eventos.catalogclient.api.EventApi;
-import com.gerenciador.eventos.identity.api.EmailVerificationApi;
+import com.gerenciador.eventos.identityclient.api.EmailVerificationApi;
 import com.gerenciador.eventos.identity.api.HostAuthorizationApi;
-import com.gerenciador.eventos.identity.api.TokenApi;
-import com.gerenciador.eventos.identity.api.UserApi;
+import com.gerenciador.eventos.identityclient.api.UserApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 
 /**
@@ -77,7 +76,7 @@ public class ErroInternoNoCorpoTest {
         hostApi = mock(HostAuthorizationApi.class);
         walletGateway = mock(EventWalletGateway.class);
         when(hostApi.currentUserId()).thenReturn(5L);
-        userController = new BffUserController(userApi, mock(TokenApi.class), emailApi);
+        userController = new BffUserController(userApi, emailApi);
         mvc = MockMvcBuilders.standaloneSetup(userController,
                 new BffEventController(eventApi, hostApi, userApi, mock(CreatorNames.class)),
                 new BffEventWalletController(walletGateway, hostApi)).build();
