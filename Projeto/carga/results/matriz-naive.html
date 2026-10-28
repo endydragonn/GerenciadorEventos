@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matriz do experimento — overselling × lag</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+    --series-3:       #1baf7a;
+    --series-4:       #eda100;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --series-3:       #199e70;
+      --series-4:       #c98500;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --grid:           #2c2c2a;
+    --baseline:       #383835;
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --series-3:       #199e70;
+    --series-4:       #c98500;
+  }
+  body { margin: 0; background: var(--surface-1, #fcfcfb); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .viz-root { background: var(--surface-1); padding: 24px 16px 40px; max-width: 980px; margin: 0 auto; color: var(--text-primary); }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 28px 0 8px; color: var(--text-secondary); }
+  h3 { font-size: 12px; font-weight: 500; margin: 0 0 4px; color: var(--text-secondary); }
+  .subtitulo, .nota { color: var(--text-secondary); font-size: 13px; margin: 0 0 8px; }
+  .nota { font-size: 12px; color: var(--text-muted); }
+  .aviso { color: var(--text-primary); font-size: 13px; margin: 0 0 8px; padding: 6px 10px; border-left: 3px solid var(--series-4); }
+  .legenda { display: flex; gap: 16px; margin: 12px 0 4px; font-size: 13px; color: var(--text-secondary); }
+  .item { display: inline-flex; align-items: center; gap: 6px; }
+  .chave { display: inline-block; width: 16px; height: 3px; border-radius: 2px; }
+  .chave-cas { background: repeating-linear-gradient(90deg, var(--series-1) 0 6px, transparent 6px 10px); }
+  .chave-naive { background: var(--series-2); }
+  .chave-s3 { background: var(--series-3); }
+  .chave-s4 { background: var(--series-4); }
+  .paineis { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  svg { display: block; overflow: visible; }
+  .grid { stroke: var(--grid); stroke-width: 1; }
+  .baseline { stroke: var(--baseline); stroke-width: 1; }
+  .eixo { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .rotulo-serie { fill: var(--text-secondary); font-size: 11px; }
+  .tabela { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-muted); font-weight: 500; }
+  footer { margin-top: 28px; font-size: 11px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+<div class="viz-root">
+<h1>Matriz do experimento — overselling × lag</h1>
+<p class="subtitulo">Fonte: matriz-naive.csv · 20 execuções · commit: b072346 · gerado em 2026-10-28T03:12:01Z</p>
+<div class="legenda"><span class="item"><span class="chave chave-naive"></span>naive</span></div>
+<p class="nota">Marcador = média das repetições · barra grossa = ±1 desvio amostral · linha fina = mín–máx · eixo x linear em ms, a partir de 0 (a posição é proporcional ao lag; marcas nos lags medidos). Overselling = max(0, confirmed − capacity); valores exatos na tabela.</p>
+<h2>N = 100 · capacity 20</h2>
+<div class="paineis">
+<div class="painel"><h3>Overselling · max(0, confirmed − capacity)</h3>
+<svg viewBox="0 0 420 250" width="100%" role="img" aria-label="Overselling por lag, N=100, capacity 20">
+<line class="baseline" x1="52" y1="214.0" x2="364" y2="214.0"/>
+<text class="eixo" x="44" y="218.0" text-anchor="end">0</text>
+<line class="grid" x1="52" y1="164.0" x2="364" y2="164.0"/>
+<text class="eixo" x="44" y="168.0" text-anchor="end">20</text>
+<line class="grid" x1="52" y1="114.0" x2="364" y2="114.0"/>
+<text class="eixo" x="44" y="118.0" text-anchor="end">40</text>
+<line class="grid" x1="52" y1="64.0" x2="364" y2="64.0"/>
+<text class="eixo" x="44" y="68.0" text-anchor="end">60</text>
+<line class="grid" x1="52" y1="14.0" x2="364" y2="14.0"/>
+<text class="eixo" x="44" y="18.0" text-anchor="end">80</text>
+<line class="baseline" x1="52.0" y1="214" x2="52.0" y2="218"/>
+<text class="eixo eixo-x" x="52.0" y="230" text-anchor="middle">0</text>
+<text class="eixo" x="208.0" y="246" text-anchor="middle">lag (ms) · escala linear</text>
+<path d="M52.0 14.0V14.0M49.0 14.0h6M49.0 14.0h6" fill="none" stroke="var(--series-2)" stroke-width="1.5" stroke-opacity=".6" stroke-linecap="round"/>
+<g class="pt"><title>naive · lag 0 ms · N=100 · capacity 20 · 10 repetições · média 80.00 ± 0.00 (mín 80, máx 80)</title><circle cx="52.0" cy="14.0" r="12" fill="transparent" pointer-events="all"/><circle cx="52.0" cy="14.0" r="4.5" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2"/></g>
+<text class="rotulo-serie" x="61.0" y="18.0">naive</text>
+</svg>
+</div>
+<div class="painel"><h3>Latência p95 da reserva (ms)</h3>
+<svg viewBox="0 0 420 250" width="100%" role="img" aria-label="Latência p95 por lag, N=100, capacity 20">
+<line class="baseline" x1="52" y1="214.0" x2="364" y2="214.0"/>
+<text class="eixo" x="44" y="218.0" text-anchor="end">0</text>
+<line class="grid" x1="52" y1="147.3" x2="364" y2="147.3"/>
+<text class="eixo" x="44" y="151.3" text-anchor="end">100</text>
+<line class="grid" x1="52" y1="80.7" x2="364" y2="80.7"/>
+<text class="eixo" x="44" y="84.7" text-anchor="end">200</text>
+<line class="grid" x1="52" y1="14.0" x2="364" y2="14.0"/>
+<text class="eixo" x="44" y="18.0" text-anchor="end">300</text>
+<line class="baseline" x1="52.0" y1="214" x2="52.0" y2="218"/>
+<text class="eixo eixo-x" x="52.0" y="230" text-anchor="middle">0</text>
+<text class="eixo" x="208.0" y="246" text-anchor="middle">lag (ms) · escala linear</text>
+<path d="M52.0 19.7V141.5M49.0 19.7h6M49.0 141.5h6" fill="none" stroke="var(--series-2)" stroke-width="1.5" stroke-opacity=".6" stroke-linecap="round"/>
+<line x1="52.0" y1="39.7" x2="52.0" y2="126.5" stroke="var(--series-2)" stroke-width="5" stroke-opacity=".35" stroke-linecap="round"/>
+<g class="pt"><title>naive · lag 0 ms · N=100 · capacity 20 · 10 repetições · média 196.32 ms ± 65.11 (mín 108.7, máx 291.4)</title><circle cx="52.0" cy="83.1" r="12" fill="transparent" pointer-events="all"/><circle cx="52.0" cy="83.1" r="4.5" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2"/></g>
+<text class="rotulo-serie" x="61.0" y="87.1">naive</text>
+</svg>
+</div>
+</div>
+<h2>N = 200 · capacity 20</h2>
+<div class="paineis">
+<div class="painel"><h3>Overselling · max(0, confirmed − capacity)</h3>
+<svg viewBox="0 0 420 250" width="100%" role="img" aria-label="Overselling por lag, N=200, capacity 20">
+<line class="baseline" x1="52" y1="214.0" x2="364" y2="214.0"/>
+<text class="eixo" x="44" y="218.0" text-anchor="end">0</text>
+<line class="grid" x1="52" y1="164.0" x2="364" y2="164.0"/>
+<text class="eixo" x="44" y="168.0" text-anchor="end">50</text>
+<line class="grid" x1="52" y1="114.0" x2="364" y2="114.0"/>
+<text class="eixo" x="44" y="118.0" text-anchor="end">100</text>
+<line class="grid" x1="52" y1="64.0" x2="364" y2="64.0"/>
+<text class="eixo" x="44" y="68.0" text-anchor="end">150</text>
+<line class="grid" x1="52" y1="14.0" x2="364" y2="14.0"/>
+<text class="eixo" x="44" y="18.0" text-anchor="end">200</text>
+<line class="baseline" x1="52.0" y1="214" x2="52.0" y2="218"/>
+<text class="eixo eixo-x" x="52.0" y="230" text-anchor="middle">0</text>
+<text class="eixo" x="208.0" y="246" text-anchor="middle">lag (ms) · escala linear</text>
+<path d="M52.0 34.0V34.0M49.0 34.0h6M49.0 34.0h6" fill="none" stroke="var(--series-2)" stroke-width="1.5" stroke-opacity=".6" stroke-linecap="round"/>
+<g class="pt"><title>naive · lag 0 ms · N=200 · capacity 20 · 10 repetições · média 180.00 ± 0.00 (mín 180, máx 180)</title><circle cx="52.0" cy="34.0" r="12" fill="transparent" pointer-events="all"/><circle cx="52.0" cy="34.0" r="4.5" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2"/></g>
+<text class="rotulo-serie" x="61.0" y="38.0">naive</text>
+</svg>
+</div>
+<div class="painel"><h3>Latência p95 da reserva (ms)</h3>
+<svg viewBox="0 0 420 250" width="100%" role="img" aria-label="Latência p95 por lag, N=200, capacity 20">
+<line class="baseline" x1="52" y1="214.0" x2="364" y2="214.0"/>
+<text class="eixo" x="44" y="218.0" text-anchor="end">0</text>
+<line class="grid" x1="52" y1="147.3" x2="364" y2="147.3"/>
+<text class="eixo" x="44" y="151.3" text-anchor="end">100</text>
+<line class="grid" x1="52" y1="80.7" x2="364" y2="80.7"/>
+<text class="eixo" x="44" y="84.7" text-anchor="end">200</text>
+<line class="grid" x1="52" y1="14.0" x2="364" y2="14.0"/>
+<text class="eixo" x="44" y="18.0" text-anchor="end">300</text>
+<line class="baseline" x1="52.0" y1="214" x2="52.0" y2="218"/>
+<text class="eixo eixo-x" x="52.0" y="230" text-anchor="middle">0</text>
+<text class="eixo" x="208.0" y="246" text-anchor="middle">lag (ms) · escala linear</text>
+<path d="M52.0 15.9V99.3M49.0 15.9h6M49.0 99.3h6" fill="none" stroke="var(--series-2)" stroke-width="1.5" stroke-opacity=".6" stroke-linecap="round"/>
+<line x1="52.0" y1="26.6" x2="52.0" y2="78.2" stroke="var(--series-2)" stroke-width="5" stroke-opacity=".35" stroke-linecap="round"/>
+<g class="pt"><title>naive · lag 0 ms · N=200 · capacity 20 · 10 repetições · média 242.40 ms ± 38.68 (mín 172.1, máx 297.1)</title><circle cx="52.0" cy="52.4" r="12" fill="transparent" pointer-events="all"/><circle cx="52.0" cy="52.4" r="4.5" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2"/></g>
+<text class="rotulo-serie" x="61.0" y="56.4">naive</text>
+</svg>
+</div>
+</div>
+<h2>Tabela</h2>
+<div class="tabela">
+<table>
+<thead><tr><th>braço</th><th>lag_ms</th><th>N</th><th>capacity</th><th>rep.</th><th>oversell média</th><th>desvio</th><th>mín</th><th>máx</th><th>p95 média (ms)</th><th>pending+confirmed média</th><th>lag obs. disparo (ms)</th><th>lag obs. máx (ms)</th></tr></thead>
+<tbody>
+<tr><td>naive</td><td>0</td><td>100</td><td>20</td><td>10</td><td>80.00</td><td>0.00</td><td>80</td><td>80</td><td>196.3</td><td>100.00</td><td>–</td><td>68.5</td></tr>
+<tr><td>naive</td><td>0</td><td>200</td><td>20</td><td>10</td><td>180.00</td><td>0.00</td><td>180</td><td>180</td><td>242.4</td><td>200.00</td><td>–</td><td>126.3</td></tr>
+</tbody>
+</table>
+</div>
+<footer>Gerado por docs/carga/harness/report-matriz.sh a partir de matriz-naive.csv. lag obs. = applied_at − last_occurred_at da projeção do evento (lag real do consumer) (média das execuções com leitura; “–” = sem leitura). Desvio amostral (n−1); “–” quando há 1 repetição.</footer>
+</div>
+</body>
+</html>
