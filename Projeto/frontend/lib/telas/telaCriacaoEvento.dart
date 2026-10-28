@@ -43,7 +43,6 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
   final _capacityController = TextEditingController();
   final _buyLimitController = TextEditingController();
   final _priceController = TextEditingController();
-  String? _eventType;
   bool _hasChanges = false;
   bool _isEAD = false;
   String _paymentType = 'Gratuito';
@@ -62,7 +61,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
     final user = homePageData.user;
 
     // Se não estiver logado, redirecionar para tela principal
-    if (user == null || user.isEmpty || user['user_id'] == null) {
+    if (user.isEmpty || user['user_id'] == null) {
       AppModals.showError(
         context,
         'Autenticação Necessária',
@@ -113,7 +112,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
       final user = homePageData.user;
 
       // Verificar se o usuário está logado
-      if (user == null || user.isEmpty) {
+      if (user.isEmpty) {
         AppModals.showError(
           context,
           'Autenticação Necessária',
@@ -150,7 +149,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
       try {
         final dateParts = _dateController.text.split('/');
         if (dateParts.length != 3) {
-          throw FormatException('Data inválida');
+          throw const FormatException('Data inválida');
         }
         final day = dateParts[0].padLeft(2, '0');
         final month = dateParts[1].padLeft(2, '0');
@@ -162,7 +161,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         if (_buyLimitController.text.isNotEmpty) {
           final buyParts = _buyLimitController.text.split('/');
           if (buyParts.length != 3) {
-            throw FormatException('Data limite inválida');
+            throw const FormatException('Data limite inválida');
           }
           final buyDay = buyParts[0].padLeft(2, '0');
           final buyMonth = buyParts[1].padLeft(2, '0');
@@ -208,10 +207,10 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         );
 
         if (response.statusCode >= 400) {
-          print('❌ Erro: ${response.body}');
+          debugPrint('❌ Erro: ${response.body}');
         }
 
-        if (!mounted) return;
+        if (!context.mounted) return;
 
         if (response.statusCode == 201) {
           AppModals.showSuccess(
@@ -246,7 +245,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
           );
         }
       } catch (e) {
-        if (!mounted) return;
+        if (!context.mounted) return;
         AppModals.showConnectionError(context);
       }
     }

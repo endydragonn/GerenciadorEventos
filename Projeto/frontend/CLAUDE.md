@@ -75,6 +75,45 @@ referência** — não é compilado, não edite.
 `--dart-define=RECAPTCHA_SITE_KEY`; o backend (serviço identity) valida o token contra a Google. Site key é
 pública, mas mesmo assim não hardcode — mantenha via dart-define.
 
+## Lint e tamanho de arquivo (issue #84)
+
+`analysis_options.yaml` inclui `package:flutter_lints/flutter.yaml` (`avoid_print` ativo) e exclui
+`blocoInteiro.dart` da análise. Não há Flutter local; o lint roda no container do SDK (estágio
+`build` do `Dockerfile`, Flutter 3.19.6). A partir da raiz do repo (no Git Bash do Windows, prefixe
+`MSYS_NO_PATHCONV=1` e use o caminho absoluto no `-v`):
+
+```
+docker build --target build -t gerenciador-flutter-sdk Projeto/frontend
+docker run --rm -v "$PWD/Projeto/frontend:/app" -w /app gerenciador-flutter-sdk sh -c "flutter pub get && flutter analyze && sh tool/verifica-tamanho.sh"
+```
+
+Tem que terminar com `No issues found!` e `Tamanho de arquivos OK`. O `pub get` deixa `.dart_tool/`,
+`pubspec.lock` e `.flutter-plugins*` na pasta (ignorados pelo `.gitignore`). Não há `.dockerignore`: apague-os
+antes de `docker build`/`compose build` do frontend, senão vão para o contexto da imagem.
+
+- **Sem `print`:** use `debugPrint` (já vem no `material.dart`). Não há logger no app — achado: logs de
+  diagnóstico são só `debugPrint` no console do navegador; um logger/telemetria de verdade fica fora do escopo.
+- **Regra desligada: `file_names`.** As telas são camelCase (`telaLogin.dart`, `telaHomePage.dart`...), convenção
+  já estabelecida; renomear 11 arquivos e todos os imports colidiria com o trabalho seguinte nas telas (issue #44).
+  Reavaliar junto com a #44. Nenhuma outra regra está desligada.
+- **`// ignore:` (um por linha, justificado):**
+  - `lib/widgets/recaptcha_widget.dart`, `import 'dart:js'` — `avoid_web_libraries_in_flutter`: o app é só web
+    e o reCAPTCHA v3 precisa chamar o `grecaptcha` do `index.html` por interop JS.
+- **Teto de tamanho:** 500 linhas por arquivo `.dart` em `lib/`, checado por `tool/verifica-tamanho.sh` (um `wc -l`
+  em shell, sem pacote novo). Acima do teto, na baseline do próprio script (limite = tamanho atual: pode encolher,
+  não crescer): `telaEdicaoPerfil` 841, `telaVerificacaoEmail` 840, `telaCadastro` 670, `telaCriacaoEvento` 665,
+  `telaEdicaoEvento` 523. As telas não foram refatoradas na #84; ao quebrar uma, baixe o limite dela.
+- **Contagem antes das correções** (`flutter_lints` 4.0.0 recém-ligado, 96 issues): `use_build_context_synchronously` 24,
+  `unnecessary_null_comparison` 13, `file_names` 11, `avoid_print` 11, `unused_field` 8, `prefer_const_constructors` 7,
+  `empty_catches` 4, `unused_import` 3, `unnecessary_to_list_in_spreads` 3, `prefer_final_fields` 3,
+  `constant_identifier_names` 3, `use_super_parameters` 2, `avoid_web_libraries_in_flutter` 2,
+  `prefer_const_literals_to_create_immutables` 1, `duplicate_import` 1.
+- **Como foram resolvidas:** `dart fix --apply` (const, `toList` no spread, imports, null checks, super params);
+  `use_build_context_synchronously` com `if (!context.mounted) return;` (context vindo por parâmetro) ou
+  `if (!mounted) return;` (State) depois do `await`; campos `unused_field` removidos junto com as atribuições;
+  `empty_catches` com comentário; as 3 constantes de config renomeadas para lowerCamelCase
+  (`AppConfig.apiBaseUrl`, `recaptchaSiteKey`, `recaptchaVerifyEndpoint`; as chaves de `--dart-define` não mudaram).
+
 ## Ao mexer aqui
 
 - Novo endpoint consumido → confira o path real no `Backend/CLAUDE.md` (sempre `/bff/...`) e

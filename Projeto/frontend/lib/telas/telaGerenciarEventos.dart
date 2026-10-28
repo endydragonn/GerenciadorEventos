@@ -53,7 +53,7 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
     final user = Provider.of<HomePageData>(context, listen: false).user;
 
     // Se não estiver logado, redirecionar para tela principal
-    if (user == null || user.isEmpty || user['user_id'] == null) {
+    if (user.isEmpty || user['user_id'] == null) {
       AppModals.showError(
         context,
         'Autenticação Necessária',
@@ -71,8 +71,8 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
   Future<void> _fetchEvents() async {
     final user = Provider.of<HomePageData>(context, listen: false).user;
     
-    if (user == null || user['user_id'] == null) {
-      print('❌ Usuário não encontrado ou sem ID');
+    if (user['user_id'] == null) {
+      debugPrint('❌ Usuário não encontrado ou sem ID');
       return;
     }
     
@@ -283,6 +283,7 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
             ),
             TextButton(
               onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
                 Navigator.of(context).pop();
                 final user = Provider.of<HomePageData>(context, listen: false).user;
                 final userId = user['user_id'];
@@ -295,7 +296,7 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
                   setState(() {
                     enrolledEvents.remove(event);
                   });
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     const SnackBar(content: Text('Inscrição cancelada!')),
                   );
                 }
@@ -379,7 +380,7 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
                   ),
                 ),
               );
-            }).toList(),
+            }),
             const SizedBox(height: 16.0),
             const Text(
               'Eventos Criados por Você',
@@ -434,7 +435,7 @@ class _ManageEventsScreenState extends State<ManageEventsScreen> {
                   ),
                 ),
               );
-            }).toList(),
+            }),
           ],
         ),
       ),

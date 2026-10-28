@@ -8,9 +8,9 @@ import 'telas/auth.dart';
 import 'config/app_config.dart';
 
 void main() async {
-  print('🏁 main() - Iniciando aplicação');
+  debugPrint('🏁 main() - Iniciando aplicação');
   WidgetsFlutterBinding.ensureInitialized();
-  print('⚙️ WidgetsFlutterBinding inicializado');
+  debugPrint('⚙️ WidgetsFlutterBinding inicializado');
   
   // Carregar token salvo antes de iniciar o app
   await ApiAuth.initialize();
