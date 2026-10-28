@@ -6,6 +6,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -139,27 +140,30 @@ public class UserRepository {
 
     /**
      * Atualiza os campos graváveis (nome, e-mail, fone, senha, nascimento, admin; NUNCA {@code host}) na {@code conn} do chamador.
-     * Campo não informado preserva o valor existente. Devolve {@code false} se o usuário não existe.
+     * Campo não informado ({@code password}, {@code birthDate} nulo ou ilegível, {@code isAdmin}) é preservado pelo próprio
+     * {@code UPDATE} ({@code COALESCE}), sem ler-mesclar-gravar (#170): um PUT sem senha concorrente a uma troca de senha não
+     * regrava o hash antigo por cima do novo. Devolve {@code false} se o usuário não existe.
      */
     public boolean update(Connection conn, User user) throws SQLException {
-        User existing = findById(conn, user.getId());
-        if (existing == null) {
-            return false;
-        }
-        String sql = "UPDATE identity.users SET user_name = ?, email = ?, fone = ?, password = ?, birthdate = ?, admin = ? "
+        String sql = "UPDATE identity.users SET user_name = ?, email = ?, fone = ?, password = COALESCE(?, password), "
+                + "birthdate = COALESCE(CAST(? AS date), birthdate), admin = COALESCE(CAST(? AS boolean), admin) "
                 + "WHERE user_id = ?";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, user.getName());
             stmt.setString(2, user.getEmail());
             stmt.setString(3, user.getFone());
-            // Preservar senha existente se não foi fornecida nova senha
-            stmt.setString(4, user.getPassword() != null ? user.getPassword() : existing.getPassword());
+            stmt.setString(4, user.getPassword());
             Date birthdateVal = toSqlDate(user.getBirthDate());
-            if (birthdateVal == null) {
-                birthdateVal = toSqlDate(existing.getBirthDate());
+            if (birthdateVal != null) {
+                stmt.setDate(5, birthdateVal);
+            } else {
+                stmt.setNull(5, Types.DATE);
             }
-            stmt.setDate(5, birthdateVal != null ? birthdateVal : Date.valueOf(LocalDate.now()));
-            stmt.setBoolean(6, user.getIsAdmin() != null ? toPrimitive(user.getIsAdmin()) : toPrimitive(existing.getIsAdmin()));
+            if (user.getIsAdmin() != null) {
+                stmt.setBoolean(6, user.getIsAdmin());
+            } else {
+                stmt.setNull(6, Types.BOOLEAN);
+            }
             stmt.setLong(7, user.getId());
             return stmt.executeUpdate() == 1;
         }
