@@ -238,7 +238,8 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   expectativa na #33**: as chamadas de reserva/capacidade vão ao `FakeReservationServer` (HTTP de verdade). **Mudança de contrato na #57**
   (IDOR em `/bff/event-wallets/**`): `userId` divergente do dono do token dá 403 nos 5 endpoints, e `userId` ausente vale o do token
   (`eventWallet_tokenDeAnaoAgeEmNomeDeBeto_returns403NosEndpoints`, `eventWallet_proprioUsuario_comESemUserId`,
-  `eventWallet_semToken_returns401NosEndpoints`).
+  `eventWallet_semToken_returns401NosEndpoints`). **Mudança de contrato na #166**: o id de usuário no path de `/bff/users/{id}/**` e de
+  `/bff/my-wallets/**` tem de ser o do token (403 caso contrário; id inexistente também é 403, não mais 404) e o `PUT` recusa e-mail de outra conta (400).
 - `gateway/ErroInternoNoCorpoTest` (issue #89): todo 500 do `gateway/*` devolve o corpo genérico `ErroInterno.MENSAGEM` (o `Map` do reCAPTCHA
   mantém `success`/`error`) e a mensagem da exceção (detalhe de SQL/infra) vai só para o log SLF4J (`log.error("...", ex)`, com stack trace).
   MockMvc standalone com as dependências mockadas falhando, sem Spring/banco. Os 400 de negócio continuam com a mensagem da exceção (é contrato
@@ -747,6 +748,16 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
     mesmo sem essa regra (verificado empiricamente, ver
     `HttpContractTest#corsPreflight_onProtectedRoute_isNotBlockedByAuth`); a regra explícita
     protege contra reordenar filtros ou remover `.cors(...)` no futuro.
+- **Dono do token no path (issue #166, mesma regra e corpo da #57)**: `gateway/AcessoNegado.barrarSeNaoDono` roda ANTES de qualquer chamada ao identity
+  e compara o id do path com o dono do token (claim `uid`). Diferente => **403** com o corpo fixo "Acesso negado: o usuário informado não é o usuário
+  autenticado" (vale mesmo para id que não existe: a negação não revela se a outra conta existe, então `GET /bff/users/{id}` de um id inexistente deixou de
+  dar 404 e dá 403); igual => segue como antes. Cobre `BffMyWalletController` (`GET /{userId}`, `POST /ensure/{userId}`) e, em `BffUserController`, todas as
+  rotas com `{id}`: `GET/PUT/DELETE /{id}`, `PUT /{id}/password`, `POST /{id}/request-password-reset-mfa`, `POST /{id}/verify-password-reset-mfa` e
+  `PUT /{id}/password-with-mfa`. Fora: `GET /email/{email}` e `POST /` (sem id de dono no path; #181). Token sem `uid` => 401. Sem exceção de
+  admin (como na #35). **`PUT /bff/users/{id}`** também recusa com **400** o e-mail que já é de OUTRA conta, sem diferenciar maiúsculas (regra do
+  `identity`: `UserService.updateUser` confere `findByEmail` ignorando caixa; o próprio e-mail, inclusive com outra caixa, segue; check-then-update sem índice em `lower(email)`, a corrida fica para a #182). Testes:
+  `HttpContractTest#usuarioA_naoLeNemAlteraNadaDoUsuarioB_emUsersEMyWallets` e `#putUsuario_emailDeOutraConta_returns400` (gateway) e
+  `UserUpdateEmailDuplicadoTest` (identity, Postgres real).
 - **JWT RS256 validado sem estado (issue #36)**: o `identity` assina e o gateway só verifica. `gateway/security/JwtAuthenticationFilter` (filtro
   próprio; **não** usa `oauth2ResourceServer()`, que daria 401 a bearer inválido até em rota pública) decodifica com o `NimbusJwtDecoder` de
   `JwtDecoderConfig` (só RS256; `exp`, `nbf` e `iss` = `gerenciador-identity`) e põe o `sub` (e-mail) como username; authority fixa `USER`. Bearer
@@ -779,8 +790,8 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
   de qualquer outra validação ou chamada ao reservation, e sem revelar se o outro usuário existe). Desde a #36 o `userId` do token é a claim
   `uid` (sem consulta): um `uid` que não existe mais **não dá mais 401** (o 401 de "usuário do token inexistente" era da #57, que consultava o
   banco). A API interna do `reservation` segue recebendo `userId` explícito, agora sempre o do token. A uma rodada de carga anterior à #36 pagava
-  `LOWER(email) = LOWER(?)` (seq scan em `users`) por reserva; depois da #36 esse custo some (não comparável com as anteriores). Fora desta
-  issue (#166): o mesmo IDOR em `BffMyWalletController` (`/{userId}`, `/ensure/{userId}`) e em `GET/PUT/DELETE /bff/users/{id}`.
+  `LOWER(email) = LOWER(?)` (seq scan em `users`) por reserva; depois da #36 esse custo some (não comparável com as anteriores). O mesmo IDOR em
+  `BffMyWalletController` e em `/bff/users/{id}/**` foi fechado na #166 (ver "Rotas e segurança").
 - **Resposta de `Event` (issue #35)**: ganha `creator_name` (somente-leitura no DTO; composto no gateway por `gateway/CreatorNames`:
   `UserApi.findNames(ids)` em lote, só `isactive = true` → conta desativada = `creator_name` nulo; Caffeine com TTL 45 s ±20% por
   entrada, ~10k entradas, sem cache negativo; **falha do `findNames` não falha a resposta**: o nome sai nulo, sem cache, e a próxima
@@ -1218,7 +1229,7 @@ O monólito NÃO tem mais o pacote `identity` (nem `public.users`/`mywallet`/`pe
   (login e verify-MFA, inclusive usuário inexistente e código nulo; o 401 do `InternalTokenFilter` NÃO leva o marcador, para um `INTERNAL_API_TOKEN` errado virar
   503 e não "senha errada"); **404** com `X-Identity-Nao-Encontrado`; **500** genérico (detalhe só no log). reCAPTCHA: sempre 200 com o envelope `{status, body}`
   (`status` 200 + `{success, score, action}`, ou 500 + `{success:false, error}`); `RECAPTCHA_VERIFY_URL` (property, default a URL do Google; o teste aponta para um fake local),
-  timeouts 2 s/5 s. `POST`/`PUT /internal/users` gravam `admin` como sempre e **nunca `host`** (senão o IDOR #166 viraria auto-promoção a host).
+  timeouts 2 s/5 s. `POST`/`PUT /internal/users` gravam `admin` como sempre e **nunca `host`** (senão o IDOR #166 viraria auto-promoção a host). `PUT /internal/users/{id}` com e-mail de OUTRA conta (sem diferenciar caixa) => 400 (#166).
 - **Cadastro**: `verify-email` consome uma tentativa por chamada (`UPDATE ... WHERE attempts < max_attempts`, atômico); depois de `max_attempts` até o código certo é
   recusado; o reenvio gera código novo e zera o contador. O fim do `pending_verifications`, o `INSERT` em `users` (a carteira nasce pelo trigger) e o `UserRegistered` entram na
   MESMA transação.
@@ -1259,7 +1270,7 @@ O monólito NÃO tem mais o pacote `identity` (nem `public.users`/`mywallet`/`pe
   login e `/me`, `/internal/**` 401 sem `X-Internal-Token` e sem porta no host, reserva no braço `cas` com overselling 0, `gerenciador-identity` parado → 503 e reserva com token válido
   201, volta, `docker restart` com o mesmo `kid` e token antigo válido; para o `gerenciador-notification` durante a execução para não mandar e-mail real). Migração verificada por
   `db/migrations/verify-20261028-migration.sh`. Lag do relay do identity: `identity.event_outbox`.
-- **Fora de escopo / pendências conhecidas**: #166 (IDOR pré-existente em `GET/PUT/DELETE /bff/users/{id}` e `/bff/my-wallets/{userId}`; a superfície não mudou); revogação de token /
+- **Fora de escopo / pendências conhecidas**: revogação de token /
   lista negra; rotação automática da chave; consumer dos eventos de ciclo de vida; remover o datasource do gateway (Hikari 10 só para o `actuator/health`).
 
 ## Suíte e2e da stack inteira — issue #37 (Fase 7)

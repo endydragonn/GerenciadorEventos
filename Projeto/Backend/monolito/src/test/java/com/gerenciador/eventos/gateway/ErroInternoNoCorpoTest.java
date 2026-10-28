@@ -105,20 +105,20 @@ public class ErroInternoNoCorpoTest {
     @Test
     void atualizarUsuario() throws Exception {
         when(userApi.updateUser(any())).thenThrow(new RuntimeException(DETALHE));
-        esperar500(put("/bff/users/1").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"A\"}"));
+        esperar500(put("/bff/users/5").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"A\"}"));
     }
 
     @Test
     void alterarSenha() throws Exception {
         when(userApi.changePassword(anyLong(), any(), any())).thenThrow(new RuntimeException(DETALHE));
-        esperar500(put("/bff/users/1/password").contentType(MediaType.APPLICATION_JSON)
+        esperar500(put("/bff/users/5/password").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"oldPassword\":\"a\",\"newPassword\":\"b\"}"));
     }
 
     @Test
     void deletarUsuario() throws Exception {
         doThrow(new RuntimeException(DETALHE)).when(userApi).deactivateUser(anyLong());
-        esperar500(delete("/bff/users/1"));
+        esperar500(delete("/bff/users/5"));
     }
 
     @Test
@@ -156,20 +156,20 @@ public class ErroInternoNoCorpoTest {
         when(userApi.requestPasswordResetMfa(anyLong())).thenAnswer(inv -> {
             throw new Exception(DETALHE);
         });
-        esperar500(post("/bff/users/1/request-password-reset-mfa"));
+        esperar500(post("/bff/users/5/request-password-reset-mfa"));
     }
 
     @Test
     void validarMfa() throws Exception {
         when(userApi.verifyPasswordResetMfaCode(anyLong(), any())).thenThrow(new RuntimeException(DETALHE));
-        esperar500(post("/bff/users/1/verify-password-reset-mfa").contentType(MediaType.APPLICATION_JSON)
+        esperar500(post("/bff/users/5/verify-password-reset-mfa").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"mfaCode\":\"123456\"}"));
     }
 
     @Test
     void alterarSenhaComMfa() throws Exception {
         doThrow(new RuntimeException(DETALHE)).when(userApi).changePasswordWithMfa(anyLong(), any(), any());
-        esperar500(put("/bff/users/1/password-with-mfa").contentType(MediaType.APPLICATION_JSON)
+        esperar500(put("/bff/users/5/password-with-mfa").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"mfaCode\":\"123456\",\"newPassword\":\"nova123\"}"));
     }
 
@@ -213,17 +213,17 @@ public class ErroInternoNoCorpoTest {
 
         List<MockHttpServletRequestBuilder> rotas = List.of(
                 get("/bff/users/email/" + EMAIL_NA_URI),
-                get("/bff/users/1"),
+                get("/bff/users/5"),
                 get("/bff/users/me"),
                 post("/bff/users").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"A\"}"),
-                put("/bff/users/1").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"A\"}"),
-                put("/bff/users/1/password").contentType(MediaType.APPLICATION_JSON)
+                put("/bff/users/5").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"A\"}"),
+                put("/bff/users/5/password").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"oldPassword\":\"a\",\"newPassword\":\"b\"}"),
-                delete("/bff/users/1"),
-                post("/bff/users/1/request-password-reset-mfa"),
-                post("/bff/users/1/verify-password-reset-mfa").contentType(MediaType.APPLICATION_JSON)
+                delete("/bff/users/5"),
+                post("/bff/users/5/request-password-reset-mfa"),
+                post("/bff/users/5/verify-password-reset-mfa").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"mfaCode\":\"123456\"}"),
-                put("/bff/users/1/password-with-mfa").contentType(MediaType.APPLICATION_JSON)
+                put("/bff/users/5/password-with-mfa").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"mfaCode\":\"123456\",\"newPassword\":\"nova123\"}"),
                 post("/bff/users/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"a@example.com\",\"password\":\"x\"}"),
