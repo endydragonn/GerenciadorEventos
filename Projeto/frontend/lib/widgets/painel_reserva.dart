@@ -260,7 +260,7 @@ class _PainelReservaState extends State<PainelReserva> {
         _uri('/confirm'),
         headers: ApiAuth.jsonHeaders(),
         body: jsonEncode({'userId': widget.userId, 'eventId': widget.eventId}),
-      );
+      ).timeout(const Duration(seconds: 10)); // sem resposta vai ao catch: volta à contagem e libera o botão
       if (!mounted || g != _geracao) return;
       final texto = _texto(resp, 'Não foi possível confirmar a reserva. Tente novamente.');
       // "Reserva já confirmada" (400) é o resultado desejado: mesmo caminho do 200.

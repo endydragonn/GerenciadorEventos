@@ -48,7 +48,7 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
   @override
   void initState() {
     super.initState();
-    _checkAuthentication();
+    if (!_checkAuthentication()) return; // sem token a tela fecha: não carrega o evento (setState depois do dispose)
     if (widget.event != null) {
       _eventData = widget.event;
     } else if (widget.eventId != null) {
@@ -59,14 +59,15 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
   // O token vive em ApiAuth.token (memória, restaurado no boot por ApiAuth.initialize). Antes lia
   // 'auth_token' do SharedPreferences, chave que não existe (o ApiAuth grava 'jwt_token'), e navegava
   // para '/login', rota que o main.dart não declara. Sem token só avisa e volta.
-  void _checkAuthentication() {
+  bool _checkAuthentication() {
     final token = ApiAuth.token;
-    if (token != null && token.isNotEmpty) return;
+    if (token != null && token.isNotEmpty) return true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       AppModals.showError(context, 'Autenticação Necessária', 'Entre na sua conta para se inscrever em um evento.');
       Navigator.pop(context);
     });
+    return false;
   }
 
   Future<void> _loadEventDetails() async {
@@ -336,7 +337,8 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
             
             // Reserva em duas fases (painel cuida de reservar, fila, contagem e confirmar)
             PainelReserva(
-              userId: Provider.of<HomePageData>(context, listen: false).user['user_id'],
+              // Observa o provider: se o /bff/users/me do boot terminar depois de abrir a tela, o userId chega aqui.
+              userId: Provider.of<HomePageData>(context).user['user_id'],
               eventId: eventId,
               temVagas: temVagas,
               onConfirmada: _aoConfirmar,
