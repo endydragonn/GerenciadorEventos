@@ -62,7 +62,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
     final user = Provider.of<HomePageData>(context, listen: false).user;
 
     // Se não estiver logado, redirecionar para tela principal
-    if (user == null || user.isEmpty || user['user_id'] == null) {
+    if (user.isEmpty || user['user_id'] == null) {
       AppModals.showError(
         context,
         'Autenticação Necessária',
@@ -148,7 +148,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
     if (_formKey.currentState!.validate()) {
       final user = Provider.of<HomePageData>(context, listen: false).user;
 
-      if (user == null || user['user_id'] == null) {
+      if (user['user_id'] == null) {
         AppModals.showError(
           context,
           'Erro de Autenticação',
@@ -163,7 +163,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
       try {
         final dateParts = _dateController.text.split('/');
         if (dateParts.length != 3) {
-          throw FormatException('Data inválida');
+          throw const FormatException('Data inválida');
         }
         final day = dateParts[0].padLeft(2, '0');
         final month = dateParts[1].padLeft(2, '0');
@@ -173,7 +173,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
         if (_buyLimitController.text.isNotEmpty) {
           final buyParts = _buyLimitController.text.split('/');
           if (buyParts.length != 3) {
-            throw FormatException('Data limite inválida');
+            throw const FormatException('Data limite inválida');
           }
           final buyDay = buyParts[0].padLeft(2, '0');
           final buyMonth = buyParts[1].padLeft(2, '0');
@@ -220,12 +220,12 @@ class _EditEventScreenState extends State<EditEventScreen> {
           body: jsonEncode(eventData),
         );
 
-        print('📥 Resposta: ${response.statusCode}');
+        debugPrint('📥 Resposta: ${response.statusCode}');
         if (response.statusCode >= 400) {
-          print('❌ Erro: ${response.body}');
+          debugPrint('❌ Erro: ${response.body}');
         }
 
-        if (!mounted) return;
+        if (!context.mounted) return;
 
         if (response.statusCode == 200) {
           AppModals.showSuccess(
@@ -243,7 +243,9 @@ class _EditEventScreenState extends State<EditEventScreen> {
           String errorMsg = 'Verifique os dados do evento e tente novamente.';
           try {
             errorMsg = response.body;
-          } catch (e) {}
+          } catch (e) {
+            // mantém a mensagem padrão
+          }
           AppModals.showError(
             context,
             'Dados Inválidos',
@@ -257,7 +259,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
           );
         }
       } catch (e) {
-        if (!mounted) return;
+        if (!context.mounted) return;
         AppModals.showConnectionError(context);
       }
     }
