@@ -24,7 +24,7 @@ erro = texto puro com a mensagem. JSON dos DTOs como o `/bff` de hoje (`User`: `
 | `UserApi.createUser` | `POST /internal/users` corpo `User` (**`host` NÃO é gravado**; `admin` é gravado como sempre foi: nenhum código autoriza por `admin`) | 201 `User` | 400 regra |
 | `UserApi.findById` | `GET /internal/users/{id}` | 200 `User` | 404 + `X-Identity-Nao-Encontrado` |
 | `UserApi.findByEmail` | `GET /internal/users/by-email?email=` (query: `@`/`.`/`+` não cabem bem em path) | 200 `User` | 404 + marcador |
-| `UserApi.updateUser` | `PUT /internal/users/{id}` corpo `User` (o `id` do path vale; **`host` NÃO é gravado**, `admin` como sempre; a resposta é a linha como ficou no banco) | 200 `User` | 400 regra |
+| `UserApi.updateUser` | `PUT /internal/users/{id}` corpo `User` (o `id` do path vale; **`host` NÃO é gravado**, `admin` como sempre; a resposta é a linha como ficou no banco) | 200 `User` | 400 regra (inclui e-mail que já é de OUTRA conta, sem diferenciar maiúsculas) |
 | `UserApi.deactivateUser` | `DELETE /internal/users/{id}` | 204 | |
 | `UserApi.getValidationErrors` | `POST /internal/users/validate` corpo `User` | 200 texto (`""` = válido) | |
 | `UserApi.login` | `POST /internal/users/login` corpo `{email, password}` | 200 `{user, token}` (RS256, `uid`, `isHost` do banco) | **401 + `X-Identity-Credenciais-Invalidas`** => `null` (senha errada, e-mail inexistente, e-mail ou senha nulos) |

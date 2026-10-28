@@ -84,7 +84,7 @@ public class InternalApiExceptionHandler {
                     ? p.getServerErrorMessage().getConstraint() : null;
             if (UNIQUE_VIOLATION.equals(sql.getSQLState())) {
                 log.warn("[identity] violação de unicidade na API interna (SQLState {}, constraint {})", sql.getSQLState(), constraint);
-                return texto(HttpStatus.BAD_REQUEST, "Já existe um cadastro com estes dados (e-mail, telefone ou nome)");
+                return texto(HttpStatus.BAD_REQUEST, UserService.CADASTRO_DUPLICADO);
             }
             log.error("[identity] falha de banco na API interna: {} (SQLState {}, constraint {})", sql.getClass().getSimpleName(),
                     sql.getSQLState(), constraint);

@@ -205,9 +205,10 @@ public class HttpContractTest {
         assertEquals(HttpStatus.OK, byEmail.getStatusCode());
         assertEquals(created.getId(), byEmail.getBody().getId());
 
-        ResponseEntity<String> notFound = restTemplate.exchange(
+        // Issue #166: id que não é o do token é 403 mesmo quando não existe (a negação não revela se o outro usuário existe)
+        ResponseEntity<String> outroId = restTemplate.exchange(
                 url("/bff/users/999999999"), HttpMethod.GET, authed, String.class);
-        assertEquals(HttpStatus.NOT_FOUND, notFound.getStatusCode());
+        assertEquals(HttpStatus.FORBIDDEN, outroId.getStatusCode());
     }
 
     @Test
@@ -1106,6 +1107,93 @@ public class HttpContractTest {
                 url("/bff/my-wallets/ensure/" + user.getId()), HttpMethod.POST, ensureEntity, MyWallet.class);
         assertEquals(HttpStatus.OK, ensured.getStatusCode());
         assertEquals(user.getId(), ensured.getBody().getUserId());
+    }
+
+    // ======================= IDOR em /bff/users/{id} e /bff/my-wallets/{userId} (issue #166) =======================
+
+    private static final String NEGADO_BODY = "Acesso negado: o usuário informado não é o usuário autenticado";
+
+    private ResponseEntity<String> chamar(HttpMethod metodo, String caminho, String token, Object corpo) {
+        return restTemplate.exchange(url(caminho), metodo, new HttpEntity<>(corpo, authHeaders(token)), String.class);
+    }
+
+    /**
+     * O token de A não lê nem altera nada de B em NENHUMA rota com id de usuário no path: 403 com o mesmo corpo da #57, a negação
+     * vem ANTES de qualquer chamada ao identity (nenhuma chamada interna com o id de B) e o estado de B fica intacto. A própria
+     * conta segue funcionando nas mesmas rotas.
+     */
+    @Test
+    public void usuarioA_naoLeNemAlteraNadaDoUsuarioB_emUsersEMyWallets() {
+        User a = createUser("idor-a");
+        User b = createUser("idor-b");
+        String tokenA = loginAndGetToken(a.getEmail(), "senha123");
+        String tokenB = loginAndGetToken(b.getEmail(), "senha123");
+        String ub = "/bff/users/" + b.getId();
+        String idB = String.valueOf(b.getId());
+
+        User alterado = copiaSemSenha(b);
+        alterado.setName("Invasor altera");
+        Map<String, String> senha = Map.of("oldPassword", "senha123", "newPassword", "invasora99");
+        Map<String, String> mfaCodigo = Map.of("mfaCode", "123456");
+        Map<String, String> mfaSenha = Map.of("mfaCode", "123456", "newPassword", "invasora99");
+
+        record Rota(HttpMethod metodo, String caminho, Object corpo) { }
+        List<Rota> rotas = List.of(
+                new Rota(HttpMethod.GET, ub, null),
+                new Rota(HttpMethod.PUT, ub, alterado),
+                new Rota(HttpMethod.PUT, ub + "/password", senha),
+                new Rota(HttpMethod.DELETE, ub, null),
+                new Rota(HttpMethod.POST, ub + "/request-password-reset-mfa", null),
+                new Rota(HttpMethod.POST, ub + "/verify-password-reset-mfa", mfaCodigo),
+                new Rota(HttpMethod.PUT, ub + "/password-with-mfa", mfaSenha),
+                new Rota(HttpMethod.GET, "/bff/my-wallets/" + idB, null),
+                new Rota(HttpMethod.POST, "/bff/my-wallets/ensure/" + idB, null));
+        int antes = identity().chamadas().size();
+        for (Rota r : rotas) {
+            ResponseEntity<String> resp = chamar(r.metodo(), r.caminho(), tokenA, r.corpo());
+            assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode(), r.metodo() + " " + r.caminho());
+            assertEquals(NEGADO_BODY, resp.getBody(), r.metodo() + " " + r.caminho());
+        }
+        assertEquals(antes, identity().chamadas().size(), "a negação vem antes de qualquer chamada ao identity");
+
+        // B intacto: nome igual, ativo (o login do B continua valendo, com a senha antiga) e a senha não mudou
+        ResponseEntity<User> deB = restTemplate.exchange(url(ub), HttpMethod.GET, new HttpEntity<>(authHeaders(tokenB)), User.class);
+        assertEquals(HttpStatus.OK, deB.getStatusCode());
+        assertEquals(b.getName(), deB.getBody().getName());
+        assertEquals(HttpStatus.OK, restTemplate.postForEntity(url("/bff/users/login"),
+                Map.of("email", b.getEmail(), "password", "senha123"), String.class).getStatusCode());
+
+        // o próprio A segue funcionando nas rotas com id (só as que não mudam estado que outros testes cobrem)
+        String ua = "/bff/users/" + a.getId();
+        assertEquals(HttpStatus.OK, chamar(HttpMethod.GET, ua, tokenA, null).getStatusCode());
+        assertEquals(HttpStatus.OK, chamar(HttpMethod.GET, "/bff/my-wallets/" + a.getId(), tokenA, null).getStatusCode());
+        assertEquals(HttpStatus.OK, chamar(HttpMethod.POST, "/bff/my-wallets/ensure/" + a.getId(), tokenA, null).getStatusCode());
+    }
+
+    private User copiaSemSenha(User origem) {
+        User c = new User();
+        c.setName(origem.getName());
+        c.setEmail(origem.getEmail());
+        c.setFone(origem.getFone());
+        c.setBirthDate(origem.getBirthDate());
+        return c;
+    }
+
+    /** {@code PUT /bff/users/{id}} com e-mail de outra conta: 400 sem diferenciar maiúsculas (a regra real é do identity). */
+    @Test
+    public void putUsuario_emailDeOutraConta_returns400() {
+        User a = createUser("dup-a");
+        User b = createUser("dup-b");
+        String tokenB = loginAndGetToken(b.getEmail(), "senha123");
+
+        User alterado = copiaSemSenha(b);
+        alterado.setEmail(a.getEmail().toUpperCase());
+        ResponseEntity<String> resp = chamar(HttpMethod.PUT, "/bff/users/" + b.getId(), tokenB, alterado);
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+
+        alterado.setEmail(b.getEmail().toUpperCase());
+        assertEquals(HttpStatus.OK, chamar(HttpMethod.PUT, "/bff/users/" + b.getId(), tokenB, alterado).getStatusCode(),
+                "o próprio e-mail, com outra caixa, segue");
     }
 
     // ======================= /bff/seed =======================
