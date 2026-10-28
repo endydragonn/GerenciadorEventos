@@ -8,9 +8,9 @@ created: 2026-10-28
 
 # Decisão de Arquitetura — Autoescala de `gateway` e `reservation` (regra 50/80)
 
-**Status:** **decidida (usuário, 2026-10-28): opção A agora, D depois.** A #111 implementa a opção A (override com `docker
+**Status:** **decidida (usuário, 2026-10-28): A agora, D depois na #197.** A #111 implementa a opção A (override com `docker
 compose --scale` + HAProxy + scaler no host, com os parâmetros abaixo) e a #112 a estende. A opção D (Kubernetes com HPA/KEDA)
-fica para uma issue futura, fora do Batch 2: <!-- issue da opção D: número a definir --> issue a criar.
+fica para a issue #197, fora do Batch 2.
 Escrita direto no repositório (sem cópia no vault).
 
 Complementa [Architecture-Decision-Async-Checkout-Queue](Architecture-Decision-Async-Checkout-Queue.md) (o gatilho 80/70 do
@@ -35,7 +35,7 @@ mesmo mecanismo a `admission`, `identity`, `catalog` e `notification`, sem mecan
   `Idempotency-Key` mora no banco do `reservation`, o cache de `exists` do gateway é só cache. Os consumers do `reservation`
   (projeção de disponibilidade e reconciliação) estão em consumer group com 1 partição e checkpoint atômico: com N réplicas, só
   uma consome por vez e as outras ficam ociosas no group. Falta o **teste** com 2+ execuções concorrentes (aceite da #111).
-- O JVM sobe em ~20 s (o `start_period` dos healthchecks). Por isso a regra tem a réplica em **stand-by**: ela sobe a 50% para
+- O JVM leva de alguns segundos a ~20 s para ficar saudável (o `start_period` dos healthchecks é a tolerância). Por isso a regra tem a réplica em **stand-by**: ela sobe a 50% para
   estar pronta quando o uso chega a 80%.
 - X = 56.000 RPM por evento (#40) foi medido com **uma** réplica, e o gargalo é a **linha** do `eventcap` do evento. Todas as
   réplicas disputam a mesma linha, então **é provável que X não cresça com réplicas**. O CAS mantém o overselling em 0 com
@@ -127,7 +127,7 @@ Qual mecanismo sobe, coloca em stand-by, promove e derruba réplicas de `gateway
 O menor conjunto de peças que cumpre o aceite (stand-by, promoção, drain, contrato da 8081 intacto) sem mexer no que já mede a
 Rodada R. A ressalva vem junto: a hipótese de que X não cresce com réplicas (linha do `eventcap`) vale para **qualquer** opção.
 
-A opção D (Kubernetes com HPA/KEDA) é o passo seguinte, numa issue futura fora do Batch 2 (número a definir). A regra 50/80, a
+A opção D (Kubernetes com HPA/KEDA) é o passo seguinte, na issue #197, fora do Batch 2. A regra 50/80, a
 chave de réplicas ativas no Redis e a conta do Supavisor desta ADR valem para ela também; muda quem sobe as réplicas e quem
 balanceia.
 
@@ -140,7 +140,7 @@ Todos por variável de ambiente no override, com default (nenhum é segredo; nen
 | `reservation`: mín. ativas / máx. total | 1 / 3 | 3 × Hikari cabe no Supavisor (abaixo) |
 | `gateway`: mín. ativas / máx. total | 1 / 3 | idem |
 | Período do laço do scaler | 2 s | 10 janelas de 200 ms do contador |
-| Subida da stand-by (u > 0,50) | boot do JVM, ~20–30 s até o health check | medido no dry-run |
+| Subida da stand-by (u > 0,50) | boot do JVM até o health check: 3–7 s medidos no dry-run local (imagens já construídas, host ocioso); a Rodada 4 mede sob carga (o `start_period` de 20 s do compose é só tolerância) | medido no dry-run |
 | Promoção da stand-by (u ≥ 0,80) | < 1 s (Runtime API) | |
 | Descida | condição sustentada por 60 s + drain de até 30 s | histerese |
 | Cooldown entre ações do mesmo serviço | 30 s | evita oscilar |
@@ -183,3 +183,25 @@ Restrição: `N_res × H_res + N_gw × 10 + 3 + 100 + 100 ≤ 1500`, contando a 
 
 A medição de X com N réplicas (escada com autoescala, overselling 0, réplicas × tempo em CSV e gráfico), o custo do salto pelo
 `lb` (C0 × C) e o registro do resultado na [ADR da fila](Architecture-Decision-Async-Checkout-Queue.md).
+
+## Como ficou implementado (#111, 2026-10-28)
+
+Arquivos: `Projeto/docker-compose.autoescala.yml`, `Projeto/autoescala/{haproxy.cfg,scaler.sh,scaler.selftest.sh,README.md}`, `rpm.lua` do `admission`
+(chave `adm:replicas` e `adm:hot`), `Projeto/frontend/{nginx.conf,Dockerfile}` (template) e a guarda do `Projeto/Backend/run-tests.sh`. Onde a implementação detalha ou
+se afasta do texto acima:
+
+- **HAProxy 3.2.25** (variante Debian, tem bash). A Runtime API escuta em `127.0.0.1:9999` **dentro** do container (nada publicado), não em socket Unix: a imagem não traz `socat`
+  nem `nc`, e o scaler a alcança por `docker exec` + `/dev/tcp`.
+- **Slot nasce com peso 100.** O stand-by é o `set server ... weight 0` que o scaler aplica à réplica nova assim que o lb a enxerga (o JVM leva alguns segundos para passar no health check,
+  então o peso 0 chega antes do primeiro tráfego). Efeito: com o scaler parado o lb continua servindo todas as réplicas que existirem (nunca há "réplica sem tráfego e sem dono").
+  Slot que sai volta a `state ready` + `weight 100` (um slot em drain não pode herdar o estado na próxima réplica que o DNS puser nele).
+- **`catalog` também chama o reservation por `lb:8082`** (além do `backend` e do `admission`): na falta disso ele cairia, por DNS, em réplica em stand-by ou escoando.
+- **Leitura ruim nunca vira carga zero** (volta 3): Redis ilegível (fora, recriado, sem PING/valores numéricos) faz o reservation não decidir naquele laço e zera os contadores de "condição sustentada"; `docker ps`/`inspect` com erro ou lb mudo fazem o laço inteiro não agir (uma lista vazia por falha viraria `subir_min` e um `--scale 1` sem drain). `hold` do `resolvers`: só `obsolete 1s` (o resto no default de 30 s: um soluço do DNS embutido não pode derrubar todos os slots).
+- **Limite do sinal:** `adm:hot` vem do admission; com o admission fora (e o Redis no ar) a chave expira e a carga lê 0, então o scaler não vê a carga do reservation e pode descer. A alternativa, cruzar com o `req_tot` do backend `reservation` do lb, fica para a Rodada 4.
+- **Uso do gateway** = delta de `req_tot` da entrada entre dois laços (média dos 2 s), em vez do `req_rate` de 1 s. **Uso do reservation** = `adm:hot`, o maior RPM visto no último
+  200 ms (a janela do contador), gravado a cada tentativa contada e só sobe dentro da janela (`>=`), com TTL de uma janela: staleness <= 1 janela.
+- **Promoção ignora o cooldown** (é a ação urgente, a 0,80); o cooldown de 30 s vale para subir, descartar e descer, e é contado também depois de uma promoção. Repor o mínimo
+  (`subir_min`, quando o total fica abaixo do mínimo) também o ignora. A stand-by é descartada antes de uma ativa descer; descer só com `S = 0` e `B = 0` (nenhuma réplica subindo).
+- **Quem o `--scale N-1` remove** é o container de maior `container-number`; o scaler escoa exatamente esse (e se, ao descartar, ele não for a stand-by, não faz nada e avisa).
+- `adm:replicas` vale TTL 15 s e é renovada também durante o drain; só aceita inteiro de 1 a 1000 (qualquer outra coisa cai no `ADMISSION_RESERVATION_REPLICAS`).
+

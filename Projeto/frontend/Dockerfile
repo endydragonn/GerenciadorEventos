@@ -41,8 +41,12 @@ FROM nginx:1-alpine-slim
 # Copia arquivos de build do estágio anterior
 COPY --from=build /app/build/web /usr/share/nginx/html
 
-# Copia configuração customizada do Nginx
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Configuração customizada do Nginx como template da imagem oficial (o entrypoint roda envsubst e grava /etc/nginx/conf.d/default.conf).
+# Só as variáveis BACKEND_* são substituídas (o resto do arquivo usa $host, $uri... do próprio nginx). Default = o backend de sempre;
+# o override docker-compose.autoescala.yml aponta para o balanceador (lb:8081).
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+ENV BACKEND_UPSTREAM=backend:8081
+ENV NGINX_ENVSUBST_FILTER=^BACKEND_
 
 # Expõe a porta padrão do nginx
 EXPOSE 80

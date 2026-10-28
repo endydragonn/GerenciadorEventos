@@ -1,0 +1,69 @@
+# Override da AUTOESCALA de `backend` (gateway) e `reservation` (issue #111, ADR docs/adr/Architecture-Decision-Autoescala.md, opção A).
+# Opcional: o compose base NÃO muda (run-tests.sh, kit de carga, smokes e o braço "sem autoescala" seguem com os nomes e a porta de sempre).
+#   docker compose -f docker-compose.yml -f docker-compose.autoescala.yml up -d --build --wait
+# Combina com o override enxuto: ... -f docker-compose.yml -f docker-compose.slim.yml -f docker-compose.autoescala.yml
+# Quem sobe, promove e derruba réplicas é o scaler no host (autoescala/scaler.sh); sem ele o stack sobe com 1 réplica de cada e funciona igual.
+# Nenhuma variável deste arquivo é segredo e nenhuma exige o `.env` (todas têm default).
+#
+# Mudanças em relação ao base:
+#  - `backend` e `reservation` sem `container_name` e sem porta no host (`--scale` exige): réplicas se chamam <project>-<serviço>-<n>.
+#  - `lb` (HAProxy, autoescala/haproxy.cfg) publica a 8081 (o contrato do Flutter, porta e path, não muda) e balanceia as réplicas do
+#    backend; a porta 8082 interna balanceia as do reservation. backend, admission e catalog chamam o reservation por `lb:8082` e o nginx
+#    do frontend chama `lb:8081`.
+#  - Hikari do reservation = 300 POR RÉPLICA (= threads do Tomcat; nenhuma thread espera conexão no Hikari). A conta no Supavisor
+#    (POOLER_MAX_CLIENT_CONN 1500), contando a stand-by, com o máximo de 3 réplicas de cada:
+#    3 x 300 (reservation) + 3 x 10 (backend) + 3 (notification) + 100 (catalog) + 100 (identity) = 1133 <= 1500.
+
+services:
+  backend:
+    container_name: !reset null
+    ports: !reset []
+    environment:
+      RESERVATION_SERVICE_URL: http://lb:8082
+    depends_on:
+      lb:
+        condition: service_healthy
+
+  reservation:
+    container_name: !reset null
+    environment:
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${AUTOESCALA_RESERVATION_HIKARI:-300}
+
+  # O worker pool da fila de admissão entrega pelo lb: a réplica promovida passa a receber a fila na hora.
+  # O ADMISSION_RESERVATION_REPLICAS (1) vira só o fallback sem a chave do scaler (adm:replicas). O X do gatilho segue o ADMISSION_X_RPM do base,
+  # e o scaler usa o MESMO valor (AUTOESCALA_X_RPM, default = ADMISSION_X_RPM, default 56000): mude por ADMISSION_X_RPM e os dois acompanham.
+  admission:
+    environment:
+      RESERVATION_SERVICE_URL: http://lb:8082
+    depends_on:
+      lb:
+        condition: service_healthy
+
+  # O catalog também chama o reservation (eventcap): pelo lb, para nunca cair numa réplica em stand-by ou escoando.
+  catalog:
+    environment:
+      RESERVATION_SERVICE_URL: http://lb:8082
+
+  # O nginx lê o upstream do template (BACKEND_UPSTREAM, default backend:8081 no Dockerfile do frontend): aqui aponta para o lb.
+  frontend:
+    environment:
+      BACKEND_UPSTREAM: lb:8081
+    depends_on:
+      lb:
+        condition: service_healthy
+
+  lb:
+    # Tag exata (a mais recente com 2+ semanas na data da issue); variante Debian: tem bash (o scaler fala com a Runtime API por /dev/tcp).
+    image: haproxy:3.2.25
+    volumes:
+      - ./autoescala/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "8081:8081"
+    healthcheck:
+      # "a porta aceita conexão" (sem curl na imagem)
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8082"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped

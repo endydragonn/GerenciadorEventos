@@ -54,6 +54,9 @@ referência** — não é compilado, não edite.
   backend, sem Nginx (uso em dev). **Mudar exige rebuild da imagem** — não é runtime.
 - **Nginx faz proxy de `/bff/` → `backend:8081/bff/` SEM rewrite/strip** (`nginx.conf`): o
   path chega igual no backend, ex. `/bff/users/login` → `/bff/users/login`.
+  O `nginx.conf` é um **template** da imagem oficial (`/etc/nginx/templates`, `envsubst` só de `BACKEND_*`): o upstream vem de `BACKEND_UPSTREAM` (default
+  `backend:8081`, no `Dockerfile`); o override `docker-compose.autoescala.yml` (#111) o troca por `lb:8081` (HAProxy na frente das réplicas do gateway). Contrato do app
+  (porta e path) inalterado.
 - JWT: `ApiAuth.jsonHeaders()` injeta `Authorization: Bearer <token>`. O token fica em
   memória (`ApiAuth.token`) e, se persistido, em `SharedPreferences` (`jwt_token`).
   `main.dart` tenta `GET ${AppConfig.apiBaseUrl}/bff/users/me` no boot pra restaurar a

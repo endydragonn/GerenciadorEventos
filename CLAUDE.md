@@ -279,6 +279,13 @@ corretude e segurança (#56, #57, #58, #59, #60, #61, #89, #133; #81 fechada sem
 `docs/artigo/experimento-monolito.md` (tabela e `docs/artigo/graficos/`). Rodando escada no host: **suba a escada aos poucos**, porque um 1º
 degrau já alto, a frio, enfileira na linha do `eventcap` e não se recupera (ver o README da etapa 06).
 
+**Implementado (issue #111, 2026-10-28, Batch 2):** autoescala de `gateway` (`backend`) e `reservation` pela regra 50/80, opção A da ADR `docs/adr/Architecture-Decision-Autoescala.md` — um override
+**opcional** `Projeto/docker-compose.autoescala.yml` (réplicas sem `container_name`/porta, HAProxy `lb` que publica a 8081 e balanceia `lb:8082` para o reservation, Hikari 300 por réplica: 3×300 + 3×10 + 3 + 100 + 100 = 1133 <= 1500)
+e um scaler em bash no host (`Projeto/autoescala/scaler.sh`: stand-by com peso 0 no lb, promoção a 0,80, drain antes de descer, CSV réplicas × tempo, selftest sem Docker). O `admission` lê as réplicas ativas da chave
+`adm:replicas` (escrita pelo scaler, com TTL; sem ela vale `ADMISSION_RESERVATION_REPLICAS`) no mesmo script Lua do gatilho e publica o RPM do evento mais quente em `adm:hot`. O compose base, o `run-tests.sh` (que agora também vê as
+réplicas pelo label), o kit de carga e o braço sem autoescala não mudam; jobs com 2+ réplicas (expiração, retenção, relay) provados em teste (`Projeto/Backend/CLAUDE.md`, "Réplicas: estado em memória e jobs" e "Autoescala"). Operação em
+`Projeto/autoescala/README.md`. A medição é da Rodada 4 (#179); o kit de carga com nomes sem `gerenciador-*` é da #178; Kubernetes (opção D) é a #197.
+
 **Decidido, não implementado:** extrair o `gateway` como microsserviço (Opção B; o `notification` saiu na #32, o `reservation` na #33,
 o `catalog` na #35, o `identity` na #36 e o `admission` nasceu na #41); a camada de alta carga (Redis RPM + fila + worker pool) existe: o contador de RPM
 (`admission` + Redis) desde a #41, a fila (RabbitMQ) e o worker pool desde a #42 e o gatilho por uso de X (histerese, `202` no gateway, consulta de estado) desde a #43; falta a UI de `pending` (#44), a medição (Rodada 4, #179) e escalar workers/réplicas (#111/#112) — ver
