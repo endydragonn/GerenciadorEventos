@@ -74,6 +74,30 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # Redis (issue #41): o contador de RPM por evento do serviço admission (chaves adm:cnt:<evento>:<bucket>, todas com TTL). Imagem com tag
+  # fixa (alpine). Senha OBRIGATÓRIA e sem default: o compose recusa subir sem REDIS_PASSWORD (Projeto/.env, ex.: openssl rand -hex 32;
+  # ou exportada na shell só para o comando). SEM persistência (--save "" --appendonly no: é estado descartável, o contador se refaz em
+  # 200 ms) e com teto de memória (volatile-lru: só chaves com TTL são candidatas, e toda chave tem). Sem porta no host: só na rede
+  # gerenciador-net. O `sh -c` passa pelo docker-entrypoint.sh da imagem oficial (que troca para o usuário redis; sem ele o Redis rodaria como
+  # root). Para debug: docker exec gerenciador-redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli keys "adm:*"').
+  redis:
+    image: redis:7.4.12-alpine
+    container_name: gerenciador-redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?defina REDIS_PASSWORD no Projeto/.env (openssl rand -hex 32)}
+    command:
+      - sh
+      - -c
+      - exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD" --save "" --appendonly no --maxmemory 256mb --maxmemory-policy volatile-lru
+    healthcheck:
+      # autenticado: a senha vai pelo ambiente (REDISCLI_AUTH), nunca na linha de comando
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
   backend:
     build:
       context: ./Backend
@@ -102,6 +126,8 @@ services:
       # as credenciais SMTP são sobrepostas por vazio aqui para o backend não recebê-las sem precisar.
       MAIL_USERNAME: ""
       MAIL_PASSWORD: ""
+      # O Redis é só do serviço admission (#41): o gateway conta pela API interna dele, nunca fala com o Redis. Sobrepõe por vazio.
+      REDIS_PASSWORD: ""
       # Backbone de eventos (issue #27): o broker interno do compose. Desde a #36 o monólito NÃO appenda evento nenhum (o identity.notification
       # passou ao serviço identity, como o catalog e o reservation têm os deles), então o relay fica DESLIGADO; e desde a #33 ele não tem
       # consumer (a projeção de disponibilidade do braço naive é do serviço reservation).
@@ -121,6 +147,11 @@ services:
       # gerenciador-net. Pool >= threads do Tomcat (300); resposta 15 s, sem retry (default no application.properties).
       CATALOG_SERVICE_URL: http://catalog:8083
       CATALOG_CLIENT_MAX_CONNECTIONS: ${CATALOG_CLIENT_MAX_CONNECTIONS:-400}
+      # Serviço admission (issue #41): conta cada POST /bff/event-wallets (nos dois braços) por HTTP, só na rede gerenciador-net. FAIL-OPEN:
+      # o backend NÃO depende dele (sem depends_on); admission fora => a reserva segue síncrona, com log. Pool >= threads do Tomcat (300);
+      # timeouts curtos e disjuntor com defaults no application.properties (ADMISSION_CLIENT_*).
+      ADMISSION_SERVICE_URL: http://admission:8085
+      ADMISSION_CLIENT_MAX_CONNECTIONS: ${ADMISSION_CLIENT_MAX_CONNECTIONS:-400}
       # Serviço identity (issue #36): usuários, login, cadastro, MFA, reCAPTCHA e a emissão do JWT RS256 por HTTP, só na rede
       # gerenciador-net. O gateway só VALIDA o JWT (JWKS em IDENTITY_SERVICE_URL/.well-known/jwks.json, cache de 24 h). Pool >= threads
       # do Tomcat (300); resposta 5 s, sem retry (default no application.properties). Hikari do monólito: 10 (só health).
@@ -147,6 +178,38 @@ services:
       catalog:
         condition: service_healthy
       identity:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Serviço admission (issue #41, Fase 7): conta cada tentativa de reserva por evento (RPM em janela deslizante, Redis) e expõe a API
+  # interna /internal/admissions (porta 8085) SÓ na rede gerenciador-net: SEM porta no host. Imagem e processo próprios
+  # (Backend/admission/Dockerfile). SEM datasource (não toca no Postgres: a conta do Supavisor, 1213 <= 1500, não muda). Não usa
+  # env_file: recebe só o que precisa, pelo NOME (INTERNAL_API_TOKEN e REDIS_PASSWORD do Projeto/.env, sem os segredos dos outros serviços).
+  # O backend NÃO depende dele (fail-open no gateway). Depende só do redis: o reservation entra no depends_on na #42, quando o worker
+  # pool passar a chamá-lo.
+  admission:
+    build:
+      context: ./Backend
+      dockerfile: admission/Dockerfile
+    container_name: gerenciador-admission
+    environment:
+      # Token de serviço exigido em toda requisição (401 sem/errado). SEM default: falha no boot sem ele.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?defina INTERNAL_API_TOKEN no Projeto/.env}
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?defina REDIS_PASSWORD no Projeto/.env (openssl rand -hex 32)}
+      SERVER_TOMCAT_THREADS_MAX: ${SERVER_TOMCAT_THREADS_MAX:-300}
+      # Contador: buckets de 50 ms numa janela de 200 ms (a janela tem de ser múltiplo do bucket; justificativa na spec do admission).
+      ADMISSION_BUCKET_MS: ${ADMISSION_BUCKET_MS:-50}
+      ADMISSION_WINDOW_MS: ${ADMISSION_WINDOW_MS:-200}
+    healthcheck:
+      # sem HTTP de saúde nem curl na imagem: "a porta aceita conexão" (bash /dev/tcp; o /bin/sh da imagem é dash)
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8085"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    depends_on:
+      redis:
         condition: service_healthy
     restart: unless-stopped
 

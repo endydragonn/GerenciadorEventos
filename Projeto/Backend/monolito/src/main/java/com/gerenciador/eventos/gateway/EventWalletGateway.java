@@ -2,10 +2,13 @@ package com.gerenciador.eventos.gateway;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.gerenciador.eventos.admissionclient.api.AdmissionApi;
+import com.gerenciador.eventos.admissionclient.api.AdmissionRequest;
 import com.gerenciador.eventos.catalogclient.api.EventApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.EventWalletApi;
@@ -28,6 +31,15 @@ import com.github.benmanes.caffeine.cache.Caffeine;
  * O {@code userId} que chega aqui já é o do token: o {@link BffEventWalletController} o tira do JWT (claim {@code uid}) e devolve
  * 403 se o corpo/query/path trouxer outro (issue #57). Ele cruza a rede como parâmetro explícito para a API interna do reservation.
  *
+ * <p><b>Admission (issue #41).</b> Depois das validações (token, ids, evento existe) e ANTES do reservation, {@code addLink} registra a
+ * tentativa no contador do evento do serviço {@code admission} ({@link AdmissionApi#admit}), nos DOIS braços (no {@code naive}, antes da
+ * leitura de disponibilidade: a janela check-then-act dele não muda). É UMA ida HTTP com fail-open (admission fora ou lento => segue
+ * síncrono, com log) e disjuntor, dentro do {@code AdmissionClient}; o modo devolvido é sempre {@code sync} na #41. Sem
+ * {@code Idempotency-Key} na requisição, o gateway GERA um UUID e o manda SÓ ao admission (que exige uma chave, e que na #42/#43 a usa como
+ * chave da mensagem). O reservation é chamado exatamente como antes da #41, com a chave DO CLIENTE (nula se ele não mandou): mandar sempre uma
+ * chave faria o serviço tratá-la como "do cliente" e consultar {@code idempotency_key} em toda rejeição de pré-requisito, um custo novo no caminho
+ * síncrono. A chave que volta no header da resposta é a que o reservation usou (a do cliente, ou a que ele gerou).
+ *
  * <p>Ordem das mensagens de erro do {@code addLink}: evento (aqui) e depois as do reservation ("Capacidade do evento não
  * configurada", janela de compra, "Vínculo já existente", "Evento lotado"). No braço naive a disponibilidade
  * é lida ANTES de "Vínculo já existente", então um usuário que já tem a vaga num evento esgotado vê "Evento lotado".</p>
@@ -37,16 +49,18 @@ public class EventWalletGateway {
 
     private final EventWalletApi reservation;
     private final EventApi eventApi;
+    private final AdmissionApi admission;
     private final boolean naive;
     private final Cache<Long, Boolean> eventosExistentes = Caffeine.newBuilder()
             .maximumSize(10_000)
             .expireAfterWrite(Duration.ofSeconds(30))
             .build();
 
-    public EventWalletGateway(EventWalletApi reservation, EventApi eventApi,
+    public EventWalletGateway(EventWalletApi reservation, EventApi eventApi, AdmissionApi admission,
             @Value("${reservation.readpath:cas}") String readPath) {
         this.reservation = reservation;
         this.eventApi = eventApi;
+        this.admission = admission;
         this.naive = "naive".equalsIgnoreCase(readPath);
     }
 
@@ -72,6 +86,10 @@ public class EventWalletGateway {
         if (!eventoExiste(ew.getEventId())) {
             throw new IllegalArgumentException("Evento não encontrado");
         }
+        // O UUID gerado vai SÓ ao admission (fail-open: um 400 dele, por chave longa, não falha a reserva; o reservation recusa a chave
+        // longa do cliente com o mesmo 400 de sempre). O reservation recebe a chave do cliente, nula se ela faltou.
+        String chaveParaAdmission = idempotencyKey == null || idempotencyKey.isBlank() ? UUID.randomUUID().toString() : idempotencyKey;
+        admission.admit(new AdmissionRequest(ew.getEventId(), ew.getUserId(), chaveParaAdmission, naive ? "naive" : "cas"));
         return reservation.addLink(ew, idempotencyKey, naive);
     }
 

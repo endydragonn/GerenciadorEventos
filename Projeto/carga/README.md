@@ -55,6 +55,19 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **`INTERNAL_API_TOKEN`** também vai para o `identity` (mesmo valor). **Pool do Supavisor** (mesmo tenant): o Hikari do backend é 10 (o gateway não toca em tabela de
 >   domínio) e o do identity 100; soma 1000 + 10 + 3 + 100 + 100 = **1213** <= 1500 (o override de carga mantém o backend em 10).
 
+> **Desde a issue #41 há o serviço `admission` (`gerenciador-admission`, `:8085` só na rede) e o Redis (`gerenciador-redis`, só na rede)**: o gateway conta cada `POST /bff/event-wallets` num contador de RPM por
+> evento (nos dois braços, depois das validações e antes do `reservation`). Na #41 o modo é sempre `sync` e o RPM é só sinal de carga:
+>
+> - **Salto novo no caminho síncrono**: +1 ida HTTP gateway → admission e +1 ida admission → Redis por reserva (fail-open: com o admission ou o Redis fora a reserva segue, com log). Uma rodada **antes da #41** não paga
+>   esse custo e não é comparável com as de depois sem considerá-lo. Sem `Idempotency-Key` na requisição o gateway gera um UUID e o manda só ao `admission`; o `reservation` recebe a requisição como antes (sem header).
+> - **Limpeza do banco entre blocos zera o Redis**: o `TRUNCATE ... RESTART IDENTITY` recicla ids de evento e de usuário, e uma contagem do bloco anterior seria lida
+>   como carga do seguinte. O `limpar-banco.sh` (fora do repo, em `E:\TCC\carga-overrides`) para o `admission` junto com os outros serviços, dá `FLUSHDB` no `gerenciador-redis`
+>   (e, a partir da #42, purge das filas `admission.*` do `gerenciador-rabbitmq`) e sobe o `admission` (healthy) **antes** do `backend`.
+> - **`REDIS_PASSWORD`** precisa estar no `Projeto/.env` do HOST (o compose recusa subir sem ela; repassada ao `redis` e ao `admission`, e sobreposta por vazio no `backend`). O gerador não precisa dela.
+> - **Pool do Supavisor não muda**: o `admission` não tem datasource (soma dos Hikari segue 1213 <= 1500).
+> - **Conferir o contador** no host: `docker exec gerenciador-redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli INFO commandstats'` (`cmdstat_evalsha` cresce com as reservas) e
+>   `docker exec gerenciador-admission printenv ADMISSION_BUCKET_MS ADMISSION_WINDOW_MS` (defaults 50/200).
+
 Duas máquinas: o **host** (roda a stack, o alvo do teste) e o **gerador** (roda o k6).
 O k6 **nunca** roda no host: competiria por CPU/rede com o backend e invalidaria as latências.
 

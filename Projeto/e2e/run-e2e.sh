@@ -4,7 +4,7 @@
 #  run-e2e.sh  -  issue #37 (Fase 7): suite de integracao da stack inteira
 # =============================================================================
 #
-#  Sobe a stack COMPLETA (gateway/backend, identity, catalog, reservation, notification, frontend, supabase-*, redpanda) num
+#  Sobe a stack COMPLETA (gateway/backend, identity, catalog, reservation, admission, redis, notification, frontend, supabase-*, redpanda) num
 #  project docker compose TEMPORARIO e isolado da stack real (gerenciador-eventos), com um captador de e-mail (Mailpit) no
 #  lugar do Gmail, e prova o fluxo ponta a ponta pelo gateway:
 #    cadastro em duas fases (o codigo vem do E-MAIL no captador) -> criar evento -> reservar -> confirmar -> e-mail
@@ -17,6 +17,8 @@
 #  (senao `db`/`redpanda`/`supabase-pooler` resolveriam para os containers REAIS e o project escreveria no meu_banco de verdade).
 #  O project precisa se chamar gerenciador-e2e*; gerenciador-eventos (o real) e recusado, e o `down -v` tambem confere.
 #  E-MAIL: o script aborta se o notification nao estiver apontado para o captador. Nenhum e-mail real sai.
+#  REDIS (#41): o compose exige REDIS_PASSWORD; o script exporta uma senha EFEMERA (openssl rand -hex 16) so para este project, entao
+#  o Redis e o admission do e2e nunca usam a do Projeto/.env. O validador confere que redis e admission existem e estao isolados.
 #  Segredos: `config --format json` carrega os segredos do Projeto/.env; so passa por um filtro que imprime nomes de
 #  container/porta/rede/volume. O Projeto/.env e o supabase/.env precisam existir (nada deles e impresso).
 #
@@ -74,6 +76,11 @@ case "$PROJETO" in
     *) abortar "E2E_PROJECT='$PROJETO' invalido: o nome precisa comecar com gerenciador-e2e." ;;
 esac
 
+# Credencial efemera do Redis do project temporario (#41): a shell tem precedencia sobre o Projeto/.env na interpolacao do compose.
+command -v openssl >/dev/null 2>&1 || abortar "preciso de openssl (rand -hex) para gerar a senha efemera do Redis do project."
+REDIS_PASSWORD="$(openssl rand -hex 16)"
+export REDIS_PASSWORD
+
 ISOLADO=0 # so vira 1 depois que o `config` passou na validacao de isolamento (passo 0)
 derrubar() { # down -v SO do project temporario e SO com o isolamento validado (config rejeitado => nao derruba nada)
     case "$PROJETO" in gerenciador-e2e*) [ "$ISOLADO" = "1" ] && dc down -v --remove-orphans >/dev/null 2>&1 ;; esac
@@ -129,8 +136,14 @@ env = (c["services"].get("notification") or {}).get("environment") or {}
 if env.get("MAIL_HOST") != "mailpit" or env.get("MAIL_PORT") != "1025" or env.get("MAIL_SMTP_AUTH") != "false" \
         or env.get("MAIL_STARTTLS") != "false" or env.get("MAIL_PASSWORD")         or not str(env.get("MAIL_USERNAME") or "").endswith("@example.com"):
     erros.append("notification: SMTP nao aponta para o captador mailpit:1025 sem auth/starttls/senha (remetente @example.com)")
-if "mailpit" not in c["services"]:
-    erros.append("falta o servico mailpit")
+for obrigatorio in ("mailpit", "redis", "admission"):
+    if obrigatorio not in c["services"]:
+        erros.append("falta o servico " + obrigatorio)
+adm_env = (c["services"].get("admission") or {}).get("environment") or {}
+if adm_env.get("REDIS_HOST") != "redis" or not adm_env.get("REDIS_PASSWORD"):
+    erros.append("admission: REDIS_HOST nao aponta para o redis do project ou falta a senha efemera")
+if (c["services"].get("backend") or {}).get("environment", {}).get("REDIS_PASSWORD"):
+    erros.append("backend: recebeu REDIS_PASSWORD (o Redis e so do admission)")
 for e in erros:
     print("   " + e)
 sys.exit(1 if erros else 0)
@@ -147,7 +160,7 @@ if [ $? -ne 0 ] || [ -n "$VIOLACOES" ]; then
     echo "$VIOLACOES"
     abortar "o isolamento NAO pode ser verificado/garantido: nada foi subido."
 fi
-ok "sem container_name, sem porta no host, rede e volumes com o prefixo do project, notification -> mailpit:1025"
+ok "sem container_name, sem porta no host, rede e volumes com o prefixo do project, notification -> mailpit:1025, redis e admission isolados"
 ISOLADO=1
 
 echo "==> 1. project limpo; 1a) so o redpanda; 1b) um pedido de e-mail PENDENTE no topico; 1c) up -d --build --wait (pode levar varios minutos no 1o build)"
@@ -252,6 +265,11 @@ confere "POST /bff/event-wallets/confirm" 200 "$HTTP_CODE"
 confere "reserva em reservation.walletevent depois do confirm" confirmed \
     "$(psql_db "SELECT status FROM reservation.walletevent WHERE user_id = $USER_ID AND event_id = $EVENT_ID")"
 confere "e-mails para o usuario no captador (so o de verificacao existe)" 1 "$(mails_para "$EMAIL")"
+# admission (#41): o gateway contou a reserva no Redis (o script Lua do contador rodou). Prova o caminho gateway -> admission -> Redis na
+# stack real; as chaves do contador vivem 250 ms, entao a prova e o contador de comandos do Redis do project (fresco: so o admission o usa).
+EVALS="$(dc exec -T redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli INFO commandstats' | tr -d '\r' \
+    | awk -F'[=,]' '/^cmdstat_eval(sha)?:/ {s += $2} END {print s + 0}')"
+confere "scripts Lua do contador executados no Redis (o admission contou a reserva)" sim "$([ "${EVALS:-0}" -ge 1 ] && echo sim || echo nao)"
 [ "$FALHAS" -eq 0 ] || abortar "o fluxo falhou antes do replay"
 
 echo "==> 5. esperar o backbone escoar (outbox vazio e lag 0 dos consumers) antes do replay"

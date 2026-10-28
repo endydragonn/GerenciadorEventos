@@ -1,3 +1,4 @@
 com.gerenciador.eventos.TestSupport.ReservationFakeSession
 com.gerenciador.eventos.TestSupport.CatalogFakeSession
 com.gerenciador.eventos.TestSupport.IdentityFakeSession
+com.gerenciador.eventos.TestSupport.AdmissionFakeSession

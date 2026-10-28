@@ -93,14 +93,14 @@ commitar ou registrar em log.
   os testes e a porta 5433 vão direto no `db`. Sobe junto o `redpanda` (broker Kafka-compatível da Fase 6, issue #27;
   só `redpanda:9092` na rede `gerenciador-net`, sem porta no host) e o backend espera ele ficar `healthy`.
 - Antes de considerar uma tarefa de backend pronta: `Projeto/Backend/run-tests.sh`
-  (precisa dos containers `db` **e** `redpanda` no ar — `docker compose -f Projeto/docker-compose.yml up -d db redpanda`;
-  os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`, e Redpanda real; o script aborta com mensagem
+  (precisa dos containers `db`, `redpanda` **e** `redis` no ar — `docker compose -f Projeto/docker-compose.yml up -d db redpanda redis`;
+  os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`, Redpanda real e Redis real (#41); o script aborta com mensagem
   clara se faltar um deles). **Pare o `gerenciador-backend` antes** (`docker stop gerenciador-backend`): desde a #28/#29 o
   relay e o consumer dele compartilham o `meu_banco` e drenam o `event_outbox` dos testes; o script aborta com
   mensagem clara se o container estiver rodando. Desde a #32 o script roda o **reactor Maven inteiro** (`shared`, `reservation-client`,
-  `catalog-client`, `identity-client`, `monolito`, `notification`, `reservation`, `catalog`, `identity`) e também aborta se o `gerenciador-notification`, o
-  `gerenciador-reservation`, o `gerenciador-catalog` ou o `gerenciador-identity` estiverem rodando
-  (`docker stop gerenciador-backend gerenciador-notification gerenciador-reservation gerenciador-catalog gerenciador-identity`; o notification
+  `catalog-client`, `identity-client`, `admission-client`, `monolito`, `notification`, `reservation`, `catalog`, `identity`, `admission`) e também aborta se o `gerenciador-notification`, o
+  `gerenciador-reservation`, o `gerenciador-catalog`, o `gerenciador-identity` ou o `gerenciador-admission` estiverem rodando
+  (`docker stop gerenciador-backend gerenciador-notification gerenciador-reservation gerenciador-catalog gerenciador-identity gerenciador-admission`; o notification
   consumiria o tópico dos testes e mandaria e-mail de verdade, o reservation, o catalog e o identity dividiriam o banco e o broker deles); ao fim o script também move o group `notification` para o
   fim do tópico (`rpk group seek`), para os eventos de teste nunca virarem e-mail quando o serviço subir (um e-mail real pendente
   antes da rodada é pulado). Ao fim o script também move os groups `reservation` e `reservation-catalog` para o fim dos tópicos
@@ -120,6 +120,13 @@ commitar ou registrar em log.
   `reservation` e ao `catalog`. Não há valor default: sem a variável **qualquer `docker compose`** (inclusive o `up -d db redpanda` dos testes)
   recusa com mensagem clara (`${INTERNAL_API_TOKEN:?...}`), e os serviços também falham no boot. O `run-tests.sh` usa um valor de teste
   explícito (não é segredo).
+- **`REDIS_PASSWORD` (desde a #41):** o Redis (`gerenciador-redis`, só o serviço `admission` o usa) exige senha, sem default. **Acrescente ao `Projeto/.env` (você mesmo; o repo nunca edita nem imprime o `.env`)**
+  `REDIS_PASSWORD=<valor aleatório>`, por exemplo `openssl rand -hex 32`. Sem a variável **qualquer `docker compose`** (inclusive o `up -d db redpanda redis` dos testes) recusa com mensagem clara
+  (`${REDIS_PASSWORD:?...}`); até lá, exporte-a na shell só para o comando (a shell vale mais que o `.env`). O `run-tests.sh` usa a do `.env` ou, se exportada, a da shell (`-e REDIS_PASSWORD`),
+  exige o `gerenciador-redis` no ar, **aborta com o `gerenciador-admission` rodando** (`docker stop gerenciador-admission`) e dá `FLUSHDB` no Redis no início e ao fim da rodada (os ids de evento são reciclados
+  pelo `RESTART IDENTITY`). O backend recebe `REDIS_PASSWORD` vazia (sobreposta no compose).
+- O serviço `admission` (#41, container `gerenciador-admission`, API interna `:8085` só na rede `gerenciador-net`, sem datasource) sobe junto com `up -d --build` (depende só do `redis`); o `backend`
+  **não** depende dele: o gateway conta cada tentativa de reserva por HTTP e, com o `admission` ou o Redis fora, faz fail-open (a reserva segue síncrona, com log). O e2e sobe os dois isolados, com senha efêmera.
 - O serviço `notification` sobe junto com `up -d --build` (container `gerenciador-notification`); o `backend` não depende dele. O serviço
   `reservation` (container `gerenciador-reservation`, API interna `:8082` só na rede `gerenciador-net`) e o serviço `catalog` (#35, container
   `gerenciador-catalog`, API interna `:8083` só na rede `gerenciador-net`) e o serviço `identity` (#36, container `gerenciador-identity`, API interna `:8084` só na rede, chave do JWT no volume `identity-keys`) também sobem junto, e o `backend` **depende dos três**
@@ -233,6 +240,13 @@ antigos viram 401. Hikari: identity 100, backend 10 (soma no Supavisor 1000 + 10
 [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md); smoke da stack real em
 `docs/testes-manuais/smoke-identity-servico-separado.sh`.
 
+**Implementado (Fase 7, issue #41, 2026-10-28, Batch 2):** primeira peça da camada de alta carga — o serviço `admission` (módulo Maven, Dockerfile, imagem e container `gerenciador-admission`, `:8085` só na rede, **sem
+datasource**) mantém um **contador de RPM por evento em Redis** (buckets de 50 ms numa janela de 200 ms, script Lua = 1 ida) e o `gateway` o chama **uma vez por `POST /bff/event-wallets`**, nos dois braços, depois das
+validações e antes do `reservation`, pela lib `admission-client` (HTTP, timeouts curtos, **fail-open** e disjuntor; o `backend` não depende do `admission`). Na #41 o modo devolvido é sempre `sync` e o RPM é só sinal de carga
+(`HttpContractTest` sem mudança de expectativa, overselling 0 no `cas`); sem `Idempotency-Key` na requisição o gateway gera um UUID e o manda SÓ ao `admission` (o `reservation` segue recebendo a chave do cliente, ou nenhuma: o caminho síncrono é o de antes). Redis no compose com senha obrigatória (`REDIS_PASSWORD`,
+sem default), sem persistência, `maxmemory`, sem porta no host. A fila (RabbitMQ), o worker pool e o gatilho por uso de X são as #42 e #43. Detalhes no `Projeto/Backend/CLAUDE.md`, "Serviço admission"; spec em
+`docs/superpowers/specs/2026-10-28-admission-servico-design.md`; diagrama em [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md).
+
 **Implementado e medido (Batch 1, 2026-10-26 a 2026-10-28, branch de integração `Batch_1`):** além da #36, o compose final e a suíte e2e
 (#37), o harness definitivo (#38: cenário de leitura, `coleta-host.sh`; #113: escada `MAPEAMENTO=sequencial|intercalado`) e os follow-ups de
 corretude e segurança (#56, #57, #58, #59, #60, #61, #89, #133; #81 fechada sem PR). A Rodada R mediu a configuração final em
@@ -241,7 +255,7 @@ corretude e segurança (#56, #57, #58, #59, #60, #61, #89, #133; #81 fechada sem
 `docs/artigo/experimento-monolito.md` (tabela e `docs/artigo/graficos/`). Rodando escada no host: **suba a escada aos poucos**, porque um 1º
 degrau já alto, a frio, enfileira na linha do `eventcap` e não se recupera (ver o README da etapa 06).
 
-**Decidido, não implementado:** extrair os demais módulos como microsserviços (Opção B — `gateway`,
-`admission`; o `notification` saiu na #32, o `reservation` na #33, o `catalog` na #35 e o `identity` na #36);
-camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
+**Decidido, não implementado:** extrair o `gateway` como microsserviço (Opção B; o `notification` saiu na #32, o `reservation` na #33,
+o `catalog` na #35, o `identity` na #36 e o `admission` nasceu na #41); da camada de alta carga (Redis RPM + fila + worker pool) existe só o contador de RPM da #41
+(`admission` + Redis). A fila (RabbitMQ), o worker pool e o gatilho por uso de X são as #42 e #43 e não existem no código — ver
 `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.
