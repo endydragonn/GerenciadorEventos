@@ -4,7 +4,8 @@
 > carga (issues #12, #13 e #14) foram preenchidos com as rodadas de 2026-10-16. O **ponto 1 da série** (monólito
 > CRUD + pooler) foi medido depois, com as rodadas 1a e 1b repetidas com o Supavisor (issue #22). Em 2026-10-17 vieram
 > as rodadas de isolamento do pooler e a escada X pelo pooler. O **ponto 2 da série** (monólito com CQRS + ES, issue #31)
-> foi medido em 2026-10-19, com o braço ingênuo lendo a projeção assíncrona real.
+> foi medido em 2026-10-19, com o braço ingênuo lendo a projeção assíncrona real. O **limiar X definitivo, por evento**
+> (issue #40), veio da Rodada R de 2026-10-28, na configuração final distribuída (subseção "Limiar X definitivo").
 > Revisão com o orientador pendente. Caminhos de arquivo são relativos à raiz do repositório (nos comandos
 > `make`, relativos a `Projeto/carga`); os termos seguem o glossário de `CONTEXT.md`.
 >
@@ -661,6 +662,84 @@ Docker em HDD (`fsync` ≈ 30 ms) e foi descartada; as medidas válidas são as 
 quase sempre -1 (a projeção ficou mais rápida que o polling), então o lag não aparece como variável. (v) O PR da `Fase_7`
 não estava mergeado: o código medido é o que vai para a `main`.
 
+### Limiar X definitivo (Rodada R, 2026-10-28; issue #40)
+
+Rodada R, contra a `Batch_1` em `b072346` (Fase 7 completa: `notification`, `reservation`, `catalog` e `identity` como
+serviços; ainda não mergeada na `main` quando a rodada rodou, então o código medido é o que vai para ela). Fonte:
+`Projeto/carga/results/06-batch1-final/` (README da etapa e `degraus-*.csv`). Braço `cas`, 200 usuários, 60 s por degrau,
+host com Docker em SSD NVMe, rede cabeada, banco limpo antes de cada bloco, Tomcat 300 e Hikari 1000 no `reservation`,
+pool do Supavisor 245. O X desta subseção é o que a arquitetura de admissão usa (`docs/adr/Architecture-Decision-Async-Checkout-Queue.md`).
+
+**X definitivo = 56.000 RPM por evento** (≈ 930 tentativas de reserva/s numa única linha do `eventcap`), da escada **sequencial**
+(evento disputado), refino 6b (`degraus-938039`), resolução de 2k:
+
+| `rpm_alvo` | `rpm_efetivo` | p50 (ms) | p95 de janela de 30 s (ms) | Descartes |
+|---|---|---|---|---|
+| 38k (aquecimento) | 38.000 | 49,6 | 1.397,0 | 0 |
+| 52k | 52.001 | 137,4 | 318,6 | 0 |
+| 54k | 54.001 | 164,6 | 356,8 | 0 |
+| **56k** | 56.000 | 215,3 | **1.669,1** | 0 |
+| 58k | 42.408 | 3.069,4 | 3.483,2 | 15.593 |
+| 60k | 42.027 | 3.096,2 | 3.426,6 | 17.974 |
+
+- **Por que 56k.** É o primeiro degrau que cumpre a regra do X (p95 de janela acima de 1 s) fora do aquecimento, e é
+  seguido de colapso (como o "58k é o primeiro degrau saturado" do ponto 3): a cauda passa de 1 s (janela de 1,67 s) ainda
+  sem descarte, e nos dois degraus seguintes a vazão **cai** para ~42k efetivos (colapso por fila, p50 ~3,1 s). O último degrau limpo é **54k** (janela de 357 ms, p50
+  165 ms). 0 erros 5xx e 0 outros em todos os degraus da tabela.
+- **Aquecimento descartado.** O degrau de 38k do `degraus-938039` é a partida a frio do refino (janela de 1,4 s) e não é
+  degradação: os degraus de 40k a 54k, na sequência, ficam limpos (169 → 357 ms). O `report-degraus` aplica a regra do X
+  ao CSV inteiro e marcaria o X nesse 38k; a leitura acima o descarta. O refino 6 (`degraus-936649`, 18k–40k) está todo
+  limpo (janela de 6 a 160 ms). Aquecimento análogo no 1º degrau de cada refino intercalado (janela de 2,1 s nos dois).
+- **Anomalia fora do X.** A escada grossa sequencial (`degraus-931618`) começou a frio em 40k e colapsou já no 1º degrau
+  (efetivo 39–44k, janela de 3,3–3,9 s); os degraus de cima herdaram o host atolado. Fica registrada como medida, não
+  como X.
+- **Causa.** Vem do diagnóstico ao vivo durante a escada a frio e do `Rpm-932720` (README da etapa), não do refino 6b e não
+  dos CSVs versionados: o `UPDATE` do CAS chegou a 344 ms de média, com 186 sessões esperando lock de transação, e as 300
+  threads do Tomcat do `reservation` ficaram esperando o banco. É a contenção na linha do `eventcap` do evento disputado.
+
+**Por que é "por evento".** No mapeamento `sequencial` a iteração `i` vai ao evento `⌊i/U⌋` (U = 200), de modo que, em cada
+instante, as chegadas novas caem num único evento: a taxa na linha quente do `eventcap` é a taxa agregada do degrau (≈ 930
+req/s a 56k). O que é fixo por evento é a **contagem** (200 tentativas, numa rajada de 200 · 60 / RPM s ≈ 0,2 s a 56k, ameaça
+10), não a taxa. Logo, a escada sequencial mede o RPM **de um
+evento**, e o `RPM(evento)` da ADR é comparável a ele.
+
+**Teto do host (intercalado).** O mapeamento `intercalado` espalha a carga pelos eventos e chega a **≈ 86k RPM** (refino
+`degraus-933734` e `degraus-935110`): 84k é o último limpo (janela de 62 ms, p50 11,8 ms), 86k degrada (efetivo 85.700,
+janela de 1.120 ms, p50 228 ms, 301 descartes) e de 88k a 92k o efetivo se segura em ~80–82k (7.050 a 12.234 descartes). É o
+teto do host somado entre eventos, não o X por evento: a linha quente de um evento custa ~35% dele (56k contra 86k).
+
+**Contra os pontos anteriores** (todos sequenciais, mesma linha quente): ≈ 97k pré-pooler (referência), ≈ 78k pelo pooler
+(ponto 1), ≈ 56k–61k no ponto 2 e ≈ 58k no ponto 3 (Rodada 3, `20aae4e`). 56k contra 58k é cerca de um passo de
+resolução, e o código mudou entre as duas (saíram o `catalog`, #35, e o `identity`, #36, do processo do `gateway`, e mudou
+o contrato da reserva, #57): **não se lê como regressão.**
+
+**Limiares derivados** (regra 50/80/70 de `docs/adr/Architecture-Decision-Async-Checkout-Queue.md`, com 1 réplica do `reservation`, uso = `RPM(evento)` ÷ (X × réplicas)):
+
+| Gatilho | Uso | RPM por evento |
+|---|---|---|
+| Fila entra | ≥ 80% | 0,8 × 56k = **44,8k** |
+| Volta ao síncrono (com fila vazia) | < 70% | 0,7 × 56k = **39,2k** |
+| Réplica em stand-by (#111) | > 50% | 0,5 × 56k = **28k** |
+
+A faixa de 44,8k fica dentro do trecho limpo da escada (44k: janela de 230 ms), com margem de 11,2k RPM para o X.
+
+**Consequências para a implementação (fora desta medição).**
+
+- **Janela do sinal.** X é uma **taxa** (≈ 930 tentativas/s), e a rajada por evento dura ~0,2 s. Um contador de janela de 60 s leria
+  ~200 numa rajada dessas e nunca chegaria a 44,8k; a janela do sinal em Redis (e como ela converte a contagem em RPM) é
+  decisão da implementação do `admission` (#41 e #43), não desta medição.
+- **Réplicas.** A Rodada R mediu **uma** réplica. O limite é a linha do `eventcap`, que réplicas extras também disputariam
+  (e o mesmo host sem a linha quente chega a 86k contra 56k): insumo para a #111, fórmula `X × réplicas` inalterada.
+
+**Ameaças a este X.** (i) Uma escada por configuração e resolução de 2k RPM: o X vale 56k ± um passo (o degrau limpo anterior é
+54k). (ii) A causa vem do diagnóstico a frio (estado já colapsado), não de uma medição no joelho do refino: o
+`pg_stat_statements` salvo não está alinhado à escada do 6b, então o joelho não tem diagnóstico de banco próprio (a coleta do
+6b, `coleta-host-r-refino-seq2-*`, só traz um pico de 237 sessões em `pg_espera_lock`, sem alinhamento por degrau). (iii) Partida
+a frio: o aquecimento do 6b e dos refinos intercalados estoura a cauda (o refino 6 começou limpo) e é descartado por
+julgamento, não pela regra automática do report. (iv) O X é uma taxa de chegada na linha quente com rajada de
+~0,2 s por evento, não um evento sustentado a 56k RPM por 60 s (um evento real esgota a capacidade antes); vale como limiar
+de contenção do `eventcap`. (v) Uma réplica do `reservation`, um host, uma rede; o código medido é o da `Batch_1`.
+
 ### Resultados preliminares (fora do protocolo)
 
 Antes do protocolo acima, rodadas de 2026-10-04 (`Projeto/carga/results/02-hikari/ANALISE.md`) mediram os dois braços
@@ -860,13 +939,13 @@ Ressalvas do ponto 2 (Rodada 2, 2026-10-19; fonte: `Projeto/carga/results/04-fas
   atraso de uma projeção real. No ponto 2 o lag é o do consumer real, mas só foi medido como limite inferior na matriz
   (ameaça 20) e como offset lag do host nas escadas e no aleatório. A transferência para o ponto 3 (consumer em
   outro processo, banco separado) continua em aberto.
-- **X preliminar e em RPM agregado.** Cada X (97k pré-pooler; ≈ 78k pelo pooler, de três execuções; ≈ 56k com o ES e o
-  consumer atual, ≈ 61k sem consumer e ≈ 58k com o consumer em lote, de duas escadas cada) vem de poucas
-  execuções da escada e é expresso em reservas por minuto do total, somando todos os eventos. Não se lê como RPM por evento: pela regra de pares,
-  a carga por evento é fixa (até 200 tentativas, capacidade 100) e só a duração da rajada por evento encurta
-  com o RPM (ameaça 10). O limiar da arquitetura de admissão é definido por evento (`RPM(evento) ≥ X` em
-  `docs/adr/Architecture-Decision-Async-Checkout-Queue.md`) e será definido na Fase 8; esta medição não o
-  converte.
+- **X anteriores preliminares; X definitivo na Rodada R.** Os X dos pontos 1 a 3 também vêm de escadas sequenciais, então
+  valem a mesma leitura por evento (subseção "Limiar X definitivo"); o que os torna preliminares é a pouca repetição e as
+  configurações diferentes, não a unidade. O X definitivo, ≈ 56k RPM por evento, é o da Rodada R. A ameaça 10 continua
+  valendo: a rajada por evento é curta (~0,2 s a 56k) e a concentração cresce com o RPM, então o 56k é o limiar de
+  contenção da linha quente, não de um evento sustentado por 60 s. O gatilho da fila (`RPM(evento) ≥ 80% de X × réplicas`,
+  `docs/adr/Architecture-Decision-Async-Checkout-Queue.md`) é o das issues #111 e #112; a escala do X com as réplicas não foi
+  medida.
 - **Escopo do workload.** Só escrita (reserva e confirmação) com `PCT_CONFIRMA=100`; capacidade fixa em 20 e
   N ∈ {100, 200} na disputa; um único evento por disputa. A escada não tem leituras, e o teste aleatório
   (com leituras) ficou fora do protocolo da matriz e da escada; entra só no ponto 2, como comparação com a #109.
