@@ -32,6 +32,9 @@ import com.gerenciador.eventos.identityclient.api.UserApi;
  * ({@code /me}), cadastro em duas fases (request-verification / verify-email /
  * resend-verification-code), reset de senha com MFA e validação do reCAPTCHA v3.
  *
+ * <p>Desde a #166 toda rota com {@code {id}} no path só atende o dono do token ({@link AcessoNegado}: 403 caso contrário, antes de
+ * chamar o identity). {@code GET /email/{email}} e {@code POST /} não têm id de dono no path e ficam fora.</p>
+ *
  * <p>Desde a #36 o gateway não tem domínio de usuário: cada rota chama o serviço identity pelo {@code IdentityClient}
  * (contrato {@code identityclient.api}). O token do login/cadastro é emitido pelo identity (RS256); o gateway só o devolve.
  * {@link IdentityUnavailableException} (identity fora/lento) é <b>503</b> genérico no {@link IdentityIndisponivelHandler}: os
@@ -75,6 +78,10 @@ public class BffUserController {
 
     @GetMapping("/{id}")
     public ResponseEntity<?> getUserById(@PathVariable Long id) {
+        ResponseEntity<String> barrado = AcessoNegado.barrarSeNaoDono(authorization, id);
+        if (barrado != null) {
+            return barrado;
+        }
         try {
             User user = userService.findById(id);
             return ResponseEntity.ok(user);
@@ -99,6 +106,10 @@ public class BffUserController {
 
     @PutMapping("/{id}")
     public ResponseEntity<?> updateUser(@PathVariable Long id, @RequestBody User user) {
+        ResponseEntity<String> barrado = AcessoNegado.barrarSeNaoDono(authorization, id);
+        if (barrado != null) {
+            return barrado;
+        }
         try {
             user.setId(id);
             User updated = userService.updateUser(user);
@@ -115,6 +126,10 @@ public class BffUserController {
 
     @PutMapping("/{id}/password")
     public ResponseEntity<?> changePassword(@PathVariable Long id, @RequestBody Map<String, String> passwords) {
+        ResponseEntity<String> barrado = AcessoNegado.barrarSeNaoDono(authorization, id);
+        if (barrado != null) {
+            return barrado;
+        }
         try {
             String oldPassword = passwords.get("oldPassword");
             String newPassword = passwords.get("newPassword");
@@ -144,6 +159,10 @@ public class BffUserController {
 
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteUser(@PathVariable Long id) {
+        ResponseEntity<String> barrado = AcessoNegado.barrarSeNaoDono(authorization, id);
+        if (barrado != null) {
+            return barrado;
+        }
         try {
             userService.deactivateUser(id);
             return ResponseEntity.noContent().build();
@@ -307,6 +326,10 @@ public class BffUserController {
 
     @PostMapping("/{id}/request-password-reset-mfa")
     public ResponseEntity<?> requestPasswordResetMfa(@PathVariable Long id) {
+        ResponseEntity<String> barrado = AcessoNegado.barrarSeNaoDono(authorization, id);
+        if (barrado != null) {
+            return barrado;
+        }
         try {
             User user = userService.requestPasswordResetMfa(id);
 
@@ -328,6 +351,10 @@ public class BffUserController {
 
     @PostMapping("/{id}/verify-password-reset-mfa")
     public ResponseEntity<?> verifyPasswordResetMfa(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        ResponseEntity<String> barrado = AcessoNegado.barrarSeNaoDono(authorization, id);
+        if (barrado != null) {
+            return barrado;
+        }
         try {
             String mfaCode = body.get("mfaCode");
 
@@ -354,6 +381,10 @@ public class BffUserController {
 
     @PutMapping("/{id}/password-with-mfa")
     public ResponseEntity<?> changePasswordWithMfa(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        ResponseEntity<String> barrado = AcessoNegado.barrarSeNaoDono(authorization, id);
+        if (barrado != null) {
+            return barrado;
+        }
         try {
             String mfaCode = body.get("mfaCode");
             String newPassword = body.get("newPassword");
