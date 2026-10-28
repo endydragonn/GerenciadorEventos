@@ -9,13 +9,15 @@
 #  - no Git Bash o binário do Docker é nativo do Windows e não entende "/e/...",
 #    então usamos "pwd -W" (-> "E:/...") e desligamos a conversão de path do MSYS.
 #
-# Roda o REACTOR inteiro (issues #32, #33, #35 e #36, Fase 7): shared + reservation-client + catalog-client + identity-client + monolito + notification +
-# reservation + catalog + identity, um `mvn clean test` na raiz do Backend/.
+# Roda o REACTOR inteiro (issues #32, #33, #35, #36 e #41, Fase 7): shared + reservation-client + catalog-client + identity-client + admission-client +
+# monolito + notification + reservation + catalog + identity + admission, um `mvn clean test` na raiz do Backend/.
 # Os relatórios Surefire de todos os módulos são copiados para Backend/target/surefire-reports (nomes de classe únicos).
 #
-# Pré-requisito: a stack no ar pra existir a rede, o banco e o broker (Redpanda; os testes do backbone de
-# eventos, issue #27, publicam e consomem nele de verdade)
-#   docker compose -f Projeto/docker-compose.yml up -d db redpanda
+# Pré-requisito: a stack no ar pra existir a rede, o banco, o broker (Redpanda; os testes do backbone de
+# eventos, issue #27, publicam e consomem nele de verdade) e o Redis (os testes do contador do admission, #41, usam o real)
+#   docker compose -f Projeto/docker-compose.yml up -d db redpanda redis
+# O compose recusa subir sem REDIS_PASSWORD (Projeto/.env, ou exportada na shell só para o comando). Se a variável estiver exportada
+# AQUI também, o container de teste usa essa (-e REDIS_PASSWORD); senão usa a do --env-file (Projeto/.env).
 # O cache do Maven fica no volume nomeado "gerenciador-eventos-m2" (persiste entre
 # execuções; não é removido por "docker compose down -v").
 
@@ -56,11 +58,11 @@ case "$(uname -s)" in
         ;;
 esac
 
-# Os testes batem num Postgres e num Redpanda reais: sem o container no ar, falha cedo e explica.
-for CONTAINER in gerenciador-db gerenciador-redpanda; do
+# Os testes batem num Postgres, num Redpanda e num Redis reais: sem o container no ar, falha cedo e explica.
+for CONTAINER in gerenciador-db gerenciador-redpanda gerenciador-redis; do
     if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != "true" ]; then
-        echo "❌ O container $CONTAINER não está no ar. Rode:"
-        echo "   docker compose -f Projeto/docker-compose.yml up -d db redpanda"
+        echo "❌ O container $CONTAINER não está no ar. Rode (o compose exige REDIS_PASSWORD no Projeto/.env ou exportada na shell):"
+        echo "   docker compose -f Projeto/docker-compose.yml up -d db redpanda redis"
         echo ""
         exit 1
     fi
@@ -109,6 +111,27 @@ fi
 if [ -n "$(docker ps -q -f name=^gerenciador-identity$)" ]; then
     echo "❌ O container gerenciador-identity está rodando: o relay dele disputa o banco e o Redpanda dos testes."
     echo "   Pare-o antes: docker stop gerenciador-identity"
+    echo ""
+    exit 1
+fi
+
+# O serviço admission (#41) conta no MESMO Redis dos testes (chaves adm:cnt:<eventId>:*): vivo, ele contaria tentativas de teste (e os
+# ids de evento se repetem depois do TRUNCATE ... RESTART IDENTITY). Falha cedo, como nos outros serviços.
+if [ -n "$(docker ps -q -f name=^gerenciador-admission$)" ]; then
+    echo "❌ O container gerenciador-admission está rodando: ele dividiria o Redis dos testes."
+    echo "   Pare-o antes: docker stop gerenciador-admission"
+    echo ""
+    exit 1
+fi
+
+# Redis dos testes: FLUSHDB no INÍCIO e ao FIM da rodada (verde ou vermelha). O admission está parado (guarda acima), então nada de
+# produção vive nesse banco; as chaves do contador usam ids de evento que o RESTART IDENTITY recicla, e uma contagem de uma rodada
+# antiga seria lida como carga da seguinte. A senha vem do ambiente do próprio container do Redis (compose), nunca da linha de comando.
+limpar_redis() {
+    docker exec gerenciador-redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli FLUSHDB' 2>&1 | tr -d '\r'
+}
+if [ "$(limpar_redis)" != "OK" ]; then
+    echo "❌ Não consegui dar FLUSHDB no gerenciador-redis (senha? o container foi criado com REDIS_PASSWORD?)."
     echo ""
     exit 1
 fi
@@ -196,12 +219,21 @@ mkdir -p "$SCRIPT_DIR/target"
 # INTERNAL_API_TOKEN: token de serviço das chamadas internas gateway -> reservation (#33) e gateway -> catalog (#35). Valor de
 # TESTE explícito, não é segredo; os serviços e os clientes não sobem sem a variável (sem default).
 #
+# REDIS_HOST=redis: o Redis do compose na rede gerenciador-net (o default do admission, localhost, não existe dentro do container de teste).
+# REDIS_PASSWORD: repassada da shell com -e SÓ se estiver exportada (senão vale a do --env-file, Projeto/.env).
+#
 # SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092: o broker interno do compose (o default do application.properties,
 # localhost:9092, não existe dentro do container de teste).
 # EVENTS_CONSUMER_GROUP=gerenciador-eventos-test: os testes têm group próprio, para nunca entrar (e causar
 # rebalance) no group do backend vivo (gerenciador-eventos) que consome do mesmo Redpanda.
+REDIS_ARGS=(-e REDIS_HOST=redis)
+if [ -n "${REDIS_PASSWORD:-}" ]; then
+    REDIS_ARGS+=(-e REDIS_PASSWORD)
+fi
+
 docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
   "${PLATFORM_ARGS[@]}" \
+  "${REDIS_ARGS[@]}" \
   -e IDEMPOTENCY_RETENTION_SCAN_MS=3600000 \
   -e NOTIFICATION_EVENTS_RETENTION_SCAN_MS=3600000 \
   -e RESERVATION_READPATH=cas \
@@ -261,6 +293,14 @@ for GRUPO_TOPICO in "reservation:reservation.wallet" "reservation-catalog:catalo
 done
 
 apagar_chave_identity
+
+# FLUSHDB do fim da rodada: as contagens dos testes não ficam para a próxima (nem para o admission, quando subir).
+if [ "$(limpar_redis)" = "OK" ]; then
+    echo "✅ Redis dos testes zerado (FLUSHDB)."
+else
+    echo "⚠️  Não consegui dar FLUSHDB no gerenciador-redis ao fim da rodada. ANTES de subir o admission, rode:"
+    echo "   docker exec gerenciador-redis sh -c 'REDISCLI_AUTH=\"\$REDIS_PASSWORD\" redis-cli FLUSHDB'"
+fi
 
 echo ""
 echo "=================================================="

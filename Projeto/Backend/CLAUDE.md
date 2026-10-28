@@ -23,6 +23,10 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
   guarda a chave de assinatura do JWT no volume `identity-keys`. O `backend` **depende dele** (`service_healthy`); com ele parado login, cadastro,
   `/bff/users/**` e `/bff/my-wallets/**` respondem 503, mas quem tem token válido segue reservando (JWKS em cache no gateway). **Não sobe** com a
   migração `20261028` pendente (`PublicSchemaGuard`). Ver "Serviço identity".
+- Serviço `admission` (issue #41): `docker compose -f Projeto/docker-compose.yml up -d --build admission` — container `gerenciador-admission`, API interna
+  na `:8085` **só na rede**; entrypoint `com.gerenciador.eventos.admission.AdmissionApplication`, `admission/Dockerfile`. Sobe junto o **Redis**
+  (`gerenciador-redis`) e depende só dele. O `backend` **não** depende dele (o gateway faz fail-open): com ele parado a reserva segue
+  síncrona, só sem a contagem. **`REDIS_PASSWORD` é obrigatória** no `Projeto/.env` (ver "Serviço admission"). Sem datasource.
 - Local: `cd Projeto/Backend && mvn -pl monolito -am spring-boot:run` (ou `mvn -pl notification -am spring-boot:run`, `mvn -pl identity -am spring-boot:run`,
   `mvn -pl reservation -am spring-boot:run`) — precisa de um Postgres em `localhost:5433` (e, para a reserva, do `reservation` em
   `localhost:8082`, o default de `RESERVATION_SERVICE_URL`; para login, do `identity` em `localhost:8084`, o de `IDENTITY_SERVICE_URL`). `application.properties` de cada módulo tem defaults de dev para as vars do `.env`,
@@ -30,8 +34,9 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
   para rodar o serviço local, exporte as duas.
 - Entrypoint do jar do monólito: `com.gerenciador.eventos.Main` (fixado em `monolito/pom.xml` e `monolito/Dockerfile`); o do
   `notification`: `com.gerenciador.eventos.notification.NotificationApplication`; o do `reservation`:
-  `com.gerenciador.eventos.reservation.ReservationApplication`; o do `identity`: `com.gerenciador.eventos.identity.IdentityApplication`.
-- Build da imagem: um Dockerfile por serviço (`monolito/Dockerfile`, `notification/Dockerfile`, `reservation/Dockerfile`, `catalog/Dockerfile`, `identity/Dockerfile`), contexto = `Projeto/Backend/`
+  `com.gerenciador.eventos.reservation.ReservationApplication`; o do `identity`: `com.gerenciador.eventos.identity.IdentityApplication`; o do
+  `admission`: `com.gerenciador.eventos.admission.AdmissionApplication`.
+- Build da imagem: um Dockerfile por serviço (`monolito/Dockerfile`, `notification/Dockerfile`, `reservation/Dockerfile`, `catalog/Dockerfile`, `identity/Dockerfile`, `admission/Dockerfile`), contexto = `Projeto/Backend/`
   (a raiz do multi-módulo); multi-stage — compila com `maven:3.9.7-temurin-21` (`-pl <serviço> -am`), roda em `temurin:25-jre`.
 
 ## Layout multi-módulo Maven — issue #32 (Fase 7)
@@ -42,7 +47,7 @@ serviço é um módulo com o próprio jar e Dockerfile; o que é comum é uma li
 
 ```
 Backend/
-  pom.xml                agregador (módulos: shared, reservation-client, catalog-client, identity-client, monolito, notification, reservation, catalog, identity)
+  pom.xml                agregador (módulos: shared, reservation-client, catalog-client, identity-client, admission-client, monolito, notification, reservation, catalog, identity, admission)
   checkstyle*.xml        um só para todos os módulos (${maven.multiModuleProjectDirectory})
   run-tests.sh           roda o reactor inteiro
   shared/                LIB (jar simples, sem repackage): DatabaseConnection + shared.events (EventStore, relay, consumer,
@@ -64,6 +69,10 @@ Backend/
   identity/              serviço extraído (#36; README.md próprio): usuários, carteira, cadastro, MFA, reCAPTCHA e emissão do JWT RS256
                          (+ JWKS) no schema `identity`, API interna /internal/** na :8084; src/, Dockerfile, pom.xml. Chamado pelo gateway por HTTP (IdentityClient);
                          o monólito NÃO tem mais o pacote `identity`
+  admission-client/      LIB (#41; README.md próprio): AdmissionRequest/AdmissionResult (os DTOs), AdmissionApi e o AdmissionClient (pool, timeouts curtos,
+                         fail-open e disjuntor). O gateway (monólito) o usa pelo AdmissionClientConfig; o serviço admission, pelos DTOs e nos testes ponta a ponta
+  admission/             serviço novo (#41; README.md próprio): contador de RPM por evento em Redis (janela deslizante por buckets) e API interna
+                         /internal/admissions na :8085; src/, Dockerfile, pom.xml. SEM datasource e SEM dependência de `shared`. Chamado pelo gateway por HTTP
   db/                    schema (fora do Maven)
 ```
 
@@ -92,8 +101,8 @@ Backend/
 
 `./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`
 (URL direta `db:5432`, **sem passar pelo pooler**),
-e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `catalog-client`, `identity-client`, `monolito`, `notification`,
-`reservation`, `catalog`, `identity`; `-fae` = um módulo vermelho não esconde o resultado dos outros). **Pré-requisito do `catalog` (#35):** o banco
+e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `catalog-client`, `identity-client`, `admission-client`, `monolito`, `notification`,
+`reservation`, `catalog`, `identity`, `admission`; `-fae` = um módulo vermelho não esconde o resultado dos outros). **Pré-requisito do `catalog` (#35):** o banco
 migrado (`db/migrations/20261026-catalog-schema.sql`): o script ABORTA se `public.event` ainda existe ou `catalog.event` não existe (não
 aplica o `14-catalog.sql`, que num banco não migrado criaria `catalog.event` vazia ao lado de `public.event`), e aborta se o
 `gerenciador-catalog` estiver rodando (o relay dele drenaria o `catalog.event_outbox` dos testes). Antes disso apaga `target/surefire-reports` sozinho, então o total do
@@ -128,6 +137,12 @@ naive); o script aborta com mensagem clara se o container estiver rodando. O scr
 passa `SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092` e `EVENTS_CONSUMER_GROUP=gerenciador-eventos-test` ao container
 de teste (group próprio: os testes nunca entram no group do backend vivo que consome do mesmo Redpanda).
 
+**Serviço `admission` e Redis (#41):** os testes do contador usam o **Redis REAL** (container `gerenciador-redis` na rede `gerenciador-net`, `REDIS_HOST=redis`), então o script
+**exige o `gerenciador-redis` no ar** (`REDIS_PASSWORD=<valor> docker compose -f Projeto/docker-compose.yml up -d db redpanda redis`: o compose recusa subir sem a variável, que vem do
+`Projeto/.env` ou é exportada na shell só para o comando) e **aborta se o `gerenciador-admission` estiver rodando** (`docker stop gerenciador-admission`: ele contaria tentativas de teste no mesmo
+Redis). **Credencial:** o container de teste recebe a `REDIS_PASSWORD` do `--env-file` (`Projeto/.env`) e, **se a variável estiver exportada na shell, a da shell por cima** (`-e REDIS_PASSWORD`,
+só nesse caso); a senha nunca vai na linha de comando do `docker exec`. **`FLUSHDB` no `gerenciador-redis` no INÍCIO e ao FIM da rodada** (verde ou vermelha): os ids de evento voltam a 1 com
+`RESTART IDENTITY`, e uma contagem de uma rodada antiga seria lida como carga da seguinte; o início aborta se o `FLUSHDB` falhar (senha errada), o fim só avisa e imprime o comando.
 - `monolito/src/test/.../SchemaValidationTest` valida o schema real contra o esperado (`public`, `notification.processed_event`, e que
   `eventcap`/`walletevent`/`event_availability`/`idempotency_key` SAÍRAM de `public` e `users`/`mywallet`/`pending_verifications` foram para `identity`, sem FK cross-schema); o do módulo `reservation`
   (`reservation/src/test/.../SchemaValidationTest`) valida o schema `reservation` (tabelas, colunas, chaves, sem FK, event store próprio).
@@ -245,6 +260,16 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
   que o Flutter mostra). Controller novo no `gateway`: nunca ecoe `getMessage()` num 500.
 - Quase tudo é teste de integração com banco (exceto os mocks pontuais do `HttpContractTest` para dependências externas
   e o `ErroInternoNoCorpoTest`, MockMvc standalone sem Spring/banco).
+- Serviço `admission` (#41; ver "Serviço admission"): módulo `admission-client` — `AdmissionClientTest` (sem Spring, servidores HTTP do JDK: pedido e token enviados, **fail-open** em 5xx, conexão
+  recusada, timeout de resposta e 401 (este com log ERROR), **400 não falha a reserva (sync, sem contar) e não conta para o disjuntor**, **disjuntor** abre com 5 falhas seguidas e fecha na sonda bem-sucedida, sonda que falha
+  reabre, sucesso zera a contagem, log com limite de taxa e a contagem acumulada, construção sem token). Módulo `admission` (Redis REAL, sem Postgres): `RpmCounterTest` (contagem, conversão em
+  RPM pelo tempo coberto (**taxa constante de 12.000 RPM lida certa em qualquer ponto do bucket**), **janela que desliza**, leitura que não conta nem cria chave, eventos independentes, **TTL em toda chave**, bucket/janela configuráveis, 400 chamadas concorrentes sem perda, janela que não é
+  múltiplo do bucket recusada), `AdmissionApiTest` (**401 sem/errado em toda rota, inclusive `/internal;x=1/...`**, contrato do `POST` e do `GET .../rpm`, os 400 e que não contam, e o
+  `AdmissionClient` REAL contra o serviço REAL), `AdmissionRedisRecusadoTest` e `AdmissionRedisTravadoTest` (**Redis recusando conexão (503 na hora) e Redis CONGELADO com a conexão aberta, por um proxy TCP do teste que para de repassar: `POST` e `GET .../rpm` dão 503 no timeout de 200 ms**, para o disjuntor do gateway contar a falha; medido com o `HttpClient` do JDK, porque o `TestRestTemplate` repete resposta 503 depois de 1 s) e `AdmissionConfigTest` (porta 8085, Tomcat 300, sem datasource, defaults do contador, sem token o serviço não sobe). Módulo `monolito`: `FakeAdmissionServer`
+  (`TestSupport`, JDK `HttpServer`, `LauncherSessionListener` `AdmissionFakeSession`, URL em `admission.service.url`; devolve `sync` por padrão, valida a chave, exige o token e deixa injetar falha) —
+  é o que mantém o `HttpContractTest` **sem mudança de expectativa** e sem Redis —, `EventWalletGatewayAdmissionTest` (uma chamada por `addLink`, depois das validações e ANTES do reservation,
+  com a chave do cliente igual nos dois serviços; **sem chave, o UUID vai só ao admission e o reservation recebe SEM header `Idempotency-Key`**; chave > 255 ignorada pelo admission e recusada pelo reservation com o 400 de sempre; **fail-open** com o admission em 503 e o **disjuntor abrindo após 5 falhas seguidas**) e o teste do braço naive em
+  `EventWalletGatewayNaiveTest` (conta com `path=naive` antes da leitura da disponibilidade); o `ModuleBoundaryArchTest` ganhou `admissionclient`.
 - `identity-client` (#36): `IdentityClientIndisponivelTest` (sem Spring/banco, servidores HTTP do JDK: porta morta, 500 e resposta lenta →
   `IdentityUnavailableException`, uma chamada por falha, sem retry; 404 e 401 com/sem marcador; 400; construção sem token; contrato feliz).
 - `LayerBoundaryArchTest` e `ModuleBoundaryArchTest` (ArchUnit) são a exceção: não usam Spring/banco, só analisam bytecode.
@@ -287,7 +312,8 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
     monólito na #32 e o `reservation` na #33: nada depende do pacote `com.gerenciador.eventos.reservation`, e o `reservationclient`
     — a lib de contrato — não depende de módulo do monólito); (f) `monolito_nao_envia_email` (#32): nada do monólito depende de
     `org.springframework.mail..`/`jakarta.mail..` — o e-mail é do serviço `notification`;
-    (b) `shared` não depende de módulo de domínio; (c) todo código de produção mora num módulo (nada volta para
+    (g) `admissionclient` (#41) é lib de contrato como as outras (não depende de módulo do monólito nem das outras libs) e nada depende do pacote `com.gerenciador.eventos.admission` (o código do
+    serviço); (b) `shared` não depende de módulo de domínio; (c) todo código de produção mora num módulo (nada volta para
     `POJO/Repository/Service`); (d) `<modulo>.api` não depende de classe interna de módulo nenhum
     (só de outros `*.api`, `shared` e libs); (e) `@RestController`/`@Controller` só no `gateway`
     (`controller_so_no_gateway`, issue #25: os demais módulos não expõem HTTP). Ver "Módulos".
@@ -319,6 +345,8 @@ shared/          CorsConfig, SchedulingConfig (monólito); DatabaseConnection e 
 identityclient/  (lib `identity-client`, #36) IdentityClient (HTTP, pool), IdentityClientConfig (o bean, no monólito)
   api/           User, MyWallet, LoginResult, RecaptchaResponse, UserApi, EmailVerificationApi, MyWalletApi (`walletExists`, não `exists`: o cliente
                  implementa as duas interfaces), RecaptchaApi, IdentityUnavailableException, IdentityNaoEncontradoException
+admissionclient/ (lib `admission-client`, #41) AdmissionClient (HTTP, pool, fail-open, disjuntor), AdmissionClientConfig (o bean, no monólito), LogComLimite
+  api/           AdmissionApi, AdmissionRequest, AdmissionResult
 catalogclient/   (lib `catalog-client`, #35) CatalogClient (HTTP, pool), CatalogClientConfig (o bean, no monólito)
   api/           Event, EventApi, EventoNaoEncontradoException, EventoEmConflitoException, CatalogUnavailableException
 reservationclient/ (lib `reservation-client`, #33) ReservationClient (HTTP, pool), ReservationClientConfig (o bean, no monólito)
@@ -336,7 +364,7 @@ reservation") e `notification/` (consumer + e-mail — "Serviço notification").
   domínio (módulos dependem dele). Dado de outro módulo entra por id ou DTO da `api`. Travado por
   `ModuleBoundaryArchTest` (ver "Quality gates"). Desde a #33/#35/#36 a fronteira é também física: o monólito não tem o código dos serviços
   no classpath e **nenhum serviço lê tabela de outro nem há FK cross-schema**.
-- **Grafo de dependências**: `gateway →` (por **HTTP**) `reservation` (`reservationclient`), `catalog` (`catalogclient`, #35) e `identity`
+- **Grafo de dependências**: `gateway →` (por **HTTP**) `admission` (`admissionclient`, #41, fail-open), `reservation` (`reservationclient`), `catalog` (`catalogclient`, #35) e `identity`
   (`identityclient`, #36); `catalog → reservation` por **HTTP** (`EventCapacityApi` da lib `reservation-client`: criar a capacidade DEPOIS do
   commit do evento, `updatePolicy`, hidratar `lot_quantity`/`quantity` — `findByCreatorId` e a busca em UMA chamada em lote —, remover no
   cancelamento); `identity → notification` só por evento (`identity.notification`, congelado). O `reservation` não enxerga o catálogo (a existência
@@ -441,6 +469,8 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
   testes e psql); com `carga/rpm` (`max_connections=300`) o pool vai para 245 sozinho (override + `subir-host-rpm.ps1`). Ou seja,
   o `too many clients` não vem mais do Hikari, e sim do pool do Supavisor + o resto passar do
   `max_connections`.
+- **O `admission` (#41) não tem datasource**: não depende de `shared` (que traz o `DatabaseConnection`), não tem Hikari nem tabela e não fala com o Postgres, então a conta abaixo (1213 <= 1500) e o
+  pool real do Supavisor **não mudam**.
 - **Outros clientes do pooler** (#32, #33, #35, #36): o `notification` (Hikari 3), o `reservation` (Hikari 1000), o `catalog` (100) e o `identity` (100) entram pelo **mesmo tenant e o mesmo
   usuário** do monólito e NÃO aumentam o pool real (a conta está em "Serviço notification", "Serviço reservation", "Serviço catalog" e "Serviço identity"). Todo serviço novo
   divide esses mesmos 45/245: documente o Hikari dele e refaça a conta antes de subir.
@@ -1262,6 +1292,57 @@ O monólito NÃO tem mais o pacote `identity` (nem `public.users`/`mywallet`/`pe
 - **Fora de escopo / pendências conhecidas**: #166 (IDOR pré-existente em `GET/PUT/DELETE /bff/users/{id}` e `/bff/my-wallets/{userId}`; a superfície não mudou); revogação de token /
   lista negra; rotação automática da chave; consumer dos eventos de ciclo de vida; remover o datasource do gateway (Hikari 10 só para o `actuator/health`).
 
+## Serviço admission — issue #41 (Fase 7: contador de RPM por evento)
+
+Primeira peça da camada de alta carga (ADR "Async-Checkout-Queue"): o `gateway` conta **cada tentativa** de `POST /bff/event-wallets` no serviço `admission` (container
+`gerenciador-admission`, `:8085` só na rede `gerenciador-net`, `admission/Dockerfile`), que mantém **um contador de RPM por evento em Redis**. Na #41 o RPM é **só sinal de carga** e o modo devolvido é
+**sempre `sync`**: a reserva segue exatamente como antes (`HttpContractTest` sem mudança de expectativa, overselling 0 no `cas`). A fila (RabbitMQ, worker pool) e o gatilho por uso de X são as #42 e #43.
+Spec: `docs/superpowers/specs/2026-10-28-admission-servico-design.md`; README do módulo em `admission/README.md` e `admission-client/README.md`.
+
+- **Onde contar (decisão da spec): salto HTTP ao `admission`, não o gateway direto no Redis.** O modo do evento (#43) depende do estado da fila e, em modo fila, a mesma chamada publica a mensagem; só o
+  `admission` terá Redis e RabbitMQ, e contar no gateway o faria ler o keyspace de outro serviço e levar credenciais ao gateway. **Custo medido na #41:** a opção A (gateway → Redis) seria 1 ida ao Redis;
+  a escolhida (B) são **1 ida HTTP keep-alive ao `admission` + 1 ida dele ao Redis**, as duas dentro do "no máximo 1 ida" do aceite. **Medido (2026-10-28, mini dry-run no project do e2e, não é medição de carga):**
+  1000 `POST /internal/admissions` sequenciais em keep-alive, de um container na rede do project (salto HTTP + script Lua no Redis): **p50 0,82 ms, p95 1,74 ms, p99 2,77 ms** (máx. 10 ms). É o custo
+  acrescentado a cada reserva síncrona, frente a uma p50 da reserva de ~165 ms no último degrau limpo da Rodada R; o efeito no X sai na Rodada 4.
+- **Quando conta:** depois das validações do gateway (token, `userId`, `eventId` positivo, evento existe) e antes do `reservation`, **nos dois braços** (`cas` e `naive`; no `naive`, antes da leitura de
+  disponibilidade: a janela check-then-act dele não muda). `EventWalletGateway.addLink` chama `AdmissionApi.admit` UMA vez. **`Idempotency-Key`:** sem chave na requisição o **gateway gera um UUID** (o `admission` exige uma chave, que na #42/#43 será a da
+  mensagem) e o manda **SÓ ao `admission`**; o `reservation` é chamado exatamente como antes da #41, com a chave **do cliente** (nula se ele não mandou). Mandar sempre uma chave faria o serviço tratá-la como "do
+  cliente" e consultar `idempotency_key` em toda rejeição de pré-requisito (custo novo no caminho síncrono; achado do revisor). O `admission` valida a chave com a regra do `reservation` (não vazia, até 255;
+  mais que isso = 400 com a mesma mensagem), mas o cliente ignora esse 400 na #41 (a chave longa do cliente chega ao `reservation`, que dá o 400 de sempre). Quando o gateway precisar usar a chave gerada também no
+  `reservation` (fail-open do braço `cas` depois de o `admission` ter publicado, #43), levar ao serviço um sinal explícito de "chave gerada" para ele manter o comportamento de chave do servidor.
+- **API interna** (`InternalTokenFilter`: `X-Internal-Token` em TODA requisição, 401 sem/errado, sem rota pública; sem `INTERNAL_API_TOKEN` o serviço e o cliente falham no boot):
+  `POST /internal/admissions` (corpo `{eventId, userId, idempotencyKey, path}`; `200 {"mode":"sync","rpm":n}`; 400 de validação) e `GET /internal/admissions/events/{eventId}/rpm`
+  (`{"eventId":n,"rpm":n}`, só leitura; 503 com o Redis fora). O corpo e a resposta já têm a forma final (a #43 só acrescenta `queued` e os campos de estado). Erros em texto puro.
+- **Contador** (`RpmCounter` + `scripts/rpm.lua`): buckets de `ADMISSION_BUCKET_MS` (**50**) somados numa janela de `ADMISSION_WINDOW_MS` (**200**, múltiplo do bucket; recusado na subida se não for).
+  Chave `adm:cnt:<eventId>:<bucket>` com `bucket = floor(agoraMs / bucketMs)`, `INCR` + `PEXPIRE` (janela + 1 bucket: **toda chave tem TTL**), RPM = soma dos buckets da janela x 60000 / **tempo coberto**, com
+  tempo coberto = `janela − bucket + (agora mod bucket) + 1 ms` (o bucket corrente está parcial: dividir pela janela cheia leria 75–100% da taxa real e ficaria abaixo do limiar nos primeiros ms de cada bucket;
+  `RpmCounterTest` confere uma taxa constante de 12.000 RPM lida a ±3% em qualquer ponto do bucket). **Um script Lua = UMA ida ao Redis, atômica** (lê chaves fora de `KEYS`: não serve a Redis Cluster, e o
+  admission usa um Redis único). O "agora" é o do
+  relógio do admission (um só processo). **Por que 200 ms:** o X (56k RPM ≈ 930 tentativas/s) foi medido no mapeamento `sequencial`, em que as 200 tentativas de cada evento chegam numa rajada de ~0,2 s e a
+  taxa na linha quente é a do degrau; com 200 ms uma rajada a 56k RPM lê ~56k RPM, com 1 s leria 12k e o gatilho da #43 nunca dispararia, com 60 s nunca. Ruído no limiar de 44,8k RPM (≈ 149 por janela): ~8%
+  (Poisson). As duas envs permitem outra escala (o e2e e o dry-run usam X baixo).
+- **Fail-open (`gateway` e `admission`):** qualquer falha da chamada (rede, timeout, 5xx, 401, e na #41 também o 400) → **modo `sync`**, a reserva segue pelo caminho de hoje, com log. **No cliente** (`AdmissionClient`, lib `admission-client`):
+  HttpClient 5, pool `ADMISSION_CLIENT_MAX_CONNECTIONS` (400, >= threads do Tomcat), conectar **200 ms**, pool **200 ms**, resposta **500 ms**, evict 20 s, sem retry, URLs montadas pelo `RestClient` (nada de
+  concatenação), **disjuntor**: 5 falhas seguidas abrem o circuito por `ADMISSION_CLIENT_OPEN_MS` (5000; nesse tempo nenhuma chamada sai), depois UMA chamada testa (sucesso fecha, falha reabre); o 400 (serviço vivo recusando o pedido) zera a contagem de falhas e só loga; log WARN com limite de taxa (no máximo 1 linha a cada 10 s, com a contagem acumulada), **401 (token diferente nos dois lados) é ERROR**. **No serviço:** `spring.data.redis.timeout` e
+  `connect-timeout` de **200 ms** (`ADMISSION_REDIS_TIMEOUT_MS`), comandos **rejeitados na hora** sem conexão (`REJECT_COMMANDS`, senão o Lettuce os enfileiraria até o timeout) e Redis fora ou lento
+  responde **503** (no `POST` e no `GET`): o fail-open é do CLIENTE, e um 200 `sync` aqui esconderia a falha do disjuntor do gateway, que nunca abriria e pagaria os 200 ms do Redis travado em TODA reserva.
+  O `backend` **não** depende do `admission` no compose.
+- **Redis no compose** (`redis`, container `gerenciador-redis`): imagem `redis:7.4.12-alpine` (tag fixa), `--requirepass` de `${REDIS_PASSWORD:?...}` (**sem default**: qualquer `docker compose` recusa sem a variável),
+  **sem persistência** (`--save "" --appendonly no`: o contador se refaz em 200 ms), `--maxmemory 256mb --maxmemory-policy volatile-lru` (só chaves com TTL são candidatas, e toda chave tem), healthcheck
+  `redis-cli ping` autenticado por `REDISCLI_AUTH` (a senha nunca vai na linha de comando do healthcheck), **sem porta no host**, só na `gerenciador-net`. O `admission` é o único cliente; o `backend` recebe
+  `REDIS_PASSWORD` sobreposta por vazio (o `env_file` entrega o `.env` inteiro).
+- **O que você acrescenta ao `Projeto/.env`** (o repo nunca edita nem imprime o `.env`): `REDIS_PASSWORD=<valor aleatório>`, por exemplo `openssl rand -hex 32` (o `INTERNAL_API_TOKEN` já existe). Sem ela o
+  compose recusa (`up`, `config`, inclusive o `up -d db redpanda redis` dos testes); até lá, exporte na shell só para o comando (a shell vale mais que o `.env` na interpolação).
+- **Configuração** (por env, defaults no `application.properties` de cada lado): serviço — `INTERNAL_API_TOKEN`, `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD`, `ADMISSION_REDIS_TIMEOUT_MS`, `ADMISSION_BUCKET_MS`,
+  `ADMISSION_WINDOW_MS`, `SERVER_TOMCAT_THREADS_MAX` (Tomcat 300, virtual threads desligadas, `max-keep-alive-requests=-1`, `keep-alive-timeout` 60 s); gateway — `ADMISSION_SERVICE_URL`
+  (`http://admission:8085` no compose; default de dev `http://localhost:8085`), `ADMISSION_CLIENT_*`.
+- **Sem datasource (a conta do Supavisor não muda):** o módulo não depende de `shared` (que traz o `DatabaseConnection`), não tem Hikari nem tabela: soma dos Hikari segue 1000 + 10 + 3 + 100 + 100 = 1213 <= 1500.
+- **Testes:** ver "Testes" (`RpmCounterTest` com Redis real, `AdmissionApiTest`, `AdmissionRedisRecusadoTest`/`AdmissionRedisTravadoTest`, `AdmissionClientTest`, `EventWalletGatewayAdmissionTest`). O `run-tests.sh` exige o Redis e aborta com o
+  `gerenciador-admission` no ar. A prova de overselling 0 contra o `reservation` REAL é do e2e (`Projeto/e2e/run-e2e.sh`, que sobe `redis` e `admission` isolados, com senha efêmera, e confere que o
+  Lua do contador rodou na stack real) e do dry-run.
+- **Caminho síncrono idêntico ao anterior:** o `reservation-client` e o `reservation` NÃO mudaram na #41; a única diferença do caminho síncrono é o salto de contagem (+1 ida HTTP ao `admission` e +1 ida dele ao Redis).
+- **Fora de escopo (#42, #43):** RabbitMQ, worker pool, resultado por mensagem, gatilho/histerese, `202` no gateway.
+
 ## Suíte e2e da stack inteira — issue #37 (Fase 7)
 
 `Projeto/e2e/run-e2e.sh` sobe **tudo** (gateway, identity, catalog, reservation, notification, frontend, `supabase-*`, redpanda) num project
@@ -1270,6 +1351,9 @@ captador**, não do banco) → promover a host por SQL → login → criar event
 esvaziarem e o lag dos groups `reservation`/`reservation-catalog`/`notification` chegar a 0 e roda o **replay** dos streams `catalog.event` e
 `reservation.wallet` (`CatalogReplayE2eTest`, `ReservationReplayE2eTest`: `EventReplay.rebuild` + `divergentTables`, sombra == projeção viva;
 exigem `E2E_REPLAY=1`, ficam PULADAS no `run-tests.sh`, não truncam nada e reutilizam a projeção do `ReservationReplayTest`). Verde = saída 0.
+- **`redis` e `admission` (#41)** entram no project como os demais serviços (`*isolado`: sem `container_name`, sem porta no host); o `run-e2e.sh` **exporta uma `REDIS_PASSWORD` efêmera** (`openssl rand -hex 16`, só
+  para o project temporário: o compose exige a variável e o e2e nunca usa a do `Projeto/.env`), o validador de isolamento confere que os dois existem, que o `admission` aponta para o `redis` do project com senha e
+  que o `backend` NÃO recebe a senha, e depois da reserva o script exige que o contador de comandos do Redis do project mostre ao menos um `EVAL`/`EVALSHA` (o gateway → `admission` → Redis rodou na stack real).
 - **Isolamento** (`Projeto/e2e/docker-compose.e2e.yml`, sem tocar nos defaults do compose normal): `container_name: !reset null` e `ports: !reset []`
   em TODOS os serviços (inclusive os dos includes do Supabase) e a rede `default` sem o nome fixo `gerenciador-net` (vira `<project>_default`;
   na rede real `db`/`redpanda`/`supabase-pooler` resolveriam para os containers REAIS e o project escreveria no `meu_banco` de verdade).
@@ -1340,12 +1424,17 @@ exigem `E2E_REPLAY=1`, ficam PULADAS no `run-tests.sh`, não truncam nada e reut
   outbox dele) junto com `EVENTS_CONSUMER_ENABLED=true` (projeção assíncrona de disponibilidade, #29); o monólito passou a `EVENTS_CONSUMER_ENABLED=false`.
   **Aviso:** com o `gerenciador-backend`, o `gerenciador-reservation`, o `gerenciador-catalog` ou o `gerenciador-identity` no ar, o relay deles drena o `event_outbox` do
   mesmo banco que o `run-tests.sh` usa e o consumer move `ativos`: o `run-tests.sh` **aborta** se algum dos containers estiver
-  rodando (`docker stop gerenciador-backend gerenciador-reservation gerenciador-catalog gerenciador-identity gerenciador-notification` antes).
+  rodando (`docker stop gerenciador-backend gerenciador-reservation gerenciador-catalog gerenciador-identity gerenciador-notification gerenciador-admission` antes; o `admission` por usar o mesmo Redis dos testes).
 - Serviço catalog e seed (#35): `CATALOG_SERVICE_URL` e `CATALOG_CLIENT_MAX_CONNECTIONS` (cliente HTTP do gateway, ver "Serviço catalog"),
   `SEED_ENABLED` (`seed.enabled`, default `false`: `POST /bff/seed` responde 404; só o override de carga liga).
 - Serviço identity (#36), variáveis do SERVIÇO (`identity/application.properties`): `SPRING_DATASOURCE_*` (Hikari 100), `SERVER_TOMCAT_THREADS_MAX` (300), `INTERNAL_API_TOKEN` (sem default),
   `JWT_SIGNING_KEY_PATH` (default `/var/lib/identity/jwt-signing-key.json`), `JWT_EXPIRATION_SECONDS` (36000), `RECAPTCHA_SECRET_KEY` e `RECAPTCHA_VERIFY_URL`, `EVENTS_RELAY_ENABLED` (`true` no compose),
   `NOTIFICATION_EVENTS_RETENTION_SCAN_MS`. Nenhuma variável nova no `.env`; `JWT_SECRET` não é lido por ninguém.
+- Serviço admission e Redis (#41), variáveis do SERVIÇO (`admission/application.properties`): `INTERNAL_API_TOKEN` (sem default), `REDIS_HOST` (default `localhost`; `redis` no compose e no `run-tests.sh`), `REDIS_PORT`
+  (`6379`), `REDIS_PASSWORD` (**sem default**; vem do `Projeto/.env`, ver o aviso em "Serviço admission"), `ADMISSION_REDIS_TIMEOUT_MS` (`200`; timeout de comando e de conexão), `ADMISSION_BUCKET_MS` (`50`),
+  `ADMISSION_WINDOW_MS` (`200`; múltiplo do bucket), `SERVER_TOMCAT_THREADS_MAX` (`300`), `SERVER_TOMCAT_MAX_KEEP_ALIVE_REQUESTS` (`-1`), `SERVER_TOMCAT_KEEP_ALIVE_TIMEOUT` (`60s`). Do GATEWAY (monólito):
+  `ADMISSION_SERVICE_URL` (default `http://localhost:8085`), `ADMISSION_CLIENT_MAX_CONNECTIONS` (`400`), `ADMISSION_CLIENT_CONNECT_TIMEOUT_MS` (`200`), `ADMISSION_CLIENT_CONNECTION_REQUEST_TIMEOUT_MS` (`200`),
+  `ADMISSION_CLIENT_RESPONSE_TIMEOUT_MS` (`500`), `ADMISSION_CLIENT_EVICT_IDLE_MS` (`20000`), `ADMISSION_CLIENT_OPEN_MS` (`5000`; tempo do circuito aberto). Única variável nova no `.env`: `REDIS_PASSWORD`.
 - Suíte e2e (#37): `MAIL_HOST`/`MAIL_PORT`/`MAIL_SMTP_AUTH`/`MAIL_STARTTLS` do `notification` (defaults do Gmail; ver "Serviço notification") e `E2E_REPLAY`
   (`1` liga as classes `*ReplayE2eTest`; sem ela ficam puladas). Variáveis do script: `E2E_PROJECT`, `MANTER`, `ESPERA_UP`.
 - Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto

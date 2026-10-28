@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.example.demo</groupId>
+        <artifactId>backend</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+    <artifactId>admission</artifactId>
+    <name>admission</name>
+    <description>Serviço admission (issue 41): contador de RPM por evento em Redis, API interna HTTP chamada pelo gateway. Sem datasource</description>
+    <dependencies>
+        <!-- Contrato HTTP: os DTOs (AdmissionRequest, AdmissionResult) são o corpo da API interna; os testes ponta a ponta usam
+             também o AdmissionClient real contra este serviço. NÃO depende de "shared" (traz o DatabaseConnection): sem Postgres. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>admission-client</artifactId>
+        </dependency>
+        <!-- API interna HTTP (sem Spring Security: o serviço só é alcançável na rede gerenciador-net, sem porta no host) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Redis (Lettuce): o contador por evento, num script Lua -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.gerenciador.eventos.admission.AdmissionApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

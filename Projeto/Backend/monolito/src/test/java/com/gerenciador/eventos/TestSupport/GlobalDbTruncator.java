@@ -42,6 +42,10 @@ public class GlobalDbTruncator {
         if (identity != null) {
             identity.reset();
         }
+        FakeAdmissionServer admission = FakeAdmissionServer.get(); // chamadas e falhas injetadas do admission falso (#41), em memória
+        if (admission != null) {
+            admission.reset();
+        }
         String truncateSQL = null;
         try (Connection conn = databaseConnection.getConnection();
              Statement stmt = conn.createStatement()) {

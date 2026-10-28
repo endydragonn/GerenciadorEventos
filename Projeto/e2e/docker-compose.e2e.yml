@@ -14,6 +14,10 @@ services:
   identity: *isolado
   catalog: *isolado
   reservation: *isolado
+  # Redis e admission (issue #41): sem container_name nem porta no host, como os demais. A senha do Redis do project temporário é
+  # efêmera (o run-e2e.sh exporta REDIS_PASSWORD, nunca a do Projeto/.env); o Redis não tem volume nem persistência.
+  redis: *isolado
+  admission: *isolado
   notification-seek: *isolado
   frontend: *isolado
   supabase-pooler: *isolado

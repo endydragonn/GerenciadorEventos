@@ -15,6 +15,9 @@ chama o `reservation` (capacidade). O diagrama de command → evento → projeç
 > `identity` assina o JWT (RS256, `kid`, claims `uid` e `isHost`); o `gateway` o valida **sem estado** pelo JWKS em cache (identity fora não
 > derruba quem já tem token) e é quem confere o papel de host e o dono do evento, lendo as claims.
 
+> **Issue #41 (Batch 2):** o `admission` (container `gerenciador-admission`, `:8085` só na rede, **sem datasource**) e o Redis (`gerenciador-redis`, só o `admission` o usa) entram no desenho:
+> o `gateway` conta cada tentativa de reserva num contador de RPM por evento (ver "O salto de contagem"). O modo é sempre `sync` e a falha dele é **fail-open**; o `backend` não depende dele.
+
 ## Topologia
 
 ```mermaid
@@ -50,12 +53,22 @@ flowchart LR
     API --> WAL
   end
 
+  subgraph ADM["admission — container gerenciador-admission :8085 (só na rede; Tomcat 300, SEM datasource)"]
+    direction TB
+    AAPI["API interna /internal/admissions<br/>POST (conta e devolve o modo) · GET .../events/{id}/rpm"]
+    CNT["RpmCounter<br/>script Lua: buckets de 50 ms, janela de 200 ms"]
+    AAPI --> CNT
+  end
+  REDIS[("Redis — gerenciador-redis<br/>só na rede · requirepass · sem persistência · maxmemory 256 MB")]
+  CNT -->|"1 ida (Lua): INCR + PEXPIRE + soma dos buckets"| REDIS
+
   subgraph NOT["notification — container gerenciador-notification (sem HTTP)"]
     NC["NotificationConsumer<br/>e-mail por SMTP"]
   end
 
   GW ==>|"HTTP (pool 400, resp. 5 s, sem retry)<br/>login, cadastro, MFA, /me, carteira, nomes em lote"| IAPI
   GW -.->|"GET /.well-known/jwks.json<br/>cache 24 h por kid, 1 fetch / 30 s"| IAPI
+  GW ==>|"HTTP (pool 400, conectar/pool 200 ms, resp. 500 ms, FAIL-OPEN + disjuntor)<br/>1 chamada por POST /bff/event-wallets, nos dois braços"| AAPI
   GW ==>|"HTTP (pool 400, keep-alive)<br/>cas: 1 chamada · naive: 2 chamadas"| API
   GW ==>|"HTTP (pool 400, resp. 15 s, sem retry)<br/>CRUD, busca, exists (cache 30 s), imagem"| CAPI
   CAT ==>|"HTTP: criar/atualizar/ler/remover eventcap<br/>capacidade nas leituras"| API
@@ -75,6 +88,33 @@ flowchart LR
   RP -->|"catalog.event (EventCreated)"| REC
   RP -->|identity.notification| NC
 ```
+
+## O salto de contagem (#41)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as cliente (k6)
+  participant G as gateway
+  participant A as admission
+  participant X as Redis
+  participant R as reservation
+
+  C->>G: POST /bff/event-wallets (Idempotency-Key opcional)
+  Note over G: validações (token, ids, evento existe) · sem chave: o gateway gera um UUID e o manda SÓ ao admission (o reservation recebe a chave do cliente, ou nenhuma)
+  G->>A: POST /internal/admissions {eventId, userId, idempotencyKey, path} (X-Internal-Token)
+  A->>X: EVALSHA rpm.lua (INCR do bucket + PEXPIRE + soma da janela) — 1 ida
+  X-->>A: contagem da janela
+  A-->>G: 200 {"mode":"sync","rpm":n}
+  G->>R: reserva como antes (cas: 1 chamada · naive: 2)
+  R-->>G: 201
+  G-->>C: 201 (contrato /bff inalterado)
+
+  Note over G,X: FAIL-OPEN: admission fora/lento (500 ms), 5xx, 401 ou Redis fora (200 ms) => modo sync, a reserva segue, com log. 5 falhas seguidas abrem o disjuntor do gateway por 5 s (nenhuma chamada ao admission nesse tempo)
+```
+
+Custo no caminho síncrono: **+1 ida HTTP keep-alive gateway → admission e +1 ida admission → Redis** por reserva (a opção "gateway direto no Redis" seria 1 ida; a spec escolheu o salto ao `admission` porque o modo
+do evento, na #43, depende do estado da fila e só o `admission` terá Redis e RabbitMQ). O custo real é medido num mini dry-run (X baixo) e registrado no `Projeto/Backend/CLAUDE.md`.
 
 ## O salto no braço `cas` e no braço `naive`
 
@@ -201,6 +241,9 @@ com `TRUNCATE ... RESTART IDENTITY` recicla o `user_id`: por isso a limpeza entr
   `reservation` criar o que faltou quando voltar (reservar nesse intervalo: "Capacidade do evento não configurada").
 - **Capacidade removida, evento mantido**: o `reservation` apagou o `eventcap` (cancelamento) e o commit do catalog falhou depois. Raro; o
   evento fica sem `eventcap`.
+- **`admission` ou Redis fora** (#41): **fail-open**. O gateway segue reservando pelo caminho de hoje (a contagem do evento só perde essas tentativas); o `AdmissionClient` loga com limite de taxa (1 linha a cada 10 s)
+  e, depois de 5 falhas seguidas, deixa de chamar o `admission` por 5 s (disjuntor). Token interno diferente nos dois lados (401) também é fail-open, mas logado em ERROR. O `backend` não depende do `admission`
+  no compose. Redis lento/fora dentro do `admission`: timeout de 200 ms, comandos rejeitados na hora e resposta **503** (que o disjuntor do gateway conta; um 200 `sync` esconderia o Redis travado e cada reserva pagaria os 200 ms).
 - **`reservation` fora**: reservar, confirmar, cancelar, listar inscrições, **ler/listar/buscar eventos** (a resposta de `Event` leva a
   capacidade, que vem do serviço) e **apagar evento** (a remoção do `eventcap` vem antes da transação do catalog, que então nem começa)
   falham com erro de rede; login e cadastro seguem. Criar evento não falha (ver a primeira janela).
