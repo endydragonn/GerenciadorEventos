@@ -33,4 +33,9 @@ final class RedisDeTeste {
     static long eventoNovo() {
         return 1_000_000_000L + (System.nanoTime() & 0xFFFFFFFFL);
     }
+
+    /** Id de usuário que nenhum outro teste usa (as esperas e os resultados da fila são por usuário; o Redis é compartilhado entre rodadas). */
+    static long usuarioNovo() {
+        return 2_000_000_000L + (System.nanoTime() & 0xFFFFFFFFL);
+    }
 }

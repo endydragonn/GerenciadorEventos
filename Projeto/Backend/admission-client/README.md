@@ -1,7 +1,8 @@
 # admission-client
 
 Lib (jar simples, sem repackage) com o **contrato HTTP** do serviço `admission` (issue #41): os DTOs `AdmissionRequest`/`AdmissionResult`, a
-interface `AdmissionApi` e o `AdmissionClient`.
+interface `AdmissionApi` e o `AdmissionClient`. Desde a #42 também o DTO `AdmissionStatus` (corpo de `GET /internal/admissions/result`: `queued`, `pending`, `rejected` ou `timed_out`),
+que a #43 consome; o `AdmissionClient` ainda não tem método para essa consulta.
 
 - **Quem usa:** o `monolito` (o gateway conta cada `POST /bff/event-wallets` por aqui; o bean sai de `AdmissionClientConfig`) e o
   `admission` (os mesmos DTOs são o corpo da API interna; o `AdmissionApiTest` usa o cliente real contra o serviço real). O `admission`

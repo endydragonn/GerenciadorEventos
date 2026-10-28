@@ -8,13 +8,19 @@
     </parent>
     <artifactId>admission</artifactId>
     <name>admission</name>
-    <description>Serviço admission (issue 41): contador de RPM por evento em Redis, API interna HTTP chamada pelo gateway. Sem datasource</description>
+    <description>Serviço admission (issues 41 e 42): contador de RPM por evento em Redis, fila de admissão (RabbitMQ) com worker pool que chama o reservation, API interna HTTP chamada pelo gateway. Sem datasource</description>
     <dependencies>
         <!-- Contrato HTTP: os DTOs (AdmissionRequest, AdmissionResult) são o corpo da API interna; os testes ponta a ponta usam
              também o AdmissionClient real contra este serviço. NÃO depende de "shared" (traz o DatabaseConnection): sem Postgres. -->
         <dependency>
             <groupId>com.example.demo</groupId>
             <artifactId>admission-client</artifactId>
+        </dependency>
+        <!-- O worker pool (issue 42) chama o reservation (POST /internal/reservations?path=cas e o replay) pelo ReservationClient da lib. A lib
+             NÃO é escaneada (o ReservationClientConfig dela fica fora do component scan): o bean é montado aqui, com o pool = a concorrência. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>reservation-client</artifactId>
         </dependency>
         <!-- API interna HTTP (sem Spring Security: o serviço só é alcançável na rede gerenciador-net, sem porta no host) -->
         <dependency>
@@ -26,9 +32,21 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
+        <!-- RabbitMQ (Spring AMQP): topologia da fila de admissão, publicação com confirms/returns e o worker pool -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- LauncherSessionListener (AdmissionTestSession): sobe o reservation falso e sorteia o prefixo do RabbitMQ antes de qualquer
+             contexto Spring dos testes (versão do BOM do Spring Boot). -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

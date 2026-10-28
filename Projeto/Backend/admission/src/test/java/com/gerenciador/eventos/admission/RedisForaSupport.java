@@ -32,6 +32,11 @@ final class RedisForaSupport {
                 .header("X-Internal-Token", "token-de-teste").GET().build());
     }
 
+    static Medida getResultado(int porta) {
+        return enviar(HttpRequest.newBuilder(URI.create("http://localhost:" + porta + "/internal/admissions/result?userId=5&idempotencyKey=k"))
+                .header("X-Internal-Token", "token-de-teste").GET().build());
+    }
+
     private static Medida enviar(HttpRequest req) {
         long t0 = System.nanoTime();
         try {

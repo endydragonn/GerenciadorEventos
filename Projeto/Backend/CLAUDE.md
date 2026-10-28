@@ -25,8 +25,9 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
   migração `20261028` pendente (`PublicSchemaGuard`). Ver "Serviço identity".
 - Serviço `admission` (issue #41): `docker compose -f Projeto/docker-compose.yml up -d --build admission` — container `gerenciador-admission`, API interna
   na `:8085` **só na rede**; entrypoint `com.gerenciador.eventos.admission.AdmissionApplication`, `admission/Dockerfile`. Sobe junto o **Redis**
-  (`gerenciador-redis`) e depende só dele. O `backend` **não** depende dele (o gateway faz fail-open): com ele parado a reserva segue
-  síncrona, só sem a contagem. **`REDIS_PASSWORD` é obrigatória** no `Projeto/.env` (ver "Serviço admission"). Sem datasource.
+  (`gerenciador-redis`) e, desde a #42, o **RabbitMQ** (`gerenciador-rabbitmq`) e o `reservation` (depende dos três, `service_healthy`: o worker pool da fila de
+  admissão chama o reservation). O `backend` **não** depende dele (o gateway faz fail-open): com ele parado a reserva segue
+  síncrona, só sem a contagem. **`REDIS_PASSWORD`, `RABBITMQ_USER` e `RABBITMQ_PASSWORD` são obrigatórias** no `Projeto/.env` (ver "Serviço admission"). Sem datasource.
 - Local: `cd Projeto/Backend && mvn -pl monolito -am spring-boot:run` (ou `mvn -pl notification -am spring-boot:run`, `mvn -pl identity -am spring-boot:run`,
   `mvn -pl reservation -am spring-boot:run`) — precisa de um Postgres em `localhost:5433` (e, para a reserva, do `reservation` em
   `localhost:8082`, o default de `RESERVATION_SERVICE_URL`; para login, do `identity` em `localhost:8084`, o de `IDENTITY_SERVICE_URL`). `application.properties` de cada módulo tem defaults de dev para as vars do `.env`,
@@ -69,10 +70,10 @@ Backend/
   identity/              serviço extraído (#36; README.md próprio): usuários, carteira, cadastro, MFA, reCAPTCHA e emissão do JWT RS256
                          (+ JWKS) no schema `identity`, API interna /internal/** na :8084; src/, Dockerfile, pom.xml. Chamado pelo gateway por HTTP (IdentityClient);
                          o monólito NÃO tem mais o pacote `identity`
-  admission-client/      LIB (#41; README.md próprio): AdmissionRequest/AdmissionResult (os DTOs), AdmissionApi e o AdmissionClient (pool, timeouts curtos,
+  admission-client/      LIB (#41; README.md próprio): AdmissionRequest/AdmissionResult/AdmissionStatus (os DTOs; o status é da #42), AdmissionApi e o AdmissionClient (pool, timeouts curtos,
                          fail-open e disjuntor). O gateway (monólito) o usa pelo AdmissionClientConfig; o serviço admission, pelos DTOs e nos testes ponta a ponta
-  admission/             serviço novo (#41; README.md próprio): contador de RPM por evento em Redis (janela deslizante por buckets) e API interna
-                         /internal/admissions na :8085; src/, Dockerfile, pom.xml. SEM datasource e SEM dependência de `shared`. Chamado pelo gateway por HTTP
+  admission/             serviço novo (#41; README.md próprio): contador de RPM por evento em Redis (janela deslizante por buckets), fila de admissão em
+                         RabbitMQ com worker pool que chama o reservation (#42) e API interna /internal/admissions na :8085; src/, Dockerfile, pom.xml. SEM datasource e SEM dependência de `shared`. Chamado pelo gateway por HTTP
   db/                    schema (fora do Maven)
 ```
 
@@ -140,7 +141,10 @@ de teste (group próprio: os testes nunca entram no group do backend vivo que co
 **Serviço `admission` e Redis (#41):** os testes do contador usam o **Redis REAL** (container `gerenciador-redis` na rede `gerenciador-net`, `REDIS_HOST=redis`), então o script
 **exige o `gerenciador-redis` no ar** (`REDIS_PASSWORD=<valor> docker compose -f Projeto/docker-compose.yml up -d db redpanda redis`: o compose recusa subir sem a variável, que vem do
 `Projeto/.env` ou é exportada na shell só para o comando) e **aborta se o `gerenciador-admission` estiver rodando** (`docker stop gerenciador-admission`: ele contaria tentativas de teste no mesmo
-Redis). **Credencial:** o container de teste recebe a `REDIS_PASSWORD` do `--env-file` (`Projeto/.env`) e, **se a variável estiver exportada na shell, a da shell por cima** (`-e REDIS_PASSWORD`,
+Redis). **RabbitMQ (#42):** os testes da fila e do worker usam o **RabbitMQ REAL** (container `gerenciador-rabbitmq` na rede `gerenciador-net`, `RABBITMQ_HOST=rabbitmq`), então o script
+**exige o `gerenciador-rabbitmq` no ar** (`docker compose -f Projeto/docker-compose.yml up -d db redpanda redis rabbitmq`; o compose recusa subir sem `RABBITMQ_USER` e `RABBITMQ_PASSWORD`, do `Projeto/.env` ou
+exportadas na shell só para o comando) e repassa `RABBITMQ_USER`/`RABBITMQ_PASSWORD` da shell com `-e` **só se estiverem exportadas** (senão valem as do `--env-file`), como a `REDIS_PASSWORD`. Os testes nunca usam as filas
+`admission.*` do serviço: cada classe monta `admission.amqp.prefix=${admission.test.prefix}<sufixo>` (o prefixo é sorteado por JVM no `AdmissionTestSession`, que também apaga as filas e exchanges no fim). **Credencial:** o container de teste recebe a `REDIS_PASSWORD` do `--env-file` (`Projeto/.env`) e, **se a variável estiver exportada na shell, a da shell por cima** (`-e REDIS_PASSWORD`,
 só nesse caso); a senha nunca vai na linha de comando do `docker exec`. **`FLUSHDB` no `gerenciador-redis` no INÍCIO e ao FIM da rodada** (verde ou vermelha): os ids de evento voltam a 1 com
 `RESTART IDENTITY`, e uma contagem de uma rodada antiga seria lida como carga da seguinte; o início aborta se o `FLUSHDB` falhar (senha errada), o fim só avisa e imprime o comando.
 - `monolito/src/test/.../SchemaValidationTest` valida o schema real contra o esperado (`public`, `notification.processed_event`, e que
@@ -347,7 +351,7 @@ identityclient/  (lib `identity-client`, #36) IdentityClient (HTTP, pool), Ident
   api/           User, MyWallet, LoginResult, RecaptchaResponse, UserApi, EmailVerificationApi, MyWalletApi (`walletExists`, não `exists`: o cliente
                  implementa as duas interfaces), RecaptchaApi, IdentityUnavailableException, IdentityNaoEncontradoException
 admissionclient/ (lib `admission-client`, #41) AdmissionClient (HTTP, pool, fail-open, disjuntor), AdmissionClientConfig (o bean, no monólito), LogComLimite
-  api/           AdmissionApi, AdmissionRequest, AdmissionResult
+  api/           AdmissionApi, AdmissionRequest, AdmissionResult, AdmissionStatus (#42)
 catalogclient/   (lib `catalog-client`, #35) CatalogClient (HTTP, pool), CatalogClientConfig (o bean, no monólito)
   api/           Event, EventApi, EventoNaoEncontradoException, EventoEmConflitoException, CatalogUnavailableException
 reservationclient/ (lib `reservation-client`, #33) ReservationClient (HTTP, pool), ReservationClientConfig (o bean, no monólito)
@@ -1339,7 +1343,7 @@ Spec: `docs/superpowers/specs/2026-10-28-admission-servico-design.md`; README do
   responde **503** (no `POST` e no `GET`): o fail-open é do CLIENTE, e um 200 `sync` aqui esconderia a falha do disjuntor do gateway, que nunca abriria e pagaria os 200 ms do Redis travado em TODA reserva.
   O `backend` **não** depende do `admission` no compose.
 - **Redis no compose** (`redis`, container `gerenciador-redis`): imagem `redis:7.4.12-alpine` (tag fixa), `--requirepass` de `${REDIS_PASSWORD:?...}` (**sem default**: qualquer `docker compose` recusa sem a variável),
-  **sem persistência** (`--save "" --appendonly no`: o contador se refaz em 200 ms), `--maxmemory 256mb --maxmemory-policy volatile-lru` (só chaves com TTL são candidatas, e toda chave tem), healthcheck
+  **sem persistência** (`--save "" --appendonly no`: o contador se refaz em 200 ms), `--maxmemory 512mb --maxmemory-policy volatile-ttl` (só chaves com TTL são candidatas, e toda chave tem; sob pressão saem primeiro as de vida mais curta; 512 MB desde a #42, que guarda também o resultado e a espera da fila), healthcheck
   `redis-cli ping` autenticado por `REDISCLI_AUTH` (a senha nunca vai na linha de comando do healthcheck), **sem porta no host**, só na `gerenciador-net`. O `admission` é o único cliente; o `backend` recebe
   `REDIS_PASSWORD` sobreposta por vazio (o `env_file` entrega o `.env` inteiro).
 - **O que você acrescenta ao `Projeto/.env`** (o repo nunca edita nem imprime o `.env`): `REDIS_PASSWORD=<valor aleatório>`, por exemplo `openssl rand -hex 32` (o `INTERNAL_API_TOKEN` já existe). Sem ela o
@@ -1349,10 +1353,69 @@ Spec: `docs/superpowers/specs/2026-10-28-admission-servico-design.md`; README do
   (`http://admission:8085` no compose; default de dev `http://localhost:8085`), `ADMISSION_CLIENT_*`.
 - **Sem datasource (a conta do Supavisor não muda):** o módulo não depende de `shared` (que traz o `DatabaseConnection`), não tem Hikari nem tabela: soma dos Hikari segue 1000 + 10 + 3 + 100 + 100 = 1213 <= 1500.
 - **Testes:** ver "Testes" (`RpmCounterTest` com Redis real, `AdmissionApiTest`, `AdmissionRedisRecusadoTest`/`AdmissionRedisTravadoTest`, `AdmissionClientTest`, `EventWalletGatewayAdmissionTest`). O `run-tests.sh` exige o Redis e aborta com o
-  `gerenciador-admission` no ar. A prova de overselling 0 contra o `reservation` REAL é do e2e (`Projeto/e2e/run-e2e.sh`, que sobe `redis` e `admission` isolados, com senha efêmera, e confere que o
+  `gerenciador-admission` no ar. A prova de overselling 0 contra o `reservation` REAL é do e2e (`Projeto/e2e/run-e2e.sh`, que sobe `redis`, `rabbitmq` e `admission` isolados, com credenciais efêmeras, e confere que o
   Lua do contador rodou na stack real) e do dry-run.
 - **Caminho síncrono idêntico ao anterior:** o `reservation-client` e o `reservation` NÃO mudaram na #41; a única diferença do caminho síncrono é o salto de contagem (+1 ida HTTP ao `admission` e +1 ida dele ao Redis).
-- **Fora de escopo (#42, #43):** RabbitMQ, worker pool, resultado por mensagem, gatilho/histerese, `202` no gateway.
+- **Fora de escopo (#43):** gatilho/histerese que liga a fila ao `POST /internal/admissions`, `202` no gateway e a consulta no `/bff`.
+
+### Fila de admissão (RabbitMQ) e worker pool — issue #42
+
+O `admission` ganhou a fila: **RabbitMQ**, a topologia declarada por ele, o caminho de enfileirar, o worker pool que chama o `reservation` e o resultado consultável por mensagem no Redis. **O gatilho que liga isto ao
+`POST /internal/admissions` é da #43**: nesta issue o `POST` segue devolvendo `sync` e o caminho de enfileirar é um **método de serviço** (`FilaDeAdmissao.enfileirar`) exercido pelos testes. Spec: a mesma
+(`docs/superpowers/specs/2026-10-28-admission-servico-design.md`, linhas "Topologia", "Mensagem", "Worker pool", "Ack e reentrega", "Dead-letter e reconciliação", "Resultado", "Repetição da chave", "Limite por usuário").
+
+- **RabbitMQ no compose** (`rabbitmq`, container `gerenciador-rabbitmq`): imagem `rabbitmq:4.1.8-alpine` (tag fixa, **sem** o plugin de management: sem porta 15672 nem UI), `RABBITMQ_DEFAULT_USER`/`RABBITMQ_DEFAULT_PASS` de
+  `${RABBITMQ_USER:?...}`/`${RABBITMQ_PASSWORD:?...}` (**sem default**: qualquer `docker compose` recusa sem as variáveis), healthcheck `rabbitmq-diagnostics -q ping`, **sem porta no host**, só na `gerenciador-net`.
+  **Sem volume persistente** (`tmpfs` em `/var/lib/rabbitmq`): o usuário criado no 1º boot vive no diretório de dados, e um volume (inclusive o anônimo que a imagem declara) prenderia a senha do 1º boot.
+  **Consequência aceita:** reiniciar o broker perde as mensagens em fila; os resultados `queued` delas viram `timed_out` depois do `deadline` e o cliente repete o `POST` com a mesma chave. O `admission` depende do
+  `rabbitmq` e do `reservation` (`service_healthy`); o `backend` recebe `RABBITMQ_USER`/`RABBITMQ_PASSWORD` sobrepostas por vazio. O Redis do compose passou a `--maxmemory 512mb --maxmemory-policy volatile-ttl`
+  (toda chave tem TTL; sob pressão saem primeiro as de vida mais curta).
+- **O que você acrescenta ao `Projeto/.env`** (o repo nunca edita nem imprime o `.env`): `RABBITMQ_USER=<nome>` e `RABBITMQ_PASSWORD=<valor aleatório>` (ex.: `openssl rand -hex 32`), além da `REDIS_PASSWORD` da #41. Sem elas o
+  compose recusa; até lá, exporte na shell só para o comando. Mudar o usuário/senha exige recriar o container (`tmpfs`: o 1º boot cria o usuário).
+- **Topologia** (declarada pelo serviço ao conectar, `AdmissionTopology`): exchange **topic** durável `admission`, routing key **`event.<eventId>`** (a chave da mensagem é o `event_id`), ligada com `event.*` a **uma fila durável**
+  `admission.requests` com `x-message-ttl` = `ADMISSION_QUEUE_TTL_MS` (30000, o tempo máximo na fila), `x-max-length` = `ADMISSION_QUEUE_MAX_LENGTH` (100000) com `x-overflow=reject-publish` e dead-letter para a
+  `admission.dlx` (routing `timed_out`), que entrega na fila `admission.timed_out`. **Uma fila em vez de uma por evento**: o worker pool é um teto GLOBAL de CAS simultâneos (o que a ADR controla); filas por
+  evento exigiriam declarar/escutar filas dinamicamente e limpá-las; a routing key por evento deixa a porta aberta. **A ordem por evento não é garantida**: a corretude é do CAS. Mudar o TTL ou o tamanho de uma fila que já existe
+  exige apagá-la (PRECONDITION_FAILED na redeclaração; o broker não tem volume: reiniciá-lo basta). Nomes com prefixo `admission.amqp.prefix` (vazio em produção; **os testes usam um por classe**).
+- **Mensagem** (`AdmissionMessage`): JSON `{userId, eventId, idempotencyKey, attemptId, deadline}`, persistente, **sem dado pessoal**. `attemptId` = UUID por publicação (amarra mensagem, espera e resultado: uma reentrega de uma tentativa
+  antiga nunca mexe na nova da mesma chave); `deadline` = epoch ms da decisão + TTL.
+- **Enfileirar** (`FilaDeAdmissao.enfileirar`, método de serviço): valida o pedido (a regra da Idempotency-Key é a do reservation) e **só aceita `path=cas`** (`naive` = `IllegalArgumentException` "a fila de admissão só aceita path=cas": a mensagem não leva o braço e o worker reserva sempre pelo CAS, o que falsearia o braço de controle), roda UM script Lua (`enfileirar.lua`: repetição da chave, limite por usuário, grava o `queued`
+  e a espera) e **publica com publisher confirms correlacionados e `mandatory`**, numa **conexão AMQP própria** (`AdmissionRabbitConfig`: `setUsePublisherConnection(true)`; com uma só conexão, um alarme de memória/disco do broker bloquearia a conexão que publica e os acks dos workers, que andam nela, parariam de ser processados). A topologia é declarada pela conexão dos consumers. Falhas: chave de OUTRO evento = `ChaveReusadaException` (422); limite por usuário (`ADMISSION_MAX_WAITING_PER_USER`, 5) =
+  `LimiteUsuarioException` (429); **fila cheia** (nack do broker, `reject-publish`) = `FilaCheiaException` (429; não vai ao CAS: é o que a ADR evita no pico); exceção antes do envio, **broker bloqueado**
+  (`BlockedListener` → `ConnectionBlockedEvent`) ou **mensagem sem rota** (`returned`) = `NaoPublicadaException`, e nos quatro casos a entrada é **desfeita** (o chamador, na #43, segue `sync`). Envio feito mas SEM confirmação em
+  200 ms (`ADMISSION_PUBLISH_CONFIRM_TIMEOUT_MS`) = tratado como **publicado** (devolve `queued`; se a mensagem não chegou, o `queued` vence pelo `deadline`). Repetição da chave: `queued`/`pending` do mesmo evento devolve o
+  estado atual SEM publicar; `rejected`/`timed_out` (e o `queued` vencido) são sobrescritos por uma tentativa nova (uma falha não consome a chave, como no síncrono); a repetição é avaliada ANTES do limite por usuário.
+- **Worker pool** (`AdmissionWorker`, `admission.worker.enabled`): `@RabbitListener` na `admission.requests`, **ack manual**, **concorrência FIXA** `ADMISSION_WORKER_CONCURRENCY` (32) e **prefetch 1**: é o teto de CAS simultâneos no
+  reservation. O `ReservationClient` do serviço (`AdmissionReservationConfig`, lib `reservation-client`, URL `RESERVATION_SERVICE_URL`, o mesmo `INTERNAL_API_TOKEN`) tem pool = concorrência do worker + da dead-letter e os
+  timeouts do gateway (conectar 2 s, pool 5 s, resposta 10 s). Por mensagem: (0) tira da espera; se o resultado da chave não é desta tentativa ou já é final, **ack e fim** (desvio consciente do "ack só depois da
+  resposta do reservation": a mensagem já tem resultado final gravado); (1) `agora > deadline` = reconcilia e ack; (2) senão `POST /internal/reservations?path=cas` com a `Idempotency-Key` da mensagem: **201 → `pending`** (com o
+  `expiresAt` do `walletevent`), **4xx de negócio** (400 "Evento lotado", "Vínculo já existente", janela de compra, "Capacidade do evento não configurada"; 422 chave reusada com outro evento) **→ `rejected`** com o motivo (o texto do
+  reservation, sem dado pessoal), ack. **Reservation fora, timeout, 5xx, 401 ou QUALQUER exceção** (Redis fora, bug): espera `ADMISSION_RETRY_BACKOFF_MS` (500) na thread do worker, **volta à espera** (`ZADD`) e `basicNack(requeue=true)`:
+  nenhuma mensagem fica sem ack e nenhum worker fica preso; a mensagem volta à MESMA fila (o TTL original vale) e o `deadline` do corpo garante o limite. **Reentrega depois de um CAS que comitou é segura**: o reservation devolve o
+  resultado salvo pela chave (#129) e não toca o `eventcap` (provado contra o reservation REAL pelo `IdempotencyKeyTest` do módulo `reservation` e, ponta a ponta, pelo e2e/dry-run da #43; aqui, contra o falso).
+  Mensagem ilegível, inclusive com campo obrigatório nulo (`userId`, `eventId`, `idempotencyKey`, `attemptId`), é descartada com ack (reentregar não conserta). Um `Error` da JVM no processamento também devolve a mensagem (nack) e vai para o
+  log em ERROR, **sem ser relançado**: o Spring AMQP PARARIA o container inteiro (todos os workers, em silêncio: o healthcheck é TCP).
+  **O teto de CAS simultâneos vale enquanto o CAS responde dentro do timeout de 10 s do cliente**: se o cliente desiste e o `reservation` segue com aquele CAS em voo, o worker devolve a mensagem e a reentrega pode ficar simultânea à primeira
+  (a idempotência do reservation garante uma vaga só, mas o número de requisições em voo passa do teto por esse intervalo). Na reconciliação, um CAS que comita depois do `replay` deixa `timed_out` com a reserva feita: o lado seguro já descrito.
+- **Dead-letter e reconciliação**: a mensagem que morre na fila (TTL) vai à `admission.dlx` → `admission.timed_out` (que tem o mesmo `x-max-length`, drop-head: com o listener parado não cresce sem teto; a reconciliação é best-effort). O listener dela (`ADMISSION_DLX_CONCURRENCY`, 4; só reconcilia um `queued` DESTA tentativa: resultado já final ou de outra tentativa só dá ack) e o passo (1) do worker **reconciliam**: `GET /internal/reservations/replay`
+  (o método `ReservationClient.replay` passou a **público** na lib; o contrato HTTP não mudou). Há reserva com a chave (o CAS comitou e a resposta se perdeu) → `pending` com o `expiresAt` dela; senão, ou com qualquer erro
+  (reservation fora, 422), → `timed_out`. Só sobrescreve um `queued` **da mesma tentativa**. O listener da dead-letter **sempre** dá ack (lado seguro: a reserva, se existir, aparece em "minhas reservas" e o job de expiração devolve a vaga).
+  `timed_out` ≠ `expired` (o `pending` vencido pelo job do reservation). No classic queue o TTL só dispara com a mensagem na cabeça da fila: como todas têm o mesmo TTL e a ordem é FIFO, a expiração acompanha a ordem.
+- **Resultado e espera no Redis** (`AdmissionStore`, scripts em `scripts/*.lua`): `adm:res:<userId>:<chave>` = JSON `{status, eventId, attemptId, deadline, expiresAt?, reason?}`, **toda escrita com `EX`** =
+  `ADMISSION_RESULT_TTL_SECONDS` (600: cobre a janela de confirmação com folga; a 750 req/s em fila são ~450 mil chaves, ~110 MB), o `queued` gravado ANTES de publicar e o estado final por **compare-and-set** (`concluir.lua`:
+  só sobrescreve o `queued` da mesma tentativa). Um `queued` cujo `deadline` + 60 s já passou vale como `timed_out` em toda leitura. **Espera** (o que foi publicado e ainda não foi pego por um worker; a #43 a lê para a
+  histerese "fila do evento vazia"): ZSET `adm:wait:<eventId>` e `adm:uwait:<userId>`, membro `userId:chave:tentativa`, score = `deadline`; `ZADD` ao enfileirar e quando o worker devolve a mensagem à fila, `ZREM` quando o worker a
+  pega, na dead-letter e quando a publicação é desfeita (idempotente: reentrega não decrementa duas vezes); o que passou do `deadline` sai sozinho (`ZREMRANGEBYSCORE`); TTL da chave = TTL da fila + 60 s.
+- **`GET /internal/admissions/result?userId=&idempotencyKey=`**: 200 com `{status, eventId, expiresAt?, reason?}` (`AdmissionStatus`, na lib `admission-client`; **sem** `attemptId`/`deadline`) ou **404 sem corpo**; 400 sem parâmetros,
+  `userId` não positivo ou chave em branco; 401 sem token; Redis fora = 503. O `/bff` que o expõe é da #43.
+- **Log sem credencial**: o `CachingConnectionFactory` loga em INFO o `toString` da conexão (`amqp://<usuário>@<host>:5672/...`), que levaria o `RABBITMQ_USER` do `.env` ao log; o serviço o põe em WARN (`logging.level...CachingConnectionFactory=WARN`), coberto por `AdmissionLogsTest`. O serviço **recusa subir** com `ADMISSION_RESULT_TTL_SECONDS` menor que o TTL da fila + a carência de 60 s (o `queued` expiraria antes do worker e a mensagem seria descartada sem reservar).
+- **Variáveis novas** (por env, defaults no `application.properties` do serviço; o compose repassa todas): `RABBITMQ_HOST`/`RABBITMQ_PORT`/`RABBITMQ_USER`/`RABBITMQ_PASSWORD` (sem default de usuário/senha), `RESERVATION_SERVICE_URL`, `ADMISSION_QUEUE_TTL_MS` (30000),
+  `ADMISSION_QUEUE_MAX_LENGTH` (100000), `ADMISSION_WORKER_CONCURRENCY` (32), `ADMISSION_DLX_CONCURRENCY` (4), `ADMISSION_RETRY_BACKOFF_MS` (500), `ADMISSION_MAX_WAITING_PER_USER` (5), `ADMISSION_RESULT_TTL_SECONDS` (600),
+  `ADMISSION_PUBLISH_CONFIRM_TIMEOUT_MS` (200), `ADMISSION_WORKER_ENABLED` (`true`; os testes o desligam por padrão), `ADMISSION_AMQP_PREFIX` (vazio; só testes). O pool do `ReservationClient` é a concorrência do worker + a da dead-letter (4: só `replay`, leitura; o teto de CAS é a do worker).
+- **Testes** (Redis e RabbitMQ REAIS, reservation FALSO = `FakeReservationServer`, JDK `HttpServer`: CAS em memória numa seção crítica, idempotência por chave, contador de chamadas simultâneas, modos "fora" e "comitar e perder a resposta"):
+  `AdmissionStoreTest`, `AdmissionTopologyTest`, `AdmissionLogsTest` (nenhum log traz `amqp://`, usuário nem senha), `FilaDeAdmissaoTest`, `FilaCheiaTest` (fila cheia = nack, sem rota = returned), `AdmissionWorkerTest` (reentrega não reserva duas vezes, concorrência ≤ configurada, N > capacidade =
+  overselling 0, exceção no worker = nack sem preso, tentativa antiga não mexe na nova, vencida = reconcilia), `AdmissionDeadLetterTest` (mensagem vencida vai à dead-letter e vira `timed_out`, ou `pending` se o replay achou a
+  reserva) e o `GET .../result` no `AdmissionApiTest`. **A prova de overselling 0 contra o reservation REAL é do e2e e do dry-run da #43** (o CAS do falso é uma seção crítica).
 
 ## Suíte e2e da stack inteira — issue #37 (Fase 7)
 
@@ -1362,6 +1425,8 @@ captador**, não do banco) → promover a host por SQL → login → criar event
 esvaziarem e o lag dos groups `reservation`/`reservation-catalog`/`notification` chegar a 0 e roda o **replay** dos streams `catalog.event` e
 `reservation.wallet` (`CatalogReplayE2eTest`, `ReservationReplayE2eTest`: `EventReplay.rebuild` + `divergentTables`, sombra == projeção viva;
 exigem `E2E_REPLAY=1`, ficam PULADAS no `run-tests.sh`, não truncam nada e reutilizam a projeção do `ReservationReplayTest`). Verde = saída 0.
+- **`rabbitmq` (#42)** também entra como `*isolado`; o `run-e2e.sh` exporta `RABBITMQ_USER` e `RABBITMQ_PASSWORD` **efêmeros** (`openssl rand -hex`) e o validador de isolamento confere que o broker existe, que o `admission` aponta para ele
+  com essas credenciais e que o `backend` NÃO as recebe. (O passo e2e que exercita a fila, com rajada, é da #43.)
 - **`redis` e `admission` (#41)** entram no project como os demais serviços (`*isolado`: sem `container_name`, sem porta no host); o `run-e2e.sh` **exporta uma `REDIS_PASSWORD` efêmera** (`openssl rand -hex 16`, só
   para o project temporário: o compose exige a variável e o e2e nunca usa a do `Projeto/.env`), o validador de isolamento confere que os dois existem, que o `admission` aponta para o `redis` do project com senha e
   que o `backend` NÃO recebe a senha, e depois da reserva o script exige que o contador de comandos do Redis do project mostre ao menos um `EVAL`/`EVALSHA` (o gateway → `admission` → Redis rodou na stack real).
@@ -1452,7 +1517,7 @@ Tabela antes/depois, includes (com motivo) e perfis Seccomp/AppArmor (opcionais,
   (`6379`), `REDIS_PASSWORD` (**sem default**; vem do `Projeto/.env`, ver o aviso em "Serviço admission"), `ADMISSION_REDIS_TIMEOUT_MS` (`200`; timeout de comando e de conexão), `ADMISSION_BUCKET_MS` (`50`),
   `ADMISSION_WINDOW_MS` (`200`; múltiplo do bucket), `SERVER_TOMCAT_THREADS_MAX` (`300`), `SERVER_TOMCAT_MAX_KEEP_ALIVE_REQUESTS` (`-1`), `SERVER_TOMCAT_KEEP_ALIVE_TIMEOUT` (`60s`). Do GATEWAY (monólito):
   `ADMISSION_SERVICE_URL` (default `http://localhost:8085`), `ADMISSION_CLIENT_MAX_CONNECTIONS` (`400`), `ADMISSION_CLIENT_CONNECT_TIMEOUT_MS` (`200`), `ADMISSION_CLIENT_CONNECTION_REQUEST_TIMEOUT_MS` (`200`),
-  `ADMISSION_CLIENT_RESPONSE_TIMEOUT_MS` (`500`), `ADMISSION_CLIENT_EVICT_IDLE_MS` (`20000`), `ADMISSION_CLIENT_OPEN_MS` (`5000`; tempo do circuito aberto). Única variável nova no `.env`: `REDIS_PASSWORD`.
+  `ADMISSION_CLIENT_RESPONSE_TIMEOUT_MS` (`500`), `ADMISSION_CLIENT_EVICT_IDLE_MS` (`20000`), `ADMISSION_CLIENT_OPEN_MS` (`5000`; tempo do circuito aberto). Variável nova no `.env` na #41: `REDIS_PASSWORD`; na #42: `RABBITMQ_USER` e `RABBITMQ_PASSWORD` (as demais variáveis da fila estão em "Fila de admissão (RabbitMQ) e worker pool — issue #42").
 - Suíte e2e (#37): `MAIL_HOST`/`MAIL_PORT`/`MAIL_SMTP_AUTH`/`MAIL_STARTTLS` do `notification` (defaults do Gmail; ver "Serviço notification") e `E2E_REPLAY`
   (`1` liga as classes `*ReplayE2eTest`; sem ela ficam puladas). Variáveis do script: `E2E_PROJECT`, `MANTER`, `ESPERA_UP`.
 - Actuator (issue #92): `spring-boot-starter-actuator` com **só** `health` exposto

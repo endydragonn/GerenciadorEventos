@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -17,6 +18,7 @@ class AdmissionConfigTest {
 
     @Autowired private Environment env;
     @Autowired private ApplicationContext contexto;
+    @Autowired private org.springframework.amqp.rabbit.core.RabbitTemplate rabbit;
 
     @Test
     void portaTomcatEKeepAliveComoOReservation() {
@@ -32,6 +34,28 @@ class AdmissionConfigTest {
         assertEquals("50", env.getProperty("admission.bucket-ms"));
         assertEquals("200", env.getProperty("admission.window-ms"));
         assertEquals("200ms", env.getProperty("spring.data.redis.timeout"));
+    }
+
+    /** A fila de admissão (#42): defaults da spec; o worker é o teto de CAS simultâneos, prefetch 1, confirms + returns + mandatory. */
+    @Test
+    void filaDeAdmissaoComOsDefaultsDaSpec() {
+        assertEquals("30000", env.getProperty("admission.queue.ttl-ms"));
+        assertEquals("100000", env.getProperty("admission.queue.max-length"));
+        assertEquals("32", env.getProperty("admission.worker.concurrency"));
+        assertEquals("500", env.getProperty("admission.retry-backoff-ms"));
+        assertEquals("5", env.getProperty("admission.max-waiting-per-user"));
+        assertEquals("600", env.getProperty("admission.result-ttl-seconds"));
+        assertEquals("200", env.getProperty("admission.publish.confirm-timeout-ms"));
+        assertEquals("1", env.getProperty("spring.rabbitmq.listener.simple.prefetch"));
+        assertEquals("correlated", env.getProperty("spring.rabbitmq.publisher-confirm-type"));
+        assertEquals("true", env.getProperty("spring.rabbitmq.publisher-returns"));
+        assertEquals("true", env.getProperty("spring.rabbitmq.template.mandatory"));
+    }
+
+    /** O publicador tem conexão própria (um alarme do broker não pode travar os acks dos workers) . */
+    @Test
+    void publicadorEmConexaoPropria() {
+        assertTrue(rabbit.isUsePublisherConnection(), "RabbitTemplate.usePublisherConnection");
     }
 
     /** Sem JDBC no classpath e sem DataSource no contexto (o {@code --env-file} do run-tests injeta SPRING_DATASOURCE_*, então a property não prova nada). */

@@ -169,12 +169,20 @@ public class ReservationClient implements EventWalletApi, EventCapacityApi {
         }
     }
 
-    /** Resultado salvo da reserva com a chave (200), ou {@code null}; chave de outro evento => 422. */
-    private EventWallet replay(EventWallet ew, String idempotencyKey) {
+    /**
+     * (A chave vai como VARIÁVEL de URI, não como valor literal de {@code queryParam}: o literal deixa o {@code +} (comum em base64) sem
+     * codificar, e o servidor o leria como espaço, e trata {@code {...}} como variável de template.)
+     *
+     * <p>Resultado salvo da reserva com a chave (200), ou {@code null} (404: nenhuma reserva com a chave); chave de outro evento => 422
+     * ({@link IdempotencyConflictException}). Público desde a #42: o worker pool do admission reconcilia com ele as mensagens que
+     * venceram na fila ({@code GET /internal/reservations/replay}, só leitura; o contrato HTTP não mudou). {@code ew} só carrega o
+     * {@code userId} e o {@code eventId}.
+     */
+    public EventWallet replay(EventWallet ew, String idempotencyKey) {
         try {
             return http.get()
-                    .uri(b -> b.path("/internal/reservations/replay").queryParam("userId", ew.getUserId())
-                            .queryParam("eventId", ew.getEventId()).queryParam("idempotencyKey", idempotencyKey).build())
+                    .uri(b -> b.path("/internal/reservations/replay").queryParam("userId", "{u}").queryParam("eventId", "{e}")
+                            .queryParam("idempotencyKey", "{k}").build(ew.getUserId(), ew.getEventId(), idempotencyKey))
                     .retrieve().body(EventWallet.class);
         } catch (NaoEncontrado ex) {
             return null;

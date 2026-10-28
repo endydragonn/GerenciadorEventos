@@ -9,15 +9,17 @@
 #  - no Git Bash o binário do Docker é nativo do Windows e não entende "/e/...",
 #    então usamos "pwd -W" (-> "E:/...") e desligamos a conversão de path do MSYS.
 #
-# Roda o REACTOR inteiro (issues #32, #33, #35, #36 e #41, Fase 7): shared + reservation-client + catalog-client + identity-client + admission-client +
+# Roda o REACTOR inteiro (issues #32, #33, #35, #36, #41 e #42, Fase 7): shared + reservation-client + catalog-client + identity-client + admission-client +
 # monolito + notification + reservation + catalog + identity + admission, um `mvn clean test` na raiz do Backend/.
 # Os relatórios Surefire de todos os módulos são copiados para Backend/target/surefire-reports (nomes de classe únicos).
 #
 # Pré-requisito: a stack no ar pra existir a rede, o banco, o broker (Redpanda; os testes do backbone de
-# eventos, issue #27, publicam e consomem nele de verdade) e o Redis (os testes do contador do admission, #41, usam o real)
-#   docker compose -f Projeto/docker-compose.yml up -d db redpanda redis
-# O compose recusa subir sem REDIS_PASSWORD (Projeto/.env, ou exportada na shell só para o comando). Se a variável estiver exportada
-# AQUI também, o container de teste usa essa (-e REDIS_PASSWORD); senão usa a do --env-file (Projeto/.env).
+# eventos, issue #27, publicam e consomem nele de verdade), o Redis (os testes do contador do admission, #41, usam o real) e o RabbitMQ
+# (os testes da fila de admissão e do worker pool, #42, também)
+#   docker compose -f Projeto/docker-compose.yml up -d db redpanda redis rabbitmq
+# O compose recusa subir sem REDIS_PASSWORD, RABBITMQ_USER e RABBITMQ_PASSWORD (Projeto/.env, ou exportadas na shell só para o comando).
+# Se a variável estiver exportada AQUI também, o container de teste usa essa (-e REDIS_PASSWORD, -e RABBITMQ_USER, -e RABBITMQ_PASSWORD);
+# senão usa a do --env-file (Projeto/.env).
 # O cache do Maven fica no volume nomeado "gerenciador-eventos-m2" (persiste entre
 # execuções; não é removido por "docker compose down -v").
 
@@ -58,11 +60,11 @@ case "$(uname -s)" in
         ;;
 esac
 
-# Os testes batem num Postgres, num Redpanda e num Redis reais: sem o container no ar, falha cedo e explica.
-for CONTAINER in gerenciador-db gerenciador-redpanda gerenciador-redis; do
+# Os testes batem num Postgres, num Redpanda, num Redis e num RabbitMQ reais: sem o container no ar, falha cedo e explica.
+for CONTAINER in gerenciador-db gerenciador-redpanda gerenciador-redis gerenciador-rabbitmq; do
     if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != "true" ]; then
-        echo "❌ O container $CONTAINER não está no ar. Rode (o compose exige REDIS_PASSWORD no Projeto/.env ou exportada na shell):"
-        echo "   docker compose -f Projeto/docker-compose.yml up -d db redpanda redis"
+        echo "❌ O container $CONTAINER não está no ar. Rode (o compose exige REDIS_PASSWORD, RABBITMQ_USER e RABBITMQ_PASSWORD no Projeto/.env ou exportadas na shell):"
+        echo "   docker compose -f Projeto/docker-compose.yml up -d db redpanda redis rabbitmq"
         echo ""
         exit 1
     fi
@@ -115,10 +117,11 @@ if [ -n "$(docker ps -q -f name=^gerenciador-identity$)" ]; then
     exit 1
 fi
 
-# O serviço admission (#41) conta no MESMO Redis dos testes (chaves adm:cnt:<eventId>:*): vivo, ele contaria tentativas de teste (e os
-# ids de evento se repetem depois do TRUNCATE ... RESTART IDENTITY). Falha cedo, como nos outros serviços.
+# O serviço admission (#41/#42) conta e guarda a fila no MESMO Redis dos testes (chaves adm:*): vivo, ele contaria tentativas de teste e
+# apagaria resultados deles (e os ids de evento se repetem depois do TRUNCATE ... RESTART IDENTITY). As filas do RabbitMQ dos testes têm
+# prefixo próprio (nunca as admission.* do serviço), então o broker não colide. Falha cedo, como nos outros serviços.
 if [ -n "$(docker ps -q -f name=^gerenciador-admission$)" ]; then
-    echo "❌ O container gerenciador-admission está rodando: ele dividiria o Redis dos testes."
+    echo "❌ O container gerenciador-admission está rodando: ele dividiria o Redis dos testes (as filas do RabbitMQ dos testes têm prefixo próprio)."
     echo "   Pare-o antes: docker stop gerenciador-admission"
     echo ""
     exit 1
@@ -222,14 +225,22 @@ mkdir -p "$SCRIPT_DIR/target"
 # REDIS_HOST=redis: o Redis do compose na rede gerenciador-net (o default do admission, localhost, não existe dentro do container de teste).
 # REDIS_PASSWORD: repassada da shell com -e SÓ se estiver exportada (senão vale a do --env-file, Projeto/.env).
 #
+# RABBITMQ_HOST=rabbitmq: o RabbitMQ do compose na rede gerenciador-net (#42; o default do admission, localhost, não existe dentro do container
+# de teste). RABBITMQ_USER e RABBITMQ_PASSWORD: repassadas da shell com -e SÓ se estiverem exportadas (senão valem as do --env-file).
+#
 # SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092: o broker interno do compose (o default do application.properties,
 # localhost:9092, não existe dentro do container de teste).
 # EVENTS_CONSUMER_GROUP=gerenciador-eventos-test: os testes têm group próprio, para nunca entrar (e causar
 # rebalance) no group do backend vivo (gerenciador-eventos) que consome do mesmo Redpanda.
-REDIS_ARGS=(-e REDIS_HOST=redis)
+REDIS_ARGS=(-e REDIS_HOST=redis -e RABBITMQ_HOST=rabbitmq)
 if [ -n "${REDIS_PASSWORD:-}" ]; then
     REDIS_ARGS+=(-e REDIS_PASSWORD)
 fi
+for VARIAVEL in RABBITMQ_USER RABBITMQ_PASSWORD; do
+    if [ -n "${!VARIAVEL:-}" ]; then
+        REDIS_ARGS+=(-e "$VARIAVEL")
+    fi
+done
 
 docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
   "${PLATFORM_ARGS[@]}" \

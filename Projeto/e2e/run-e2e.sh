@@ -4,7 +4,7 @@
 #  run-e2e.sh  -  issue #37 (Fase 7): suite de integracao da stack inteira
 # =============================================================================
 #
-#  Sobe a stack COMPLETA (gateway/backend, identity, catalog, reservation, admission, redis, notification, frontend, supabase-*, redpanda) num
+#  Sobe a stack COMPLETA (gateway/backend, identity, catalog, reservation, admission, redis, rabbitmq, notification, frontend, supabase-*, redpanda) num
 #  project docker compose TEMPORARIO e isolado da stack real (gerenciador-eventos), com um captador de e-mail (Mailpit) no
 #  lugar do Gmail, e prova o fluxo ponta a ponta pelo gateway:
 #    cadastro em duas fases (o codigo vem do E-MAIL no captador) -> criar evento -> reservar -> confirmar -> e-mail
@@ -19,6 +19,8 @@
 #  E-MAIL: o script aborta se o notification nao estiver apontado para o captador. Nenhum e-mail real sai.
 #  REDIS (#41): o compose exige REDIS_PASSWORD; o script exporta uma senha EFEMERA (openssl rand -hex 16) so para este project, entao
 #  o Redis e o admission do e2e nunca usam a do Projeto/.env. O validador confere que redis e admission existem e estao isolados.
+#  RABBITMQ (#42): idem, usuario e senha EFEMEROS (openssl rand -hex 16) exportados so para este project; o validador confere que o rabbitmq
+#  existe, esta isolado (sem container_name nem porta no host) e que o admission aponta para ele; o backend nao recebe as credenciais.
 #  Segredos: `config --format json` carrega os segredos do Projeto/.env; so passa por um filtro que imprime nomes de
 #  container/porta/rede/volume. O Projeto/.env e o supabase/.env precisam existir (nada deles e impresso).
 #
@@ -83,6 +85,10 @@ esac
 command -v openssl >/dev/null 2>&1 || abortar "preciso de openssl (rand -hex) para gerar a senha efemera do Redis do project."
 REDIS_PASSWORD="$(openssl rand -hex 16)"
 export REDIS_PASSWORD
+# Credenciais efemeras do RabbitMQ do project temporario (#42): mesmo motivo (a shell vence o Projeto/.env na interpolacao do compose).
+RABBITMQ_USER="e2e$(openssl rand -hex 4)"
+RABBITMQ_PASSWORD="$(openssl rand -hex 16)"
+export RABBITMQ_USER RABBITMQ_PASSWORD
 
 ISOLADO=0 # so vira 1 depois que o `config` passou na validacao de isolamento (passo 0)
 derrubar() { # down -v SO do project temporario e SO com o isolamento validado (config rejeitado => nao derruba nada)
@@ -139,7 +145,7 @@ env = (c["services"].get("notification") or {}).get("environment") or {}
 if env.get("MAIL_HOST") != "mailpit" or env.get("MAIL_PORT") != "1025" or env.get("MAIL_SMTP_AUTH") != "false" \
         or env.get("MAIL_STARTTLS") != "false" or env.get("MAIL_PASSWORD")         or not str(env.get("MAIL_USERNAME") or "").endswith("@example.com"):
     erros.append("notification: SMTP nao aponta para o captador mailpit:1025 sem auth/starttls/senha (remetente @example.com)")
-for obrigatorio in ("mailpit", "redis", "admission"):
+for obrigatorio in ("mailpit", "redis", "rabbitmq", "admission"):
     if obrigatorio not in c["services"]:
         erros.append("falta o servico " + obrigatorio)
 adm_env = (c["services"].get("admission") or {}).get("environment") or {}
@@ -147,6 +153,14 @@ if adm_env.get("REDIS_HOST") != "redis" or not adm_env.get("REDIS_PASSWORD"):
     erros.append("admission: REDIS_HOST nao aponta para o redis do project ou falta a senha efemera")
 if (c["services"].get("backend") or {}).get("environment", {}).get("REDIS_PASSWORD"):
     erros.append("backend: recebeu REDIS_PASSWORD (o Redis e so do admission)")
+if adm_env.get("RABBITMQ_HOST") != "rabbitmq" or not adm_env.get("RABBITMQ_USER") or not adm_env.get("RABBITMQ_PASSWORD"):
+    erros.append("admission: RABBITMQ_HOST nao aponta para o rabbitmq do project ou faltam as credenciais efemeras")
+rabbit_env = (c["services"].get("rabbitmq") or {}).get("environment") or {}
+if rabbit_env.get("RABBITMQ_DEFAULT_USER") != adm_env.get("RABBITMQ_USER") or rabbit_env.get("RABBITMQ_DEFAULT_PASS") != adm_env.get("RABBITMQ_PASSWORD"):
+    erros.append("rabbitmq: as credenciais do broker nao sao as do admission")
+bk_env = (c["services"].get("backend") or {}).get("environment", {})
+if bk_env.get("RABBITMQ_USER") or bk_env.get("RABBITMQ_PASSWORD"):
+    erros.append("backend: recebeu as credenciais do RabbitMQ (a fila e so do admission)")
 for e in erros:
     print("   " + e)
 sys.exit(1 if erros else 0)
@@ -163,7 +177,7 @@ if [ $? -ne 0 ] || [ -n "$VIOLACOES" ]; then
     echo "$VIOLACOES"
     abortar "o isolamento NAO pode ser verificado/garantido: nada foi subido."
 fi
-ok "sem container_name, sem porta no host, rede e volumes com o prefixo do project, notification -> mailpit:1025, redis e admission isolados"
+ok "sem container_name, sem porta no host, rede e volumes com o prefixo do project, notification -> mailpit:1025, redis, rabbitmq e admission isolados"
 ISOLADO=1
 SERVICOS_SLIM="backend identity catalog reservation notification"
 if [ "${E2E_SLIM:-0}" = "1" ]; then

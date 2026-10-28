@@ -18,6 +18,10 @@ chama o `reservation` (capacidade). O diagrama de command → evento → projeç
 > **Issue #41 (Batch 2):** o `admission` (container `gerenciador-admission`, `:8085` só na rede, **sem datasource**) e o Redis (`gerenciador-redis`, só o `admission` o usa) entram no desenho:
 > o `gateway` conta cada tentativa de reserva num contador de RPM por evento (ver "O salto de contagem"). O modo é sempre `sync` e a falha dele é **fail-open**; o `backend` não depende dele.
 
+> **Issue #42 (Batch 2):** o `admission` ganha o **RabbitMQ** (`gerenciador-rabbitmq`, só na rede, sem management, sem volume) e o **worker pool** (ver "A fila de admissão e o worker pool"): a topologia
+> (exchange `admission`, fila `admission.requests` com TTL, dead-letter `admission.dlx` → `admission.timed_out`), o caminho de enfileirar, o resultado por mensagem no Redis e o `GET /internal/admissions/result`.
+> **Nada disso é ligado ao `POST /internal/admissions` ainda** (o gatilho é da #43): o modo devolvido segue `sync`. O `admission` agora chama o `reservation` (depende dele no compose).
+
 ## Topologia
 
 ```mermaid
@@ -55,12 +59,20 @@ flowchart LR
 
   subgraph ADM["admission — container gerenciador-admission :8085 (só na rede; Tomcat 300, SEM datasource)"]
     direction TB
-    AAPI["API interna /internal/admissions<br/>POST (conta e devolve o modo) · GET .../events/{id}/rpm"]
+    AAPI["API interna /internal/admissions<br/>POST (conta e devolve o modo) · GET .../events/{id}/rpm · GET .../result (#42)"]
     CNT["RpmCounter<br/>script Lua: buckets de 50 ms, janela de 200 ms"]
+    FILA["FilaDeAdmissao (#42)<br/>enfileirar: Lua (repetição, limite, queued + espera) + publicação com confirms e mandatory"]
+    WRK["AdmissionWorker (#42)<br/>worker pool: ack manual, concorrência fixa 32, prefetch 1<br/>listener da dead-letter: reconcilia pelo replay"]
     AAPI --> CNT
   end
-  REDIS[("Redis — gerenciador-redis<br/>só na rede · requirepass · sem persistência · maxmemory 256 MB")]
+  REDIS[("Redis — gerenciador-redis<br/>só na rede · requirepass · sem persistência · maxmemory 512 MB volatile-ttl")]
+  RMQ[("RabbitMQ — gerenciador-rabbitmq<br/>só na rede · sem management · tmpfs (sem volume)<br/>exchange admission → admission.requests (TTL, max-length, reject-publish)<br/>admission.dlx → admission.timed_out")]
   CNT -->|"1 ida (Lua): INCR + PEXPIRE + soma dos buckets"| REDIS
+  FILA -->|"Lua: resultado queued + espera (adm:res, adm:wait, adm:uwait)"| REDIS
+  FILA -->|"publica event.{id} (persistente, confirms + mandatory)"| RMQ
+  RMQ -->|"1 mensagem por worker (ack manual)"| WRK
+  WRK -->|"estado final por compare-and-set"| REDIS
+  WRK ==>|"POST /internal/reservations?path=cas (Idempotency-Key da mensagem) · GET .../replay"| API
 
   subgraph NOT["notification — container gerenciador-notification (sem HTTP)"]
     NC["NotificationConsumer<br/>e-mail por SMTP"]
@@ -112,6 +124,40 @@ sequenceDiagram
 
   Note over G,X: FAIL-OPEN: admission fora/lento (500 ms), 5xx, 401 ou Redis fora (200 ms) => modo sync, a reserva segue, com log. 5 falhas seguidas abrem o disjuntor do gateway por 5 s (nenhuma chamada ao admission nesse tempo)
 ```
+
+## A fila de admissão e o worker pool (#42)
+
+Ainda **sem gatilho** (o `POST /internal/admissions` devolve `sync`; a #43 liga). O que existe, exercido pelos testes:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant F as FilaDeAdmissao (admission)
+  participant X as Redis
+  participant Q as RabbitMQ
+  participant W as worker (x32, prefetch 1)
+  participant R as reservation
+
+  F->>X: Lua: repetição da chave · limite por usuário · queued + espera (attemptId, deadline)
+  F->>Q: publica event.{id} (persistente, confirms + mandatory)
+  Note over F,Q: nack = fila cheia (429) · returned = sem rota · exceção/bloqueado: desfaz (sync) · sem confirmação em 200 ms = publicada
+  Q->>W: entrega (ack manual)
+  W->>X: sai da espera; o resultado é desta tentativa e ainda queued?
+  W->>R: POST /internal/reservations?path=cas (Idempotency-Key da mensagem)
+  alt 201
+    W->>X: pending (expiresAt) por compare-and-set · ack
+  else 4xx de negócio
+    W->>X: rejected (motivo) · ack
+  else fora / timeout / 5xx / exceção
+    W->>X: volta à espera (ZADD)
+    W-->>Q: nack requeue (após o backoff); o TTL original vale
+  end
+  Q-->>Q: TTL vence: dead-letter → admission.timed_out
+  Note over Q,R: o listener da dead-letter chama GET /internal/reservations/replay: achou = pending, senão timed_out (sempre ack)
+```
+
+A ordem por evento não é garantida (uma fila só, de propósito: o worker pool é o teto global de CAS simultâneos); a corretude é do CAS. Reiniciar o RabbitMQ (sem volume) perde as mensagens em fila: os `queued`
+delas viram `timed_out` depois do `deadline`. Detalhes no `Projeto/Backend/CLAUDE.md`, "Fila de admissão (RabbitMQ) e worker pool — issue #42".
 
 Custo no caminho síncrono: **+1 ida HTTP keep-alive gateway → admission e +1 ida admission → Redis** por reserva (a opção "gateway direto no Redis" seria 1 ida; a spec escolheu o salto ao `admission` porque o modo
 do evento, na #43, depende do estado da fila e só o `admission` terá Redis e RabbitMQ). O custo real é medido num mini dry-run (X baixo) e registrado no `Projeto/Backend/CLAUDE.md`.
@@ -241,6 +287,8 @@ com `TRUNCATE ... RESTART IDENTITY` recicla o `user_id`: por isso a limpeza entr
   `reservation` criar o que faltou quando voltar (reservar nesse intervalo: "Capacidade do evento não configurada").
 - **Capacidade removida, evento mantido**: o `reservation` apagou o `eventcap` (cancelamento) e o commit do catalog falhou depois. Raro; o
   evento fica sem `eventcap`.
+- **RabbitMQ fora** (#42): a publicação falha (conexão recusada em 2 s) e o caminho de enfileirar desfaz a entrada e devolve "não publicada" (na #43 o gateway segue `sync`); o worker reconecta sozinho. **Reservation fora**:
+  o worker devolve a mensagem à fila com backoff (nada se perde enquanto o TTL de 30 s não vence; depois, dead-letter e `timed_out`).
 - **`admission` ou Redis fora** (#41): **fail-open**. O gateway segue reservando pelo caminho de hoje (a contagem do evento só perde essas tentativas); o `AdmissionClient` loga com limite de taxa (1 linha a cada 10 s)
   e, depois de 5 falhas seguidas, deixa de chamar o `admission` por 5 s (disjuntor). Token interno diferente nos dois lados (401) também é fail-open, mas logado em ERROR. O `backend` não depende do `admission`
   no compose. Redis lento/fora dentro do `admission`: timeout de 200 ms, comandos rejeitados na hora e resposta **503** (que o disjuntor do gateway conta; um 200 `sync` esconderia o Redis travado e cada reserva pagaria os 200 ms).

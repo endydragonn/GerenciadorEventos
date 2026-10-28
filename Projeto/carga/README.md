@@ -64,6 +64,10 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 >   como carga do seguinte. O `limpar-banco.sh` (fora do repo, em `E:\TCC\carga-overrides`) para o `admission` junto com os outros serviços, dá `FLUSHDB` no `gerenciador-redis`
 >   (e, a partir da #42, purge das filas `admission.*` do `gerenciador-rabbitmq`) e sobe o `admission` (healthy) **antes** do `backend`.
 > - **`REDIS_PASSWORD`** precisa estar no `Projeto/.env` do HOST (o compose recusa subir sem ela; repassada ao `redis` e ao `admission`, e sobreposta por vazio no `backend`). O gerador não precisa dela.
+> - **Desde a #42, `RABBITMQ_USER` e `RABBITMQ_PASSWORD`** também precisam estar no `Projeto/.env` do HOST (o compose recusa subir sem elas; repassadas ao `rabbitmq` e ao `admission`, sobrepostas por vazio no `backend`).
+>   O `gerenciador-rabbitmq` não tem volume (tmpfs): reiniciá-lo zera as filas. **A limpeza entre blocos faz purge das filas `admission.requests` e `admission.timed_out`** (com o `admission` parado, junto do `FLUSHDB`), senão mensagens
+>   e `queued` do bloco anterior seriam processados no seguinte; o `admission` ainda não enfileira nada até a #43, então hoje o purge é só garantia. Sem o management, o purge manual é
+>   `docker exec gerenciador-rabbitmq rabbitmqctl purge_queue admission.requests` (idem `admission.timed_out`), ou reiniciar o container (tmpfs).
 > - **Pool do Supavisor não muda**: o `admission` não tem datasource (soma dos Hikari segue 1213 <= 1500).
 > - **Conferir o contador** no host: `docker exec gerenciador-redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli INFO commandstats'` (`cmdstat_evalsha` cresce com as reservas) e
 >   `docker exec gerenciador-admission printenv ADMISSION_BUCKET_MS ADMISSION_WINDOW_MS` (defaults 50/200).

@@ -35,7 +35,8 @@ public class AdmissionService {
         return contador.rpm(eventId);
     }
 
-    private static void validar(AdmissionRequest p) {
+    /** As regras do pedido (a da Idempotency-Key é a do reservation). Também usada por {@link FilaDeAdmissao#enfileirar}. */
+    static void validar(AdmissionRequest p) {
         if (p == null) {
             throw new IllegalArgumentException("Pedido vazio");
         }

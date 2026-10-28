@@ -17,6 +17,9 @@ services:
   # Redis e admission (issue #41): sem container_name nem porta no host, como os demais. A senha do Redis do project temporário é
   # efêmera (o run-e2e.sh exporta REDIS_PASSWORD, nunca a do Projeto/.env); o Redis não tem volume nem persistência.
   redis: *isolado
+  # RabbitMQ (issue #42): a fila de admissão. Sem container_name nem porta no host; usuário e senha EFÊMEROS (o run-e2e.sh exporta
+  # RABBITMQ_USER e RABBITMQ_PASSWORD, nunca os do Projeto/.env); sem volume (tmpfs no compose base).
+  rabbitmq: *isolado
   admission: *isolado
   notification-seek: *isolado
   frontend: *isolado
