@@ -21,6 +21,9 @@ import com.gerenciador.eventos.identityclient.api.UserApi;
 @Service
 public class UserService implements UserApi {
 
+    /** 400 de e-mail/telefone/nome repetido: texto genérico (sem o valor), o mesmo do 23505 em {@link InternalApiExceptionHandler}. */
+    static final String CADASTRO_DUPLICADO = "Já existe um cadastro com estes dados (e-mail, telefone ou nome)";
+
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final String CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz";
 
@@ -120,7 +123,7 @@ public class UserService implements UserApi {
     }
 
     /**
-     * Atualizar usuário. {@code host} NÃO é gravável (nenhuma rota promove a host). Devolve a linha como ficou no banco
+     * Atualizar usuário (400 se o e-mail já é de outra conta, #166). {@code host} NÃO é gravável (nenhuma rota promove a host). Devolve a linha como ficou no banco
      * (relida), não o que o chamador mandou.
      */
     public User updateUser(User user) {
@@ -128,6 +131,11 @@ public class UserService implements UserApi {
             throw new IllegalArgumentException("ID do usuário não pode ser nulo");
         }
         validateRequiredFields(user);
+        // #166: e-mail de OUTRA conta, sem diferenciar caixa (a UNIQUE do banco é sensível a caixa); o próprio e-mail segue
+        User dono = userRepository.findByEmail(user.getEmail());
+        if (dono != null && !dono.getId().equals(user.getId())) {
+            throw new IllegalArgumentException(CADASTRO_DUPLICADO);
+        }
         try {
             return notifications.emTransacaoComResultado(conn -> {
                 if (!userRepository.update(conn, user)) {
