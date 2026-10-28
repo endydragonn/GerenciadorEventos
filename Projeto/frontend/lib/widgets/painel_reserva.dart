@@ -174,7 +174,7 @@ class _PainelReservaState extends State<PainelReserva> {
       final resp = await http.get(
         _uri('/admission?idempotencyKey=${Uri.encodeQueryComponent(_chave ?? '')}'),
         headers: ApiAuth.jsonHeaders(),
-      );
+      ).timeout(const Duration(seconds: 5)); // sem resposta conta como falha transitória (catch) e a consulta segue até o limite
       if (!mounted || g != _geracao) return;
       corpo = _json(resp);
       r = classificarConsulta(resp.statusCode, corpo['status']?.toString());
