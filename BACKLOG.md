@@ -34,7 +34,7 @@ Labels sugeridas: `fase/0`…`fase/11`, `area/backend`, `area/banco`, `area/infr
 
 ---
 
-## Estado (2026-10-26)
+## Estado (2026-10-28)
 
 Snapshot do GitHub (`gh issue list` / `gh pr list`). A definição de cada item continua sendo o
 texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
@@ -73,7 +73,12 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 32 | #33 | fechada — `reservation` como serviço atrás do `gateway` (schema e event store próprios, API `/internal/**` com token de serviço); naive em 2 chamadas HTTP, CAS em 1; `eventcap` por chamada síncrona | #153 |
 | 33 | #34 | fechada (2026-10-26) — Rodada 3 (ponto 3) em `Projeto/carga/results/05-distribuido`, X ≈ 58k, CAS com overselling 0; controle do ponto 2 no cabo em `04b-fase6-es-cabo`; ponto 3 em `docs/artigo/experimento-monolito.md` | #155, #156 |
 | 34 | #35 | fechada — `catalog` como serviço (schema, event store e relay próprios; API `/internal/events/**` com token de serviço); `creator_id` integer amarrado ao token, `creator_name` composto no `gateway`; seed desligado por padrão | #157 |
-| 35–46 | #36–#47 | abertas | — |
+| 35 | #36 | fechada na `Batch_1` — `identity` como serviço (schema `identity`, event store e relay próprios); JWT RS256 emitido pelo serviço e validado sem estado no `gateway` pelo JWKS (claim `uid`); migração `20261028` | #169 |
+| 36 | #37 | fechada na `Batch_1` — compose final (healthchecks, `notification-seek` no 1º `up`, SMTP parametrizável) + suíte e2e `Projeto/e2e/run-e2e.sh` (project isolado, Mailpit) | #172 |
+| 37 | #38 | fechada na `Batch_1` — harness definitivo: cenário de leitura no `test-rpm`, `coleta-host.sh` (lags, outbox, conexões, `pg_stat_statements`) | #168 |
+| 38 | #39 | fechada na `Batch_1` — comparação das 3 configurações (tabela + gráficos em `docs/artigo/graficos/`) em `docs/artigo/experimento-monolito.md` | #174 |
+| 39 | #40 | fechada na `Batch_1` — X definitivo = 56k RPM por evento (Rodada R, `Projeto/carga/results/06-batch1-final`; intercalado ≈ 86k = teto do host) | #173 |
+| 40–46 | #41–#47 | abertas | — |
 | 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
 
 Branch de integração da Fase 2: `Fase_2` (a #11 entrou pelo PR #104; as #12–#15 foram
@@ -83,8 +88,10 @@ desenvolvidas direto nela; entrou em `main` pelos PRs #114 e #115). Branch de in
 `Fase_6`, criada a partir da `Fase_5` (PRs #135, #137–#144 com base nela; PR final `Fase_6` → `main`, merge do usuário). Vocabulário do
 experimento em `CONTEXT.md`.
 
-Fora do backlog (follow-ups): #56–#61 abertas (`updatePolicy`, IDOR em `/bff/event-wallets`,
-endurecer schema, cobertura, transações do `updateEvent`, N+1/pool); #78 (BFF única + JWT
+Fora do backlog (follow-ups): #56–#61 fechadas no Batch 1 (`updatePolicy` PR #163, IDOR em `/bff/event-wallets` PR #167,
+endurecer schema PR #159, cobertura PR #162, transações do `updateEvent` PR #160, N+1/expiração em lote PR #161), junto com
+#89 (PR #164), #133 (PR #165), #113 (PR #158) e #81 (fechada sem PR: o `SEED_ENABLED` da #35 já cobria o aceite); abertas do
+Batch 1: #166 (IDOR pré-existente), #170 e #171; #78 (BFF única + JWT
 deny-by-default, PR #79), #83 (quality gates, PR #85), #86 (PR #88), #92 (`/actuator/health`,
 PR #93) e #67 fechadas; #81, #84, #89 abertas. Da Fase 5: #129 (PK da idempotência por usuário, PR #137), #130 (retenção
 da `idempotency_key`, PR #139), #131 (`run-tests.sh` limpa `surefire-reports`, PR #135) e #136 (`verify-20260901` com o init-script 10, PR #140)
@@ -94,7 +101,9 @@ fechadas na `Fase_6`; #133 (CORS `*` com credenciais) aberta. #146 (consumer da 
 Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feitas (marco de banca atingido); Fase 4: #17 → #18
 → #19/#20/#21 → #22 feitas (ponto 1 da série; PR #122); Fase 5: #23 → #24/#25 feitas (PR #134); Fase 6: #26 → #27 → #28/#29 → #30 feitas (na `Fase_6`);
 Rodada 2 (#31, ponto 2 da série) feita em 2026-10-19 (PR #148). Fase 7: #32 → #33 feitas em 2026-10-21 na branch de integração
-`Fase_7` (PRs #152 e #153; PR final #156 `Fase_7` → `main`, mergeado em 2026-10-25); a #34 (Rodada 3) foi feita em 2026-10-24 com o gerador (resultados em `Projeto/carga/results/05-distribuido`) e fechada em 2026-10-26; a #35 (`catalog`) fechou em 2026-10-25 (PR #157). Próximo: #36 (`identity`).
+`Fase_7` (PRs #152 e #153; PR final #156 `Fase_7` → `main`, mergeado em 2026-10-25); a #34 (Rodada 3) foi feita em 2026-10-24 com o gerador (resultados em `Projeto/carga/results/05-distribuido`) e fechada em 2026-10-26; a #35 (`catalog`) fechou em 2026-10-25 (PR #157). Batch 1 (2026-10-26 a 2026-10-28, branch de integração `Batch_1`): #36 →
+#37 → #38 → Rodada R (`Projeto/carga/results/06-batch1-final`) → #40 → #39, mais os follow-ups acima; PR final `Batch_1` → `main`
+aguarda o merge do usuário. Próximo: #41–#43 (`admission`).
 
 ## Fase 0 — Desbloqueio de ambiente
 

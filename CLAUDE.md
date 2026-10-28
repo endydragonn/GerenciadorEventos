@@ -233,6 +233,14 @@ antigos viram 401. Hikari: identity 100, backend 10 (soma no Supavisor 1000 + 10
 [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md); smoke da stack real em
 `docs/testes-manuais/smoke-identity-servico-separado.sh`.
 
+**Implementado e medido (Batch 1, 2026-10-26 a 2026-10-28, branch de integração `Batch_1`):** além da #36, o compose final e a suíte e2e
+(#37), o harness definitivo (#38: cenário de leitura, `coleta-host.sh`; #113: escada `MAPEAMENTO=sequencial|intercalado`) e os follow-ups de
+corretude e segurança (#56, #57, #58, #59, #60, #61, #89, #133; #81 fechada sem PR). A Rodada R mediu a configuração final em
+`Projeto/carga/results/06-batch1-final`: CAS com overselling 0 (matriz e aleatório), naive no teto, **X definitivo = 56k RPM por evento**
+(escada sequencial, linha quente do `eventcap`; #40) e ≈ 86k no intercalado (teto do host). A comparação das 3 configurações (#39) está em
+`docs/artigo/experimento-monolito.md` (tabela e `docs/artigo/graficos/`). Rodando escada no host: **suba a escada aos poucos**, porque um 1º
+degrau já alto, a frio, enfileira na linha do `eventcap` e não se recupera (ver o README da etapa 06).
+
 **Decidido, não implementado:** extrair os demais módulos como microsserviços (Opção B — `gateway`,
 `admission`; o `notification` saiu na #32, o `reservation` na #33, o `catalog` na #35 e o `identity` na #36);
 camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
