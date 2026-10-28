@@ -339,7 +339,7 @@ ciclo() {
     aplica_pendentes
     chave=""; (( SECO == 0 && E_A[reservation] > 0 )) && chave="${E_A[reservation]}"
     leitura_ok=1
-    saida="$(redis_ciclo "$chave" 2>/dev/null)" && saida="$(valida_leitura "${saida//$''/}")" || leitura_ok=0
+    saida="$(redis_ciclo "$chave" 2>/dev/null)" && saida="$(valida_leitura "${saida//$'\r'/}")" || leitura_ok=0
     if (( leitura_ok == 1 )); then read -r hot fila <<<"$saida"; fi
     # req/s da entrada = delta de req_tot entre laços (mais estável que o req_rate de 1 s)
     tot="$(stat_campo entrada FRONTEND req_tot <<<"$STAT")"; tms="$(agora_ms)"; rps=0
