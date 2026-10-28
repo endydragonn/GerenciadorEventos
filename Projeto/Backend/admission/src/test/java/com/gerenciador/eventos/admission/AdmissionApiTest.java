@@ -39,13 +39,73 @@ class AdmissionApiTest {
     @LocalServerPort private int porta;
     @Autowired private TestRestTemplate http;
     @Autowired private StringRedisTemplate redis;
+    @Autowired private AdmissionStore store;
     private long evento = RedisDeTeste.eventoNovo();
+    private long usuario = RedisDeTeste.usuarioNovo();
 
     @AfterEach
     void limpar() {
         var chaves = redis.keys("adm:cnt:" + evento + ":*");
         if (chaves != null && !chaves.isEmpty()) {
             redis.delete(chaves);
+        }
+        var fila = redis.keys("adm:*:" + usuario + "*");
+        if (fila != null && !fila.isEmpty()) {
+            redis.delete(fila);
+        }
+        redis.delete(AdmissionStore.chaveEspera(evento));
+    }
+
+    private String resultado(String token, String query) {
+        return chamar(HttpMethod.GET, "/internal/admissions/result" + query, token, null).getBody();
+    }
+
+    @Test
+    void resultadoDaFilaTemTokenEmTodaRotaEDevolve404SemCorpoOu200ComOEstado() {
+        String query = "?userId=" + usuario + "&idempotencyKey=chave-1";
+        for (String token : new String[] {null, "", "errado"}) {
+            assertEquals(HttpStatus.UNAUTHORIZED, chamar(HttpMethod.GET, "/internal/admissions/result" + query, token, null).getStatusCode());
+        }
+
+        ResponseEntity<String> semResultado = chamar(HttpMethod.GET, "/internal/admissions/result" + query, TOKEN, null);
+        assertEquals(HttpStatus.NOT_FOUND, semResultado.getStatusCode());
+        assertTrue(semResultado.getBody() == null || semResultado.getBody().isEmpty(), "404 sem corpo");
+
+        AdmissionMessage m = new AdmissionMessage(usuario, evento, "chave-1", "tentativa-1", System.currentTimeMillis() + 30_000);
+        store.entrar(m);
+        ResponseEntity<String> queued = chamar(HttpMethod.GET, "/internal/admissions/result" + query, TOKEN, null);
+        assertEquals(HttpStatus.OK, queued.getStatusCode());
+        assertEquals("{\"status\":\"queued\",\"eventId\":" + evento + "}", queued.getBody(),
+                "só o estado público: sem attemptId, deadline nem dado pessoal");
+
+        store.concluir(m, store.resultado(usuario, "chave-1").pending("2026-10-28T12:00:00"));
+        assertEquals("{\"status\":\"pending\",\"eventId\":" + evento + ",\"expiresAt\":\"2026-10-28T12:00:00\"}",
+                resultado(TOKEN, query));
+
+        AdmissionMessage outra = new AdmissionMessage(usuario, evento, "chave-2", "tentativa-2", System.currentTimeMillis() + 30_000);
+        store.entrar(outra);
+        store.concluir(outra, store.resultado(usuario, "chave-2").rejected("Evento lotado"));
+        assertEquals("{\"status\":\"rejected\",\"eventId\":" + evento + ",\"reason\":\"Evento lotado\"}",
+                resultado(TOKEN, "?userId=" + usuario + "&idempotencyKey=chave-2"));
+        assertEquals(HttpStatus.NOT_FOUND, chamar(HttpMethod.GET, "/internal/admissions/result?userId=" + (usuario + 1)
+                + "&idempotencyKey=chave-1", TOKEN, null).getStatusCode(), "a chave é escopada pelo usuário");
+    }
+
+    @Test
+    void resultadoQueuedComODeadlineVencidoMaisACarenciaValeComoTimedOut() {
+        long deadline = System.currentTimeMillis() - 61_000;
+        store.entrar(new AdmissionMessage(usuario, evento, "chave-velha", "tentativa-1", deadline));
+
+        assertEquals("{\"status\":\"timed_out\",\"eventId\":" + evento + "}",
+                resultado(TOKEN, "?userId=" + usuario + "&idempotencyKey=chave-velha"));
+    }
+
+    @Test
+    void resultadoSemParametrosOuInvalidoDa400() {
+        for (String query : new String[] {"", "?userId=" + usuario, "?idempotencyKey=k", "?userId=abc&idempotencyKey=k",
+                "?userId=0&idempotencyKey=k", "?userId=" + usuario + "&idempotencyKey="}) {
+            assertEquals(HttpStatus.BAD_REQUEST, chamar(HttpMethod.GET, "/internal/admissions/result" + query, TOKEN, null).getStatusCode(),
+                    query);
         }
     }
 

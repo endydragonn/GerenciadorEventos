@@ -93,8 +93,8 @@ commitar ou registrar em log.
   os testes e a porta 5433 vão direto no `db`. Sobe junto o `redpanda` (broker Kafka-compatível da Fase 6, issue #27;
   só `redpanda:9092` na rede `gerenciador-net`, sem porta no host) e o backend espera ele ficar `healthy`.
 - Antes de considerar uma tarefa de backend pronta: `Projeto/Backend/run-tests.sh`
-  (precisa dos containers `db`, `redpanda` **e** `redis` no ar — `docker compose -f Projeto/docker-compose.yml up -d db redpanda redis`;
-  os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`, Redpanda real e Redis real (#41); o script aborta com mensagem
+  (precisa dos containers `db`, `redpanda`, `redis` **e** `rabbitmq` no ar — `docker compose -f Projeto/docker-compose.yml up -d db redpanda redis rabbitmq`;
+  os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`, Redpanda real, Redis real (#41) e RabbitMQ real (#42); o script aborta com mensagem
   clara se faltar um deles). **Pare o `gerenciador-backend` antes** (`docker stop gerenciador-backend`): desde a #28/#29 o
   relay e o consumer dele compartilham o `meu_banco` e drenam o `event_outbox` dos testes; o script aborta com
   mensagem clara se o container estiver rodando. Desde a #32 o script roda o **reactor Maven inteiro** (`shared`, `reservation-client`,
@@ -125,8 +125,13 @@ commitar ou registrar em log.
   (`${REDIS_PASSWORD:?...}`); até lá, exporte-a na shell só para o comando (a shell vale mais que o `.env`). O `run-tests.sh` usa a do `.env` ou, se exportada, a da shell (`-e REDIS_PASSWORD`),
   exige o `gerenciador-redis` no ar, **aborta com o `gerenciador-admission` rodando** (`docker stop gerenciador-admission`) e dá `FLUSHDB` no Redis no início e ao fim da rodada (os ids de evento são reciclados
   pelo `RESTART IDENTITY`). O backend recebe `REDIS_PASSWORD` vazia (sobreposta no compose).
-- O serviço `admission` (#41, container `gerenciador-admission`, API interna `:8085` só na rede `gerenciador-net`, sem datasource) sobe junto com `up -d --build` (depende só do `redis`); o `backend`
-  **não** depende dele: o gateway conta cada tentativa de reserva por HTTP e, com o `admission` ou o Redis fora, faz fail-open (a reserva segue síncrona, com log). O e2e sobe os dois isolados, com senha efêmera.
+- **`RABBITMQ_USER` e `RABBITMQ_PASSWORD` (desde a #42):** o RabbitMQ (`gerenciador-rabbitmq`, fila de admissão do serviço `admission`; imagem sem management, sem porta no host, **sem volume**: reiniciar perde as mensagens em fila)
+  exige usuário e senha, sem default. **Acrescente ao `Projeto/.env` (você mesmo; o repo nunca edita nem imprime o `.env`)** `RABBITMQ_USER=<nome>` e `RABBITMQ_PASSWORD=<valor aleatório>` (ex.: `openssl rand -hex 32`). Sem elas
+  **qualquer `docker compose`** recusa com mensagem clara; até lá, exporte-as na shell só para o comando. O `run-tests.sh` usa as do `.env` ou, se exportadas, as da shell (`-e RABBITMQ_USER`, `-e RABBITMQ_PASSWORD`) e exige o
+  `gerenciador-rabbitmq` no ar. O backend recebe as duas vazias (sobrepostas no compose). Os testes usam filas com prefixo próprio (nunca as `admission.*` do serviço).
+- O serviço `admission` (#41, container `gerenciador-admission`, API interna `:8085` só na rede `gerenciador-net`, sem datasource) sobe junto com `up -d --build` (depende do `redis` e, desde a #42, do `rabbitmq` e do `reservation`); o `backend`
+  **não** depende dele: o gateway conta cada tentativa de reserva por HTTP e, com o `admission` ou o Redis fora, faz fail-open (a reserva segue síncrona, com log). Desde a #42 ele também tem a fila de admissão e o worker pool (o gatilho que os liga
+  ao `POST /internal/admissions` é da #43). O e2e sobe `redis`, `rabbitmq` e `admission` isolados, com credenciais efêmeras.
 - O serviço `notification` sobe junto com `up -d --build` (container `gerenciador-notification`); o `backend` não depende dele. O serviço
   `reservation` (container `gerenciador-reservation`, API interna `:8082` só na rede `gerenciador-net`) e o serviço `catalog` (#35, container
   `gerenciador-catalog`, API interna `:8083` só na rede `gerenciador-net`) e o serviço `identity` (#36, container `gerenciador-identity`, API interna `:8084` só na rede, chave do JWT no volume `identity-keys`) também sobem junto, e o `backend` **depende dos três**
@@ -247,6 +252,13 @@ validações e antes do `reservation`, pela lib `admission-client` (HTTP, timeou
 sem default), sem persistência, `maxmemory`, sem porta no host. A fila (RabbitMQ), o worker pool e o gatilho por uso de X são as #42 e #43. Detalhes no `Projeto/Backend/CLAUDE.md`, "Serviço admission"; spec em
 `docs/superpowers/specs/2026-10-28-admission-servico-design.md`; diagrama em [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md).
 
+**Implementado (Fase 7, issue #42, 2026-10-28, Batch 2):** a fila da camada de alta carga — o `admission` ganhou o **RabbitMQ** (`gerenciador-rabbitmq`, tag fixa sem management, sem porta no host, **sem volume**) com a topologia declarada
+por ele (exchange topic `admission`, fila `admission.requests` com TTL, `max-length` + `reject-publish` e dead-letter `admission.dlx` → `admission.timed_out`), o **caminho de enfileirar** (`FilaDeAdmissao.enfileirar`: resultado `queued` + espera + limite
+por usuário num script Lua, publicação com confirms e `mandatory`, desfazer, 422/429; **sem ligar ao `POST /internal/admissions`**, que segue devolvendo `sync`: o gatilho é da #43), o **worker pool** (`@RabbitListener` com ack manual, concorrência
+fixa 32 = teto de CAS simultâneos, prefetch 1, chama `POST /internal/reservations?path=cas` pelo `ReservationClient` com a `Idempotency-Key` da mensagem; 201 → `pending`, 4xx de negócio → `rejected`, reservation fora/5xx/exceção → backoff e nack com
+requeue), a **dead-letter** reconciliada pelo `replay` (`pending` se há reserva com a chave, senão `timed_out`) e o **resultado consultável** no Redis (`GET /internal/admissions/result`). Redis do compose: 512 MB `volatile-ttl`. Credenciais novas no `Projeto/.env`:
+`RABBITMQ_USER` e `RABBITMQ_PASSWORD`. Detalhes no `Projeto/Backend/CLAUDE.md`, "Fila de admissão (RabbitMQ) e worker pool — issue #42"; diagrama em [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md).
+
 **Implementado e medido (Batch 1, 2026-10-26 a 2026-10-28, branch de integração `Batch_1`):** além da #36, o compose final e a suíte e2e
 (#37), o harness definitivo (#38: cenário de leitura, `coleta-host.sh`; #113: escada `MAPEAMENTO=sequencial|intercalado`) e os follow-ups de
 corretude e segurança (#56, #57, #58, #59, #60, #61, #89, #133; #81 fechada sem PR). A Rodada R mediu a configuração final em
@@ -257,5 +269,5 @@ degrau já alto, a frio, enfileira na linha do `eventcap` e não se recupera (ve
 
 **Decidido, não implementado:** extrair o `gateway` como microsserviço (Opção B; o `notification` saiu na #32, o `reservation` na #33,
 o `catalog` na #35, o `identity` na #36 e o `admission` nasceu na #41); da camada de alta carga (Redis RPM + fila + worker pool) existe só o contador de RPM da #41
-(`admission` + Redis). A fila (RabbitMQ), o worker pool e o gatilho por uso de X são as #42 e #43 e não existem no código — ver
+(`admission` + Redis). A fila (RabbitMQ) e o worker pool existem desde a #42 (sem gatilho); o gatilho por uso de X e o `202` no gateway são da #43 e não existem no código — ver
 `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.

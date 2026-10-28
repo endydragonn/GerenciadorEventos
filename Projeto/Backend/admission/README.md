@@ -5,8 +5,8 @@ num **contador de janela deslizante em Redis** e expõe o RPM atual como sinal d
 8085) chamada pelo `gateway` do monólito. Processo, imagem e container (`gerenciador-admission`) próprios; **sem porta no host**; **sem
 datasource** (não toca no Postgres e não depende da lib `shared`).
 
-Na #41 o modo devolvido é **sempre `sync`** (a reserva segue pelo caminho de hoje). A fila RabbitMQ e o gatilho de alta carga são as
-issues #42 e #43; o corpo do `POST` já tem a forma final.
+Na #41 o modo devolvido é **sempre `sync`** (a reserva segue pelo caminho de hoje). Na **#42** o serviço ganhou a **fila de admissão** (RabbitMQ), o **worker pool** que chama o `reservation`, o resultado por mensagem no
+Redis e o `GET /internal/admissions/result`; **o gatilho que liga a fila ao `POST` é da #43** (o `POST` continua devolvendo `sync`; o caminho de enfileirar é o método `FilaDeAdmissao.enfileirar`, usado pelos testes).
 
 - **Autenticação:** todo `/internal/**` exige o header `X-Internal-Token` = `INTERNAL_API_TOKEN` (401 sem/errado, em toda requisição; sem
   rota pública); sem a variável o serviço não sobe. O mesmo valor vai ao backend (o compose repassa do `Projeto/.env`).
@@ -16,17 +16,30 @@ issues #42 e #43; o corpo do `POST` já tem a forma final.
     255 caracteres (mesma regra e mesma mensagem do `reservation`). Redis fora ou lento (timeout de 200 ms) = **503**: o fail-open é do cliente
     (gateway) e o 503 é o que o disjuntor dele conta; um 200 `sync` esconderia a falha.
   - `GET /internal/admissions/events/{eventId}/rpm` — `{"eventId":n,"rpm":n}`, só leitura (não conta). Redis fora = `503`.
+  - `GET /internal/admissions/result?userId=&idempotencyKey=` (#42) — `200 {status, eventId, expiresAt?, reason?}` (`queued`, `pending`, `rejected` ou `timed_out`; um `queued` com o `deadline` + 60 s vencido vale
+    `timed_out`) ou `404` sem corpo; `400` sem parâmetros ou inválidos.
 - **Contador:** buckets de `ADMISSION_BUCKET_MS` (50 ms) somados numa janela de `ADMISSION_WINDOW_MS` (200 ms, múltiplo do bucket). Chave
   `adm:cnt:<eventId>:<bucket>`, `INCR` + `PEXPIRE` (janela + 1 bucket: **toda chave tem TTL**); RPM = soma dos buckets da janela x 60000 /
   tempo coberto (`janela − bucket + resto do bucket corrente + 1 ms`: o bucket corrente é parcial). Um script Lua (`scripts/rpm.lua`) = UMA ida ao Redis, atômica. Justificativa da janela de 200 ms (a rajada por evento na escada
   dura ~0,2 s; 1 s leria 1/5 da taxa e 60 s nunca dispararia o gatilho da #43): `docs/superpowers/specs/2026-10-28-admission-servico-design.md`.
   O RPM é **só sinal de carga**: nada de capacidade é decidido por ele.
-- **Redis:** container `gerenciador-redis` (imagem com tag fixa, `--requirepass`, sem persistência, `maxmemory` 256 MB `volatile-lru`, sem
-  porta no host). Lettuce com timeout de **200 ms** e comandos rejeitados na hora sem conexão (`REJECT_COMMANDS`).
+- **Redis:** container `gerenciador-redis` (imagem com tag fixa, `--requirepass`, sem persistência, `maxmemory` 512 MB `volatile-ttl`, sem
+  porta no host). Lettuce com timeout de **200 ms** e comandos rejeitados na hora sem conexão (`REJECT_COMMANDS`). Além do contador, guarda o resultado de cada mensagem da fila
+  (`adm:res:<userId>:<chave>`, toda escrita com TTL, estado final por compare-and-set pela tentativa) e a espera (ZSET `adm:wait:<eventId>`, `adm:uwait:<userId>`).
+- **Fila (#42):** container `gerenciador-rabbitmq` (`rabbitmq:4.1.8-alpine`, **sem** management, sem porta no host, **sem volume**: `tmpfs`). Topologia declarada pelo serviço: exchange topic `admission` (routing
+  `event.<eventId>`) → fila durável `admission.requests` (`x-message-ttl` = `ADMISSION_QUEUE_TTL_MS`, `x-max-length` = `ADMISSION_QUEUE_MAX_LENGTH` com `reject-publish`, dead-letter para `admission.dlx`) e
+  `admission.timed_out`. Mensagem `{userId, eventId, idempotencyKey, attemptId, deadline}`, persistente, sem dado pessoal. **Worker pool:** `@RabbitListener` com ack manual, concorrência fixa
+  `ADMISSION_WORKER_CONCURRENCY` (o teto de CAS simultâneos no `reservation`), prefetch 1; `POST /internal/reservations?path=cas` com a `Idempotency-Key` da mensagem: 201 → `pending`, 4xx de negócio → `rejected`,
+  reservation fora/5xx/exceção (inclusive `Error`) → backoff e a mensagem volta (nack com requeue). O publicador usa uma conexão AMQP própria e `enfileirar` só aceita `path=cas`. Dead-letter: reconcilia pelo `replay` do reservation (`pending` se há reserva com a chave, senão `timed_out`; sempre ack). A ordem por evento
+  não é garantida (a corretude é do CAS). Detalhes e a justificativa no `Projeto/Backend/CLAUDE.md`, "Fila de admissão (RabbitMQ) e worker pool — issue #42".
+- **Variáveis novas no `Projeto/.env`:** `RABBITMQ_USER=<nome>` e `RABBITMQ_PASSWORD=<valor aleatório>` (`openssl rand -hex 32`), além da `REDIS_PASSWORD` da #41; sem elas o compose recusa.
 - **Configuração** (só pelo nome): `INTERNAL_API_TOKEN`, `REDIS_HOST` (`redis` no compose), `REDIS_PORT`, `REDIS_PASSWORD` (sem default: o
-  compose recusa subir sem ela), `ADMISSION_REDIS_TIMEOUT_MS`, `ADMISSION_BUCKET_MS`, `ADMISSION_WINDOW_MS`, `SERVER_TOMCAT_THREADS_MAX` (300).
+  compose recusa subir sem ela), `ADMISSION_REDIS_TIMEOUT_MS`, `ADMISSION_BUCKET_MS`, `ADMISSION_WINDOW_MS`, `SERVER_TOMCAT_THREADS_MAX` (300); da fila (#42): `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`,
+  `RABBITMQ_PASSWORD`, `RESERVATION_SERVICE_URL`, `ADMISSION_QUEUE_TTL_MS` (30000), `ADMISSION_QUEUE_MAX_LENGTH` (100000), `ADMISSION_WORKER_CONCURRENCY` (32), `ADMISSION_DLX_CONCURRENCY` (4),
+  `ADMISSION_RETRY_BACKOFF_MS` (500), `ADMISSION_MAX_WAITING_PER_USER` (5), `ADMISSION_RESULT_TTL_SECONDS` (600), `ADMISSION_PUBLISH_CONFIRM_TIMEOUT_MS` (200).
   Tomcat 300, virtual threads desligadas, keep-alive sem teto de requisições e de 60 s (acima do `evict-idle` de 20 s do cliente).
-- **Rodar:** `docker compose -f Projeto/docker-compose.yml up -d --build admission` (sobe junto `redis`, de quem depende). O `backend` **não** depende dele.
-- **Testar:** `Projeto/Backend/run-tests.sh` (reactor inteiro; precisa do `redis` no ar e do `gerenciador-admission` parado). O contador é
+- **Rodar:** `docker compose -f Projeto/docker-compose.yml up -d --build admission` (sobe junto `redis`, `rabbitmq` e `reservation`, de quem depende). O `backend` **não** depende dele.
+- **Testar:** `Projeto/Backend/run-tests.sh` (reactor inteiro; precisa do `redis` e do `rabbitmq` no ar e do `gerenciador-admission` parado). A fila e o worker são testados com **RabbitMQ e Redis reais** e um
+  `reservation` falso (`FakeReservationServer`): `AdmissionStoreTest`, `AdmissionTopologyTest`, `AdmissionLogsTest`, `FilaDeAdmissaoTest`, `FilaCheiaTest`, `AdmissionWorkerTest`, `AdmissionDeadLetterTest`. O contador é
   testado contra o **Redis real** (`RpmCounterTest`), a API por HTTP real com o `AdmissionClient` real (`AdmissionApiTest`), o 503 com o
   Redis recusando e congelado (`AdmissionRedisRecusadoTest`, `AdmissionRedisTravadoTest`).

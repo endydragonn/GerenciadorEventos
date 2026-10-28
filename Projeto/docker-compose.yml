@@ -74,10 +74,12 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # Redis (issue #41): o contador de RPM por evento do serviço admission (chaves adm:cnt:<evento>:<bucket>, todas com TTL). Imagem com tag
+  # Redis (issue #41): o contador de RPM por evento do serviço admission (chaves adm:cnt:<evento>:<bucket>, todas com TTL) e, desde a #42, o
+  # resultado (adm:res:*) e a espera (adm:wait:*, adm:uwait:*) da fila de admissão. Imagem com tag
   # fixa (alpine). Senha OBRIGATÓRIA e sem default: o compose recusa subir sem REDIS_PASSWORD (Projeto/.env, ex.: openssl rand -hex 32;
   # ou exportada na shell só para o comando). SEM persistência (--save "" --appendonly no: é estado descartável, o contador se refaz em
-  # 200 ms) e com teto de memória (volatile-lru: só chaves com TTL são candidatas, e toda chave tem). Sem porta no host: só na rede
+  # 200 ms) e com teto de memória (512 MB, volatile-ttl: só chaves com TTL são candidatas, e toda chave tem; sob pressão saem primeiro as de vida
+  # mais curta; desde a #42 guarda também o resultado e a espera da fila de admissão, ~110 MB a 750 req/s em fila). Sem porta no host: só na rede
   # gerenciador-net. O `sh -c` passa pelo docker-entrypoint.sh da imagem oficial (que troca para o usuário redis; sem ele o Redis rodaria como
   # root). Para debug: docker exec gerenciador-redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli keys "adm:*"').
   redis:
@@ -88,7 +90,7 @@ services:
     command:
       - sh
       - -c
-      - exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD" --save "" --appendonly no --maxmemory 256mb --maxmemory-policy volatile-lru
+      - exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD" --save "" --appendonly no --maxmemory 512mb --maxmemory-policy volatile-ttl
     healthcheck:
       # autenticado: a senha vai pelo ambiente (REDISCLI_AUTH), nunca na linha de comando
       test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
@@ -96,6 +98,29 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+    restart: unless-stopped
+
+  # RabbitMQ (issue #42): a fila de admissão do serviço admission (exchange `admission`, fila `admission.requests` com TTL e dead-letter,
+  # declaradas pelo próprio serviço). Imagem com tag fixa (alpine) SEM o plugin de management (sem porta 15672 nem UI). Credenciais
+  # OBRIGATÓRIAS e sem default: o compose recusa subir sem RABBITMQ_USER/RABBITMQ_PASSWORD (Projeto/.env, ex.: openssl rand -hex 32; ou
+  # exportadas na shell só para o comando). SEM volume persistente: o tmpfs em /var/lib/rabbitmq faz o usuário do 1º boot nascer a cada
+  # start (um volume, inclusive o anônimo que a imagem declara, prenderia a senha do 1º boot). Reiniciar o broker perde as mensagens em fila
+  # (os resultados `queued` delas viram `timed_out` depois do `deadline`; o cliente repete o POST com a mesma chave). Sem porta no host: só
+  # na rede gerenciador-net (o run-tests.sh e o e2e falam com ele por `rabbitmq:5672`).
+  rabbitmq:
+    image: rabbitmq:4.1.8-alpine
+    container_name: gerenciador-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?defina RABBITMQ_USER no Projeto/.env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?defina RABBITMQ_PASSWORD no Projeto/.env (openssl rand -hex 32)}
+    tmpfs:
+      - /var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
     restart: unless-stopped
 
   backend:
@@ -128,6 +153,9 @@ services:
       MAIL_PASSWORD: ""
       # O Redis é só do serviço admission (#41): o gateway conta pela API interna dele, nunca fala com o Redis. Sobrepõe por vazio.
       REDIS_PASSWORD: ""
+      # O RabbitMQ também é só do serviço admission (#42). Sobrepõe por vazio.
+      RABBITMQ_USER: ""
+      RABBITMQ_PASSWORD: ""
       # Backbone de eventos (issue #27): o broker interno do compose. Desde a #36 o monólito NÃO appenda evento nenhum (o identity.notification
       # passou ao serviço identity, como o catalog e o reservation têm os deles), então o relay fica DESLIGADO; e desde a #33 ele não tem
       # consumer (a projeção de disponibilidade do braço naive é do serviço reservation).
@@ -185,8 +213,9 @@ services:
   # interna /internal/admissions (porta 8085) SÓ na rede gerenciador-net: SEM porta no host. Imagem e processo próprios
   # (Backend/admission/Dockerfile). SEM datasource (não toca no Postgres: a conta do Supavisor, 1213 <= 1500, não muda). Não usa
   # env_file: recebe só o que precisa, pelo NOME (INTERNAL_API_TOKEN e REDIS_PASSWORD do Projeto/.env, sem os segredos dos outros serviços).
-  # O backend NÃO depende dele (fail-open no gateway). Depende só do redis: o reservation entra no depends_on na #42, quando o worker
-  # pool passar a chamá-lo.
+  # O backend NÃO depende dele (fail-open no gateway). Desde a #42 depende também do rabbitmq e do reservation: o worker pool (RABBITMQ) chama
+  # o reservation por HTTP (cas) com a Idempotency-Key da mensagem. O caminho de enfileirar existe como método de serviço; o gatilho que o liga
+  # ao POST /internal/admissions é da #43.
   admission:
     build:
       context: ./Backend
@@ -197,7 +226,22 @@ services:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?defina INTERNAL_API_TOKEN no Projeto/.env}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:?defina REDIS_PASSWORD no Projeto/.env (openssl rand -hex 32)}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:?defina RABBITMQ_USER no Projeto/.env}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?defina RABBITMQ_PASSWORD no Projeto/.env (openssl rand -hex 32)}
+      # O worker pool chama o reservation (POST /internal/reservations?path=cas) com o mesmo token de serviço.
+      RESERVATION_SERVICE_URL: http://reservation:8082
       SERVER_TOMCAT_THREADS_MAX: ${SERVER_TOMCAT_THREADS_MAX:-300}
+      # Fila de admissão (#42): TTL na fila (tempo máximo de espera), tamanho máximo (reject-publish), concorrência FIXA do worker pool (o teto de
+      # CAS simultâneos no reservation), backoff da reentrega, limite de mensagens em espera por usuário e TTL do resultado consultável.
+      ADMISSION_QUEUE_TTL_MS: ${ADMISSION_QUEUE_TTL_MS:-30000}
+      ADMISSION_QUEUE_MAX_LENGTH: ${ADMISSION_QUEUE_MAX_LENGTH:-100000}
+      ADMISSION_WORKER_CONCURRENCY: ${ADMISSION_WORKER_CONCURRENCY:-32}
+      ADMISSION_RETRY_BACKOFF_MS: ${ADMISSION_RETRY_BACKOFF_MS:-500}
+      ADMISSION_MAX_WAITING_PER_USER: ${ADMISSION_MAX_WAITING_PER_USER:-5}
+      ADMISSION_RESULT_TTL_SECONDS: ${ADMISSION_RESULT_TTL_SECONDS:-600}
+      ADMISSION_DLX_CONCURRENCY: ${ADMISSION_DLX_CONCURRENCY:-4}
+      ADMISSION_PUBLISH_CONFIRM_TIMEOUT_MS: ${ADMISSION_PUBLISH_CONFIRM_TIMEOUT_MS:-200}
       # Contador: buckets de 50 ms numa janela de 200 ms (a janela tem de ser múltiplo do bucket; justificativa na spec do admission).
       ADMISSION_BUCKET_MS: ${ADMISSION_BUCKET_MS:-50}
       ADMISSION_WINDOW_MS: ${ADMISSION_WINDOW_MS:-200}
@@ -210,6 +254,10 @@ services:
       start_period: 20s
     depends_on:
       redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      reservation:
         condition: service_healthy
     restart: unless-stopped
 

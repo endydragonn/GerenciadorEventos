@@ -26,5 +26,6 @@ class AdmissionRedisRecusadoTest {
         assertEquals(503, post.status(), "Redis fora: 503 (o disjuntor do gateway precisa contar a falha)");
         assertTrue(post.ms() < 1_000, "a falha é rápida (conexão recusada): " + post.ms() + " ms");
         assertEquals(503, get.status());
+        assertEquals(503, RedisForaSupport.getResultado(porta).status(), "a consulta do resultado da fila também: Redis fora = 503");
     }
 }
