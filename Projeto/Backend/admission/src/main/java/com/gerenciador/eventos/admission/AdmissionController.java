@@ -15,7 +15,8 @@ import com.gerenciador.eventos.admissionclient.api.AdmissionStatus;
 
 /**
  * API interna do admission (issue #41), só na rede {@code gerenciador-net} e sempre atrás do {@link InternalTokenFilter}.
- * {@code POST /internal/admissions} conta a tentativa e devolve o modo (sempre {@code sync} na #41);
+ * {@code POST /internal/admissions} conta a tentativa e devolve o modo ({@code sync}, ou {@code queued} com o estado da tentativa quando o
+ * evento está em modo fila, #43; 422/429 de negócio, ver {@link InternalApiExceptionHandler});
  * {@code GET /internal/admissions/events/{eventId}/rpm} devolve o RPM atual do evento sem contar; {@code GET /internal/admissions/result}
  * (#42) devolve o resultado da mensagem da fila de admissão (200) ou 404 sem corpo.
  */

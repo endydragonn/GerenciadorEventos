@@ -25,8 +25,8 @@ import com.gerenciador.eventos.admissionclient.api.AdmissionStatus;
 
 /**
  * O caminho de ENFILEIRAR da fila de admissão (issue #42): grava o resultado {@code queued} + a espera + o limite por usuário no Redis (um
- * script), publica a mensagem com publisher confirms e {@code mandatory} e desfaz a entrada se a mensagem não foi publicada. É um método
- * de serviço: o gatilho que o liga ao {@code POST /internal/admissions} (e a resposta 202) é da #43.
+ * script), publica a mensagem com publisher confirms e {@code mandatory} e desfaz a entrada se a mensagem não foi publicada. Quem o liga ao
+ * {@code POST /internal/admissions} é o {@link AdmissionService} (#43), quando o gatilho do evento manda para a fila.
  *
  * <p>Falhas: chave de outro evento = {@link ChaveReusadaException} (422); limite por usuário = {@link LimiteUsuarioException} (429); fila
  * cheia (nack do broker, {@code reject-publish}) = {@link FilaCheiaException} (429, desfaz); exceção antes do envio, broker bloqueado

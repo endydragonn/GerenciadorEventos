@@ -20,7 +20,7 @@ import org.springframework.amqp.rabbit.core.RabbitAdmin;
 public class AdmissionTestSession implements LauncherSessionListener {
 
     /** Um sufixo por classe de teste que usa o RabbitMQ. */
-    static final String[] SUFIXOS = {"geral-", "fila-", "cheia-", "worker-", "dlx-", "log-"};
+    static final String[] SUFIXOS = {"geral-", "fila-", "cheia-", "worker-", "dlx-", "log-", "gatilho-", "limites-", "volta-"};
 
     @Override
     public void launcherSessionOpened(LauncherSession session) {

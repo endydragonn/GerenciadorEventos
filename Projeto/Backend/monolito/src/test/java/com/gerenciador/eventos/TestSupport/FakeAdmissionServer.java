@@ -18,7 +18,7 @@ import com.sun.net.httpserver.HttpServer;
 /**
  * Servidor HTTP de verdade (JDK {@code HttpServer}, porta sorteada) que faz o papel do serviço admission nos testes do MONÓLITO
  * (issue #41), como o {@link FakeReservationServer} faz o do reservation: o monólito não tem o código do serviço (nem precisa de
- * Redis), então fala HTTP com este, que devolve {@code sync} (o único modo da #41), valida a chave de idempotência com a regra do
+ * Redis), então fala HTTP com este, que devolve {@code sync} (por padrão; {@code queued} com {@link #modoFila}, #43, só no braço cas), valida a chave de idempotência com a regra do
  * serviço real (não vazia, até 255 caracteres), exige o token interno e registra cada chamada. O contador de verdade (Redis) é
  * testado no módulo {@code admission}, e o contrato cliente-servidor no {@code AdmissionApiTest} de lá.
  *
@@ -51,6 +51,10 @@ public final class FakeAdmissionServer {
     private final List<String> sem401 = new CopyOnWriteArrayList<>();
     private final java.util.concurrent.atomic.AtomicInteger recebidas = new java.util.concurrent.atomic.AtomicInteger();
     private volatile int statusForcado;
+    private volatile String mensagemForcada = "admission indisponível (falha injetada)";
+    private volatile boolean modoFila;
+    private final java.util.Map<String, String> estados = new java.util.concurrent.ConcurrentHashMap<>();
+    private final List<String> consultas = new CopyOnWriteArrayList<>();
     private volatile Consumer<Chamada> aoReceber;
     private volatile long rpm = 300;
 
@@ -71,6 +75,10 @@ public final class FakeAdmissionServer {
         recebidas.set(0);
         sem401.clear();
         statusForcado = 0;
+        mensagemForcada = "admission indisponível (falha injetada)";
+        modoFila = false;
+        estados.clear();
+        consultas.clear();
         aoReceber = null;
     }
 
@@ -93,6 +101,27 @@ public final class FakeAdmissionServer {
         this.statusForcado = status;
     }
 
+    /** Igual {@link #falhar(int)}, com o texto da resposta (a recusa de negócio 422/429 do admission real leva a mensagem dele). */
+    public void falhar(int status, String mensagem) {
+        this.mensagemForcada = mensagem;
+        this.statusForcado = status;
+    }
+
+    /** {@code true} = o evento está em modo fila: o {@code POST} devolve {@code queued} (como o serviço real acima do gatilho). */
+    public void modoFila(boolean ligado) {
+        this.modoFila = ligado;
+    }
+
+    /** O que {@code GET /internal/admissions/result} devolve (200 com este JSON) para o usuário e a chave; sem registro, 404 sem corpo. */
+    public void estado(long userId, String idempotencyKey, String json) {
+        estados.put(userId + "|" + idempotencyKey, json);
+    }
+
+    /** As consultas recebidas em {@code GET .../result}, como {@code userId|chave} (já decodificadas). */
+    public List<String> consultas() {
+        return Collections.unmodifiableList(new ArrayList<>(consultas));
+    }
+
     public void aoReceber(Consumer<Chamada> acao) {
         this.aoReceber = acao;
     }
@@ -107,7 +136,24 @@ public final class FakeAdmissionServer {
         recebidas.incrementAndGet();
         int forcado = statusForcado;
         if (forcado != 0) {
-            responder(ex, forcado, "text/plain", "admission indisponível (falha injetada)");
+            responder(ex, forcado, "text/plain", mensagemForcada);
+            return;
+        }
+        if ("GET".equals(ex.getRequestMethod()) && "/internal/admissions/result".equals(ex.getRequestURI().getPath())) {
+            java.util.Map<String, String> q = new java.util.HashMap<>();
+            for (String par : ex.getRequestURI().getRawQuery().split("&")) {
+                String[] kv = par.split("=", 2);
+                q.put(kv[0], java.net.URLDecoder.decode(kv.length > 1 ? kv[1] : "", StandardCharsets.UTF_8));
+            }
+            String chave = q.get("userId") + "|" + q.get("idempotencyKey");
+            consultas.add(chave);
+            String estado = estados.get(chave);
+            if (estado == null) {
+                ex.sendResponseHeaders(404, -1);
+                ex.close();
+            } else {
+                responder(ex, 200, "application/json", estado);
+            }
             return;
         }
         JsonNode corpo = JSON.readTree(ex.getRequestBody());
@@ -123,7 +169,9 @@ public final class FakeAdmissionServer {
         } else if (c.idempotencyKey().length() > 255) { // mesma regra e mensagem do serviço real e do reservation
             responder(ex, 400, "text/plain", "Idempotency-Key deve ter no máximo 255 caracteres");
         } else {
-            responder(ex, 200, "application/json", "{\"mode\":\"sync\",\"rpm\":" + rpm + "}");
+            responder(ex, 200, "application/json", modoFila && "cas".equals(c.path())
+                    ? "{\"mode\":\"queued\",\"rpm\":" + rpm + ",\"status\":\"queued\",\"idempotencyKey\":\"" + c.idempotencyKey() + "\",\"eventId\":" + c.eventId() + "}"
+                    : "{\"mode\":\"sync\",\"rpm\":" + rpm + "}");
         }
     }
 

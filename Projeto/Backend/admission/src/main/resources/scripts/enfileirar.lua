@@ -1,9 +1,11 @@
 -- Entrada na fila de admissão (issue #42): grava o resultado `queued` e a espera do evento e do usuário, depois da repetição da chave e do
 -- limite por usuário. UM script = uma ida ao Redis, atômico.
--- KEYS[1] = adm:res:<userId>:<chave>  KEYS[2] = adm:wait:<eventId>  KEYS[3] = adm:uwait:<userId>
+-- KEYS[1] = adm:res:<userId>:<chave>  KEYS[2] = adm:wait:<eventId>  KEYS[3] = adm:uwait:<userId>  KEYS[4] = adm:mode:<eventId>
 -- ARGV[1] = agora (ms)  ARGV[2] = eventId  ARGV[3] = JSON do resultado `queued` desta tentativa  ARGV[4] = TTL do resultado (s)
 -- ARGV[5] = máximo de mensagens em espera por usuário  ARGV[6] = membro da espera (userId:chave:tentativa)
 -- ARGV[7] = deadline da mensagem (ms; é o score da espera)  ARGV[8] = TTL das chaves de espera (s)  ARGV[9] = carência do queued (ms)
+-- ARGV[10] = TTL da chave do modo (s). Ao enfileirar, o modo fila do evento é (re)marcado (issue #43): a decisão do modo (rpm.lua) e esta entrada
+-- são duas idas ao Redis; se outro pedido desligou o modo entre as duas, a mensagem que acabou de entrar na espera o religa (mensagem esperando = fila).
 -- Devolve {código, JSON}: 0 = enfileirada (publicar); 1 = repetição, o JSON é o estado atual (não publica de novo); 2 = a chave é de OUTRO
 -- evento (422); 3 = limite por usuário (429).
 local agora = tonumber(ARGV[1])
@@ -34,4 +36,5 @@ redis.call('ZADD', KEYS[2], ARGV[7], ARGV[6])
 redis.call('EXPIRE', KEYS[2], ARGV[8])
 redis.call('ZADD', KEYS[3], ARGV[7], ARGV[6])
 redis.call('EXPIRE', KEYS[3], ARGV[8])
+redis.call('SET', KEYS[4], '1', 'EX', ARGV[10])
 return {0, ''}

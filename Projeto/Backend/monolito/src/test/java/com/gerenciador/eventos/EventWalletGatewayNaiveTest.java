@@ -6,6 +6,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +43,11 @@ public class EventWalletGatewayNaiveTest {
     @BeforeEach
     void limparChamadas() {
         reservation = FakeReservationServer.get();
+    }
+
+    @AfterEach
+    void deixarOAdmissionFalsoLimpo() {
+        FakeAdmissionServer.get().reset(); // singleton da JVM: modoFila/falhar de um teste não pode vazar para as classes seguintes
     }
 
     @Test
@@ -83,6 +89,32 @@ public class EventWalletGatewayNaiveTest {
         assertEquals(0, chamadasAoReservationQuandoContou.get(), "contou antes de qualquer chamada ao reservation");
         assertEquals(List.of("GET /internal/events/" + e.getEvent_id() + "/availability"), reservation.chamadas(),
                 "a chave gerada pelo gateway não dispara a consulta de repetição: a rejeição custa UMA chamada, como antes da #41");
+    }
+
+    /**
+     * Issue #43: o braço naive NUNCA enfileira, nem com o evento em modo fila (o admission devolve {@code sync} ao {@code path=naive}), e o
+     * fail-open do admission só manda a chave gerada ao reservation no braço cas: o naive segue com a chave do cliente (nula).
+     */
+    @Test
+    void naiveNuncaEnfileiraEMesmoComOAdmissionForaMantemAChaveDoCliente() {
+        User u = usuario("gw-naive-fila");
+        User u2 = usuario("gw-naive-fila-2");
+        Event e = evento(u.getId(), "GW Naive fila", 5);
+        FakeAdmissionServer admission = FakeAdmissionServer.get();
+        admission.reset();
+        reservation.projetar(e.getEvent_id(), 0);
+        reservation.limparChamadas();
+        admission.modoFila(true);
+
+        assertEquals("pending", gateway.addLink(new EventWallet(u.getId(), e.getEvent_id()), null).getStatus(),
+                "naive com o evento em fila: a reserva segue síncrona, em duas chamadas");
+
+        admission.falhar(503);
+        FakeReservationServer.get().limparChamadas();
+        gateway.addLink(new EventWallet(u2.getId(), e.getEvent_id()), null);
+        assertEquals(java.util.Arrays.asList((String) null), FakeReservationServer.get().chavesDeReserva(),
+                "fail-open do naive: sem chave do cliente o reservation segue sem chave (a regra da chave efetiva é do braço cas)");
+        admission.reset();
     }
 
     @Test

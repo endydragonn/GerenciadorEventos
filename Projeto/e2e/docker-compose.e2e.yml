@@ -20,7 +20,13 @@ services:
   # RabbitMQ (issue #42): a fila de admissão. Sem container_name nem porta no host; usuário e senha EFÊMEROS (o run-e2e.sh exporta
   # RABBITMQ_USER e RABBITMQ_PASSWORD, nunca os do Projeto/.env); sem volume (tmpfs no compose base).
   rabbitmq: *isolado
-  admission: *isolado
+  # Gatilho do modo fila (#43): X BAIXO no e2e (o run-e2e.sh exporta ADMISSION_X_RPM, default 600; o validador exige 500..5000). 80% de X = 480
+  # RPM: a reserva isolada do passo 4 (uma tentativa le no maximo ~397 RPM) segue sincrona, e a rajada do passo 4b ultrapassa o limiar e liga
+  # o modo fila. Os demais valores do admission ficam os do compose base.
+  admission:
+    <<: *isolado
+    environment:
+      ADMISSION_X_RPM: ${ADMISSION_X_RPM:-600}
   notification-seek: *isolado
   frontend: *isolado
   supabase-pooler: *isolado

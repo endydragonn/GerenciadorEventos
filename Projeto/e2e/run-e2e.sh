@@ -46,6 +46,12 @@ ESPERA_UP="${ESPERA_UP:-900}"
 REDE="${PROJETO}_default"
 CLI="${PROJETO}-cli"
 SUFIXO="$(date +%s)-$RANDOM"
+# Rajada do modo fila (#43, passo 4b): usuarios concorrentes no evento da rajada (E2E_RAJADA_USUARIOS, default 20; com um valor alto o mesmo
+# passo e o dry-run acima do limiar), capacidade do evento (default N/4, sempre menor que N) e o X do admission no project (override e2e).
+RAJADA_USUARIOS="${E2E_RAJADA_USUARIOS:-20}"
+RAJADA_CAPACIDADE="${E2E_RAJADA_CAPACIDADE:-$(( RAJADA_USUARIOS / 4 > 0 ? RAJADA_USUARIOS / 4 : 1 ))}"
+ADMISSION_X_RPM="${E2E_ADMISSION_X_RPM:-600}"
+export ADMISSION_X_RPM
 EMAIL="e2e-$SUFIXO@example.com"
 FONE="11$(printf '%09d' $(( (RANDOM * 32768 + RANDOM) % 1000000000 )))"
 IMAGEM_MVN="maven:3.9.7-eclipse-temurin-21-jammy"
@@ -161,6 +167,14 @@ if rabbit_env.get("RABBITMQ_DEFAULT_USER") != adm_env.get("RABBITMQ_USER") or ra
 bk_env = (c["services"].get("backend") or {}).get("environment", {})
 if bk_env.get("RABBITMQ_USER") or bk_env.get("RABBITMQ_PASSWORD"):
     erros.append("backend: recebeu as credenciais do RabbitMQ (a fila e so do admission)")
+try:
+    x = float(adm_env.get("ADMISSION_X_RPM") or 0)
+except ValueError:
+    x = 0
+if not 500 <= x <= 5000:
+    # o passo 4 faz UMA reserva e ela tem de seguir sincrona (uma tentativa isolada le ate ~397 RPM; 80% de X > 397 pede X >= 500);
+    # a rajada do passo 4b tem de passar de 80% de X (X baixo, para a suite nao depender de carga real)
+    erros.append("admission: ADMISSION_X_RPM=%s fora de 500..5000 (o e2e precisa de X baixo e acima de 500)" % adm_env.get("ADMISSION_X_RPM"))
 for e in erros:
     print("   " + e)
 sys.exit(1 if erros else 0)
@@ -301,7 +315,86 @@ confere "e-mails para o usuario no captador (so o de verificacao existe)" 1 "$(m
 EVALS="$(dc exec -T redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli INFO commandstats' | tr -d '\r' \
     | awk -F'[=,]' '/^cmdstat_eval(sha)?:/ {s += $2} END {print s + 0}')"
 confere "scripts Lua do contador executados no Redis (o admission contou a reserva)" sim "$([ "${EVALS:-0}" -ge 1 ] && echo sim || echo nao)"
-[ "$FALHAS" -eq 0 ] || abortar "o fluxo falhou antes do replay"
+[ "$FALHAS" -eq 0 ] || abortar "o fluxo falhou antes do rajada/replay"
+
+echo "==> 4b. modo fila (#43): rajada concorrente de $RAJADA_USUARIOS usuarios num evento de capacidade $RAJADA_CAPACIDADE (X do admission = $ADMISSION_X_RPM RPM)"
+# precisa de pelo menos 2 usuarios (so a partir de 2 tentativas na janela o RPM passa de 80% de X) e de capacidade MENOR que os usuarios (senao
+# nenhum fica "rejected" e "todas as vagas foram dadas" perde o sentido)
+[ "$RAJADA_USUARIOS" -ge 2 ] || abortar "E2E_RAJADA_USUARIOS=$RAJADA_USUARIOS: a rajada precisa de pelo menos 2 usuarios."
+[ "$RAJADA_CAPACIDADE" -ge 1 ] && [ "$RAJADA_CAPACIDADE" -lt "$RAJADA_USUARIOS" ] \
+    || abortar "E2E_RAJADA_CAPACIDADE=$RAJADA_CAPACIDADE: precisa estar entre 1 e $((RAJADA_USUARIOS - 1)) (menor que os usuarios)."
+# O passo 4 (UMA reserva, 201) ficou abaixo do gatilho (80% de X = $((ADMISSION_X_RPM * 8 / 10)) RPM; uma tentativa isolada le <= 397 RPM). Aqui, N usuarios
+# reservam o MESMO evento ao mesmo tempo: o RPM do evento passa de 80% de X, o admission liga o modo fila e o gateway responde 202 a
+# parte deles; o worker pool faz o CAS no reservation REAL. Os usuarios sao criados por SQL (copiando o hash BCrypt do usuario do passo 3:
+# nenhum e-mail, nenhum cadastro em duas fases) e logam pelo gateway; a rajada roda dentro do container auxiliar (rajada-container.sh).
+http POST "$GW/bff/events" \
+    "{\"event_name\":\"E2E rajada $SUFIXO\",\"is_EAD\":true,\"event_date\":\"2035-12-01T14:00:00\",\"description\":\"e2e #43\",\"lot_quantity\":$RAJADA_CAPACIDADE,\"presenters\":[]}" "$TOKEN"
+confere "POST /bff/events (evento da rajada, capacidade $RAJADA_CAPACIDADE)" 201 "$HTTP_CODE"
+RAJADA_EVENT_ID="$(extrair_num event_id "$HTTP_BODY")"
+[ -n "$RAJADA_EVENT_ID" ] || abortar "sem event_id do evento da rajada"
+# A janela de confirmacao (eventcap.max_time_in_line, 120 s por padrao) nao pode vencer durante uma rajada grande (E2E_RAJADA_USUARIOS alto):
+# o job de expiracao devolveria vagas e "reservas ativas = capacidade" falharia sem haver overselling. Neste project descartavel, 1 h.
+confere "eventcap da rajada com max_time_in_line = 3600" 1 \
+    "$(psql_db "WITH u AS (UPDATE reservation.eventcap SET max_time_in_line = 3600 WHERE event_id = $RAJADA_EVENT_ID RETURNING 1) SELECT count(*) FROM u")"
+psql_db "INSERT INTO identity.users (user_name, email, fone, password, birthdate)
+    SELECT 'Rajada $SUFIXO ' || g, 'rajada-$SUFIXO-' || g || '@example.com', 'rj-$SUFIXO-' || g, (SELECT password FROM identity.users WHERE email = '$EMAIL'), DATE '1990-01-15'
+    FROM generate_series(1, $RAJADA_USUARIOS) AS g" >/dev/null
+confere "usuarios da rajada criados por SQL" "$RAJADA_USUARIOS" \
+    "$(psql_db "SELECT count(*) FROM identity.users WHERE email LIKE 'rajada-$SUFIXO-%@example.com'")"
+[ "$FALHAS" -eq 0 ] || abortar "sem os usuarios da rajada"
+# o script roda em segundo plano; a profundidade da fila admission.requests e amostrada (rabbitmqctl) enquanto ele corre, e depois
+amostra_fila() { dc exec -T rabbitmq rabbitmqctl list_queues -q name messages 2>/dev/null | tr -d '\r' | awk '$1 == "admission.requests" {print $2}'; }
+PARALELO=$(( RAJADA_USUARIOS < 400 ? RAJADA_USUARIOS : 400 ))
+cli env GW="$GW" EVENT_ID="$RAJADA_EVENT_ID" SUFIXO="$SUFIXO" N="$RAJADA_USUARIOS" PARALELO="$PARALELO" bash -s \
+    <"$SCRIPT_DIR/rajada-container.sh" >"$TMP/rajada.out" 2>&1 &
+RAJADA_PID=$!
+AMOSTRAS=""
+while kill -0 "$RAJADA_PID" 2>/dev/null; do
+    AMOSTRAS="$AMOSTRAS $(amostra_fila)"
+    sleep 1
+done
+wait "$RAJADA_PID"
+RAJADA_CODE=$?
+sed 's/^/     /' "$TMP/rajada.out"
+confere "rajada-container.sh terminou (codigo de saida)" 0 "$RAJADA_CODE"
+[ "$FALHAS" -eq 0 ] || abortar "a rajada nao rodou"
+# conta as respostas por codigo e os estados finais (impressos pelo script)
+n_codigo() { awk -v c="$1" '$1 == "CODIGO" && $2 == c {s += $3} END {print s + 0}' "$TMP/rajada.out"; }
+n_estado() { awk -v e="$1" '$1 == "ESTADO" && $2 == e {s += $3} END {print s + 0}' "$TMP/rajada.out"; }
+C201="$(n_codigo 201)"; C202="$(n_codigo 202)"; C429="$(n_codigo 429)"; C400="$(n_codigo 400)"
+echo "   respostas da rajada: 201=$C201 202=$C202 400=$C400 429=$C429 (de $RAJADA_USUARIOS)"
+confere "a rajada produziu pelo menos um 202 (o gatilho ligou o modo fila)" sim "$([ "$C202" -ge 1 ] && echo sim || echo nao)"
+confere "toda resposta da rajada e 201, 202, 400 (lotado) ou 429" "$RAJADA_USUARIOS" "$((C201 + C202 + C400 + C429))"
+confere "nenhum usuario ficou sem estado final em 90 s" 0 "$(awk '$1 == "SEM_ESTADO_FINAL" {print $2}' "$TMP/rajada.out")"
+confere "estados finais: pending + rejected + timed_out + rejeitado_429 = usuarios" "$RAJADA_USUARIOS" \
+    "$(( $(n_estado pending) + $(n_estado rejected) + $(n_estado timed_out) + $(n_estado rejeitado_429) ))"
+echo "   estados finais: pending=$(n_estado pending) rejected=$(n_estado rejected) timed_out=$(n_estado timed_out)"
+# a fila drenou: profundidade 0 (amostras durante a rajada, impressas; depois ate 60 s ate zerar)
+echo "   profundidade de admission.requests durante a rajada (1 amostra/s):${AMOSTRAS:- (rajada curta demais para amostrar)}"
+PROFUNDIDADE=""
+for i in $(seq 1 30); do
+    PROFUNDIDADE="$(amostra_fila)"
+    echo "   admission.requests apos a rajada (amostra $i): ${PROFUNDIDADE:-?}"
+    [ "$PROFUNDIDADE" = "0" ] && break
+    sleep 2
+done
+confere "fila admission.requests drenada (profundidade 0)" 0 "$PROFUNDIDADE"
+# overselling 0 contra o reservation REAL: reservas ativas <= capacidade e eventcap.quant = capacidade - ativas
+ATIVAS="$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = $RAJADA_EVENT_ID AND status IN ('pending', 'confirmed')")"
+QUANT="$(psql_db "SELECT quant FROM reservation.eventcap WHERE event_id = $RAJADA_EVENT_ID")"
+echo "   reservation: capacidade=$RAJADA_CAPACIDADE reservas ativas=$ATIVAS eventcap.quant=$QUANT"
+confere "overselling 0: reservas ativas <= capacidade" sim "$([ "$ATIVAS" -le "$RAJADA_CAPACIDADE" ] && echo sim || echo nao)"
+confere "eventcap.quant coerente (capacidade - reservas ativas)" "$((RAJADA_CAPACIDADE - ATIVAS))" "$QUANT"
+confere "todas as vagas foram dadas (N > capacidade): reservas ativas = capacidade" "$RAJADA_CAPACIDADE" "$ATIVAS"
+confere "estados pending = reservas ativas no reservation" "$ATIVAS" "$(n_estado pending)"
+# consulta de estado: so o dono (404 igual para o de outro usuario), 400 sem a chave, 401 sem token
+http GET "$GW/bff/event-wallets/admission?idempotencyKey=rajada-$SUFIXO-1" "" "$TOKEN"
+confere "GET /bff/event-wallets/admission com a chave de OUTRO usuario" 404 "$HTTP_CODE"
+http GET "$GW/bff/event-wallets/admission" "" "$TOKEN"
+confere "GET /bff/event-wallets/admission sem a chave" 400 "$HTTP_CODE"
+http GET "$GW/bff/event-wallets/admission?idempotencyKey=rajada-$SUFIXO-1"
+confere "GET /bff/event-wallets/admission sem token" 401 "$HTTP_CODE"
+[ "$FALHAS" -eq 0 ] || abortar "a rajada do modo fila falhou antes do replay"
 
 echo "==> 5. esperar o backbone escoar (outbox vazio e lag 0 dos consumers) antes do replay"
 PENDENTES=""

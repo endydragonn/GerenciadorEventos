@@ -19,7 +19,8 @@ import com.gerenciador.eventos.admissionclient.LogComLimite;
 
 /**
  * Status HTTP da API interna: o corpo de toda resposta de erro é a MENSAGEM em texto puro (o {@code AdmissionClient} a repassa
- * como mensagem da exceção). 400 = regra de negócio ({@link IllegalArgumentException}) e pedido malformado, 503 = Redis fora ou lento
+ * como mensagem da exceção). 400 = regra de negócio ({@link IllegalArgumentException}) e pedido malformado, 422 = chave de outro evento e
+ * 429 = limite por usuário ou fila cheia (#43, respostas de negócio que o cliente não trata como falha), 503 = Redis fora ou lento
  * (no POST e no GET: o fail-open é do cliente, e o 503 é o que o disjuntor do gateway conta), 500 = o resto (corpo genérico: o detalhe só
  * vai para o log). O log do 503 tem limite de taxa (no máximo 1 linha a cada 10 s, com a contagem acumulada).
  */
@@ -39,6 +40,18 @@ public class InternalApiExceptionHandler {
             MissingServletRequestParameterException.class, HttpMediaTypeNotSupportedException.class})
     ResponseEntity<String> pedidoMalformado(Exception ex) {
         return texto(HttpStatus.BAD_REQUEST, "Pedido malformado");
+    }
+
+    /** Chave já usada, por este usuário, com outro evento (#43): 422, como o reservation. */
+    @ExceptionHandler(FilaDeAdmissao.ChaveReusadaException.class)
+    ResponseEntity<String> chaveReusada(FilaDeAdmissao.ChaveReusadaException ex) {
+        return texto(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());
+    }
+
+    /** Limite de mensagens em espera por usuário e fila cheia (#43): 429, sem publicar. */
+    @ExceptionHandler({FilaDeAdmissao.LimiteUsuarioException.class, FilaDeAdmissao.FilaCheiaException.class})
+    ResponseEntity<String> muitasRequisicoes(RuntimeException ex) {
+        return texto(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
     }
 
     @ExceptionHandler(DataAccessException.class)

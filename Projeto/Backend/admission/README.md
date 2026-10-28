@@ -6,7 +6,7 @@ num **contador de janela deslizante em Redis** e expõe o RPM atual como sinal d
 datasource** (não toca no Postgres e não depende da lib `shared`).
 
 Na #41 o modo devolvido é **sempre `sync`** (a reserva segue pelo caminho de hoje). Na **#42** o serviço ganhou a **fila de admissão** (RabbitMQ), o **worker pool** que chama o `reservation`, o resultado por mensagem no
-Redis e o `GET /internal/admissions/result`; **o gatilho que liga a fila ao `POST` é da #43** (o `POST` continua devolvendo `sync`; o caminho de enfileirar é o método `FilaDeAdmissao.enfileirar`, usado pelos testes).
+Redis e o `GET /internal/admissions/result`; **na #43 o gatilho liga a fila ao `POST`**: acima de 80% de X × réplicas (`ADMISSION_X_RPM` 56000, `ADMISSION_RESERVATION_REPLICAS` 1, `ADMISSION_QUEUE_ON` 0,80) o evento entra em modo fila e o `POST` devolve `queued` (o gateway responde `202`); volta ao `sync` só com uso < 0,70 (`ADMISSION_SYNC_BELOW`) e a espera do evento vazia. Abaixo do gatilho o `POST` é idêntico ao da #41. Respostas 422/429 de negócio; o braço `naive` nunca enfileira.
 
 - **Autenticação:** todo `/internal/**` exige o header `X-Internal-Token` = `INTERNAL_API_TOKEN` (401 sem/errado, em toda requisição; sem
   rota pública); sem a variável o serviço não sobe. O mesmo valor vai ao backend (o compose repassa do `Projeto/.env`).

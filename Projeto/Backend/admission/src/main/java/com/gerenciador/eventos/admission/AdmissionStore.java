@@ -64,9 +64,10 @@ public class AdmissionStore {
      */
     public Entrada entrar(AdmissionMessage m) {
         List<?> r = redis.execute(ENFILEIRAR, List.of(chaveResultado(m.userId(), m.idempotencyKey()), chaveEspera(m.eventId()),
-                chaveEsperaUsuario(m.userId())), String.valueOf(relogio.millis()), String.valueOf(m.eventId()),
+                chaveEsperaUsuario(m.userId()), chaveModo(m.eventId())), String.valueOf(relogio.millis()), String.valueOf(m.eventId()),
                 escrever(ResultadoDaFila.queued(m)), String.valueOf(ttlResultadoSegundos), String.valueOf(maxEmEsperaPorUsuario),
-                m.membro(), String.valueOf(m.deadline()), String.valueOf(ttlEspera.toSeconds()), String.valueOf(ResultadoDaFila.CARENCIA_MS));
+                m.membro(), String.valueOf(m.deadline()), String.valueOf(ttlEspera.toSeconds()), String.valueOf(ResultadoDaFila.CARENCIA_MS),
+                String.valueOf(RpmCounter.TTL_MODO_SEGUNDOS));
         return switch (((Number) r.get(0)).intValue()) {
             case 0 -> new Entrada(Tipo.ENFILEIRADA, null);
             case 1 -> new Entrada(Tipo.EXISTENTE, ler((String) r.get(1)));
@@ -102,12 +103,17 @@ public class AdmissionStore {
 
     /** O worker devolveu a mensagem à fila ({@code nack} com requeue): volta às esperas, com TTL, num script (o backlog segue contando). */
     public void voltarParaEspera(AdmissionMessage m) {
-        redis.execute(VOLTAR, List.of(chaveEspera(m.eventId()), chaveEsperaUsuario(m.userId())), m.membro(), String.valueOf(m.deadline()),
-                String.valueOf(ttlEspera.toSeconds()));
+        redis.execute(VOLTAR, List.of(chaveEspera(m.eventId()), chaveEsperaUsuario(m.userId()), chaveModo(m.eventId())), m.membro(),
+                String.valueOf(m.deadline()), String.valueOf(ttlEspera.toSeconds()), String.valueOf(RpmCounter.TTL_MODO_SEGUNDOS));
     }
 
     static String chaveResultado(long userId, String chave) {
         return "adm:res:" + userId + ":" + chave;
+    }
+
+    /** Presente = o evento está em modo fila (issue #43); escrita só pelo script do contador. */
+    static String chaveModo(long eventId) {
+        return "adm:mode:" + eventId;
     }
 
     static String chaveEspera(long eventId) {

@@ -59,6 +59,18 @@ referência** — não é compilado, não edite.
   `main.dart` tenta `GET ${AppConfig.apiBaseUrl}/bff/users/me` no boot pra restaurar a
   sessão; token inválido é limpo. "Lembrar de mim" também cacheia `email`/`password` em
   `SharedPreferences`.
+- **Reserva em modo fila (contrato novo da issue #43, aditivo; a tela vem na #44, o Flutter ainda NÃO o consome):**
+  `POST /bff/event-wallets` pode responder **`202 Accepted`** (evento acima de 80% de X) em vez de `201`:
+  headers `Idempotency-Key` (a enviada, ou a gerada pelo gateway) e `Retry-After: 1` (ambos expostos no CORS) e corpo
+  `{"status":"queued","eventId":n,"idempotencyKey":"..."}`; **nenhuma reserva existe ainda**. O cliente consulta
+  `GET /bff/event-wallets/admission?idempotencyKey=<chave>` (autenticado; o usuário é o do token) a cada `Retry-After`
+  até um estado final: `200 {"status":"queued"|"pending"|"rejected"|"timed_out","eventId":n,"idempotencyKey":"...",
+  "expiresAt"?,"reason"?}` (`pending` traz `expiresAt`: a reserva está feita e a confirmação segue em
+  `POST /bff/event-wallets/confirm`, como no `201`; `rejected` traz o motivo, ex. "Evento lotado"; `timed_out` = morreu
+  na fila, repetir o `POST` com a MESMA chave). `404` = chave inexistente ou de outro usuário (indistinguíveis),
+  `400` sem a chave, `503` com o serviço de admissão fora. O `POST` também pode responder `429` (limite de reservas na fila
+  por usuário, ou fila cheia; corpo = mensagem) e `422` (a chave já foi usada em outro evento). Abaixo do gatilho o
+  `201` de sempre segue idêntico.
 
 ## Estado e UI
 
