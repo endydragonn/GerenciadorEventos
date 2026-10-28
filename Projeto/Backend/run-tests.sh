@@ -127,6 +127,19 @@ if [ -n "$(docker ps -q -f name=^gerenciador-admission$)" ]; then
     exit 1
 fi
 
+# Réplicas da autoescala (#111, docker-compose.autoescala.yml): sem container_name fixo (<project>-<serviço>-<n>), então as guardas por nome acima
+# não as veem. Mesmas razões, achadas pelo label do compose (project padrão gerenciador-eventos; o do e2e, gerenciador-e2e, tem banco e broker
+# próprios e não conta).
+REPLICAS_VIVAS="$(docker ps --filter "label=com.docker.compose.project=gerenciador-eventos" \
+    --filter "label=com.docker.compose.service" --format '{{.Names}} {{.Label "com.docker.compose.service"}}' \
+    | awk '$2 ~ /^(backend|notification|reservation|catalog|identity|admission|lb)$/ {print $1}' | tr '\n' ' ')"
+if [ -n "$REPLICAS_VIVAS" ]; then
+    echo "❌ Há containers de serviço rodando (réplicas e lb da autoescala, sem o nome fixo gerenciador-*): $REPLICAS_VIVAS"
+    echo "   Eles disputam o banco, o Redpanda e o Redis dos testes. Pare o scaler (Projeto/autoescala/scaler.sh, Ctrl+C) e os containers: docker stop $REPLICAS_VIVAS"
+    echo ""
+    exit 1
+fi
+
 # Redis dos testes: FLUSHDB no INÍCIO e ao FIM da rodada (verde ou vermelha). O admission está parado (guarda acima), então nada de
 # produção vive nesse banco; as chaves do contador usam ids de evento que o RESTART IDENTITY recicla, e uma contagem de uma rodada
 # antiga seria lida como carga da seguinte. A senha vem do ambiente do próprio container do Redis (compose), nunca da linha de comando.

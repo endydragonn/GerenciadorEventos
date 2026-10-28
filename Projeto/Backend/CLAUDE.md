@@ -1148,6 +1148,72 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   `public`, `reservation` e `catalog` numa instrução, move os groups `reservation`/`reservation-catalog`/`notification` para o fim dos
   tópicos e sobe `reservation` + `catalog` antes do `backend` (#35; resumo em `Projeto/carga/README.md`).
 
+## Réplicas: estado em memória e jobs (issue #111)
+
+Pré-requisito da autoescala de `gateway` (monólito) e `reservation`: com 2+ réplicas do mesmo serviço, (1) nenhum estado de domínio pode morar na memória
+de uma réplica e (2) os `@Scheduled` rodam em TODAS as réplicas ao mesmo tempo e têm de continuar corretos. O mecanismo de subir/descer réplicas
+(ADR `docs/adr/Architecture-Decision-Autoescala.md`) está na seção seguinte; esta é a auditoria do código e a prova dos jobs.
+
+**Auditoria do estado em memória** (2026-10-28; `monolito`, `reservation` e as libs `*-client`; busca por `Map`/`List`/`Set`/`Atomic*`/`volatile`/`Caffeine`/
+`ThreadLocal`/campos estáticos mutáveis e por campos não-`final` em beans singleton). Nada de domínio vive na memória: sessão não existe (JWT validado sem
+estado, CSRF off), a `Idempotency-Key` está só em `reservation.idempotency_key`, as reservas e a capacidade em `walletevent`/`eventcap`, o código de cadastro/MFA
+no `identity`. Os únicos campos mutáveis:
+
+| Onde | O que é | Classe | Com N réplicas |
+|---|---|---|---|
+| `gateway/EventWalletGateway.eventosExistentes` | Caffeine, `exists` do evento (só positivo), 30 s, 10 mil entradas | cache recomputável | ok: cada réplica enche o seu; no pior caso um evento apagado ainda é reservável por até 30 s em alguma réplica (já aceito, ver "Resposta de `Event`") |
+| `gateway/CreatorNames.cache` | Caffeine, `creator_name` por id, 45 s ±20%, 10 mil entradas | cache recomputável | ok: falha do `findNames` já não derruba a resposta |
+| `gateway/security/JwtDecoderConfig` (JWKS do Nimbus) | chave pública do `identity` em cache 24 h, refetch por `kid` desconhecido a cada 30 s no máximo | cache recomputável | ok. **Operação:** apagar a chave do JWT (limpeza de banco, `TRUNCATE ... RESTART IDENTITY`) exige reiniciar **todas** as réplicas do gateway, não só "o backend" |
+| `admissionclient/AdmissionClient.falhasSeguidas`/`abertoAte` | disjuntor do admission | estatística local | ok por réplica: cada uma abre o seu sozinha e faz fail-open; não há decisão global a manter |
+| `admissionclient/LogComLimite`, `gateway/AdmissionIndisponivelHandler.suprimidas`/`ultimoLog` | limitador de taxa de log | só log | ok por réplica (mais linhas de log, nenhum efeito) |
+| pools HTTP/JDBC (`ReservationClient`, `CatalogClient`, `IdentityClient`, `AdmissionClient`, Hikari) | conexões | recurso por processo, não estado | **dimensionamento, não correção:** a soma dos Hikari de todas as réplicas tem de caber em `POOLER_MAX_CLIENT_CONN` (hoje 1213 de 1500 com 1 réplica de cada; o Hikari 1000 do `reservation` não pode ser multiplicado) |
+| `reservation`: nenhum campo mutável (só repositórios/serviços injetados e `@Value` imutáveis) | — | — | ok. Offsets dos consumers estão no broker e o checkpoint em `projection_checkpoint` (banco) |
+
+Nenhum item quebra com N réplicas. Fora do escopo desta auditoria: `catalog`, `identity`, `notification` e `admission` (o Redis e o RabbitMQ do admission são o
+estado compartilhado dele por desenho).
+
+**Jobs com 2+ réplicas** (cada réplica roda o seu `@Scheduled`; o que os mantém corretos, e o teste que prova com N execuções simultâneas, cada uma na própria
+conexão, contra Postgres e Redpanda reais, repetidas para dar chance à corrida — `Concorrencia.emParalelo` solta as threads juntas numa `CyclicBarrier`):
+
+| Job | O que o protege | Teste (módulo `reservation`) |
+|---|---|---|
+| `ReservationExpiryService` | `FOR UPDATE SKIP LOCKED` em lotes + `UPDATE` condicional (`expireIfStale`, só `pending` e vencida). **Cada um sozinho já basta para a corretude**; o `SKIP LOCKED` faz as réplicas dividirem as linhas do lote (nenhuma reserva é pega por duas), o `UPDATE` condicional é a rede de segurança. Isso NÃO elimina a espera entre réplicas: as que expiram reservas do mesmo evento ainda disputam a linha do `eventcap` e podem dar deadlock, que o savepoint por linha desfaz só naquela linha (ela segue `pending` e entra no próximo tick) | `ReservationExpiryConcurrentTest`: 4 execuções simultâneas, 28 vencidas em 2 eventos (lote de 3) + 4 reservas vivas; 5 repetições. Confere: todas `expired`, nenhuma vencida `pending`, `eventcap.quant` = capacidade − vivas (cada vaga volta UMA vez; as vivas impedem o teto de esconder devolução em dobro), um `ReservationExpired` por reserva e nenhum stream com o evento repetido |
+| `IdempotencyKeyRetentionService` | o `DELETE ... FOR UPDATE` em lotes de 1000: a execução concorrente espera o lote da outra e pula as linhas que sumiram; apagar é idempotente | `IdempotencyRetentionConcurrentTest`: 4 execuções simultâneas sobre 2500 chaves vencidas + 50 dentro do prazo; 3 repetições. Soma do que as execuções relatam = 2500 (cada chave apagada uma vez), nenhuma tarefa falha, as 50 válidas ficam |
+| relay do `reservation.event_outbox` (`shared/events/OutboxRelay`) | `pg_try_advisory_xact_lock` (chave derivada do schema) por lote: quem não pega o lock sai sem publicar | `ReservationRelayConcurrentTest`: 3 relays simultâneos (lote de 4) drenam 45 eventos de 3 streams; 3 repetições. Outbox da rodada vazio, o tópico tem exatamente 45 mensagens (pede-se uma a mais para a duplicata aparecer), a sequência inteira do tópico é a do append (`global_position`) e cada stream sai em ordem de versão. O `OutboxRelayTest` do monólito já cobre o schema `public`; este prova o schema do `reservation` (outra chave de lock), que é onde as réplicas vão rodar |
+
+Prova de que os testes pegam a falha (mutação local, restaurada): sem o `FOR UPDATE SKIP LOCKED` (mantido o `UPDATE` condicional) OU sem a condição do `UPDATE` (mantido o lock) o teste de expiração ainda passa (cada
+guarda cobre a outra; o `SKIP LOCKED` dentro do lote é do `ReservationExpiryBatchTest`); sem as DUAS, 4 das 5 repetições falham (`quant` volta acima do esperado: vaga devolvida em dobro). Sem o advisory lock, o relay publica
+mensagens em dobro e o tópico passa das 45 esperadas. A retenção não tem guarda de concorrência a remover (o `DELETE` já é idempotente): o teste prova ausência de erro e de
+contagem em dobro.
+
+**Custo, não correção:** com N réplicas o relay roda N vezes por tick (50 ms); N−1 abrem uma transação curta que só tenta o lock e sai (a ~20 por segundo cada).
+**Consumers Kafka do `reservation`** (group `reservation`, projeção de disponibilidade, e `reservation-catalog`, reconciliação do `eventcap`): tópicos de 1
+partição, então com N réplicas **só uma consome** e as outras ficam ociosas; a queda de quem consome passa a partição às outras por rebalance, e o checkpoint
+atômico (`projection_checkpoint`) / a criação idempotente por `event_id` evitam aplicar duas vezes. O teste de rebalance é da #112.
+
+### Autoescala: pool por réplica, chave de réplicas ativas e guarda do run-tests (issue #111)
+
+Mecanismo, regra 50/80 e parâmetros: ADR `docs/adr/Architecture-Decision-Autoescala.md` (opção A); como operar: `Projeto/autoescala/README.md`. Resumo do que mexe no backend:
+
+- **Override opcional** `Projeto/docker-compose.autoescala.yml` (o compose base não muda): `backend` e `reservation` sem `container_name`/porta (`--scale`), `lb` (HAProxy 3.2.25,
+  `autoescala/haproxy.cfg`) publica a 8081 e balanceia as réplicas do gateway; a porta interna `lb:8082` balanceia as do reservation e é o `RESERVATION_SERVICE_URL` do `backend`, do
+  `admission` e do `catalog` (o worker pool da fila entrega já pela réplica promovida). O scaler (`autoescala/scaler.sh`, no host) sobe a réplica nova em stand-by (peso 0 no lb), promove em
+  `u >= 0,80` e escoa (`state drain`) antes de descer.
+- **Pool por réplica (a conta do Supavisor).** No override o Hikari do `reservation` é **300 por réplica** (`AUTOESCALA_RESERVATION_HIKARI`, = threads do Tomcat: nenhuma thread espera
+  conexão no Hikari; a fila real continua no Supavisor, pool real 45/245, que não cresce com réplicas). Com o máximo de 3 réplicas de cada, **contando a stand-by** (ela abre o
+  `minimum-idle`): `3 × 300 (reservation) + 3 × 10 (backend) + 3 (notification) + 100 (catalog) + 100 (identity) = 1133 <= POOLER_MAX_CLIENT_CONN 1500`; sobram 367 para as réplicas de
+  `identity` e `catalog` da #112. O compose base segue com 1000 (braço sem autoescala comparável com a Rodada R). Mudar o Hikari por réplica ou o máximo exige refazer a conta.
+- **Réplicas ativas do reservation no `admission`.** O `RpmCounter` não fixa mais `X × réplicas` no construtor: o script Lua lê **`adm:replicas`** (escrita pelo scaler, TTL 15 s, renovada a
+  cada laço) na MESMA ida ao Redis. Chave ausente (scaler parado) ou inválida (não inteiro, < 1, > 1000, lixo) => vale `ADMISSION_RESERVATION_REPLICAS` (lado seguro: capacidade menor, fila mais
+  cedo; nunca divide por zero). O mesmo script publica **`adm:hot`** (maior RPM visto, TTL de uma janela = staleness <= 1 janela, atualizado a cada tentativa contada, só sobe) que o scaler
+  lê por `docker exec` + `redis-cli` (a senha vem de `REDISCLI_AUTH` DENTRO do container, nunca na linha de comando). Gatilho (0,80/0,70), histerese e `HttpContractTest` inalterados com a
+  chave ausente. Testes: `ReplicasAtivasTest` (Redis real; chave = 2 usa X×2, chave que muda sem recriar o contador, sem chave usa o env, 10 valores inválidos usam o env, `adm:hot` só sobe,
+  tem TTL de uma janela e vai embora; o braço naive também publica, leitura não).
+- **`run-tests.sh`** também aborta se houver container de `backend`/`notification`/`reservation`/`catalog`/`identity`/`admission`/`lb` rodando no project `gerenciador-eventos` (achado pelo label
+  `com.docker.compose.service`, porque as réplicas do override se chamam `<project>-<serviço>-<n>` e as guardas por nome não as veem), com a lista dos nomes e o `docker stop` a rodar (pare também o scaler: com as réplicas paradas ele repõe o mínimo).
+- **Falha de leitura do scaler (volta 3):** Redis ilegível, lb mudo ou `docker ps`/`inspect` com erro nunca viram "carga 0" nem "nenhum container": o laço não decide (reservation) ou não age (lb/docker) e zera os contadores de histerese; coberto no `scaler.selftest.sh` (`valida_leitura`, `zera_rastreio`, `ler_estado` com `docker`/`lb_cmd` falsos).
+- **Selftest do scaler** (sem Docker): `Projeto/autoescala/scaler.selftest.sh` (decisão, histerese sem oscilar depois da promoção, descer com `A-1`, mínimo/máximo, cooldown e os parsers do HAProxy).
+
 ## Serviço catalog — issue #35 (Fase 7: terceira extração)
 
 O monólito NÃO tem mais o pacote `catalog` (nem `public.event`): o `gateway` usa o

@@ -21,6 +21,10 @@ import org.springframework.stereotype.Component;
  * (0,70) E a espera do evento vazia (ZSET {@code adm:wait:<eventId>}, lido ANTES de contar a tentativa atual). A decisão é do braço
  * {@code cas} ({@link #decidir}); {@link #contar} (braço {@code naive}) só conta e nunca mexe no modo.</p>
  *
+ * <p><b>Réplicas ativas dinâmicas (#111).</b> O {@code réplicas} da conta é lido NO MESMO script de {@code adm:replicas}, chave que o scaler da
+ * autoescala escreve (com TTL) a cada laço; ausente (scaler parado) ou inválida, vale {@code admission.reservation-replicas}. O mesmo script
+ * publica em {@code adm:hot} o maior RPM visto na janela (TTL de uma janela), que o scaler lê para decidir.</p>
+ *
  * <p>O RPM é sinal de carga. A janela efetiva é de (n-1) a n buckets, porque o bucket corrente ainda está parcialmente cheio; com os
  * defaults (50 ms / 200 ms) a resolução é de 300 RPM por tentativa. O "agora" é o do relógio do admission (um só processo): informado ao
  * script, que não chama {@code TIME}.</p>
@@ -38,7 +42,8 @@ public class RpmCounter {
     private final Clock relogio;
     private final long bucketMs;
     private final long janelaMs;
-    private final String capacidade;
+    private final String xRpm;
+    private final String replicas;
     private final String queueOn;
     private final String syncBelow;
 
@@ -63,8 +68,10 @@ public class RpmCounter {
         this.relogio = relogio;
         this.bucketMs = bucketMs;
         this.janelaMs = janelaMs;
-        // enviados como texto: o Lua faz rpm / capacidade e compara com os mesmos doubles que o Java
-        this.capacidade = String.valueOf(xRpm * replicas);
+        // enviados como texto: o Lua faz rpm / (X x réplicas) e compara com os mesmos doubles que o Java. As réplicas do env só valem
+        // sem a chave adm:replicas do scaler (issue #111)
+        this.xRpm = String.valueOf(xRpm);
+        this.replicas = String.valueOf(replicas);
         this.queueOn = String.valueOf(queueOn);
         this.syncBelow = String.valueOf(syncBelow);
     }
@@ -86,9 +93,10 @@ public class RpmCounter {
 
     private Decisao executar(long eventId, boolean contar, boolean decidir) {
         List<?> r = redis.execute(SCRIPT,
-                List.of("adm:cnt:" + eventId + ":", AdmissionStore.chaveModo(eventId), AdmissionStore.chaveEspera(eventId)),
+                List.of("adm:cnt:" + eventId + ":", AdmissionStore.chaveModo(eventId), AdmissionStore.chaveEspera(eventId),
+                        AdmissionStore.CHAVE_REPLICAS, AdmissionStore.CHAVE_QUENTE),
                 String.valueOf(relogio.millis()), String.valueOf(bucketMs), String.valueOf(janelaMs), contar ? "1" : "0",
-                decidir ? "1" : "0", capacidade, queueOn, syncBelow, String.valueOf(TTL_MODO_SEGUNDOS));
+                decidir ? "1" : "0", xRpm, queueOn, syncBelow, String.valueOf(TTL_MODO_SEGUNDOS), replicas);
         return r == null ? new Decisao(0, false) : new Decisao(((Number) r.get(0)).longValue(), ((Number) r.get(1)).longValue() == 1);
     }
 

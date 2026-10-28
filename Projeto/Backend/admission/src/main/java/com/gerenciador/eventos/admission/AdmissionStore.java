@@ -107,6 +107,12 @@ public class AdmissionStore {
                 String.valueOf(m.deadline()), String.valueOf(ttlEspera.toSeconds()), String.valueOf(RpmCounter.TTL_MODO_SEGUNDOS));
     }
 
+    /** Réplicas ATIVAS do reservation, escritas pelo scaler da autoescala (#111) com TTL; ausente ou inválida => vale o env (ver rpm.lua). */
+    static final String CHAVE_REPLICAS = "adm:replicas";
+
+    /** RPM do evento mais quente da janela atual (maior valor visto, TTL de uma janela), escrito pelo rpm.lua e lido pelo scaler (#111). */
+    static final String CHAVE_QUENTE = "adm:hot";
+
     static String chaveResultado(long userId, String chave) {
         return "adm:res:" + userId + ":" + chave;
     }
