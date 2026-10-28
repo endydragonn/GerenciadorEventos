@@ -3,6 +3,7 @@ package com.gerenciador.eventos.admissionclient;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
@@ -23,8 +24,11 @@ import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import com.gerenciador.eventos.admissionclient.api.AdmissionApi;
+import com.gerenciador.eventos.admissionclient.api.AdmissionRecusadaException;
 import com.gerenciador.eventos.admissionclient.api.AdmissionRequest;
 import com.gerenciador.eventos.admissionclient.api.AdmissionResult;
+import com.gerenciador.eventos.admissionclient.api.AdmissionStatus;
+import com.gerenciador.eventos.admissionclient.api.AdmissionUnavailableException;
 
 /**
  * Cliente HTTP da API interna do serviço admission (issue #41, Fase 7): o salto {@code gateway -> admission} que conta cada tentativa
@@ -125,6 +129,9 @@ public class AdmissionClient implements AdmissionApi, AutoCloseable {
                     .body(request).retrieve().body(AdmissionResult.class);
             sucesso();
             return resultado != null ? resultado : AdmissionResult.sync(-1);
+        } catch (AdmissionRecusadaException ex) {
+            sucesso(); // 422/429 (#43): recusa de negócio de um serviço vivo; o gateway a repassa ao cliente, sem fail-open
+            throw ex;
         } catch (PedidoRecusado ex) {
             sucesso(); // 400: o serviço está vivo e respondeu; a tentativa só não foi contada
             avisos.registrar("[admission-client] o admission recusou o pedido (HTTP 400: " + ex.getMessage()
@@ -138,6 +145,24 @@ public class AdmissionClient implements AdmissionApi, AutoCloseable {
             falha();
         }
         return AdmissionResult.sync(-1);
+    }
+
+    /**
+     * Consulta do estado de uma tentativa da fila (issue #43). Fora do disjuntor: não lê nem altera o circuito do {@link #admit} (uma
+     * consulta que falha não desliga a contagem, e o circuito aberto não impede a consulta). Os parâmetros vão codificados pelo
+     * {@code RestClient} (variáveis de URI), nunca concatenados.
+     */
+    @Override
+    public Optional<AdmissionStatus> result(long userId, String idempotencyKey) {
+        try {
+            AdmissionStatus estado = http.get().uri(b -> b.path("/internal/admissions/result").queryParam("userId", "{u}")
+                    .queryParam("idempotencyKey", "{k}").build(userId, idempotencyKey)).retrieve().body(AdmissionStatus.class);
+            return Optional.ofNullable(estado);
+        } catch (NaoEncontrado ex) {
+            return Optional.empty();
+        } catch (RuntimeException ex) {
+            throw new AdmissionUnavailableException("admission indisponível na consulta: " + ex, ex);
+        }
     }
 
     /** {@code true} se a chamada pode sair: circuito fechado, ou aberto com o tempo vencido (esta chamada é a sonda). */
@@ -170,8 +195,15 @@ public class AdmissionClient implements AdmissionApi, AutoCloseable {
         return switch (status) {
             case 400 -> new PedidoRecusado(mensagem);
             case 401 -> new NaoAutorizado();
+            case 404 -> new NaoEncontrado();
+            case 422, 429 -> new AdmissionRecusadaException(status, mensagem);
             default -> new RuntimeException("HTTP " + status + ": " + mensagem);
         };
+    }
+
+    /** 404 de {@code GET .../result}: não há estado para a chave (resposta normal, não falha). */
+    private static final class NaoEncontrado extends RuntimeException {
+        private static final long serialVersionUID = 1L;
     }
 
     /** 400 do admission: o serviço respondeu e recusou o pedido (não é falha do serviço, e não falha a reserva). */

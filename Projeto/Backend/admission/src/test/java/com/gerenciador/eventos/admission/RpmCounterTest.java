@@ -47,7 +47,7 @@ class RpmCounterTest {
     }
 
     private RpmCounter contador(long bucketMs, long janelaMs) {
-        return new RpmCounter(redis, relogio, bucketMs, janelaMs);
+        return new RpmCounter(redis, relogio, bucketMs, janelaMs, 56000, 1, 0.8, 0.7);
     }
 
     /** RPM esperado: soma x 60000 / (janela - bucket + resto do bucket corrente + 1 ms), o bucket corrente é parcial. */

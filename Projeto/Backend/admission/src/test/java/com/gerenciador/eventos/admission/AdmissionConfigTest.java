@@ -36,6 +36,15 @@ class AdmissionConfigTest {
         assertEquals("200ms", env.getProperty("spring.data.redis.timeout"));
     }
 
+    /** O gatilho (#43): X medido na #40, 1 réplica até a #111, entra em fila com 80% e volta com 70% e a espera vazia. */
+    @Test
+    void gatilhoComOsDefaultsDaSpec() {
+        assertEquals("56000", env.getProperty("admission.x-rpm"));
+        assertEquals("1", env.getProperty("admission.reservation-replicas"));
+        assertEquals("0.8", env.getProperty("admission.queue-on"));
+        assertEquals("0.7", env.getProperty("admission.sync-below"));
+    }
+
     /** A fila de admissão (#42): defaults da spec; o worker é o teto de CAS simultâneos, prefetch 1, confirms + returns + mandatory. */
     @Test
     void filaDeAdmissaoComOsDefaultsDaSpec() {

@@ -66,11 +66,18 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **`REDIS_PASSWORD`** precisa estar no `Projeto/.env` do HOST (o compose recusa subir sem ela; repassada ao `redis` e ao `admission`, e sobreposta por vazio no `backend`). O gerador não precisa dela.
 > - **Desde a #42, `RABBITMQ_USER` e `RABBITMQ_PASSWORD`** também precisam estar no `Projeto/.env` do HOST (o compose recusa subir sem elas; repassadas ao `rabbitmq` e ao `admission`, sobrepostas por vazio no `backend`).
 >   O `gerenciador-rabbitmq` não tem volume (tmpfs): reiniciá-lo zera as filas. **A limpeza entre blocos faz purge das filas `admission.requests` e `admission.timed_out`** (com o `admission` parado, junto do `FLUSHDB`), senão mensagens
->   e `queued` do bloco anterior seriam processados no seguinte; o `admission` ainda não enfileira nada até a #43, então hoje o purge é só garantia. Sem o management, o purge manual é
+>   e `queued` do bloco anterior seriam processados no seguinte; desde a #43 o `admission` enfileira (modo fila, abaixo), então o purge é necessário. Sem o management, o purge manual é
 >   `docker exec gerenciador-rabbitmq rabbitmqctl purge_queue admission.requests` (idem `admission.timed_out`), ou reiniciar o container (tmpfs).
 > - **Pool do Supavisor não muda**: o `admission` não tem datasource (soma dos Hikari segue 1213 <= 1500).
 > - **Conferir o contador** no host: `docker exec gerenciador-redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli INFO commandstats'` (`cmdstat_evalsha` cresce com as reservas) e
 >   `docker exec gerenciador-admission printenv ADMISSION_BUCKET_MS ADMISSION_WINDOW_MS` (defaults 50/200).
+> - **Desde a #43 o modo fila liga sozinho acima de 80% de X por evento** (`uso = RPM do evento ÷ (X × réplicas)`; defaults `ADMISSION_X_RPM=56000` e `ADMISSION_RESERVATION_REPLICAS=1`, ou seja 44,8k RPM no evento;
+>   volta ao síncrono só com uso < 70% e a espera do evento vazia). Acima do limiar o `POST /bff/event-wallets` responde **`202`** (corpo `queued`, `Idempotency-Key`, `Retry-After: 1`) em vez de 201 e o resultado vem pelo
+>   `GET /bff/event-wallets/admission?idempotencyKey=`: o harness da Rodada 4 (#179) precisa tratar 202 como "aceito" e consultar o estado, e **os degraus acima do limiar já não medem o caminho síncrono**. A janela do RPM é de
+>   **200 ms** (`ADMISSION_WINDOW_MS`, bucket de 50 ms): a rajada por evento da escada sequencial dura ~0,2 s, e uma janela maior nunca dispararia. Envs do gatilho no `admission` (todas com default no compose):
+>   `ADMISSION_X_RPM`, `ADMISSION_RESERVATION_REPLICAS`, `ADMISSION_QUEUE_ON` (0,80), `ADMISSION_SYNC_BELOW` (0,70); worker e fila: `ADMISSION_WORKER_CONCURRENCY` (32), `ADMISSION_QUEUE_TTL_MS` (30000), `ADMISSION_QUEUE_MAX_LENGTH`.
+>   Conferir o modo de um evento: `docker exec gerenciador-redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli EXISTS adm:mode:<eventId>'` (1 = em fila) e a profundidade da fila com
+>   `docker exec gerenciador-rabbitmq rabbitmqctl list_queues name messages`. O dry-run local acima do limiar (não é medição) é o passo 4b do `Projeto/e2e/run-e2e.sh` com `E2E_RAJADA_USUARIOS` alto.
 
 Duas máquinas: o **host** (roda a stack, o alvo do teste) e o **gerador** (roda o k6).
 O k6 **nunca** roda no host: competiria por CPU/rede com o backend e invalidaria as latências.

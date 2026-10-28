@@ -43,6 +43,7 @@ class AdmissionStoreTest {
             redis.delete(chaves);
         }
         redis.delete(AdmissionStore.chaveEspera(evento));
+        redis.delete(AdmissionStore.chaveModo(evento));
     }
 
     private AdmissionMessage msg(String chave, String tentativa, long deadline) {
@@ -75,6 +76,9 @@ class AdmissionStoreTest {
         Long ttlEspera = redis.getExpire(AdmissionStore.chaveEspera(evento));
         assertTrue(ttlEspera != null && ttlEspera > 0 && ttlEspera <= 90, "a espera tem TTL = TTL da fila + 60 s: " + ttlEspera);
         assertTrue(redis.getExpire(AdmissionStore.chaveEsperaUsuario(usuario)) > 0);
+        Long ttlModo = redis.getExpire(AdmissionStore.chaveModo(evento));
+        assertTrue(ttlModo != null && ttlModo > 3500 && ttlModo <= 3600,
+                "a mensagem enfileirada (re)marca o modo fila do evento, com TTL de 1 h: " + ttlModo);
     }
 
     @Test
@@ -222,6 +226,21 @@ class AdmissionStoreTest {
         assertEquals((double) m.deadline(), redis.opsForZSet().score(AdmissionStore.chaveEspera(evento), m.membro()));
         assertTrue(redis.getExpire(AdmissionStore.chaveEspera(evento)) > 0, "a espera que voltou tem TTL");
         assertTrue(redis.getExpire(AdmissionStore.chaveEsperaUsuario(usuario)) > 0);
+        Long ttlModo = redis.getExpire(AdmissionStore.chaveModo(evento));
+        assertTrue(ttlModo != null && ttlModo > 3500 && ttlModo <= 3600, "a mensagem que volta à espera religa o modo fila: " + ttlModo);
+    }
+
+    @Test
+    void voltarParaEsperaReligaOModoQueUmaDecisaoDesligouComOWorkerSegurandoAMensagem() {
+        AdmissionMessage m = msg("k-volta", "t1");
+        store.entrar(m);
+        store.sairDaEspera(m); // o worker pegou a mensagem (o reservation está fora: backoff antes do nack)
+        redis.delete(AdmissionStore.chaveModo(evento)); // uma decisão com uso < 0,70 viu a espera vazia e desligou o modo
+        assertFalse(redis.hasKey(AdmissionStore.chaveModo(evento)));
+
+        store.voltarParaEspera(m);
+
+        assertTrue(redis.hasKey(AdmissionStore.chaveModo(evento)), "mensagem esperando = modo fila");
     }
 
     @Test

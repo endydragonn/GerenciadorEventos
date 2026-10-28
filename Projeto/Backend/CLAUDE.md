@@ -1311,7 +1311,7 @@ O monólito NÃO tem mais o pacote `identity` (nem `public.users`/`mywallet`/`pe
 
 Primeira peça da camada de alta carga (ADR "Async-Checkout-Queue"): o `gateway` conta **cada tentativa** de `POST /bff/event-wallets` no serviço `admission` (container
 `gerenciador-admission`, `:8085` só na rede `gerenciador-net`, `admission/Dockerfile`), que mantém **um contador de RPM por evento em Redis**. Na #41 o RPM é **só sinal de carga** e o modo devolvido é
-**sempre `sync`**: a reserva segue exatamente como antes (`HttpContractTest` sem mudança de expectativa, overselling 0 no `cas`). A fila (RabbitMQ, worker pool) e o gatilho por uso de X são as #42 e #43.
+**sempre `sync`**: a reserva segue exatamente como antes (`HttpContractTest` sem mudança de expectativa, overselling 0 no `cas`). A fila (RabbitMQ, worker pool) é a #42 e o gatilho por uso de X, a histerese e o `202` são a #43 (subseção "Gatilho, modo fila e 202" abaixo; abaixo do gatilho nada muda).
 Spec: `docs/superpowers/specs/2026-10-28-admission-servico-design.md`; README do módulo em `admission/README.md` e `admission-client/README.md`.
 
 - **Onde contar (decisão da spec): salto HTTP ao `admission`, não o gateway direto no Redis.** O modo do evento (#43) depende do estado da fila e, em modo fila, a mesma chamada publica a mensagem; só o
@@ -1323,8 +1323,9 @@ Spec: `docs/superpowers/specs/2026-10-28-admission-servico-design.md`; README do
   disponibilidade: a janela check-then-act dele não muda). `EventWalletGateway.addLink` chama `AdmissionApi.admit` UMA vez. **`Idempotency-Key`:** sem chave na requisição o **gateway gera um UUID** (o `admission` exige uma chave, que na #42/#43 será a da
   mensagem) e o manda **SÓ ao `admission`**; o `reservation` é chamado exatamente como antes da #41, com a chave **do cliente** (nula se ele não mandou). Mandar sempre uma chave faria o serviço tratá-la como "do
   cliente" e consultar `idempotency_key` em toda rejeição de pré-requisito (custo novo no caminho síncrono; achado do revisor). O `admission` valida a chave com a regra do `reservation` (não vazia, até 255;
-  mais que isso = 400 com a mesma mensagem), mas o cliente ignora esse 400 na #41 (a chave longa do cliente chega ao `reservation`, que dá o 400 de sempre). Quando o gateway precisar usar a chave gerada também no
-  `reservation` (fail-open do braço `cas` depois de o `admission` ter publicado, #43), levar ao serviço um sinal explícito de "chave gerada" para ele manter o comportamento de chave do servidor.
+  mais que isso = 400 com a mesma mensagem), mas o cliente ignora esse 400 na #41 (a chave longa do cliente chega ao `reservation`, que dá o 400 de sempre). Na #43 o gateway
+  passou a usar a chave efetiva (do cliente ou a gerada) também no `reservation`, mas SÓ no fail-open do braço `cas` (o `admission` pode ter publicado antes de o gateway desistir); nesse modo degradado o serviço a trata como
+  "do cliente" e paga a consulta extra de `idempotency_key` nas rejeições de pré-requisito (custo aceito pela spec, linha "Idempotency-Key no gateway"). Com o `admission` respondendo `sync`, a chave segue a do cliente.
 - **API interna** (`InternalTokenFilter`: `X-Internal-Token` em TODA requisição, 401 sem/errado, sem rota pública; sem `INTERNAL_API_TOKEN` o serviço e o cliente falham no boot):
   `POST /internal/admissions` (corpo `{eventId, userId, idempotencyKey, path}`; `200 {"mode":"sync","rpm":n}`; 400 de validação) e `GET /internal/admissions/events/{eventId}/rpm`
   (`{"eventId":n,"rpm":n}`, só leitura; 503 com o Redis fora). O corpo e a resposta já têm a forma final (a #43 só acrescenta `queued` e os campos de estado). Erros em texto puro.
@@ -1356,12 +1357,12 @@ Spec: `docs/superpowers/specs/2026-10-28-admission-servico-design.md`; README do
   `gerenciador-admission` no ar. A prova de overselling 0 contra o `reservation` REAL é do e2e (`Projeto/e2e/run-e2e.sh`, que sobe `redis`, `rabbitmq` e `admission` isolados, com credenciais efêmeras, e confere que o
   Lua do contador rodou na stack real) e do dry-run.
 - **Caminho síncrono idêntico ao anterior:** o `reservation-client` e o `reservation` NÃO mudaram na #41; a única diferença do caminho síncrono é o salto de contagem (+1 ida HTTP ao `admission` e +1 ida dele ao Redis).
-- **Fora de escopo (#43):** gatilho/histerese que liga a fila ao `POST /internal/admissions`, `202` no gateway e a consulta no `/bff`.
+- **Gatilho/histerese, `202` no gateway e a consulta no `/bff`:** são a #43 (subseção "Gatilho, modo fila e 202" no fim desta seção).
 
 ### Fila de admissão (RabbitMQ) e worker pool — issue #42
 
 O `admission` ganhou a fila: **RabbitMQ**, a topologia declarada por ele, o caminho de enfileirar, o worker pool que chama o `reservation` e o resultado consultável por mensagem no Redis. **O gatilho que liga isto ao
-`POST /internal/admissions` é da #43**: nesta issue o `POST` segue devolvendo `sync` e o caminho de enfileirar é um **método de serviço** (`FilaDeAdmissao.enfileirar`) exercido pelos testes. Spec: a mesma
+`POST /internal/admissions` é da #43** (subseção seguinte): na #42 o `POST` seguia devolvendo `sync` e o caminho de enfileirar era um **método de serviço** (`FilaDeAdmissao.enfileirar`) exercido pelos testes. Spec: a mesma
 (`docs/superpowers/specs/2026-10-28-admission-servico-design.md`, linhas "Topologia", "Mensagem", "Worker pool", "Ack e reentrega", "Dead-letter e reconciliação", "Resultado", "Repetição da chave", "Limite por usuário").
 
 - **RabbitMQ no compose** (`rabbitmq`, container `gerenciador-rabbitmq`): imagem `rabbitmq:4.1.8-alpine` (tag fixa, **sem** o plugin de management: sem porta 15672 nem UI), `RABBITMQ_DEFAULT_USER`/`RABBITMQ_DEFAULT_PASS` de
@@ -1417,6 +1418,48 @@ O `admission` ganhou a fila: **RabbitMQ**, a topologia declarada por ele, o cami
   overselling 0, exceção no worker = nack sem preso, tentativa antiga não mexe na nova, vencida = reconcilia), `AdmissionDeadLetterTest` (mensagem vencida vai à dead-letter e vira `timed_out`, ou `pending` se o replay achou a
   reserva) e o `GET .../result` no `AdmissionApiTest`. **A prova de overselling 0 contra o reservation REAL é do e2e e do dry-run da #43** (o CAS do falso é uma seção crítica).
 
+### Gatilho, modo fila e 202 — issue #43
+
+Liga a fila da #42 ao `POST /internal/admissions` e ao `/bff`. **Abaixo do gatilho nada muda** (`POST /bff/event-wallets` 201, corpo e headers de antes; `HttpContractTest` sem mudança de expectativa nos casos
+existentes; overselling 0 no `cas`); acima dele a tentativa vai para a fila e termina no **mesmo `pending`** do caminho síncrono (o `walletevent` nasce `pending` com `expires_at`; a confirmação segue em
+`POST /bff/event-wallets/confirm` nos dois modos).
+
+- **Gatilho (por evento, no MESMO script Lua do contador, `scripts/rpm.lua`):** `uso = RPM do evento ÷ (X × réplicas)` com `ADMISSION_X_RPM` (**56000**, o X medido na #40), `ADMISSION_RESERVATION_REPLICAS` (**1** até a
+  #111), `ADMISSION_QUEUE_ON` (**0,80**) e `ADMISSION_SYNC_BELOW` (**0,70**); `queue-on` tem de ser maior que `sync-below` e tudo positivo (recusado na subida). Em `sync`, uso ≥ 0,80 liga o modo fila do evento
+  (`adm:mode:<eventId>`, TTL 1 h, renovado a cada decisão em fila); com a fila ligada, **só volta ao síncrono com uso < 0,70 E a espera do evento vazia** (histerese: entre 0,70 e 0,80, ou com mensagem esperando,
+  segue em fila). A espera (ZSET `adm:wait:<eventId>`, a da #42: publicada e ainda não pega por um worker; o que passou do `deadline` sai dela) é lida ANTES de contar a tentativa. A decisão vale para o braço
+  **`cas`** (`RpmCounter.decidir`); o **`naive` só conta** (`contar`) e nunca enfileira nem mexe no modo. O RPM tem a janela de **200 ms** (a rajada por evento na escada dura ~0,2 s; janela maior nunca dispararia).
+- **`POST /internal/admissions`** (`AdmissionService.admit`): `sync` → `200 {"mode":"sync","rpm":n}` (corpo idêntico ao da #41, 1 ida ao Redis); em modo fila, chama `FilaDeAdmissao.enfileirar` (a decisão e o enfileirar são
+  duas idas ao Redis, só no modo fila; **não são atômicas entre si** (desvio aceito da spec "Gatilho (#43)"). O que isso permite: (1) A decide fila; B (uso < 0,70, espera vazia) desliga o modo; A entra na espera e o `enfileirar.lua` o religa (`SET adm:mode`, TTL 1 h): o modo
+  fica ligado **sem uso ≥ 0,80** (com uso entre 0,70 e 0,80 segue em fila até a primeira decisão com uso < 0,70 e espera vazia); (2) A decide fila, o `enfileirar.lua` marca o modo e a publicação falha (`NaoPublicada`, entrada desfeita): a resposta é `sync`, mas o
+  modo fica ligado com a espera vazia (idem: a próxima decisão com uso < 0,70 o desliga); (3) o worker segura a mensagem (a espera esvazia) e uma decisão com uso < 0,70 desliga o modo; o requeue (`voltar.lua`) o religa, mantendo "mensagem esperando = modo fila".
+  Nenhum estado fica preso (toda decisão `cas` com uso < 0,70 e espera vazia desliga o modo; mensagem perdida sai da espera pelo `deadline`) e a corretude não é afetada (o CAS guarda; o `reservation` deduplica pela chave)) e responde `200 {"mode":"queued","rpm":n,"status":"queued"|"pending","idempotencyKey":"...",
+  "eventId":n,"expiresAt"?}` (repetição da chave devolve o estado atual, sem publicar de novo). **Mensagem não publicada** (broker bloqueado, sem rota, falha ao enviar; a entrada é desfeita) → `sync`. Respostas de
+  negócio (`InternalApiExceptionHandler`): **422** chave de outro evento, **429** limite por usuário (`ADMISSION_MAX_WAITING_PER_USER`) e fila cheia; 400 e 503 como na #41.
+- **`AdmissionClient`** (`admit` e novo `result`): 422/429 viram a `AdmissionRecusadaException(status, mensagem)`, **fora do disjuntor** (serviço vivo: zeram a contagem de falhas, sem fail-open); o 400 segue como na #41
+  (sync, sem contar). `result(userId, idempotencyKey)` chama `GET /internal/admissions/result` (URL pelo `RestClient`, parâmetros codificados), devolve vazio no 404, lança `AdmissionUnavailableException` em
+  rede/timeout/5xx/401 e **nunca passa pelo disjuntor** do `admit` (a consulta que falha não desliga a contagem, e o circuito aberto não impede a consulta).
+- **Gateway** (`EventWalletGateway.addLink`): o `admission` respondendo `queued` → `ReservaEnfileiradaException` (o `BffEventWalletController` faz o **`202 Accepted`**, header `Idempotency-Key` (a recebida ou a gerada),
+  `Retry-After: 1` (exposto no CORS) e o corpo `{"status":"queued","eventId":n,"idempotencyKey":"..."}`; o `reservation` não é chamado); **429/422 do `admission` são repassados com o texto dele**. **Chave no `reservation`:**
+  com o `admission` respondendo `sync` ela é a **do cliente** (nula se não mandou), exatamente como na #41; **só no fail-open do braço `cas`** (a chamada ao `admission` falhou: rpm −1) vai a **chave efetiva** (a do cliente
+  ou a gerada), porque o `admission` pode ter publicado antes de o gateway desistir e o `reservation` deduplica pela chave (nunca duas vagas). O `naive` nunca enfileira e segue com a chave do cliente.
+- **`GET /bff/event-wallets/admission?idempotencyKey=`** (autenticado, deny-by-default): o `userId` é a claim `uid` do token (nunca um parâmetro); **200** `{"status":"queued"|"pending"|"rejected"|"timed_out","eventId":n,
+  "idempotencyKey":"...","expiresAt"?,"reason"?}`, **400** sem chave, **401** sem token, **404 igual** para chave inexistente e para a de outro usuário (a chave é escopada pelo usuário no `admission`: a resposta não revela
+  existência), **503** genérico com o `admission` fora (`AdmissionIndisponivelHandler`; log só da classe). `timed_out` ≠ `expired` do `walletevent`. Fora do disjuntor.
+- **Envs novas** (serviço `admission`, repassadas pelo compose com defaults): `ADMISSION_X_RPM`, `ADMISSION_RESERVATION_REPLICAS`, `ADMISSION_QUEUE_ON`, `ADMISSION_SYNC_BELOW`. Para o harness da Rodada 4: o modo fila
+  liga acima de 80% de X (44,8k RPM por evento com os defaults); com X baixo no ambiente de teste o gatilho dispara com pouca carga.
+- **Testes:** `ModoDoEventoTest` (Redis real, relógio manual: bucket = janela = 1 s no ms 999 torna RPM = 60 × tentativas e as contas exatas; entra com 14 tentativas a X=1000 e no limiar exato de 0,80 a X=1200;
+  réplicas; histerese: espera segura a fila, 0,72 mantém, < 0,70 com espera vazia volta; espera vencida pelo deadline; por evento; `contar` não muda o modo; configuração inválida), `AdmissionGatilhoTest` (HTTP real, Redis,
+  RabbitMQ e worker REAIS, reservation falso: contrato `sync` idêntico abaixo de 80% de X (100 RPM), a tentativa 79 ou 80 vira `queued` e o worker leva todas ao `pending`; `naive` nunca enfileira),
+  `AdmissionGatilhoLimitesTest` (sem worker: repetição sem publicar de novo, 422, 429 por usuário, 429 de fila cheia, broker bloqueado = `sync` sem `queued` fantasma), `AdmissionClientTest` (422/429 tipados fora do
+  disjuntor, `result`), `EventWalletGatewayAdmissionTest` (202 sem chamar o reservation, 429 tipado sem abrir o circuito, chave efetiva no fail-open do `cas`, estado), `HttpContractTest` (**aditivo**: 202 + headers + corpo,
+  422/429 repassados, o GET 200/400/401/404/503), `FakeAdmissionServer` (`modoFila`, `falhar(status, mensagem)`, `estado`). **Overselling 0 contra o `reservation` REAL:** passo 4b do e2e e dry-run (abaixo).
+- **e2e (passo 4b de `Projeto/e2e/run-e2e.sh`):** o override do e2e baixa o X do `admission` (`ADMISSION_X_RPM`, default 600; o validador exige 500..5000: a reserva isolada do passo 4 lê ≤ ~397 RPM e segue
+  síncrona, 201). O passo cria N usuários por SQL (hash BCrypt copiado do usuário do passo 3, sem e-mail; `E2E_RAJADA_USUARIOS`, default **20**), um evento de capacidade N/4 (`E2E_RAJADA_CAPACIDADE`; o passo aborta com N < 2 ou capacidade fora de 1..N−1; a `max_time_in_line` do `eventcap` da rajada sobe a 1 h no project descartável, para uma rajada grande não passar dos 120 s padrão e expirar vagas), loga
+  todos e dispara a rajada concorrente dentro do container auxiliar (`Projeto/e2e/rajada-container.sh`); exige **pelo menos um 202**, todos os estados finais pela consulta (`pending`/`rejected`/`timed_out`),
+  a fila `admission.requests` com profundidade **0** (`rabbitmqctl list_queues`, amostrada durante e depois da rajada e impressa) e **overselling 0** (reservas ativas ≤ capacidade, `eventcap.quant` = capacidade −
+  ativas, pending = reservas ativas), imprimindo as contagens de 201/202/400/429 e dos estados. O mesmo passo com `E2E_RAJADA_USUARIOS` alto (ex.: 2000) é o **dry-run local acima do limiar** (não é medição).
+
 ## Suíte e2e da stack inteira — issue #37 (Fase 7)
 
 `Projeto/e2e/run-e2e.sh` sobe **tudo** (gateway, identity, catalog, reservation, notification, frontend, `supabase-*`, redpanda) num project
@@ -1426,7 +1469,7 @@ esvaziarem e o lag dos groups `reservation`/`reservation-catalog`/`notification`
 `reservation.wallet` (`CatalogReplayE2eTest`, `ReservationReplayE2eTest`: `EventReplay.rebuild` + `divergentTables`, sombra == projeção viva;
 exigem `E2E_REPLAY=1`, ficam PULADAS no `run-tests.sh`, não truncam nada e reutilizam a projeção do `ReservationReplayTest`). Verde = saída 0.
 - **`rabbitmq` (#42)** também entra como `*isolado`; o `run-e2e.sh` exporta `RABBITMQ_USER` e `RABBITMQ_PASSWORD` **efêmeros** (`openssl rand -hex`) e o validador de isolamento confere que o broker existe, que o `admission` aponta para ele
-  com essas credenciais e que o `backend` NÃO as recebe. (O passo e2e que exercita a fila, com rajada, é da #43.)
+  com essas credenciais e que o `backend` NÃO as recebe. O passo 4b (#43) exercita a fila com uma rajada (abaixo).
 - **`redis` e `admission` (#41)** entram no project como os demais serviços (`*isolado`: sem `container_name`, sem porta no host); o `run-e2e.sh` **exporta uma `REDIS_PASSWORD` efêmera** (`openssl rand -hex 16`, só
   para o project temporário: o compose exige a variável e o e2e nunca usa a do `Projeto/.env`), o validador de isolamento confere que os dois existem, que o `admission` aponta para o `redis` do project com senha e
   que o `backend` NÃO recebe a senha, e depois da reserva o script exige que o contador de comandos do Redis do project mostre ao menos um `EVAL`/`EVALSHA` (o gateway → `admission` → Redis rodou na stack real).

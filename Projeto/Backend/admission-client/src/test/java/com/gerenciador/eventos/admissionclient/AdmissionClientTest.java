@@ -18,8 +18,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
+import com.gerenciador.eventos.admissionclient.api.AdmissionRecusadaException;
 import com.gerenciador.eventos.admissionclient.api.AdmissionRequest;
 import com.gerenciador.eventos.admissionclient.api.AdmissionResult;
+import com.gerenciador.eventos.admissionclient.api.AdmissionStatus;
+import com.gerenciador.eventos.admissionclient.api.AdmissionUnavailableException;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -41,6 +44,7 @@ class AdmissionClientTest {
     private final AtomicInteger acessos = new AtomicInteger();
     private final List<String> corpos = new CopyOnWriteArrayList<>();
     private final List<String> tokens = new CopyOnWriteArrayList<>();
+    private final List<String> queries = new CopyOnWriteArrayList<>();
     private volatile int status = 200;
     private volatile String resposta = "{\"mode\":\"sync\",\"rpm\":900}";
     private volatile long atrasoMs;
@@ -70,6 +74,7 @@ class AdmissionClientTest {
     private void tratar(HttpExchange ex) throws IOException {
         acessos.incrementAndGet();
         tokens.add(String.valueOf(ex.getRequestHeaders().getFirst("X-Internal-Token")));
+        queries.add(String.valueOf(ex.getRequestURI().getRawQuery()));
         corpos.add(ex.getRequestMethod() + " " + ex.getRequestURI().getPath() + " "
                 + new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
         if (atrasoMs > 0) {
@@ -81,8 +86,10 @@ class AdmissionClientTest {
         }
         byte[] bytes = resposta.getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().add("Content-Type", status == 200 ? "application/json" : "text/plain");
-        ex.sendResponseHeaders(status, bytes.length);
-        ex.getResponseBody().write(bytes);
+        ex.sendResponseHeaders(status, status == 404 ? -1 : bytes.length); // 404 do resultado: sem corpo
+        if (status != 404) {
+            ex.getResponseBody().write(bytes);
+        }
         ex.close();
     }
 
@@ -110,6 +117,77 @@ class AdmissionClientTest {
             assertEquals(AdmissionResult.sync(-1), client.admit(PEDIDO), "o admission é só sinal de carga: o 400 dele não falha a reserva");
         }
         assertEquals(8, acessos.get(), "400 é resposta do serviço vivo: o disjuntor nunca abre por ele");
+    }
+
+    @Test
+    void modoFilaDevolveOEstadoDaFila() {
+        resposta = "{\"mode\":\"queued\",\"rpm\":50000,\"status\":\"queued\",\"idempotencyKey\":\"chave-1\",\"eventId\":7}";
+
+        AdmissionResult r = client.admit(PEDIDO);
+
+        assertEquals("queued", r.mode());
+        assertTrue(r.queued());
+        assertEquals(new AdmissionResult("queued", 50000, "queued", "chave-1", 7L, null, null), r);
+    }
+
+    @Test
+    void recusasDeNegocio422e429SaoTipadasNaoFazemFailOpenENaoContamParaODisjuntor() {
+        for (int codigo : new int[] {422, 429}) {
+            status = codigo;
+            resposta = "motivo-" + codigo;
+            for (int i = 0; i < 8; i++) {
+                AdmissionRecusadaException ex = assertThrows(AdmissionRecusadaException.class, () -> client.admit(PEDIDO));
+                assertEquals(codigo, ex.status());
+                assertEquals("motivo-" + codigo, ex.getMessage());
+            }
+        }
+        assertEquals(16, acessos.get(), "resposta de negócio é do serviço vivo: o disjuntor nunca abre por ela");
+        status = 200;
+        resposta = "{\"mode\":\"sync\",\"rpm\":1}";
+        assertEquals(AdmissionResult.sync(1), client.admit(PEDIDO), "e a chamada seguinte sai normalmente");
+    }
+
+    @Test
+    void resultadoDevolveOEstadoOu404VazioEOUrlCodificaOsParametros() {
+        resposta = "{\"status\":\"pending\",\"eventId\":7,\"expiresAt\":\"2026-10-28T12:00:00\"}";
+        String chaveEstranha = "a b&c=d+e/é?#";
+
+        AdmissionStatus s = client.result(42L, chaveEstranha).orElseThrow();
+
+        assertEquals(new AdmissionStatus("pending", 7L, "2026-10-28T12:00:00", null), s);
+        assertEquals(List.of("userId=42&idempotencyKey=a%20b%26c%3Dd%2Be%2F%C3%A9%3F%23"), queries,
+                "a chave vai codificada no query string: nada de & ou # soltos nem path injetado");
+        assertTrue(corpos.get(0).startsWith("GET /internal/admissions/result "), corpos.get(0));
+        assertEquals(List.of("token-de-teste"), tokens);
+
+        status = 404;
+        assertEquals(java.util.Optional.empty(), client.result(42L, "k"));
+    }
+
+    @Test
+    void resultadoComServicoForaLancaIndisponivelEForaDoDisjuntorDoAdmit() {
+        status = 503;
+        for (int i = 0; i < 8; i++) {
+            assertThrows(AdmissionUnavailableException.class, () -> client.result(42L, "k"));
+        }
+        status = 401;
+        assertThrows(AdmissionUnavailableException.class, () -> client.result(42L, "k"));
+        assertEquals(9, acessos.get(), "a consulta nunca fica aberta pelo circuito");
+
+        status = 200;
+        assertEquals(AdmissionResult.sync(900), client.admit(PEDIDO), "e a falha da consulta não desliga a contagem");
+        assertEquals(10, acessos.get());
+    }
+
+    @Test
+    void falhasDoAdmitNaoImpedemAConsulta() {
+        status = 500;
+        for (int i = 0; i < 5; i++) {
+            client.admit(PEDIDO);
+        }
+        status = 200;
+        resposta = "{\"status\":\"queued\",\"eventId\":7}";
+        assertEquals("queued", client.result(42L, "k").orElseThrow().status(), "circuito do admit aberto: a consulta sai mesmo assim");
     }
 
     @Test

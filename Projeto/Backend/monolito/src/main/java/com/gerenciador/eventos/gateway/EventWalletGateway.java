@@ -2,6 +2,7 @@ package com.gerenciador.eventos.gateway;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import com.gerenciador.eventos.admissionclient.api.AdmissionApi;
 import com.gerenciador.eventos.admissionclient.api.AdmissionRequest;
+import com.gerenciador.eventos.admissionclient.api.AdmissionResult;
 import com.gerenciador.eventos.catalogclient.api.EventApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.EventWalletApi;
@@ -34,11 +36,16 @@ import com.github.benmanes.caffeine.cache.Caffeine;
  * <p><b>Admission (issue #41).</b> Depois das validações (token, ids, evento existe) e ANTES do reservation, {@code addLink} registra a
  * tentativa no contador do evento do serviço {@code admission} ({@link AdmissionApi#admit}), nos DOIS braços (no {@code naive}, antes da
  * leitura de disponibilidade: a janela check-then-act dele não muda). É UMA ida HTTP com fail-open (admission fora ou lento => segue
- * síncrono, com log) e disjuntor, dentro do {@code AdmissionClient}; o modo devolvido é sempre {@code sync} na #41. Sem
- * {@code Idempotency-Key} na requisição, o gateway GERA um UUID e o manda SÓ ao admission (que exige uma chave, e que na #42/#43 a usa como
- * chave da mensagem). O reservation é chamado exatamente como antes da #41, com a chave DO CLIENTE (nula se ele não mandou): mandar sempre uma
- * chave faria o serviço tratá-la como "do cliente" e consultar {@code idempotency_key} em toda rejeição de pré-requisito, um custo novo no caminho
- * síncrono. A chave que volta no header da resposta é a que o reservation usou (a do cliente, ou a que ele gerou).
+ * síncrono, com log) e disjuntor, dentro do {@code AdmissionClient}. Sem {@code Idempotency-Key} na requisição, o gateway GERA um UUID e o
+ * manda ao admission (a chave da mensagem no modo fila). Com o admission respondendo {@code sync}, o reservation é chamado exatamente como
+ * antes da #41, com a chave DO CLIENTE (nula se ele não mandou): mandar sempre uma chave faria o serviço consultar {@code idempotency_key} em
+ * toda rejeição de pré-requisito, um custo novo no caminho síncrono. A chave que volta no header da resposta é a que o reservation usou.
+ *
+ * <p><b>Modo fila (issue #43).</b> Acima do gatilho (80% de X por evento, braço {@code cas}) o admission já enfileirou a tentativa e responde
+ * {@code queued}: o gateway lança {@link ReservaEnfileiradaException} (o controller faz o {@code 202}) e não chama o reservation; o
+ * {@code naive} nunca enfileira. Só no FAIL-OPEN do braço {@code cas} (a chamada ao admission falhou, e ele pode ter publicado antes de o gateway
+ * desistir) o reservation recebe a chave efetiva (a do cliente ou a gerada): se a mensagem também for processada, ele deduplica pela chave.
+ * {@code AdmissionRecusadaException} (422/429) propaga e o controller a repassa.</p>
  *
  * <p>Ordem das mensagens de erro do {@code addLink}: evento (aqui) e depois as do reservation ("Capacidade do evento não
  * configurada", janela de compra, "Vínculo já existente", "Evento lotado"). No braço naive a disponibilidade
@@ -86,11 +93,27 @@ public class EventWalletGateway {
         if (!eventoExiste(ew.getEventId())) {
             throw new IllegalArgumentException("Evento não encontrado");
         }
-        // O UUID gerado vai SÓ ao admission (fail-open: um 400 dele, por chave longa, não falha a reserva; o reservation recusa a chave
-        // longa do cliente com o mesmo 400 de sempre). O reservation recebe a chave do cliente, nula se ela faltou.
-        String chaveParaAdmission = idempotencyKey == null || idempotencyKey.isBlank() ? UUID.randomUUID().toString() : idempotencyKey;
-        admission.admit(new AdmissionRequest(ew.getEventId(), ew.getUserId(), chaveParaAdmission, naive ? "naive" : "cas"));
-        return reservation.addLink(ew, idempotencyKey, naive);
+        // A chave efetiva (a do cliente ou um UUID gerado aqui) vai ao admission: é a chave da mensagem no modo fila. Fail-open: um 400 dele
+        // (chave longa) não falha a reserva; o reservation recusa a chave longa do cliente com o mesmo 400 de sempre.
+        String chaveEfetiva = idempotencyKey == null || idempotencyKey.isBlank() ? UUID.randomUUID().toString() : idempotencyKey;
+        AdmissionResult admissao = admission.admit(new AdmissionRequest(ew.getEventId(), ew.getUserId(), chaveEfetiva, naive ? "naive" : "cas"));
+        if (admissao.queued()) {
+            throw new ReservaEnfileiradaException(EstadoDaReserva.de(admissao)); // 202: nenhuma reserva ainda (o worker do admission a faz)
+        }
+        // Com o admission respondendo sync, o reservation recebe a chave DO CLIENTE (nula se ele não mandou), como antes da #41: mandar sempre uma
+        // chave faria o serviço consultar idempotency_key em toda rejeição de pré-requisito (custo novo no caminho síncrono). Só no fail-open do
+        // braço cas (rpm < 0: a chamada ao admission falhou, e ele pode ter publicado a mensagem antes de o gateway desistir) vai a chave efetiva:
+        // se a mensagem também for processada, o reservation deduplica pela mesma chave (nunca duas vagas). O naive nunca enfileira.
+        boolean admissaoFalhou = !naive && admissao.rpm() < 0;
+        return reservation.addLink(ew, admissaoFalhou ? chaveEfetiva : idempotencyKey, naive);
+    }
+
+    /**
+     * Estado de uma tentativa enfileirada (issue #43), do usuário do token: vazio se a chave não existe PARA ELE (a chave é escopada pelo usuário
+     * no admission, então "não existe" e "é de outro usuário" são o mesmo 404). O controller já validou o usuário (token) e a chave. Falha do admission propaga ({@code AdmissionUnavailableException}).
+     */
+    public Optional<EstadoDaReserva> estadoDaAdmissao(Long userId, String idempotencyKey) {
+        return admission.result(userId, idempotencyKey).map(s -> EstadoDaReserva.de(s, idempotencyKey));
     }
 
     public EventWallet confirm(Long userId, Long eventId) {

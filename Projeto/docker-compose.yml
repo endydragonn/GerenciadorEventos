@@ -214,8 +214,8 @@ services:
   # (Backend/admission/Dockerfile). SEM datasource (não toca no Postgres: a conta do Supavisor, 1213 <= 1500, não muda). Não usa
   # env_file: recebe só o que precisa, pelo NOME (INTERNAL_API_TOKEN e REDIS_PASSWORD do Projeto/.env, sem os segredos dos outros serviços).
   # O backend NÃO depende dele (fail-open no gateway). Desde a #42 depende também do rabbitmq e do reservation: o worker pool (RABBITMQ) chama
-  # o reservation por HTTP (cas) com a Idempotency-Key da mensagem. O caminho de enfileirar existe como método de serviço; o gatilho que o liga
-  # ao POST /internal/admissions é da #43.
+  # o reservation por HTTP (cas) com a Idempotency-Key da mensagem. Desde a #43 o gatilho (uso de X por evento, com histerese) liga o caminho de enfileirar
+  # ao POST /internal/admissions: acima do limiar o POST devolve queued e o gateway responde 202.
   admission:
     build:
       context: ./Backend
@@ -242,6 +242,12 @@ services:
       ADMISSION_RESULT_TTL_SECONDS: ${ADMISSION_RESULT_TTL_SECONDS:-600}
       ADMISSION_DLX_CONCURRENCY: ${ADMISSION_DLX_CONCURRENCY:-4}
       ADMISSION_PUBLISH_CONFIRM_TIMEOUT_MS: ${ADMISSION_PUBLISH_CONFIRM_TIMEOUT_MS:-200}
+      # Gatilho do modo fila (#43): uso = RPM do evento / (X x réplicas ativas do reservation). X = 56000 RPM por evento (medido na #40);
+      # réplicas = 1 até a #111. Entra em fila com uso >= 0,80; volta ao síncrono só com uso < 0,70 E a espera do evento vazia (histerese, por evento).
+      ADMISSION_X_RPM: ${ADMISSION_X_RPM:-56000}
+      ADMISSION_RESERVATION_REPLICAS: ${ADMISSION_RESERVATION_REPLICAS:-1}
+      ADMISSION_QUEUE_ON: ${ADMISSION_QUEUE_ON:-0.8}
+      ADMISSION_SYNC_BELOW: ${ADMISSION_SYNC_BELOW:-0.7}
       # Contador: buckets de 50 ms numa janela de 200 ms (a janela tem de ser múltiplo do bucket; justificativa na spec do admission).
       ADMISSION_BUCKET_MS: ${ADMISSION_BUCKET_MS:-50}
       ADMISSION_WINDOW_MS: ${ADMISSION_WINDOW_MS:-200}
