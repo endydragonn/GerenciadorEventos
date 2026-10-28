@@ -48,3 +48,8 @@ Projeto/carga/results/**/degraus-*.html
 # Supabase self-hosted: dados do Postgres e snippets do Studio (volumes locais)
 Projeto/supabase/volumes/db/data/
 Projeto/supabase/volumes/snippets/
+
+# Flutter (pub get no container de lint)
+Projeto/frontend/.dart_tool/
+Projeto/frontend/pubspec.lock
+Projeto/frontend/.flutter-plugins*

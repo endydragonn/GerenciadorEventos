@@ -154,11 +154,11 @@ class _LoginScreenState extends State<LoginScreen> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Row(
+          title: const Row(
             children: [
-              const Icon(Icons.lock_reset, color: Colors.purple),
-              const SizedBox(width: 10),
-              const Text('Recuperação de Senha'),
+              Icon(Icons.lock_reset, color: Colors.purple),
+              SizedBox(width: 10),
+              Text('Recuperação de Senha'),
             ],
           ),
           content: Column(

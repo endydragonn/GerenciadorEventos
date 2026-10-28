@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'dart:html' as html;
+// ignore: avoid_web_libraries_in_flutter
 import 'dart:js' as js;
 import 'dart:async';
 import '../config/app_config.dart';
@@ -24,7 +24,6 @@ class RecaptchaWidget extends StatefulWidget {
 class _RecaptchaWidgetState extends State<RecaptchaWidget> {
   bool _isVerifying = false;
   bool _isVerified = false;
-  String? _token;
 
   @override
   void initState() {
@@ -41,11 +40,11 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
       
       // Verificar token no backend
       final isValid = await _verifyTokenOnBackend(token);
+      if (!mounted) return;
       
       setState(() {
         _isVerifying = false;
         _isVerified = isValid;
-        _token = token;
       });
 
       widget.onRecaptchaChanged(isValid);
@@ -59,10 +58,11 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isVerifying = false);
       
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
+        const SnackBar(
           content: Text('Erro na verificação do reCAPTCHA'),
           backgroundColor: Colors.red,
         ),
@@ -123,7 +123,7 @@ class _RecaptchaWidgetState extends State<RecaptchaWidget> {
   Future<bool> _verifyTokenOnBackend(String token) async {
     try {
       final response = await http.post(
-        Uri.parse('${AppConfig.apiBaseUrl}$RECAPTCHA_VERIFY_ENDPOINT'),
+        Uri.parse('${AppConfig.apiBaseUrl}$recaptchaVerifyEndpoint'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'token': token,

@@ -11,23 +11,27 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.gerenciador.eventos.gateway.security.HostAuthorizationApi;
 import com.gerenciador.eventos.identityclient.api.MyWallet;
 import com.gerenciador.eventos.identityclient.api.MyWalletApi;
 
 /**
  * Camada BFF única para a carteira do usuário (my-wallet): validate, getByUser, ensure.
  * Antes desta issue (#78) vivia em {@code bff.BffApplication.MyWalletBffController}.
- * Comportamento inalterado. Sem chamador no frontend hoje (carteira é criada
- * automaticamente por trigger no cadastro), mas faz parte da superfície BFF.
+ * Sem chamador no frontend hoje (carteira é criada automaticamente por trigger no cadastro), mas faz parte da superfície BFF.
+ * Desde a #166, {@code getByUser} e {@code ensure} só atendem o dono do token ({@link AcessoNegado}: 403 caso contrário, antes de
+ * chamar o identity).
  */
 @RestController
 @RequestMapping("/bff/my-wallets")
 public class BffMyWalletController {
 
     private final MyWalletApi myWalletService;
+    private final HostAuthorizationApi authorization;
 
-    public BffMyWalletController(MyWalletApi myWalletService) {
+    public BffMyWalletController(MyWalletApi myWalletService, HostAuthorizationApi authorization) {
         this.myWalletService = myWalletService;
+        this.authorization = authorization;
     }
 
     @PostMapping("/validate")
@@ -41,6 +45,10 @@ public class BffMyWalletController {
 
     @GetMapping("/{userId}")
     public ResponseEntity<?> getByUser(@PathVariable Long userId) {
+        ResponseEntity<String> barrado = AcessoNegado.barrarSeNaoDono(authorization, userId);
+        if (barrado != null) {
+            return barrado;
+        }
         if (userId == null || userId <= 0) {
             return ResponseEntity.badRequest().body("userId inválido");
         }
@@ -49,7 +57,11 @@ public class BffMyWalletController {
     }
 
     @PostMapping("/ensure/{userId}")
-    public ResponseEntity<MyWallet> ensureExists(@PathVariable Long userId) {
+    public ResponseEntity<?> ensureExists(@PathVariable Long userId) {
+        ResponseEntity<String> barrado = AcessoNegado.barrarSeNaoDono(authorization, userId);
+        if (barrado != null) {
+            return barrado;
+        }
         return ResponseEntity.ok(myWalletService.ensureExists(userId));
     }
 
