@@ -121,7 +121,7 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
     final user = homePageData.user;
 
     // Verificar se o usuário está logado
-    if (user == null || user.isEmpty) {
+    if (user.isEmpty) {
       AppModals.showError(
         context,
         'Autenticação Necessária',
@@ -145,7 +145,7 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
         body: jsonEncode(enrollment),
       );
 
-      if (!mounted) return;
+      if (!context.mounted) return;
 
       if (reserveResp.statusCode != 201 && reserveResp.statusCode != 200) {
         String errorMsg = 'Você já está inscrito neste evento ou o evento está lotado.';
@@ -169,7 +169,7 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
         body: jsonEncode(enrollment),
       );
 
-      if (!mounted) return;
+      if (!context.mounted) return;
 
       if (confirmResp.statusCode == 200) {
         AppModals.showSuccess(
@@ -191,7 +191,7 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
         AppModals.showError(context, 'Confirmação Pendente', errorMsg);
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!context.mounted) return;
       AppModals.showError(
         context,
         'Erro de Conexão',

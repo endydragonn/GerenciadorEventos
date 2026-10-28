@@ -46,8 +46,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   bool _mfaValidated = false;
   bool _showNewPassword = false;
   bool _showConfirmPassword = false;
-  bool _requestingMfa = false;
-  bool _isRequestingMfa = false;
 
   // Método para validar força da senha
   bool _isPasswordStrong(String password) {
@@ -68,18 +66,16 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     });
     // Inicializar com dados atuais (serão atualizados por _loadUserData)
     final user = Provider.of<HomePageData>(context, listen: false).user;
-    if (user != null) {
-      _nameController.text = user['name'] ?? '';
-      _emailController.text = user['email'] ?? '';
-      _phoneController.text = user['fone'] ?? '';
-    }
+    _nameController.text = user['name'] ?? '';
+    _emailController.text = user['email'] ?? '';
+    _phoneController.text = user['fone'] ?? '';
   }
 
   void _checkAuthentication() {
     final user = Provider.of<HomePageData>(context, listen: false).user;
 
     // Se não estiver logado, redirecionar para tela principal
-    if (user == null || user.isEmpty || user['user_id'] == null) {
+    if (user.isEmpty || user['user_id'] == null) {
       AppModals.showError(
         context,
         'Autenticação Necessária',
@@ -96,7 +92,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   Future<void> _loadUserData() async {
     final user = Provider.of<HomePageData>(context, listen: false).user;
-    if (user == null || user['user_id'] == null) return;
+    if (user['user_id'] == null) return;
 
     try {
       final response = await http.get(
@@ -188,7 +184,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           body: jsonEncode(updatedUser),
         );
 
-        if (!mounted) return;
+        if (!context.mounted) return;
 
         if (response.statusCode == 200) {
           // Se alterando senha, fazer a alteração agora (após validação de MFA)
@@ -202,13 +198,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               }),
             );
 
-            if (!mounted) return;
+            if (!context.mounted) return;
 
             if (passwordResponse.statusCode != 200) {
               String errorMsg = 'Erro ao alterar senha';
               try {
                 errorMsg = jsonDecode(passwordResponse.body);
-              } catch (e) {}
+              } catch (e) {
+                // mantém a mensagem padrão
+              }
               
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -245,7 +243,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           );
         }
       } catch (e) {
-        if (!mounted) return;
+        if (!context.mounted) return;
         AppModals.showConnectionError(context);
       }
     }
@@ -278,10 +276,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   Future<void> _requestPasswordResetMfa() async {
     final user = Provider.of<HomePageData>(context, listen: false).user;
-    
-    setState(() {
-      _isRequestingMfa = true;
-    });
 
     try {
       final response = await http.post(
@@ -290,10 +284,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       );
 
       if (!mounted) return;
-
-      setState(() {
-        _isRequestingMfa = false;
-      });
 
       if (response.statusCode == 200) {
         setState(() {
@@ -311,7 +301,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         String errorMsg = 'Erro ao solicitar código MFA';
         try {
           errorMsg = jsonDecode(response.body);
-        } catch (e) {}
+        } catch (e) {
+          // mantém a mensagem padrão
+        }
         
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -322,9 +314,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _isRequestingMfa = false;
-      });
       AppModals.showConnectionError(context);
     }
   }
@@ -366,7 +355,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         String errorMsg = 'Código MFA inválido ou expirado';
         try {
           errorMsg = jsonDecode(response.body);
-        } catch (e) {}
+        } catch (e) {
+          // mantém a mensagem padrão
+        }
         
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -521,7 +512,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   builder: (context, homePageData, child) {
                     final user = homePageData.user;
                     String birthdate = 'Não informado';
-                    if (user != null && user['birthdate'] != null) {
+                    if (user['birthdate'] != null) {
                       try {
                         final date = DateTime.parse(user['birthdate']);
                         birthdate = '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
@@ -551,7 +542,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   builder: (context, homePageData, child) {
                     final user = homePageData.user;
                     String createdAt = 'Não disponível';
-                    if (user != null && user['created_at'] != null) {
+                    if (user['created_at'] != null) {
                       try {
                         final date = DateTime.parse(user['created_at']);
                         createdAt = '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year} às ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';

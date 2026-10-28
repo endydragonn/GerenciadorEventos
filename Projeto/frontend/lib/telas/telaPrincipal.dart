@@ -28,7 +28,6 @@ import 'telaHomePage.dart'; // HomeScreen & HomePageData
 import 'telaEdicaoPerfil.dart';
 import 'telaCriacaoEvento.dart';
 import '../config/app_config.dart'; // AppConfig
-import 'telaHomePage.dart'; // Para deslogar
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -53,6 +52,7 @@ class _MainScreenState extends State<MainScreen> {
         Uri.parse('${AppConfig.apiBaseUrl}/bff/users/me'),
         headers: ApiAuth.jsonHeaders(),
       );
+      if (!mounted) return;
       
       if (response.statusCode == 200) {
         final userData = jsonDecode(response.body) as Map<String, dynamic>;
@@ -260,7 +260,7 @@ class _MainScreenState extends State<MainScreen> {
                     ),
                   ],
                 ),
-              )).toList(),
+              )),
             ],
           ),
         ),
