@@ -1,5 +1,6 @@
 package com.gerenciador.eventos.reservation;
 
+import java.time.LocalDateTime;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,8 +43,13 @@ abstract class ReservationTestSupport {
 
     /** Evento com capacidade {@code capacidade} (-1 = ilimitado), sem janela de compra. */
     protected Evento novoEvento(Long ignorado, String nome, int capacidade) {
+        return novoEvento(ignorado, nome, capacidade, null);
+    }
+
+    /** Evento com capacidade {@code capacidade} e janela de compra até {@code buyTimeLimit} (null = sem janela). */
+    protected Evento novoEvento(Long ignorado, String nome, int capacidade, LocalDateTime buyTimeLimit) {
         Evento e = new Evento(IDS.getAndIncrement());
-        eventCapRepository.create(new EventCap(e.id(), capacidade, capacidade, null));
+        eventCapRepository.create(new EventCap(e.id(), capacidade, capacidade, buyTimeLimit));
         return e;
     }
 }

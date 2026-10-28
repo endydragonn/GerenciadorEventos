@@ -12,6 +12,10 @@
 // Variaveis (passadas pelo rodar-rpm.ps1):
 //   BASE_URL, RPM, DURACAO_S, USERS_FILE (json [{email,password}]), EVENTS_FILE (json [id,...]),
 //   SUMMARY_FILE, MAX_VUS (opcional), PCT_CONFIRMA (0-100, padrao 100)
+//   CENARIO (escrita | leitura; padrao escrita). leitura (issue #38): cada iteracao e um
+//   GET /bff/events/{id} publico (catalogo: gateway -> catalog -> disponibilidade no reservation),
+//   em rodizio pelos eventos semeados; sem login. Os campos aceitas/erros_5xx/outros e p50/p95/p99
+//   do resumo passam a ser das leituras (200 / 5xx / outro).
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { Counter, Trend } from 'k6/metrics';
@@ -25,6 +29,8 @@ const USERS = lerJson(__ENV.USERS_FILE);
 const EVENTS = lerJson(__ENV.EVENTS_FILE);
 const MAX_PARES = USERS.length * EVENTS.length;
 const PCT_CONFIRMA = parseInt(__ENV.PCT_CONFIRMA || '100', 10);
+const CENARIO = __ENV.CENARIO || 'escrita';
+if (CENARIO !== 'escrita' && CENARIO !== 'leitura') throw new Error(`CENARIO invalido: ${CENARIO}`);
 
 const aceitas = new Counter('reservas_aceitas');
 const lotado = new Counter('reservas_lotado');
@@ -58,6 +64,7 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
 // Login de todos os usuarios ANTES da carga (nao entra na medicao).
 export function setup() {
+  if (CENARIO === 'leitura') return [];
   const sessoes = [];
   for (let i = 0; i < USERS.length; i += 25) {
     const lote = USERS.slice(i, i + 25);
@@ -121,8 +128,20 @@ function confirmar(s, eventId) {
   }
 }
 
+function ler(i) {
+  const res = http.get(`${BASE}/bff/events/${EVENTS[i % EVENTS.length]}`, { tags: { name: 'leitura' } });
+  reservaDur.add(res.timings.duration);
+  if (res.status === 200) aceitas.add(1);
+  else if (res.status >= 500) erros5xx.add(1);
+  else {
+    outros.add(1);
+    if (i < 5) console.warn(`leitura inesperada: HTTP ${res.status} ${String(res.body).slice(0, 160)}`);
+  }
+}
+
 export default function (sessoes) {
   const i = exec.scenario.iterationInTest;
+  if (CENARIO === 'leitura') return ler(i);
   if (i >= MAX_PARES) {
     alemDosPares.add(1); // pares repetidos dariam 400 de duplicidade: nao envia
     return;
@@ -171,6 +190,7 @@ export function handleSummary(data) {
   const o = contador(data, 'reservas_outros');
   const tentativas = a + l + e5 + o;
   const out = {
+    cenario: CENARIO,
     rpm_alvo: RPM,
     rpm_real: duracaoS > 0 ? (tentativas / duracaoS) * 60 : 0,
     duracao_s: duracaoS,

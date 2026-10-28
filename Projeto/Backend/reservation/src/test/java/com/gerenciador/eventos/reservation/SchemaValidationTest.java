@@ -171,6 +171,46 @@ public class SchemaValidationTest {
         }
     }
 
+    /**
+     * Issue #58: as janelas de compra/expiração são instantes (timestamptz), não horário de parede sem fuso; sem isso a
+     * comparação com CURRENT_TIMESTAMP dependeria do fuso da sessão.
+     */
+    @Test
+    void buyTimeLimitAndExpiresAtShouldBeTimestamptz() throws Exception {
+        assertEquals("timestamp with time zone", dataType("eventcap", "buy_time_limit"), "eventcap.buy_time_limit");
+        assertEquals("timestamp with time zone", dataType("walletevent", "expires_at"), "walletevent.expires_at");
+    }
+
+    /** Issue #58: a PK (user_id, event_id) não serve busca só por event_id (contagem/varredura por evento). */
+    @Test
+    void walletEventShouldHaveEventIdIndex() throws Exception {
+        String sql = "select count(*) from pg_indexes where schemaname = any(?) "
+            + "and tablename = 'walletevent' and indexname = 'idx_walletevent_event_id'";
+        try (Connection c = databaseConnection.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                assertEquals(1, rs.getInt(1), "índice idx_walletevent_event_id");
+            }
+        }
+    }
+
+    private String dataType(String table, String column) throws Exception {
+        String sql = "select data_type from information_schema.columns where table_schema = any(?) "
+            + "and table_name = ? and column_name = ?";
+        try (Connection c = databaseConnection.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setArray(1, c.createArrayOf("text", TestSchemas.parse(schemasConfig).toArray()));
+            ps.setString(2, table);
+            ps.setString(3, column);
+            try (ResultSet rs = ps.executeQuery()) {
+                assertTrue(rs.next(), "coluna " + table + "." + column + " não existe");
+                return rs.getString(1);
+            }
+        }
+    }
+
     /** Colunas, em ordem, da constraint do tipo {@code contype} ('p' = PK, 'u' = UNIQUE) da tabela. */
     private List<String> constraintColumns(String table, char contype) throws Exception {
         String sql = "select a.attname from pg_constraint c "

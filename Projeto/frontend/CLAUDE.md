@@ -33,9 +33,11 @@ referência** — não é compilado, não edite.
 - Via Docker: `docker compose -f Projeto/docker-compose.yml up -d --build frontend`
   — Nginx na porta `8088` (container `:80`), container `gerenciador-frontend`.
 - Build local: `flutter build web --release --dart-define=API_BASE_URL=<url> --dart-define=RECAPTCHA_SITE_KEY=<key>`
-- Dev: `flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:8081` (aponta
+- Dev: `flutter run -d chrome --web-port=3000 --dart-define=API_BASE_URL=http://localhost:8081` (aponta
   direto pro backend, sem o proxy do Nginx — precisa do `backend` rodando em `:8081` com
   CORS liberado pra origem do `flutter run`, ver `Backend/CLAUDE.md`).
+  `--web-port=3000` bate com o default de `CORS_ALLOWED_ORIGINS` (#133); outra origem (`127.0.0.1`, IP da
+  LAN) exige acrescentá-la a `CORS_ALLOWED_ORIGINS` no `Projeto/.env`.
 - Sem lockfile versionado; `flutter pub get` resolve pelo `pubspec.yaml`.
   Flutter 3.19.6 / Dart SDK `>=3.3.0 <4.0.0` (ver `Dockerfile`).
 
@@ -70,7 +72,7 @@ referência** — não é compilado, não edite.
 ## reCAPTCHA v3
 
 `widgets/recaptcha_widget.dart` + `config/recaptcha_config.dart`. A **site key** entra por
-`--dart-define=RECAPTCHA_SITE_KEY`; o backend valida o token contra a Google. Site key é
+`--dart-define=RECAPTCHA_SITE_KEY`; o backend (serviço identity) valida o token contra a Google. Site key é
 pública, mas mesmo assim não hardcode — mantenha via dart-define.
 
 ## Ao mexer aqui

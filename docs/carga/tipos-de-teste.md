@@ -131,6 +131,7 @@ pré-alocados: só há descarte quando todos estão ocupados, ou seja, quando um
 ```powershell
 make test-degraus HOST_IP=<ip>                                     # 12k→40k, passo 4k, 2000 VUs
 make test-degraus HOST_IP=<ip> DEG_INICIO=95000 DEG_PASSO=1000 DEG_MAX=100000 MAX_VUS=3000
+make test-degraus HOST_IP=<ip> MAPEAMENTO=intercalado              # carga espalhada pelos eventos
 make report-degraus CSV=results\degraus-<id>.csv                   # gráfico + X
 ```
 
@@ -138,10 +139,23 @@ make report-degraus CSV=results\degraus-<id>.csv                   # gráfico + 
 entram) **ou** alguma janela de 30 s com **p95 > 1 s**. Se o gerador saturar antes (iterações
 descartadas ou RPM efetivo abaixo do alvo sem degradação do host), o X vira **limite inferior**.
 
-**O que o X mede:** a escada manda 200 reservas seguidas para o mesmo evento (evento `floor(i / U)`),
-então o X é o limite de **um evento disputado**: as reservas disputam a mesma linha do `eventcap`. Para
-medir a capacidade do host com a carga espalhada, veja a issue #113. Resultados em
-[Escada de degraus: resultados de 2026-10-16](./resultados-escada-2026-10-16.md).
+**O que o X mede** depende do `MAPEAMENTO`, que decide como a iteração `i` vira o par (usuário,
+evento), com `U` usuários e `E` eventos (cada par é único dentro da escada nos dois modos):
+- `sequencial` (padrão): usuário `i % U`, evento `floor(i / U)`. As `U` (200) reservas seguidas vão
+  para o **mesmo evento**, então o X é o limite de **um evento disputado**: as reservas disputam a
+  mesma linha do `eventcap`. Use para medir a disputa por um evento.
+- `intercalado`: usuário `floor(i / E)`, evento `i % E`. As `E` reservas seguidas vão para eventos
+  **diferentes**, então a carga se espalha e o X é a **capacidade do host** sem a linha quente de um
+  evento. Use para medir quanto o host aguenta quando a procura é distribuída.
+
+Capacidade por evento: o padrão do runner é `USUARIOS / 2` no `sequencial` e `USUARIOS` no `intercalado`. No
+intercalado o evento recebe a *u*-ésima reserva na "rodada" *u*, então `USUARIOS / 2` lotaria todos os eventos juntos
+no meio da escada (segunda metade 100% "lotado", X inflado); com `USUARIOS` cada evento aceita as `U` reservas (uma por
+usuário). O runner imprime a capacidade usada.
+
+O CSV registra o modo na coluna `mapeamento` (o report o mostra no subtítulo); CSV antigo, sem a
+coluna, aparece como `n/d`. Os dois X só se comparam entre si com o mesmo `MAPEAMENTO`. Resultados
+em [Escada de degraus: resultados de 2026-10-16](./resultados-escada-2026-10-16.md).
 
 **Cuidados:**
 - Os parâmetros `MAX_CONN` e `POOL_HIKARI` do gerador só **rotulam** o CSV. Confira no host o

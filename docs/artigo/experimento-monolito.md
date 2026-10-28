@@ -4,7 +4,8 @@
 > carga (issues #12, #13 e #14) foram preenchidos com as rodadas de 2026-10-16. O **ponto 1 da série** (monólito
 > CRUD + pooler) foi medido depois, com as rodadas 1a e 1b repetidas com o Supavisor (issue #22). Em 2026-10-17 vieram
 > as rodadas de isolamento do pooler e a escada X pelo pooler. O **ponto 2 da série** (monólito com CQRS + ES, issue #31)
-> foi medido em 2026-10-19, com o braço ingênuo lendo a projeção assíncrona real.
+> foi medido em 2026-10-19, com o braço ingênuo lendo a projeção assíncrona real. O **limiar X definitivo, por evento**
+> (issue #40), veio da Rodada R de 2026-10-28, na configuração final distribuída (subseção "Limiar X definitivo").
 > Revisão com o orientador pendente. Caminhos de arquivo são relativos à raiz do repositório (nos comandos
 > `make`, relativos a `Projeto/carga`); os termos seguem o glossário de `CONTEXT.md`.
 >
@@ -21,6 +22,10 @@
 > - **Pré-pooler (referência, "monólito + HikariCP").** A matriz 1a/1b anterior e a escada de carga (limiar X),
 >   com o backend direto no PG 16 (pool e `max_connections` informados no Setup). Ficam como histórico e como
 >   comparação. O X pré-pooler (97k) é a referência do X pelo pooler.
+>
+> A subseção "Comparação das 3 configurações" (issue #39) **junta esses conjuntos de propósito**, lado a lado, com tabela e
+> gráficos e com as ressalvas dela (rede, disco e código diferentes entre os pontos; o X intercalado da Rodada R não é comparável
+> com os X sequenciais).
 
 ## Hipótese
 
@@ -661,6 +666,155 @@ Docker em HDD (`fsync` ≈ 30 ms) e foi descartada; as medidas válidas são as 
 quase sempre -1 (a projeção ficou mais rápida que o polling), então o lag não aparece como variável. (v) O PR da `Fase_7`
 não estava mergeado: o código medido é o que vai para a `main`.
 
+### Limiar X definitivo (Rodada R, 2026-10-28; issue #40)
+
+Rodada R, contra a `Batch_1` em `b072346` (Fase 7 completa: `notification`, `reservation`, `catalog` e `identity` como
+serviços; ainda não mergeada na `main` quando a rodada rodou, então o código medido é o que vai para ela). Fonte:
+`Projeto/carga/results/06-batch1-final/` (README da etapa e `degraus-*.csv`). Braço `cas`, 200 usuários, 60 s por degrau,
+host com Docker em SSD NVMe, rede cabeada, banco limpo antes de cada bloco, Tomcat 300 e Hikari 1000 no `reservation`,
+pool do Supavisor 245. O X desta subseção é o que a arquitetura de admissão usa (`docs/adr/Architecture-Decision-Async-Checkout-Queue.md`).
+
+**X definitivo = 56.000 RPM por evento** (≈ 930 tentativas de reserva/s numa única linha do `eventcap`), da escada **sequencial**
+(evento disputado), refino 6b (`degraus-938039`), resolução de 2k:
+
+| `rpm_alvo` | `rpm_efetivo` | p50 (ms) | p95 de janela de 30 s (ms) | Descartes |
+|---|---|---|---|---|
+| 38k (aquecimento) | 38.000 | 49,6 | 1.397,0 | 0 |
+| 52k | 52.001 | 137,4 | 318,6 | 0 |
+| 54k | 54.001 | 164,6 | 356,8 | 0 |
+| **56k** | 56.000 | 215,3 | **1.669,1** | 0 |
+| 58k | 42.408 | 3.069,4 | 3.483,2 | 15.593 |
+| 60k | 42.027 | 3.096,2 | 3.426,6 | 17.974 |
+
+- **Por que 56k.** É o primeiro degrau que cumpre a regra do X (p95 de janela acima de 1 s) fora do aquecimento, e é
+  seguido de colapso (como o "58k é o primeiro degrau saturado" do ponto 3): a cauda passa de 1 s (janela de 1,67 s) ainda
+  sem descarte, e nos dois degraus seguintes a vazão **cai** para ~42k efetivos (colapso por fila, p50 ~3,1 s). O último degrau limpo é **54k** (janela de 357 ms, p50
+  165 ms). 0 erros 5xx e 0 outros em todos os degraus da tabela.
+- **Aquecimento descartado.** O degrau de 38k do `degraus-938039` é a partida a frio do refino (janela de 1,4 s) e não é
+  degradação: os degraus de 40k a 54k, na sequência, ficam limpos (169 → 357 ms). O `report-degraus` aplica a regra do X
+  ao CSV inteiro e marcaria o X nesse 38k; a leitura acima o descarta. O refino 6 (`degraus-936649`, 18k–40k) está todo
+  limpo (janela de 6 a 160 ms). Aquecimento análogo no 1º degrau de cada refino intercalado (janela de 2,1 s nos dois).
+- **Anomalia fora do X.** A escada grossa sequencial (`degraus-931618`) começou a frio em 40k e colapsou já no 1º degrau
+  (efetivo 39–44k, janela de 3,3–3,9 s); os degraus de cima herdaram o host atolado. Fica registrada como medida, não
+  como X.
+- **Causa.** Vem do diagnóstico ao vivo (README da etapa), não do refino 6b e não dos CSVs versionados: o `pg_stat_statements`
+  acumulado desde o início da escada sequencial a frio até o fim do `Rpm-932720` deu média de 344 ms no `UPDATE` do CAS
+  e, durante o `Rpm-932720`, havia 186 sessões esperando lock de transação e as 300
+  threads do Tomcat do `reservation` ficaram esperando o banco. É a contenção na linha do `eventcap` do evento disputado.
+
+**Por que é "por evento".** No mapeamento `sequencial` a iteração `i` vai ao evento `⌊i/U⌋` (U = 200), de modo que, em cada
+instante, as chegadas novas caem num único evento: a taxa na linha quente do `eventcap` é a taxa agregada do degrau (≈ 930
+req/s a 56k). O que é fixo por evento é a **contagem** (200 tentativas, numa rajada de 200 · 60 / RPM s ≈ 0,2 s a 56k, ameaça
+10), não a taxa. Logo, a escada sequencial mede o RPM **de um
+evento**, e o `RPM(evento)` da ADR é comparável a ele.
+
+**Teto do host (intercalado).** O mapeamento `intercalado` espalha a carga pelos eventos e chega a **≈ 86k RPM** (refino
+`degraus-933734` e `degraus-935110`): 84k é o último limpo (janela de 62 ms, p50 11,8 ms), 86k degrada (efetivo 85.700,
+janela de 1.120 ms, p50 228 ms, 301 descartes) e de 88k a 92k o efetivo se segura em ~80–82k (7.050 a 12.234 descartes). É o
+teto do host somado entre eventos, não o X por evento: a linha quente de um evento custa ~35% dele (56k contra 86k).
+
+**Contra os pontos anteriores** (todos sequenciais, mesma linha quente): ≈ 97k pré-pooler (referência), ≈ 78k pelo pooler
+(ponto 1), ≈ 56k–61k no ponto 2 e ≈ 58k no ponto 3 (Rodada 3, `20aae4e`). 56k contra 58k é cerca de um passo de
+resolução, e o código mudou entre as duas (saíram o `catalog`, #35, e o `identity`, #36, do processo do `gateway`, e mudou
+o contrato da reserva, #57): **não se lê como regressão.**
+
+**Limiares derivados** (regra 50/80/70 de `docs/adr/Architecture-Decision-Async-Checkout-Queue.md`, com 1 réplica do `reservation`, uso = `RPM(evento)` ÷ (X × réplicas)):
+
+| Gatilho | Uso | RPM por evento |
+|---|---|---|
+| Fila entra | ≥ 80% | 0,8 × 56k = **44,8k** |
+| Volta ao síncrono (com fila vazia) | < 70% | 0,7 × 56k = **39,2k** |
+| Réplica em stand-by (#111) | > 50% | 0,5 × 56k = **28k** |
+
+A faixa de 44,8k fica dentro do trecho limpo da escada (44k: janela de 230 ms), com margem de 11,2k RPM para o X.
+
+**Consequências para a implementação (fora desta medição).**
+
+- **Janela do sinal.** X é uma **taxa** (≈ 930 tentativas/s), e a rajada por evento dura ~0,2 s. Um contador de janela de 60 s leria
+  ~200 numa rajada dessas e nunca chegaria a 44,8k; a janela do sinal em Redis (e como ela converte a contagem em RPM) é
+  decisão da implementação do `admission` (#41 e #43), não desta medição.
+- **Réplicas.** A Rodada R mediu **uma** réplica. O limite é a linha do `eventcap`, que réplicas extras também disputariam
+  (e o mesmo host sem a linha quente chega a 86k contra 56k): insumo para a #111, fórmula `X × réplicas` inalterada.
+
+**Ameaças a este X.** (i) Uma escada por configuração e resolução de 2k RPM: o X vale 56k ± um passo (o degrau limpo anterior é
+54k). (ii) A causa vem do diagnóstico a frio (estado já colapsado), não de uma medição no joelho do refino: o
+`pg_stat_statements` salvo não está alinhado à escada do 6b, então o joelho não tem diagnóstico de banco próprio (a coleta do
+6b, `coleta-host-r-refino-seq2-*`, só traz um pico de 237 sessões em `pg_espera_lock`, sem alinhamento por degrau). (iii) Partida
+a frio: o aquecimento do 6b e dos refinos intercalados estoura a cauda (o refino 6 começou limpo) e é descartado por
+julgamento, não pela regra automática do report. (iv) O X é uma taxa de chegada na linha quente com rajada de
+~0,2 s por evento, não um evento sustentado a 56k RPM por 60 s (um evento real esgota a capacidade antes); vale como limiar
+de contenção do `eventcap`. (v) Uma réplica do `reservation`, um host, uma rede; o código medido é o da `Batch_1`.
+
+### Comparação das 3 configurações (issue #39)
+
+Resultado consolidado da série: **monólito CRUD + pooler** (ponto 1), **monólito com CQRS + ES** (ponto 2) e **distribuído com ES**
+(ponto 3: a etapa 05 como intermediária e a Rodada R, etapa 06, como configuração final). Esta subseção **junta de propósito os
+conjuntos** que o "Escopo dos números" do topo manda não misturar, lado a lado e com as ressalvas abaixo. Nenhum número é recalculado:
+todos vêm dos README das etapas (`Projeto/carga/results/<etapa>/README.md`) e das subseções anteriores, e os valores e a fonte de cada
+um estão em [`graficos/comparacao-3-configuracoes.csv`](graficos/comparacao-3-configuracoes.csv). Os gráficos saem de
+[`graficos/gera-graficos.sh`](graficos/gera-graficos.sh) (bash + awk, sem lib). Compara-se sequencial com sequencial (escada do X) e o
+aleatório de 45 min com a mesma semente 617706 (latência); o X **intercalado** da Rodada R não entra na comparação (ver abaixo).
+
+| | Ponto 1: monólito CRUD + pooler (03) | Ponto 2: monólito ES (04 Wi-Fi; 04b cabo) | Ponto 3 intermediário: distribuído (05) | Distribuído final, Rodada R (06) |
+|---|---|---|---|---|
+| Commit / rede | matriz `8ba01b4` (código a partir de `66a46b4`), escada na `main` `a8fc86a`; cabo | `main` `1ee6fbe`; 04 em Wi-Fi (baseline HTTP p50 26,6 / p95 42,9 ms); 04b: + #146, no cabo, SSD | `20aae4e`; cabo, SSD | `b072346`; cabo, SSD (baseline HTTP p50 13,9 / p95 15,6 ms) |
+| Overselling, braço CAS | 0 em 10/10 | 04: 0 em 10/10; 04b: não medido | 0 em 20/20 | 0 em 20/20 e 0 no aleatório |
+| Overselling, braço ingênuo | teto em 36/40 (15 a 180) | 04: teto em 10/10 (80/180); 04b: teto em 10/10 (80/180) | teto em 19/20 (168 na rep 1 de N=200) | teto em 20/20 (80/180) |
+| **X sequencial** (throughput, RPM por evento) | 78k (referência pré-pooler: 97k) | 04: 56k (Wi-Fi); 04b: ≥ 60k (só limite inferior) | 58k | 56k (último degrau limpo 54k) |
+| Teto do host, intercalado (não comparável com o X) | n/d | n/d | n/d | 86k (último limpo 84k) |
+| Reserva p50 / p95 / p99 (ms, aleatório 45 min) | 3,9 / 5,7 / 10,7 (Ale-29057) | 10,8 / 36,2 / 62,0 (Ale-190276, Wi-Fi); 04b sem aleatório | 4,8 / 6,6 / 9,3 (Ale-644172) | 4,7 / 6,7 / 8,0 (Ale-939580) |
+| Confirmação p50 / p95 / p99 (ms, aleatório 45 min) | 2,1 / 5,0 / 8,8 | 8,7 / 29,7 / 56,0 (Wi-Fi) | 3,1 / 4,5 / 6,9 | 3,1 / 5,5 / 8,1 |
+| Leitura p95 (ms): busca / evento / carteira | 15,0 / 3,4 / 12,6 | 128,3 / 32,7 / 56,9 (Wi-Fi) | 19,9 / 3,7 / 10,1 | 32 / 5 / 8 |
+| Lag (a definição muda por ponto) | timer **configurado** de 500 a 10000 ms; `lag_obs_disparo` médio de 241 a 6211 ms | 04: `lag_obs_max` de 19 a 280 ms (13 de 20 linhas) e, no aleatório, offset lag do consumer médio de 2,9 e máximo de 49 mensagens; 04b: `lag_obs_max` = -1 em 9 de 10 linhas (projeção mais rápida que o polling de 250 ms) | `lag_obs_*` = -1 quase sempre (projeção mais rápida que o polling) | `lag_obs_max` lido em poucas linhas (máx. 79 a 158 ms); nas outras a projeção foi mais rápida que o polling de 250 ms |
+| Aceitas, 5xx e descartes no aleatório | 146.400 aceitas, 0 erros 5xx, 0 descartes | 04: 146.400 aceitas, 0 erros 5xx, 0 descartes | 146.400 aceitas, 0 erros 5xx, 0 descartes | 146.400 aceitas, 0 erros 5xx, 0 descartes |
+
+O **lag** não tem uma coluna comparável: no ponto 1 é a variável independente (um timer de refresh), do ponto 2 em diante é medido no
+pipeline real (`lag_obs_*` em ms ou offset lag em mensagens), e `-1` significa que a projeção foi mais rápida que o polling. Por isso o
+lag fica na tabela e não vira gráfico; o overselling também (é uma contagem por repetição, sem escala a comparar). Como o SVG é uma
+imagem estática, a tabela acima é a "table view" dos gráficos.
+
+![Limiar X sequencial por configuração: pré-pooler 97k (referência), ponto 1 78k, ponto 2 56k no Wi-Fi e no mínimo 60k no cabo, ponto 3 intermediário 58k e final 56k; o teto do host intercalado (86k) fica fora da série.](graficos/x-sequencial.svg)
+
+O primeiro gráfico mostra o X sequencial, uma barra por configuração. O ponto 2 no cabo (04b) é só um **limite inferior** (contorno
+tracejado com seta, não barra), porque o refino ficou inconclusivo por banco sujo.
+
+![Latência de reserva e de confirmação (p50, p95, p99) no aleatório de 45 min, mesma semente, em quatro configurações, em dois painéis de mesma escala.](graficos/latencia-aleatorio.svg)
+
+O segundo mostra a latência do aleatório de 45 min por configuração, em dois painéis de mesma escala (reserva e confirmação). O ponto 2
+é o do Wi-Fi (o 04b não tem aleatório).
+
+**Leitura.**
+
+- **Corretude.** O braço CAS ficou em **0 de overselling** em todos os pontos em que foi medido (10/10, 10/10, 20/20 e 20/20, mais 0
+  no aleatório da Rodada R), e o braço ingênuo ficou no teto (80 em N=100 e 180 em N=200) em quase todas as repetições, em todos os
+  pontos: a corretude do CAS não mudou ao introduzir ES nem ao distribuir.
+- **Throughput.** O X caiu de ≈ 78k RPM (ponto 1, sem ES) para ≈ 56k no ponto 2 (Wi-Fi) e ficou na mesma faixa ao distribuir: 58k
+  (05) e 56k (06, com 54k como último degrau limpo). O 04b no cabo só dá um limite inferior (≥ 60k), então o ponto 2 refeito no cabo
+  não fecha um X para comparar com 58k e 56k. A diferença entre 58k e 56k é cerca de um passo de resolução e o código mudou entre as
+  duas (nota da #57 abaixo): não se lê como regressão.
+- **Teto do host.** O X intercalado de ≈ 86k RPM só existe na Rodada R. É o teto do host somado entre eventos, não o X por evento, e
+  por isso não é comparável com os X sequenciais acima.
+- **Latência.** No aleatório, a reserva do distribuído (p95 de 6,6 ms no 05 e 6,7 ms no 06) ficou na faixa do ponto 1 (5,7 ms), e a
+  confirmação também (4,5 e 5,5 contra 5,0 ms). O ponto 2 aparece mais alto (reserva 36,2 ms, confirmação 29,7 ms), mas foi medido no
+  Wi-Fi e a latência dele inclui a rede: o 05, no cabo e também com ES, **indica** que boa parte do aumento vinha da rede (indício, não
+  prova). A confirmação direta, com o aleatório do código do ponto 2 no cabo, não foi feita, então a parte desse aumento que vem do ES
+  e a que vem da rede não estão isoladas.
+
+**Nota da #57 entre os pontos.** Nos pontos 1 a 3 (até a etapa 05) o `userId` da reserva vinha do corpo da requisição. Na Rodada R a
+reserva é amarrada ao token (PR #167, issue #57): em `/bff/event-wallets/**` o `userId` informado fica opcional, o ausente vale o do
+token e o **divergente devolve 403**, antes de qualquer validação ou chamada ao `reservation` (testes
+`HttpContractTest.eventWallet_tokenDeAnaoAgeEmNomeDeBeto_returns403NosEndpoints` e `eventWallet_proprioUsuario_comESemUserId`).
+Com a #36, o `gateway` tira o id da claim `uid` do JWT RS256, validado sem estado pelo JWKS, **sem consulta ao banco** (a #57 sozinha
+faria uma consulta e-mail → `user_id` por requisição). O kit de carga já mandava o `userId` do dono do token, então **a requisição do
+k6 é a mesma**; muda o caminho no servidor (validação do JWT pelo JWKS, sem consulta). **Não é uma variável isolada:** entra junto
+com as outras mudanças entre as etapas 05 e 06 (a saída do `catalog` e do `identity` do processo do `gateway`, #35 e #36).
+
+**Ameaças desta comparação.** (i) **Uma escada por configuração**, com resolução de 1k a 2k RPM no X (56k ± um passo). (ii) **Rede, disco e
+estado do banco diferentes:** o ponto 2 (04) rodou no Wi-Fi e, nos blocos 1 a 3b, sobre banco acumulado; o 04b, no cabo e em SSD, só deu um limite inferior. (iii) **Códigos diferentes entre
+os pontos**, sem isolar uma variável por vez (a arquitetura, o Hikari do monólito, o pool HTTP, o timeout, o token interno e a #57
+mudaram junto). (iv) O ponto 1 rodou com **Tomcat de 200 threads**; do ponto 2 em diante, 300. (v) O X do 04b é **só limite inferior**
+(≥ 60k). (vi) O lag não tem a mesma definição nos pontos: é uma variável configurada no ponto 1 e uma medida do pipeline depois.
+
 ### Resultados preliminares (fora do protocolo)
 
 Antes do protocolo acima, rodadas de 2026-10-04 (`Projeto/carga/results/02-hikari/ANALISE.md`) mediram os dois braços
@@ -860,13 +1014,13 @@ Ressalvas do ponto 2 (Rodada 2, 2026-10-19; fonte: `Projeto/carga/results/04-fas
   atraso de uma projeção real. No ponto 2 o lag é o do consumer real, mas só foi medido como limite inferior na matriz
   (ameaça 20) e como offset lag do host nas escadas e no aleatório. A transferência para o ponto 3 (consumer em
   outro processo, banco separado) continua em aberto.
-- **X preliminar e em RPM agregado.** Cada X (97k pré-pooler; ≈ 78k pelo pooler, de três execuções; ≈ 56k com o ES e o
-  consumer atual, ≈ 61k sem consumer e ≈ 58k com o consumer em lote, de duas escadas cada) vem de poucas
-  execuções da escada e é expresso em reservas por minuto do total, somando todos os eventos. Não se lê como RPM por evento: pela regra de pares,
-  a carga por evento é fixa (até 200 tentativas, capacidade 100) e só a duração da rajada por evento encurta
-  com o RPM (ameaça 10). O limiar da arquitetura de admissão é definido por evento (`RPM(evento) ≥ X` em
-  `docs/adr/Architecture-Decision-Async-Checkout-Queue.md`) e será definido na Fase 8; esta medição não o
-  converte.
+- **X anteriores preliminares; X definitivo na Rodada R.** Os X dos pontos 1 a 3 também vêm de escadas sequenciais, então
+  valem a mesma leitura por evento (subseção "Limiar X definitivo"); o que os torna preliminares é a pouca repetição e as
+  configurações diferentes, não a unidade. O X definitivo, ≈ 56k RPM por evento, é o da Rodada R. A ameaça 10 continua
+  valendo: a rajada por evento é curta (~0,2 s a 56k) e a concentração cresce com o RPM, então o 56k é o limiar de
+  contenção da linha quente, não de um evento sustentado por 60 s. O gatilho da fila (`RPM(evento) ≥ 80% de X × réplicas`,
+  `docs/adr/Architecture-Decision-Async-Checkout-Queue.md`) é o das issues #111 e #112; a escala do X com as réplicas não foi
+  medida.
 - **Escopo do workload.** Só escrita (reserva e confirmação) com `PCT_CONFIRMA=100`; capacidade fixa em 20 e
   N ∈ {100, 200} na disputa; um único evento por disputa. A escada não tem leituras, e o teste aleatório
   (com leituras) ficou fora do protocolo da matriz e da escada; entra só no ponto 2, como comparação com a #109.

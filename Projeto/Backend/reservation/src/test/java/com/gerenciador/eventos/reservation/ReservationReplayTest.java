@@ -51,7 +51,7 @@ import com.gerenciador.eventos.shared.events.Projection;
 public class ReservationReplayTest extends ReservationTestSupport {
 
     private static final String SOMBRA = "replay_t29_wallet";
-    private static final Map<String, List<String>> COMPARAVEIS = Map.of(
+    static final Map<String, List<String>> COMPARAVEIS = Map.of(
             "walletevent", List.of("user_id", "event_id", "status", "expires_at", "version"),
             "event_availability", List.of("event_id", "ativos", "last_occurred_at"));
 
@@ -59,7 +59,7 @@ public class ReservationReplayTest extends ReservationTestSupport {
      * O que o replay precisa reconstruir: a projeção de {@code ativos} (a MESMA do consumer) e o {@code walletevent}
      * (projeção inline, que na viva é gravada pelas guardas e na sombra sai só do log).
      */
-    private static class WalletEAtivos implements Projection {
+    static class WalletEAtivos implements Projection {
         private final EventAvailabilityProjection ativos = new EventAvailabilityProjection();
 
         @Override

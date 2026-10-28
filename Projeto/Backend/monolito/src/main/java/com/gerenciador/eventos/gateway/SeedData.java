@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.gerenciador.eventos.catalogclient.api.Event;
-import com.gerenciador.eventos.identity.api.User;
+import com.gerenciador.eventos.identityclient.api.User;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 
 /**

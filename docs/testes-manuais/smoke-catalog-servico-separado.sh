@@ -22,7 +22,7 @@
 #  Pre-requisito: a stack no ar COM o seed ligado (POST /bff/seed so existe com SEED_ENABLED=true, issue #35; e o
 #  unico jeito de criar usuario com senha sem o fluxo de e-mail). O override de carga liga:
 #    docker compose -f Projeto/docker-compose.yml -f Projeto/carga/docker-compose.carga.yml up -d --build
-#  Host: nenhuma rota promove usuario a host; o script promove o seu usuario de teste por SQL (UPDATE users SET host).
+#  Host: nenhuma rota promove usuario a host; o script promove o seu usuario de teste por SQL (UPDATE identity.users SET host).
 #
 #  Uso:  docs/testes-manuais/smoke-catalog-servico-separado.sh
 #  Variaveis (opcionais): BASE_URL (http://localhost:8081), CONTAINER_DB (gerenciador-db),
@@ -99,7 +99,7 @@ limpar() {
         psql_db "DELETE FROM reservation.walletevent WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name = '$NOME_EVENTO');
                  DELETE FROM reservation.eventcap WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name = '$NOME_EVENTO');
                  DELETE FROM catalog.event WHERE event_name = '$NOME_EVENTO';
-                 DELETE FROM users WHERE email LIKE 'smoke35-$SUFIXO-%@example.com';" >/dev/null 2>&1 || true
+                 DELETE FROM identity.users WHERE email LIKE 'smoke35-$SUFIXO-%@example.com';" >/dev/null 2>&1 || true
     fi
     rm -rf "$TMP"
 }
@@ -126,7 +126,7 @@ if [ "$code" = "404" ]; then
             docker compose -f Projeto/docker-compose.yml -f Projeto/carga/docker-compose.carga.yml up -d"
 fi
 confere "POST /bff/seed (2 usuarios)" 200 "$code"
-psql_db "UPDATE users SET host = true WHERE email = 'smoke35-$SUFIXO-host@example.com'" >/dev/null
+psql_db "UPDATE identity.users SET host = true WHERE email = 'smoke35-$SUFIXO-host@example.com'" >/dev/null
 for papel in host part; do
     curl -s -o "$TMP/login-$papel.json" -X POST "$BASE_URL/bff/users/login" -H 'Content-Type: application/json' \
         -d "{\"email\":\"smoke35-$SUFIXO-$papel@example.com\",\"password\":\"senha123\"}"

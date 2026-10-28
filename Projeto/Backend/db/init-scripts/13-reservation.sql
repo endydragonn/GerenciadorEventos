@@ -14,8 +14,9 @@
 -- Event store próprio (event_store, event_outbox, event_snapshot, projection_checkpoint): mesmo desenho do 11-event-store.sql,
 -- em reservation.*. O serviço appenda o stream reservation.wallet na MESMA transação do CAS/guarda, o relay dele drena o
 -- outbox dele e o consumer idempotente dele confere o eventId no event_store dele: nenhum serviço lê tabela de outro.
--- Usa timestamptz nas tabelas novas (código novo não propaga a dívida da issue #58); eventcap/walletevent mantêm os
--- tipos que já tinham.
+-- Instantes (buy_time_limit, expires_at, last_occurred_at, ...) são timestamptz em todo o schema (issue #58 migrou o
+-- eventcap/walletevent; migrations/20261027-reservation-timestamptz.sql, a quente). created_at/updated_at do eventcap e do
+-- walletevent seguem timestamp: são carimbos de auditoria, não entram em comparação.
 
 SET client_encoding = 'UTF8';
 
@@ -25,7 +26,8 @@ ALTER SCHEMA reservation OWNER to admin;
 -- ===== eventcap =====
 -- Agregado ISOLADO de capacidade/vagas de um evento (fronteira de consistência forte).
 --   capacity = -1 => SEM LIMITE (quant também -1, a reserva não passa pelo CAS).
---   capacity >= 0 => limitado; invariante 0 <= quant <= capacity (CHECK) e reserva por UPDATE condicional atômico:
+--   capacity >= 1 => limitado (0 é recusado pelo CHECK: um evento sem vaga alguma não faz sentido);
+--     invariante 0 <= quant <= capacity (CHECK) e reserva por UPDATE condicional atômico:
 --     UPDATE reservation.eventcap SET quant = quant - 1 WHERE event_id = ? AND capacity <> -1 AND quant >= 1;
 --     rowcount = 0 => sem vaga. Liberação: quant + 1 ... WHERE capacity <> -1 AND quant < capacity.
 --   Nasce por chamada síncrona do catalog (PUT /internal/eventcaps/{id}, idempotente por event_id) e é reconciliada pelo
@@ -37,13 +39,13 @@ CREATE TABLE IF NOT EXISTS reservation.eventcap
     event_id integer NOT NULL,
     capacity integer NOT NULL,
     quant integer NOT NULL,
-    buy_time_limit timestamp without time zone,
+    buy_time_limit timestamptz,
     max_time_in_line integer NOT NULL DEFAULT 120,
     created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT eventcap_pkey PRIMARY KEY (event_id),
-    -- -1 = ilimitado; caso contrário capacity >= 0
-    CONSTRAINT eventcap_capacity_valid CHECK (capacity >= -1),
+    -- -1 = ilimitado; caso contrário capacity >= 1 (mesma regra do catalog: lot_quantity >= 1 ou -1)
+    CONSTRAINT eventcap_capacity_valid CHECK (capacity = -1 OR capacity >= 1),
     -- invariante só vale para eventos limitados
     CONSTRAINT eventcap_quant_bounds
         CHECK (capacity = -1 OR (quant >= 0 AND quant <= capacity)),
@@ -73,7 +75,7 @@ CREATE TABLE IF NOT EXISTS reservation.walletevent
     user_id integer NOT NULL,
     event_id integer NOT NULL,
     status text COLLATE pg_catalog."default" NOT NULL DEFAULT 'confirmed',
-    expires_at timestamp without time zone,
+    expires_at timestamptz,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     version integer NOT NULL DEFAULT 0,
@@ -86,6 +88,10 @@ TABLESPACE pg_default;
 
 ALTER TABLE IF EXISTS reservation.walletevent
     OWNER to admin;
+
+-- Busca só por event_id (a PK é (user_id, event_id) e não serve): contagem/varredura das reservas de um evento.
+CREATE INDEX IF NOT EXISTS idx_walletevent_event_id
+    ON reservation.walletevent USING btree (event_id);
 
 -- Índice para o job de expiração varrer reservas pending vencidas.
 CREATE INDEX IF NOT EXISTS idx_walletevent_pending_expires

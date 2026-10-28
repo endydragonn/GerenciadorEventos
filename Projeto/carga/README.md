@@ -11,7 +11,7 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **`READPATH` / `RESERVATION_READPATH`** vai para o **backend** (o gateway decide o fluxo): `cas` = 1 chamada ao `reservation`; `naive` = 2
 >   (GET da disponibilidade e depois POST da reserva). A conferência é `docker exec gerenciador-backend printenv RESERVATION_READPATH`.
 > - **Relay, consumer, Hikari 1000 e Tomcat 300 do caminho quente estão no `reservation`** (`docker exec gerenciador-reservation printenv
->   EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`); o backend tem Hikari 350. `POOL_HIKARI` do
+>   EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`); o backend tem Hikari 350 (10 desde a #36). `POOL_HIKARI` do
 >   `make test-degraus` rotula o do **reservation**. O `LOGGING_LEVEL_EVENTS_LAG=DEBUG` também é do `reservation`.
 > - **Consultas de banco** (psql do gerador e verificações do host) leem `reservation.eventcap`, `reservation.walletevent`,
 >   `reservation.event_availability`, `reservation.event_outbox`. O consumer group da projeção é `reservation` (`docker exec
@@ -27,7 +27,7 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **`INTERNAL_API_TOKEN`** precisa estar no `Projeto/.env` do HOST (o compose o repassa ao `backend`, ao `reservation` e ao `catalog`, que
 >   não sobem sem ele). O gerador não precisa dele: o k6 só fala `/bff/**`.
 > - **Pool do Supavisor não cresce** (mesmo tenant e usuário de todos os serviços); a soma dos Hikari de cliente é
->   1000 + 350 + 3 + 100 (catalog) = 1453 <= 1500.
+>   1000 + 350 + 3 + 100 (catalog) = 1453 <= 1500 na #35 (1213 desde a #36, abaixo).
 >
 > **Desde a issue #35 os eventos são o serviço `catalog`** (container `gerenciador-catalog`, `:8083` só na rede, schema `catalog`):
 >
@@ -38,6 +38,22 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **Salto novo**: o gateway confere o evento da reserva por HTTP no `catalog` (`exists`, com cache positivo de 30 s no gateway);
 >   ler/listar/buscar evento passa por gateway → catalog → reservation (capacidade). Com o `catalog` fora, `/bff/events/**` e a reserva
 >   respondem 503 (na reserva, um positivo de `exists` ainda no cache de 30 s deixa a reserva seguir).
+>
+> **Desde a issue #36 o `identity` é o serviço `gerenciador-identity`** (`:8084` só na rede, schema `identity`; JWT RS256 com JWKS):
+>
+> - **Alvo HTTP igual**: o k6 continua em `/bff/**`; `POST /bff/users/login` devolve o mesmo `{user, token}`, agora com um token RS256 emitido pelo identity
+>   (o k6 só guarda e reenvia o bearer). Tokens antigos (HS256) viram 401: o kit já re-semeia e reloga a cada bloco.
+> - **Reserva sem consulta ao banco por usuário**: o gateway lê `uid` e `isHost` do token (sem `LOWER(email)` por reserva, sem conferir a carteira); a reserva
+>   com token válido **não depende do identity** (JWKS em cache no gateway). Uma rodada de carga **antes da #36** pagava essa consulta a mais por reserva e não é
+>   comparável com as de depois.
+> - **Consultas de banco** sobre usuários leem `identity.users` / `identity.mywallet` (`public.users` não existe mais).
+> - **Limpeza do banco entre blocos** (`limpar-banco.sh`): trunca também o schema `identity` e, como o `TRUNCATE ... RESTART IDENTITY` recicla o `user_id` e o JWT é
+>   validado sem estado, **apaga a chave de assinatura do volume `identity-keys`** (com o identity parado, ANTES do TRUNCATE; se falhar, aborta sem religar nada), sobe o identity, espera `healthy` e só então religa o `backend`
+>   (cache de JWKS vazio). Sem isso um token do bloco anterior valeria como o usuário novo com o mesmo `uid`.
+> - **Smoke antes de medir**: `docs/testes-manuais/smoke-identity-servico-separado.sh` (cadastro, token RS256, `/internal/**` com token, reserva `cas` com overselling 0,
+>   identity parado e `restart`).
+> - **`INTERNAL_API_TOKEN`** também vai para o `identity` (mesmo valor). **Pool do Supavisor** (mesmo tenant): o Hikari do backend é 10 (o gateway não toca em tabela de
+>   domínio) e o do identity 100; soma 1000 + 10 + 3 + 100 + 100 = **1213** <= 1500 (o override de carga mantém o backend em 10).
 
 Duas máquinas: o **host** (roda a stack, o alvo do teste) e o **gerador** (roda o k6).
 O k6 **nunca** roda no host: competiria por CPU/rede com o backend e invalidaria as latências.
@@ -85,6 +101,39 @@ ACPI) em CSV com `epoch_ms` UTC, para cruzar com os CSVs do k6 (colunas em `lib-
   temperatura da CPU com os sensores do RESET EXPLODE (ou HWiNFO) **antes e depois** da rodada, não durante: eles também
   consomem CPU. Em `pct_freq_max` uma queda sustentada sob carga já indica throttling de energia ou térmico.
 - Registre o pior caso de cada máquina junto do resultado (substitui o "CPU ≤ 73%" de observação do operador).
+
+## Harness definitivo (issue #38)
+
+O que roda numa rodada contra o sistema distribuído, sempre do **gerador** (k6) contra o **host** (stack):
+
+| Cenário | Comando (gerador) | Mede |
+|---|---|---|
+| Escrita: reserva + confirma | `make test-degraus HOST_IP=<ip> MAPEAMENTO=sequencial\|intercalado` (escada, limiar X) ou `make test-rpm HOST_IP=<ip>` (taxa fixa) | throughput sustentado (`rpm_efetivo`), p50/p95/p99, 5xx |
+| Leitura: catálogo | `make test-rpm HOST_IP=<ip> CENARIO=leitura RPM=<n> DURACAO=<s até 3600>` | o mesmo, para `GET /bff/events/{id}` (gateway → catalog → disponibilidade no reservation), sem login, em rodízio por 50 eventos semeados |
+
+Na escrita cada usuário semeado faz login no `/bff/users/login` antes da carga e reserva com **o próprio token** (o `userId` do corpo é o
+do dono do token, #57); o harness nunca assina JWT. A coluna `cenario` do `results\resultados-rpm.csv` separa as duas (linhas antigas sem
+valor são escrita); no cenário `leitura` as colunas `aceitas`/`erros_5xx`/`outros`/`p*_ms` são das leituras (200 / 5xx / outro).
+
+**No host**, junto com o `make telemetria-host`, ligue a coleta do banco/broker **antes** de disparar o gerador:
+
+```powershell
+make coleta-host ROTULO=<nome>            # Ctrl+C ao fim; COLETA_S=<s> para parar sozinho
+```
+
+`coleta-host.sh` (Git Bash; só `docker exec`, nenhum segredo) reseta o `pg_stat_statements` no início (cria a extensão no `meu_banco` se
+faltar) e grava, a cada `INTERVALO_S` (1 s), `results\coleta-host-<rótulo>-<data>.csv` com `epoch_ms` UTC (cruza com a telemetria):
+
+- `lag_projecao_ms`: write → projeção, `MAX(applied_at - last_occurred_at)` de `reservation.event_availability` nas linhas aplicadas no
+  intervalo (-1 = nada aplicado);
+- `lag_reservation`, `lag_reservation_catalog`, `lag_notification`: lag do consumer (`TOTAL-LAG` do `rpk group describe`; -1 = grupo ausente);
+- `outbox_reservation`, `outbox_catalog`, `outbox_identity`: pendentes nos `event_outbox` (relay atrasado);
+- `pg_conexoes`, `pg_ativas`, `pg_idle`, `pg_idle_tx`, `pg_espera_lock`: o lado servidor do pooler, as conexões que o Supavisor mantém no
+  `meu_banco` por estado (`pg_stat_activity`). Não se lê o endpoint de métricas do Supavisor: ele exige um JWT assinado com segredo do
+  `supabase/.env`.
+
+Ao fim grava `results\pgss-<rótulo>-<data>.csv` (top 25 do `pg_stat_statements` por tempo total) e imprime max e p95 de cada coluna.
+Selftest sem Docker: `bash coleta-host.selftest.sh`.
 
 ## Matriz do experimento (runner oficial)
 
@@ -331,7 +380,7 @@ seed usam bcrypt, caro) geram milhares de reservas sem duplicidade.
 
 ### Por que `MAX_CONN` importa
 
-O caminho quente (o serviço `reservation`) usa pool HikariCP (`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`, default 1000; o backend/gateway usa 350; o pool
+O caminho quente (o serviço `reservation`) usa pool HikariCP (`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`, default 1000; o backend/gateway usa 10 desde a #36 (350 até a #35); o pool
 cresce só sob demanda a partir de `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE`, default 5). Com
 `MAX_CONN=100` (padrão do Postgres) o pool de 1000 pode pedir mais conexões do que o Postgres
 aceita → `too many clients` → HTTP 500; para esse caso reduza o pool por env (ex.: 50). Com
@@ -383,14 +432,15 @@ make verificar-rpm PREFIXO=Deg-<id>
 Sem `make`: `.\degraus\rodar-degraus.ps1 -HostIp <ip> -MaxConnections 300 -PoolHikari 1000` e
 `bash ../../docs/carga/harness/report-degraus.sh results/degraus-<id>.csv results/degraus-<id>.html`.
 Parâmetros: `DEG_INICIO=12000`, `DEG_PASSO=4000`, `DEG_MAX=40000` (degraus de INICIO a MAX, no máximo 40),
-`DEG_DURACAO=60` (por degrau: ≥ 60 s e múltiplo de 30), `USUARIOS=200`, `MAX_VUS=2000`, `PCT_CONFIRMA=100`.
+`DEG_DURACAO=60` (por degrau: ≥ 60 s e múltiplo de 30), `USUARIOS=200`, `MAX_VUS=2000`, `PCT_CONFIRMA=100`,
+`MAPEAMENTO=sequencial` (ou `intercalado`; ver "Mapeamento" abaixo; sem `make`: `-Mapeamento`).
 A escada **vai até o máximo**, mesmo depois de o host degradar: ajuste `DEG_MAX` perto do esperado.
 
 **Versione** `Projeto/carga/results/degraus-<id>.csv` (uma linha por degrau) e o `summary-degraus-<id>.json` da
 escada; anote o X preliminar (refinado na Fase 8, issue #40) e se o report o marcou como **limite inferior**. O `.html`
 regenera do CSV e fica fora do git.
 
-**Colunas do CSV:** `escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit`
+**Colunas do CSV:** `escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit,mapeamento`
 
 | Coluna | Significado |
 |---|---|
@@ -404,6 +454,7 @@ regenera do CSV e fica fora do git.
 | `throughput` | reservas/s respondidas sem 5xx (`(reservas − 5xx da reserva) / duração`) |
 | `iteracoes_descartadas` | `dropped_iterations` do k6 no degrau |
 | `braco`, `max_connections`, `pool_hikari`, `commit` | o que o host roda (rotulado) e o commit do checkout do gerador |
+| `mapeamento` | `sequencial` ou `intercalado` (última coluna): como a iteração virou o par (usuário, evento). O report lê por nome e a mostra no subtítulo; CSV antigo, sem a coluna, continua valendo e aparece como `mapeamento n/d` (não se presume `sequencial`) |
 
 **Regra do X** (só em `report-degraus.sh`; o runner apenas grava as colunas; `report-degraus-selftest.sh` cobre as
 fixtures): *degradou* = `taxa_5xx > 1%` (5xx das reservas / reservas) ou `p95_max_janela_30s > 1000 ms`; *gerador saturado* = `iteracoes_descartadas > 0`
@@ -423,6 +474,30 @@ em `USUARIOS × eventos`, com `eventos = ceil(total × 1,05 / USUARIOS)`; o k6 a
 Padrão (12k…40k de 4k em 4k, 60 s, 200 usuários): 8 degraus, 208.008 pares, 1.093 eventos, ~11,6 min de k6 (31 s
 ociosos entre degraus: 30 s de `gracefulStop`, para as iterações em voo terminarem antes do próximo, mais 1 s de folga
 para os planos de VUs dos cenários não se tocarem).
+
+**Mapeamento (`MAPEAMENTO`, issue #113):** como o índice `i` da iteração vira o par (usuário, evento), com `U` usuários e
+`E` eventos. A lógica mora em `degraus/lib-mapeamento.js` (módulo puro, importado pelo `carga-degraus.js`; o k6 resolve o
+`import` relativo ao script).
+
+| Valor | Par | Efeito | Use para |
+|---|---|---|---|
+| `sequencial` (padrão) | usuário `i % U`, evento `⌊i / U⌋` | `U` reservas seguidas caem no **mesmo** evento: uma linha quente de cada vez no `eventcap` | **evento disputado**: onde o CAS degrada quando muita gente vai ao mesmo evento |
+| `intercalado` | usuário `⌊i / E⌋`, evento `i % E` | `E` reservas seguidas caem em eventos **diferentes**: a carga se espalha pelos eventos | **capacidade do host**: o X sem a linha quente de um evento |
+
+Nos dois modos cada par (usuário, evento) é único dentro da escada e a checagem `USUARIOS × eventos ≥ soma das cotas` vale
+igual (o `setup()` aborta se não couber). O padrão `sequencial` gera exatamente os mesmos pares e requisições de antes
+da opção. Valor diferente dos dois aborta o `setup()` com mensagem clara antes do login; maiúscula (`Intercalado`) também é recusada
+pelo k6 quando a env `MAPEAMENTO` é setada à mão. O `rodar-degraus.ps1` aceita qualquer caixa no `-Mapeamento` (`ValidateSet`)
+e normaliza para minúsculas antes de repassar ao k6 e ao CSV.
+
+**Capacidade por evento no mapeamento (`-Capacidade 0`, o padrão):** `sequencial` mantém `USUARIOS / 2` (como o teste 2: cada
+evento recebe `U` reservas seguidas e metade vira "lotado", de propósito). No `intercalado` o evento recebe a *u*-ésima
+reserva na "rodada" *u*, então `USUARIOS / 2` lotaria **todos os eventos juntos** por volta do meio da escada e a segunda
+metade viraria 100% "lotado" (X inflado). Por isso o padrão do `intercalado` é `USUARIOS`: cada evento aceita no máximo `U`
+reservas (uma por usuário), todas aceitas na escada inteira. O runner imprime a capacidade usada (`Pares: ... (capacidade
+N/evento)`) e avisa se um `-Capacidade` explícito ficar abaixo de `USUARIOS` no `intercalado`
+(`Get-CapacidadePadrao` em `degraus/lib-degraus.ps1`, coberta pelo `lib-degraus.selftest.ps1`). Para comparar com CSVs antigos, lembre que os históricos não trazem a
+coluna: confira o `commit`/o script usado antes de presumir o mapeamento.
 
 **VUs:** os `MAX_VUS` (2000) VUs são **todos pré-alocados** (`preAllocatedVUs = maxVUs`). No `constant-arrival-rate` o
 k6 descarta a iteração quando não há VU livre e só aloca VU extra depois, em segundo plano (o que pesa no gerador e o
@@ -454,7 +529,8 @@ Limites: os degraus são contíguos (só os 31 s ociosos; sem resfriamento do ho
 degrau pode contaminar o seguinte); um degrau cujo host trava de vez gera timeouts (`outros`), que não contam como
 5xx. O limite de 110 s do teste 2 não vale aqui: ele protege a conta de overselling contra reservas `pending` que
 expiram, e a escada não mede overselling (e com `PCT_CONFIRMA=100` nada fica `pending`). Auto-testes (sem rede/stack):
-`.\degraus\lib-degraus.selftest.ps1` e `bash ../../docs/carga/harness/report-degraus-selftest.sh`.
+`.\degraus\lib-degraus.selftest.ps1`, `node degraus/lib-mapeamento.selftest.mjs` (mapeamento: pares exatos e únicos nos
+dois modos; exige Node >= 22.7, que detecta ESM em `.js` sem `package.json`) e `bash ../../docs/carga/harness/report-degraus-selftest.sh`.
 
 ## Teste 3 — carga aleatória (estabilidade por tempo)
 
@@ -595,7 +671,7 @@ naquela etapa; a raiz de `results/` é a área de trabalho da rodada corrente.**
 | `../../docs/carga/harness/report-matriz.sh` | gerador | `make report-matriz`: `results\matriz.csv` → `results\matriz.html` (SVG, bash+awk) |
 | `lib-seed.ps1` | gerador | `Invoke-Seed`: chama o seed único `docs/carga/harness/setup.sh` via Git Bash |
 | `rpm/*` | ambos | teste 2 |
-| `degraus/*` | gerador | escada de carga (limiar X preliminar): `carga-degraus.js`, `rodar-degraus.ps1`, `lib-degraus.ps1` (plano, p95 em janelas de 30 s, linha do CSV; `lib-degraus.selftest.ps1` testa) |
+| `degraus/*` | gerador | escada de carga (limiar X preliminar): `carga-degraus.js`, `rodar-degraus.ps1`, `lib-degraus.ps1` (plano, p95 em janelas de 30 s, linha do CSV; `lib-degraus.selftest.ps1` testa), `lib-mapeamento.js` (mapeamento iteração → par usuário/evento, `sequencial`/`intercalado`; `lib-mapeamento.selftest.mjs` testa com `node`) |
 | `../../docs/carga/harness/report-degraus.sh` | gerador | `make report-degraus`: `results\degraus-<id>.csv` → curva × carga + degrau X (SVG, bash+awk; `report-degraus-selftest.sh` testa) |
 | `aleatorio/*` | gerador | teste 3 |
 | `Makefile` | ambos | atalhos |

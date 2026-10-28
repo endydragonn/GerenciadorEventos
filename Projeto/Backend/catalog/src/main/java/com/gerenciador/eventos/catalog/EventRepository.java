@@ -8,6 +8,7 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -237,21 +238,27 @@ public class EventRepository {
     }
 
     /**
-     * Atualizar os metadados do evento (capacidade/janela de venda vão pelo EventCapacityApi): appenda
-     * {@code EventUpdated} e aplica a projeção na mesma transação. {@code image_data} NÃO é tocada aqui (issue #35: a
-     * imagem tem método próprio, {@link #saveImage}; antes um update sem imagem a apagava).
+     * Atualizar o evento (capacidade/janela de venda vão pelo EventCapacityApi, ANTES, em {@link EventService#updateEvent}):
+     * UM command, uma transação do catalog: appenda {@code EventUpdated} e, se {@code presenters} veio no POJO, a diferença de
+     * apresentadores ({@code PresenterRemoved}/{@code PresenterAdded}, versões contíguas), aplicando a projeção em cada passo.
+     * Falhou em qualquer ponto: nada dos dois fica gravado. {@code image_data} NÃO é tocada aqui (issue #35: a imagem tem método
+     * próprio, {@link #saveImage}; antes um update sem imagem a apagava).
      */
     public Event update(Event e) {
         if (e.getEvent_id() == null) {
             throw new IllegalArgumentException("event_id é obrigatório para atualizar");
         }
         long id = Objects.requireNonNull(e.getEvent_id(), "event_id não pode ser nulo");
+        Set<String> apresentadores = e.getPresenters() == null ? null : CatalogEventWriter.normalizar(e.getPresenters());
         try {
             writer.executar(tx -> {
                 if (!tx.bloquear(id)) {
                     throw new EventoNaoEncontradoException(id);
                 }
                 tx.append("EventUpdated", EventPayloads.evento(id, e));
+                if (apresentadores != null) {
+                    CatalogEventWriter.trocarApresentadores(tx, id, apresentadores);
+                }
                 return null;
             });
             fetchTimestamps(e);

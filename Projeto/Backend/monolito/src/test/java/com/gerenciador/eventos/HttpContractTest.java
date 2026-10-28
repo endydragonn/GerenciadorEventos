@@ -1,17 +1,17 @@
 package com.gerenciador.eventos;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -34,14 +34,13 @@ import org.springframework.util.MultiValueMap;
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.catalogclient.api.EventApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
-import com.gerenciador.eventos.identity.api.MyWallet;
-import com.gerenciador.eventos.identity.PendingVerification;
-import com.gerenciador.eventos.identity.api.User;
-import com.gerenciador.eventos.identity.PendingVerificationRepository;
-import com.gerenciador.eventos.identity.UserService;
+import com.gerenciador.eventos.identityclient.api.MyWallet;
+import com.gerenciador.eventos.identityclient.api.User;
+import com.gerenciador.eventos.identityclient.api.RecaptchaResponse;
+import com.gerenciador.eventos.identityclient.api.UserApi;
+import com.gerenciador.eventos.TestSupport.FakeIdentityServer;
 import com.gerenciador.eventos.TestSupport.FakeCatalogServer;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**
  * Teste de contrato da superfície HTTP única {@code /bff/**} (issue #78).
@@ -60,7 +59,7 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
  * <p>PR #79 (issue #78): {@code SecurityConfig} deixou de liberar {@code /bff/**} por inteiro — só a
  * lista explícita de rotas públicas continua sem token, o resto exige
  * {@code Authorization: Bearer <jwt>}. O fixture {@link #createUser(String)} passou a criar o
- * usuário via {@link UserService} direto (não HTTP) porque {@code POST /bff/users} agora
+ * usuário direto no {@link FakeIdentityServer} (não HTTP) porque {@code POST /bff/users} agora
  * exige auth e a maioria dos testes usa esse fixture só para ter um usuário/token disponível
  * antes de exercitar a rota que o teste realmente cobre; o contrato HTTP de
  * {@code POST /bff/users} continua coberto por {@link #createUser_returns201WithUserId()}.</p>
@@ -72,7 +71,9 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Import(GlobalDbTruncator.class)
-@TestPropertySource(properties = {"RECAPTCHA_SECRET_KEY=", "seed.enabled=true"})
+@TestPropertySource(properties = {"RECAPTCHA_SECRET_KEY=", "seed.enabled=true",
+        // Fixa a lista de CORS (issue #133) para os testes não dependerem do CORS_ALLOWED_ORIGINS do .env
+        "CORS_ALLOWED_ORIGINS=http://localhost:8088,http://localhost:3000"})
 public class HttpContractTest {
 
     @LocalServerPort
@@ -81,14 +82,13 @@ public class HttpContractTest {
     @Autowired
     private TestRestTemplate restTemplate;
 
+    /** O {@code IdentityClient} do gateway, contra o {@code FakeIdentityServer} (issue #36: o identity é outro serviço). */
     @Autowired
-    private PendingVerificationRepository pendingVerificationRepository;
+    private UserApi userApi;
 
-    @Autowired
-    private UserService userService;
-
-    @Autowired
-    private DatabaseConnection databaseConnection;
+    private FakeIdentityServer identity() {
+        return FakeIdentityServer.get();
+    }
 
     /** O {@code CatalogClient} do gateway, contra o {@code FakeCatalogServer} (issue #35: o catalog é outro serviço). */
     @Autowired
@@ -101,7 +101,7 @@ public class HttpContractTest {
     // ======================= fixtures =======================
 
     /**
-     * Cria usuário direto via {@link UserService} (não HTTP): desde o PR #79 (issue #78)
+     * Cria usuário direto no {@link FakeIdentityServer} (não HTTP): desde o PR #79 (issue #78)
      * {@code POST /bff/users} exige auth, e este fixture é usado por quase todo teste só
      * para ter um usuário disponível antes de logar e exercitar a rota que o teste cobre de
      * fato. O contrato HTTP de criação continua coberto por
@@ -114,7 +114,7 @@ public class HttpContractTest {
         u.setFone("119" + String.format("%08d", Math.abs(tag.hashCode()) % 100000000));
         u.setPassword("senha123");
         u.setBirthDate("1990-01-01");
-        User created = userService.createUser(u);
+        User created = identity().criarUsuario(u);
         assertNotNull(created.getId());
         return created;
     }
@@ -124,13 +124,7 @@ public class HttpContractTest {
      * auto-promoção via {@code PUT /bff/users/{id}}. */
     private User createHostUser(String tag) {
         User created = createUser(tag);
-        try (Connection conn = databaseConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement("UPDATE users SET host = true WHERE user_id = ?")) {
-            stmt.setLong(1, created.getId());
-            stmt.executeUpdate();
-        } catch (SQLException e) {
-            throw new RuntimeException("Falha ao promover usuário de teste a host: " + e.getMessage(), e);
-        }
+        identity().promoverHost(created.getId()); // equivale ao UPDATE users SET host = true de antes
         created.setIsHost(true);
         return created;
     }
@@ -351,9 +345,8 @@ public class HttpContractTest {
 
         // código só existe no banco (vai por e-mail, enviado pelo serviço notification) — lido aqui só para
         // montar o fixture do passo seguinte, não para testar o envio de e-mail em si.
-        Optional<PendingVerification> pending = pendingVerificationRepository.findByEmail(email);
-        assertTrue(pending.isPresent());
-        String code = pending.get().getVerificationCode();
+        String code = identity().codigoPendente(email);
+        assertNotNull(code, "cadastro pendente no identity");
 
         Map<String, String> verifyBody = new HashMap<>();
         verifyBody.put("email", email);
@@ -386,7 +379,7 @@ public class HttpContractTest {
         // O código MFA é enviado só por e-mail (pelo serviço notification); geramos um novo direto pelo
         // service (mesmo autowired usado pelo controller) só para montar o fixture do
         // passo seguinte — não estamos testando a geração do código aqui.
-        String mfaCode = userService.generatePasswordResetMfa(user.getId());
+        String mfaCode = identity().gerarMfa(user.getId());
 
         HttpEntity<Map<String, String>> verifyEntity = new HttpEntity<>(Map.of("mfaCode", mfaCode), authHeaders(token));
         ResponseEntity<Map> verifyResp = restTemplate.exchange(
@@ -401,7 +394,7 @@ public class HttpContractTest {
                 HttpMethod.POST, invalidEntity, String.class);
         assertEquals(HttpStatus.UNAUTHORIZED, invalidMfa.getStatusCode());
 
-        String mfaCode2 = userService.generatePasswordResetMfa(user.getId());
+        String mfaCode2 = identity().gerarMfa(user.getId());
         Map<String, String> changeBody = new HashMap<>();
         changeBody.put("mfaCode", mfaCode2);
         changeBody.put("newPassword", "senhaComMfa789");
@@ -611,7 +604,7 @@ public class HttpContractTest {
         e.setDescription("desc");
         // direto pelo service: nenhuma resposta do gateway compôs (nem cacheou) o nome antes da desativação
         Event criado = eventService.createEvent(e);
-        userService.deactivateUser(criador.getId());
+        userApi.deactivateUser(criador.getId());
 
         Map<String, Object> lido = getEventJson(criado.getEvent_id());
         assertTrue(lido.containsKey("creator_name"), "o campo existe no contrato");
@@ -619,13 +612,7 @@ public class HttpContractTest {
         assertEquals(criador.getId(), ((Number) lido.get("creator_id")).longValue());
 
         // sem cache negativo: reativada a conta, o próximo GET já traz o nome
-        try (Connection conn = databaseConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement("UPDATE users SET isactive = true WHERE user_id = ?")) {
-            stmt.setLong(1, criador.getId());
-            stmt.executeUpdate();
-        } catch (SQLException ex) {
-            throw new RuntimeException(ex);
-        }
+        identity().reativar(criador.getId());
         assertEquals(criador.getName(), getEventJson(criado.getEvent_id()).get("creator_name"));
     }
 
@@ -768,18 +755,51 @@ public class HttpContractTest {
         // responde o preflight antes do AuthorizationFilter, então .authenticated() nunca
         // chega a barrar. A regra OPTIONS→permitAll continua sendo mantida como defesa em
         // profundidade (ver comentário em SecurityConfig), não como correção de um 401 real.
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("Origin", "http://localhost:9999");
-        headers.set("Access-Control-Request-Method", "DELETE");
-        headers.set("Access-Control-Request-Headers", "authorization,content-type");
-        HttpEntity<Void> preflight = new HttpEntity<>(headers);
-
-        ResponseEntity<String> resp = restTemplate.exchange(
-                url("/bff/my-wallets/1"), HttpMethod.OPTIONS, preflight, String.class);
+        //
+        // Issue #133: a origem é a do Flutter (:8088, default de CORS_ALLOWED_ORIGINS); com o
+        // bean "*" removido, uma origem qualquer deixou de ser aceita.
+        ResponseEntity<String> resp = preflight("http://localhost:8088", "/bff/my-wallets/1");
 
         assertTrue(!resp.getStatusCode().equals(HttpStatus.UNAUTHORIZED),
                 "preflight numa rota protegida não deve ser barrado por auth, veio " + resp.getStatusCode());
-        assertEquals("http://localhost:9999", resp.getHeaders().getFirst("Access-Control-Allow-Origin"));
+        assertEquals("http://localhost:8088", resp.getHeaders().getFirst("Access-Control-Allow-Origin"));
+        assertEquals("true", resp.getHeaders().getFirst("Access-Control-Allow-Credentials"));
+    }
+
+    @Test
+    public void corsPreflight_origemNegada_naoRecebeAllowOrigin() {
+        // Issue #133: origem fora de CORS_ALLOWED_ORIGINS. Conferir só o status não basta (o Spring
+        // responde 403 "Invalid CORS request"); o que protege é o header estar AUSENTE.
+        ResponseEntity<String> resp = preflight("http://localhost:9999", "/bff/my-wallets/1");
+
+        assertNull(resp.getHeaders().getFirst("Access-Control-Allow-Origin"),
+                "origem negada não pode receber Access-Control-Allow-Origin");
+        assertNull(resp.getHeaders().getFirst("Access-Control-Allow-Credentials"));
+    }
+
+    @Test
+    public void cors_respostaReal_expoeAuthorizationContentTypeEIdempotencyKey() {
+        // Issue #133: exposedHeaders vêm da config única. Rota protegida sem token = 401, e o
+        // CorsFilter (que roda antes da autorização) ainda anexa os headers de CORS à resposta.
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Origin", "http://localhost:8088");
+
+        ResponseEntity<String> resp = restTemplate.exchange(
+                url("/bff/my-wallets/1"), HttpMethod.GET, new HttpEntity<>(headers), String.class);
+
+        assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
+        assertEquals("http://localhost:8088", resp.getHeaders().getFirst("Access-Control-Allow-Origin"));
+        String expostos = String.join(",", resp.getHeaders().getOrEmpty("Access-Control-Expose-Headers")).toLowerCase();
+        assertTrue(expostos.contains("authorization") && expostos.contains("content-type")
+                && expostos.contains("idempotency-key"), "Access-Control-Expose-Headers = " + expostos);
+    }
+
+    private ResponseEntity<String> preflight(String origem, String caminho) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Origin", origem);
+        headers.set("Access-Control-Request-Method", "DELETE");
+        headers.set("Access-Control-Request-Headers", "authorization,content-type");
+        return restTemplate.exchange(url(caminho), HttpMethod.OPTIONS, new HttpEntity<Void>(headers), String.class);
     }
 
     // ======================= /actuator (issue #92) =======================
@@ -908,6 +928,107 @@ public class HttpContractTest {
                 url("/bff/event-wallets?userId=" + attendee.getId() + "&eventId=" + event.getEvent_id()),
                 HttpMethod.DELETE, authedDelete, Void.class);
         assertEquals(HttpStatus.OK, removed.getStatusCode());
+    }
+
+    /**
+     * Issue #57 (IDOR): o usuário vem do token, nunca do corpo/query/path. O token do usuário A com {@code userId} do B
+     * (corpo, query ou path) dá 403 nos 5 endpoints e não mexe na inscrição do B; o 403 vale mesmo com o B inexistente.
+     * Mudança de contrato registrada aqui: antes a requisição passava com o userId que o cliente mandasse.
+     */
+    @Test
+    public void eventWallet_tokenDeAnaoAgeEmNomeDeBeto_returns403NosEndpoints() {
+        User host = createHostUser("idor-host");
+        String hostToken = loginAndGetToken(host.getEmail(), "senha123");
+        User ana = createUser("idor-ana");
+        String anaToken = loginAndGetToken(ana.getEmail(), "senha123");
+        User beto = createUser("idor-beto");
+        String betoToken = loginAndGetToken(beto.getEmail(), "senha123");
+        Event event = createEvent(host.getId(), "Evento IDOR " + System.nanoTime(), 5, hostToken);
+        long eventId = event.getEvent_id();
+
+        // o Beto se inscreve (pending) e a Ana tenta agir em nome dele
+        EventWallet doBeto = new EventWallet(beto.getId(), eventId);
+        assertEquals(HttpStatus.CREATED, restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                new HttpEntity<>(doBeto, authHeaders(betoToken)), String.class).getStatusCode());
+
+        HttpEntity<EventWallet> comoAna = new HttpEntity<>(doBeto, authHeaders(anaToken));
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST, comoAna,
+                String.class).getStatusCode(), "addLink");
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(url("/bff/event-wallets/confirm"), HttpMethod.POST,
+                comoAna, String.class).getStatusCode(), "confirm");
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(url("/bff/event-wallets/validate"), HttpMethod.POST,
+                comoAna, String.class).getStatusCode(), "validate");
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(
+                url("/bff/event-wallets?userId=" + beto.getId() + "&eventId=" + eventId), HttpMethod.DELETE,
+                new HttpEntity<>(authHeaders(anaToken)), String.class).getStatusCode(), "removeLink");
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(url("/bff/event-wallets/user/" + beto.getId()),
+                HttpMethod.GET, new HttpEntity<>(authHeaders(anaToken)), String.class).getStatusCode(), "listByUser");
+        // userId inexistente: continua 403 (a negação não depende do alvo existir)
+        assertEquals(HttpStatus.FORBIDDEN, restTemplate.exchange(url("/bff/event-wallets/user/999999999"),
+                HttpMethod.GET, new HttpEntity<>(authHeaders(anaToken)), String.class).getStatusCode());
+
+        // nada mudou para o Beto: segue pending (não confirmou nem cancelou) e a Ana não ganhou inscrição
+        ResponseEntity<EventWallet[]> listaBeto = restTemplate.exchange(url("/bff/event-wallets/user/" + beto.getId()),
+                HttpMethod.GET, new HttpEntity<>(authHeaders(betoToken)), EventWallet[].class);
+        assertEquals(1, listaBeto.getBody().length);
+        assertEquals("pending", listaBeto.getBody()[0].getStatus());
+        ResponseEntity<EventWallet[]> listaAna = restTemplate.exchange(url("/bff/event-wallets/user/" + ana.getId()),
+                HttpMethod.GET, new HttpEntity<>(authHeaders(anaToken)), EventWallet[].class);
+        assertEquals(0, listaAna.getBody().length);
+    }
+
+    /** Issue #57: o próprio usuário segue funcionando com o userId (igual ao do token) e sem ele (o do token). */
+    @Test
+    public void eventWallet_proprioUsuario_comESemUserId() {
+        User host = createHostUser("idor-ok-host");
+        String hostToken = loginAndGetToken(host.getEmail(), "senha123");
+        User ana = createUser("idor-ok-ana");
+        String token = loginAndGetToken(ana.getEmail(), "senha123");
+        Event e1 = createEvent(host.getId(), "Evento IDOR ok 1 " + System.nanoTime(), 5, hostToken);
+        Event e2 = createEvent(host.getId(), "Evento IDOR ok 2 " + System.nanoTime(), 5, hostToken);
+        HttpHeaders h = authHeaders(token);
+
+        // sem userId no corpo: vale o do token, e a resposta traz o dono real
+        Map<String, Object> semUserId = Map.of("eventId", e1.getEvent_id());
+        assertEquals(HttpStatus.OK, restTemplate.exchange(url("/bff/event-wallets/validate"), HttpMethod.POST,
+                new HttpEntity<>(semUserId, h), String.class).getStatusCode());
+        ResponseEntity<EventWallet> criada = restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                new HttpEntity<>(semUserId, h), EventWallet.class);
+        assertEquals(HttpStatus.CREATED, criada.getStatusCode());
+        assertEquals(ana.getId(), criada.getBody().getUserId());
+        ResponseEntity<EventWallet> confirmada = restTemplate.exchange(url("/bff/event-wallets/confirm"),
+                HttpMethod.POST, new HttpEntity<>(semUserId, h), EventWallet.class);
+        assertEquals(HttpStatus.OK, confirmada.getStatusCode());
+        assertEquals("confirmed", confirmada.getBody().getStatus());
+        assertEquals(HttpStatus.OK, restTemplate.exchange(url("/bff/event-wallets?eventId=" + e1.getEvent_id()),
+                HttpMethod.DELETE, new HttpEntity<>(h), Void.class).getStatusCode());
+
+        // com userId igual ao do token: segue como antes
+        EventWallet proprio = new EventWallet(ana.getId(), e2.getEvent_id());
+        assertEquals(HttpStatus.CREATED, restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                new HttpEntity<>(proprio, h), String.class).getStatusCode());
+        assertEquals(HttpStatus.OK, restTemplate.exchange(url("/bff/event-wallets?userId=" + ana.getId()
+                + "&eventId=" + e2.getEvent_id()), HttpMethod.DELETE, new HttpEntity<>(h), Void.class).getStatusCode());
+        assertEquals(HttpStatus.OK, restTemplate.exchange(url("/bff/event-wallets/user/" + ana.getId()),
+                HttpMethod.GET, new HttpEntity<>(h), String.class).getStatusCode());
+    }
+
+    /** Issue #57 (regressão): sem token, 401 nos 4 endpoints (e no validate), antes de qualquer lógica do controller. */
+    @Test
+    public void eventWallet_semToken_returns401NosEndpoints() {
+        HttpHeaders semAuth = new HttpHeaders();
+        semAuth.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<EventWallet> corpo = new HttpEntity<>(new EventWallet(1L, 1L), semAuth);
+        assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST, corpo,
+                String.class).getStatusCode(), "addLink");
+        assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.exchange(url("/bff/event-wallets/confirm"), HttpMethod.POST,
+                corpo, String.class).getStatusCode(), "confirm");
+        assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.exchange(url("/bff/event-wallets/validate"), HttpMethod.POST,
+                corpo, String.class).getStatusCode(), "validate");
+        assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.exchange(url("/bff/event-wallets?userId=1&eventId=1"),
+                HttpMethod.DELETE, new HttpEntity<>(semAuth), String.class).getStatusCode(), "removeLink");
+        assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.exchange(url("/bff/event-wallets/user/1"), HttpMethod.GET,
+                new HttpEntity<>(semAuth), String.class).getStatusCode(), "listByUser");
     }
 
     /**
@@ -1060,5 +1181,165 @@ public class HttpContractTest {
         ResponseEntity<String> seedResp = restTemplate.getForEntity(url("/api/seed"), String.class);
         assertTrue(!seedResp.getStatusCode().is2xxSuccessful(),
                 "esperado não-2xx para /api/seed removido, veio " + seedResp.getStatusCode());
+    }
+
+    // ======================= reCAPTCHA delegado ao identity (issue #36) =======================
+
+    @Test
+    public void verifyRecaptcha_scoreAlto_returns200ComSuccessScoreEAction() {
+        identity().recaptcha(new RecaptchaResponse(200, Map.of("success", true, "score", 0.9, "action", "login")));
+        ResponseEntity<Map> resp = restTemplate.postForEntity(url("/bff/users/verify-recaptcha"),
+                Map.of("token", "t", "action", "login"), Map.class);
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals(Boolean.TRUE, resp.getBody().get("success"));
+        assertEquals("login", resp.getBody().get("action"));
+        assertNotNull(resp.getBody().get("score"));
+    }
+
+    // ======================= JWT RS256 validado pelo JWKS do identity (issue #36) =======================
+
+    private ResponseEntity<String> getComBearer(String path, String bearer) {
+        HttpHeaders h = new HttpHeaders();
+        h.set("Authorization", "Bearer " + bearer);
+        return restTemplate.exchange(url(path), HttpMethod.GET, new HttpEntity<>(h), String.class);
+    }
+
+    /** Bearer inválido, vencido ou de outra chave numa rota PÚBLICA segue como anônimo (200), nunca 401 (contrato de hoje). */
+    @Test
+    public void bearerInvalidoEmRotaPublica_segueAnonimoComo200() {
+        User u = createUser("jwt-publica");
+        for (String bearer : List.of("lixo", "a.b.c", identity().tokenDeOutraChave(u.getId()),
+                FakeIdentityServer.tokenHs256(u.getEmail(), u.getId()),
+                identity().tokenCustom(u.getEmail(), u.getId(), false, FakeIdentityServer.ISSUER,
+                        Instant.now().minusSeconds(7200)))) {
+            assertEquals(HttpStatus.OK, getComBearer("/bff/events/search?term=", bearer).getStatusCode(), bearer);
+            assertEquals(HttpStatus.OK, getComBearer("/actuator/health", bearer).getStatusCode(), bearer);
+        }
+    }
+
+    /** Em rota protegida: outra chave, HS256, sem uid, vencido, outro emissor e lixo dão 401; o token bom passa. */
+    @Test
+    public void tokenInvalidoEmRotaProtegida_returns401_eOTokenBomPassa() {
+        User u = createUser("jwt-protegida");
+        String bom = loginAndGetToken(u.getEmail(), "senha123");
+        assertEquals(HttpStatus.OK, getComBearer("/bff/users/me", bom).getStatusCode());
+
+        Map<String, String> invalidos = new LinkedHashMap<>();
+        invalidos.put("outra chave RS256", identity().tokenDeOutraChave(u.getId()));
+        invalidos.put("HS256", FakeIdentityServer.tokenHs256(u.getEmail(), u.getId()));
+        invalidos.put("sem uid", identity().tokenCustom(u.getEmail(), null, false, FakeIdentityServer.ISSUER,
+                Instant.now().plusSeconds(3600)));
+        invalidos.put("vencido", identity().tokenCustom(u.getEmail(), u.getId(), false, FakeIdentityServer.ISSUER,
+                Instant.now().minusSeconds(7200)));
+        invalidos.put("outro emissor", identity().tokenCustom(u.getEmail(), u.getId(), false, "outro-emissor",
+                Instant.now().plusSeconds(3600)));
+        invalidos.put("lixo", "isto-nao-e-um-jwt");
+        invalidos.forEach((caso, token) -> assertEquals(HttpStatus.UNAUTHORIZED,
+                getComBearer("/bff/users/me", token).getStatusCode(), caso));
+        assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.getForEntity(url("/bff/users/me"), String.class).getStatusCode(),
+                "sem token");
+    }
+
+    /** O papel de host vem do claim {@code isHost} NA EMISSÃO (sem consulta): token anterior à promoção segue sem host. */
+    @Test
+    public void hostVemDoClaimDoToken_promocaoSoValePraTokenNovo() {
+        User u = createUser("jwt-host-claim");
+        String antes = loginAndGetToken(u.getEmail(), "senha123");
+        identity().promoverHost(u.getId());
+        Event e = new Event();
+        e.setEvent_name("Evento host claim " + System.nanoTime());
+        e.setIs_EAD(true);
+        e.setEvent_date(LocalDateTime.now().plusDays(5));
+        e.setLot_quantity(5);
+        e.setPresenters(new ArrayList<>());
+
+        ResponseEntity<String> semHost = restTemplate.exchange(url("/bff/events"), HttpMethod.POST,
+                new HttpEntity<>(e, authHeaders(antes)), String.class);
+        assertEquals(HttpStatus.BAD_REQUEST, semHost.getStatusCode());
+        assertTrue(semHost.getBody().contains("host"), "veio: " + semHost.getBody());
+
+        String depois = loginAndGetToken(u.getEmail(), "senha123");
+        assertEquals(HttpStatus.CREATED, restTemplate.exchange(url("/bff/events"), HttpMethod.POST,
+                new HttpEntity<>(e, authHeaders(depois)), String.class).getStatusCode());
+    }
+
+    /**
+     * {@code PUT /bff/users/{id}} com {@code isHost: true} não promove: o login seguinte continua sem host (anti auto-promoção). A regra
+     * REAL é do serviço e está provada em {@code IdentityApiE2ETest#isHostDoTokenVemDoBancoNaEmissaoEOPutNaoGravaHost}; aqui só se confere
+     * o fluxo do gateway com o contrato (o {@code FakeIdentityServer} reproduz a regra).
+     */
+    @Test
+    public void putComIsHostTrue_naoPromove_tokenSeguinteSemHost() {
+        User u = createUser("jwt-nao-promove");
+        String token = loginAndGetToken(u.getEmail(), "senha123");
+        u.setIsHost(true);
+        u.setPassword(null);
+        assertEquals(HttpStatus.OK, restTemplate.exchange(url("/bff/users/" + u.getId()), HttpMethod.PUT,
+                new HttpEntity<>(u, authHeaders(token)), User.class).getStatusCode());
+
+        String novo = loginAndGetToken(u.getEmail(), "senha123");
+        String payload = new String(java.util.Base64.getUrlDecoder().decode(novo.split("\\.")[1]),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(payload.contains("\"isHost\":false"), "claims: " + payload);
+        assertTrue(payload.contains("\"uid\":" + u.getId()), "claims: " + payload);
+    }
+
+    /**
+     * Identity fora do ar: {@code /bff/users/**} e {@code /bff/my-wallets/**} e o login dão 503 GENÉRICO (nunca 401/404/500, sem a URI
+     * interna), mas a reserva com token já validado segue 201 SEM nenhuma chamada ao identity (o {@code uid} do token é o
+     * {@code userId}; a chave está no cache do JWKS, que tolera a queda).
+     */
+    @Test
+    public void identityFora_users503_eReservaComTokenValidoSegue201SemChamarOIdentity() {
+        User host = createHostUser("host-identity-fora");
+        String hostToken = loginAndGetToken(host.getEmail(), "senha123");
+        User attendee = createUser("attendee-identity-fora");
+        String token = loginAndGetToken(attendee.getEmail(), "senha123");
+        Event event = createEvent(host.getId(), "Evento identity fora " + System.nanoTime(), 5, hostToken);
+        assertEquals(HttpStatus.OK, getComBearer("/bff/users/me", token).getStatusCode(), "esquenta o cache do JWKS");
+
+        FakeIdentityServer identidade = identity();
+        identidade.foraDoAr(true);
+        try {
+            for (String rota : List.of("/bff/users/me", "/bff/users/" + attendee.getId(), "/bff/my-wallets/" + attendee.getId())) {
+                ResponseEntity<String> r = getComBearer(rota, token);
+                assertEquals(HttpStatus.SERVICE_UNAVAILABLE, r.getStatusCode(), rota);
+                assertFalse(String.valueOf(r.getBody()).contains("http") || String.valueOf(r.getBody()).contains("/internal"),
+                        "corpo genérico, veio: " + r.getBody());
+            }
+            ResponseEntity<String> login = restTemplate.postForEntity(url("/bff/users/login"),
+                    Map.of("email", attendee.getEmail(), "password", "senha123"), String.class);
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, login.getStatusCode(), "login com identity fora: 503, não 401");
+
+            int antes = identidade.chamadas().size();
+            ResponseEntity<EventWallet> reserva = restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                    new HttpEntity<>(new EventWallet(attendee.getId(), event.getEvent_id()), authHeaders(token)),
+                    EventWallet.class);
+            assertEquals(HttpStatus.CREATED, reserva.getStatusCode());
+            assertEquals(attendee.getId(), reserva.getBody().getUserId(), "o userId da reserva é o uid do token");
+            assertEquals(antes, identidade.chamadas().size(), "a reserva não chamou o identity");
+        } finally {
+            identidade.foraDoAr(false);
+        }
+    }
+
+    /**
+     * {@code uid} de usuário que não existe (mais): a reserva NÃO dá mais 401 (validação sem estado; o teste da #57 mudou de
+     * expectativa) e o gateway não confere a carteira: o userId do token é o da reserva.
+     */
+    @Test
+    public void reservaComUidDeUsuarioInexistente_naoDa401_semConferirCarteira() {
+        User host = createHostUser("host-uid-fantasma");
+        String hostToken = loginAndGetToken(host.getEmail(), "senha123");
+        Event event = createEvent(host.getId(), "Evento uid fantasma " + System.nanoTime(), 5, hostToken);
+        long uidFantasma = 987_654_321L;
+        String token = identity().tokenCustom("fantasma@example.com", uidFantasma, false, FakeIdentityServer.ISSUER,
+                Instant.now().plusSeconds(3600));
+
+        ResponseEntity<EventWallet> reserva = restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                new HttpEntity<>(Map.of("eventId", event.getEvent_id()), authHeaders(token)), EventWallet.class);
+
+        assertEquals(HttpStatus.CREATED, reserva.getStatusCode());
+        assertEquals(uidFantasma, reserva.getBody().getUserId());
     }
 }

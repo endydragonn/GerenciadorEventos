@@ -62,8 +62,8 @@ Arquivo: `Projeto/Backend/monolito/src/test/java/com/gerenciador/eventos/EventWa
 | corpo do POST de reserva | `{"userId": <id>, "eventId": <id>}` |
 | status da recusa | **HTTP 400** (o `BffEventWalletController` traduz `IllegalArgumentException` para `badRequest`); corpo = texto puro `Evento lotado`. |
 
-> **Nota (fora de escopo):** o `userId` vir do corpo em vez do JWT é o IDOR
-> tratado na **issue #57**. Este roteiro não tenta corrigir isso.
+> **Nota:** desde a **issue #57** o `userId` vem do JWT; um `userId` no corpo diferente do dono do
+> token dá **403**. Este roteiro já não roda desde a #78/#79 (cria usuário sem JWT).
 
 ## Como executar
 
@@ -91,7 +91,7 @@ Variáveis de ambiente (todas opcionais):
   `event.event_name` são `UNIQUE` e o backend rejeita duplicados — sem o sufixo a
   segunda execução falharia em "já existente".
 - O script tem **rotina de limpeza** no `trap EXIT`: remove `reservation.walletevent` e
-  `reservation.eventcap` (do serviço `reservation`, sem FK desde a #33) → `event` → `users`
+  `reservation.eventcap` (do serviço `reservation`, sem FK desde a #33) → `catalog.event` → `identity.users`
   (o `mywallet` cai por `CASCADE`). As queries do roteiro leem `reservation.eventcap` e `reservation.walletevent`.
 - Roda **duas vezes seguidas** sem falhar (verificado).
 - Limpeza manual alternativa:

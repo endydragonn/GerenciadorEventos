@@ -61,7 +61,7 @@ padrão do arquivo que você está editando.
 
 ## Segredos
 
-`Projeto/.env` contém credenciais **reais** (SMTP do Gmail, `JWT_SECRET`, chaves reCAPTCHA,
+`Projeto/.env` contém credenciais **reais** (SMTP do Gmail, `JWT_SECRET` — sem uso desde a #36, chaves reCAPTCHA,
 senha do Postgres). Nunca imprima o conteúdo, cole em PR/issue, mande para serviço externo,
 ou registre em log. Para exemplos, use placeholders (`<...>`). O `.env` é lido por
 `application.properties` e pelo `docker-compose.yml`; código-fonte lê via variável de
@@ -98,30 +98,41 @@ commitar ou registrar em log.
   clara se faltar um deles). **Pare o `gerenciador-backend` antes** (`docker stop gerenciador-backend`): desde a #28/#29 o
   relay e o consumer dele compartilham o `meu_banco` e drenam o `event_outbox` dos testes; o script aborta com
   mensagem clara se o container estiver rodando. Desde a #32 o script roda o **reactor Maven inteiro** (`shared`, `reservation-client`,
-  `catalog-client`, `monolito`, `notification`, `reservation`, `catalog`) e também aborta se o `gerenciador-notification`, o
-  `gerenciador-reservation` ou o `gerenciador-catalog` estiverem rodando
-  (`docker stop gerenciador-backend gerenciador-notification gerenciador-reservation gerenciador-catalog`; o notification
-  consumiria o tópico dos testes e mandaria e-mail de verdade, o reservation e o catalog dividiriam o banco e o broker deles); ao fim o script também move o group `notification` para o
+  `catalog-client`, `identity-client`, `monolito`, `notification`, `reservation`, `catalog`, `identity`) e também aborta se o `gerenciador-notification`, o
+  `gerenciador-reservation`, o `gerenciador-catalog` ou o `gerenciador-identity` estiverem rodando
+  (`docker stop gerenciador-backend gerenciador-notification gerenciador-reservation gerenciador-catalog gerenciador-identity`; o notification
+  consumiria o tópico dos testes e mandaria e-mail de verdade, o reservation, o catalog e o identity dividiriam o banco e o broker deles); ao fim o script também move o group `notification` para o
   fim do tópico (`rpk group seek`), para os eventos de teste nunca virarem e-mail quando o serviço subir (um e-mail real pendente
   antes da rodada é pulado). Ao fim o script também move os groups `reservation` e `reservation-catalog` para o fim dos tópicos
   `reservation.wallet` / `catalog.event` (a reconciliação criaria `eventcap` para ids de evento de teste). Banco já existente precisa dos
   schemas novos: aplicar `Projeto/Backend/db/migrations/20261024-notification-schema.sql`, **com o backend e o reservation parados**
   `20261025-reservation-schema.sql` e, **com o backend e o catalog parados e depois do backup
   `pg_dump -h localhost -U admin --clean --if-exists -n public meu_banco`** (backup, migração e rollback no cabeçalho do arquivo),
-  `20261026-catalog-schema.sql` (move `event`/`eventpresenter` e o stream `catalog.event` para o schema `catalog`;
-  idempotentes; bancos novos já nascem com eles). O `run-tests.sh` **aborta** se o banco ainda tiver `public.event` (migração 20261026
-  pendente) ou não tiver `catalog.event`.
-- **`INTERNAL_API_TOKEN` (desde a #33, volta 3):** as chamadas internas gateway → reservation e gateway → catalog (`/internal/**`; #35) exigem um token de serviço
+  `20261026-catalog-schema.sql` (move `event`/`eventpresenter` e o stream `catalog.event` para o schema `catalog`) e, **com o backend e o reservation parados e
+  depois do backup `pg_dump -h localhost -U admin --clean --if-exists -n reservation meu_banco`** (backup, migração e rollback no cabeçalho do arquivo),
+  `20261027-reservation-timestamptz.sql` (#58: `eventcap.buy_time_limit`/`walletevent.expires_at` em `timestamptz`, índice `idx_walletevent_event_id`,
+  `capacity = -1 OR >= 1`; aborta se houver `capacity = 0`) e, **com o backend e o identity parados e depois do backup `pg_dump -h localhost -U admin --clean --if-exists -n public meu_banco`** (backup, migração e rollback no cabeçalho do arquivo),
+  `20261028-identity-schema.sql` (#36: move `users`, `mywallet` e `pending_verifications` e o stream `identity.notification` para o schema `identity`, preservando `user_id` e a identity; aborta se houver FK de fora ou sobra com linha); idempotentes; bancos novos já nascem com eles). O `run-tests.sh` **aborta** se o banco ainda tiver `public.event` (migração 20261026
+  pendente) ou não tiver `catalog.event`, e se ainda tiver `public.users` (20261028 pendente) ou não tiver `identity.users`. **Os testes dão `TRUNCATE ... RESTART IDENTITY` em `identity.users` e o JWT é validado sem estado (claim `uid`):** no início e ao fim da rodada o script apaga a chave de assinatura do volume `identity-keys` (identity e backend estão parados), e todo token antigo vira 401 — relogue depois de subir a stack. Limpeza de banco fora dos testes (carga, `TRUNCATE` manual) deve fazer o mesmo e reiniciar identity e backend (cache de JWKS do gateway de até 24 h).
+- **`INTERNAL_API_TOKEN` (desde a #33, volta 3):** as chamadas internas gateway → reservation, gateway → catalog (`/internal/**`; #35) e gateway → identity (#36; só o JWKS é isento) exigem um token de serviço
   (header `X-Internal-Token`; 401 sem/errado). **Acrescente ao `Projeto/.env` (você mesmo; o repo nunca edita nem imprime o `.env`)**
-  `INTERNAL_API_TOKEN=<valor aleatório>`, por exemplo gerado com `openssl rand -hex 32`. O compose repassa o MESMO valor ao `backend`, ao
+  `INTERNAL_API_TOKEN=<valor aleatório>`, por exemplo gerado com `openssl rand -hex 32`. O compose repassa o MESMO valor ao `backend`, ao `identity`, ao
   `reservation` e ao `catalog`. Não há valor default: sem a variável **qualquer `docker compose`** (inclusive o `up -d db redpanda` dos testes)
   recusa com mensagem clara (`${INTERNAL_API_TOKEN:?...}`), e os serviços também falham no boot. O `run-tests.sh` usa um valor de teste
   explícito (não é segredo).
 - O serviço `notification` sobe junto com `up -d --build` (container `gerenciador-notification`); o `backend` não depende dele. O serviço
   `reservation` (container `gerenciador-reservation`, API interna `:8082` só na rede `gerenciador-net`) e o serviço `catalog` (#35, container
-  `gerenciador-catalog`, API interna `:8083` só na rede `gerenciador-net`) também sobem junto, e o `backend` **depende dos dois**
+  `gerenciador-catalog`, API interna `:8083` só na rede `gerenciador-net`) e o serviço `identity` (#36, container `gerenciador-identity`, API interna `:8084` só na rede, chave do JWT no volume `identity-keys`) também sobem junto, e o `backend` **depende dos três**
   (`service_healthy`). `POST /bff/seed` fica **desligado** (404) no compose normal; o override de carga (`carga/docker-compose.carga.yml`)
   liga `SEED_ENABLED=true`.
+- **Suíte e2e da stack inteira (#37):** `Projeto/e2e/run-e2e.sh` sobe tudo num project temporário `gerenciador-e2e` (rede e volumes próprios, sem
+  porta no host, e-mail num captador Mailpit — nenhum e-mail real), roda cadastro (código lido do e-mail) → evento → reserva → confirmação e o replay
+  de `catalog.event` e `reservation.wallet`, e derruba só esse project no fim (`MANTER=1` mantém). Confere o isolamento por `config` antes do `up`.
+  Detalhes no `Projeto/Backend/CLAUDE.md`, "Suíte e2e da stack inteira". Os serviços do compose agora têm healthcheck (`backend`, `notification`,
+  `frontend`), então `docker compose -f Projeto/docker-compose.yml up -d --build --wait` espera tudo ficar `healthy`.
+- **Primeiro `up` e o group `notification`:** o serviço one-shot `notification-seek` move o group `notification` para o fim de `identity.notification`
+  SÓ se o group ainda não existe (stack nova não manda e-mail de evento antigo); o `notification` espera ele terminar. O SMTP do `notification` é
+  parametrizável (`MAIL_HOST`/`MAIL_PORT`/`MAIL_SMTP_AUTH`/`MAIL_STARTTLS`; defaults = Gmail).
 - Relate o resultado real dos testes; se algo falhou ou foi pulado, diga.
 
 ## Documentação de arquitetura (vault Obsidian)
@@ -202,11 +213,35 @@ X ≈ 58k RPM, overselling 0 no CAS (20 de 20) e naive no teto; controle do pont
 rede, schema `catalog` com **event store e relay próprios**; migração `20261026-catalog-schema.sql`). O `gateway` o chama pela lib
 `catalog-client` (`/internal/**` com `X-Internal-Token`; cadeia gateway → catalog → reservation nas leituras), segue validando JWT e host,
 amarra `creator_id` (integer, sem FK) ao token e exige o dono em PUT/DELETE/imagem (403), e compõe o `creator_name` (lote ao `identity` +
-cache). Catalog fora → 503 (inclusive na reserva, salvo positivo de `exists` ainda no cache de 30 s do gateway). `POST /bff/seed` desligado por padrão (`SEED_ENABLED`). JWT assimétrico + JWKS é a #36.
+cache). Catalog fora → 503 (inclusive na reserva, salvo positivo de `exists` ainda no cache de 30 s do gateway). `POST /bff/seed` desligado por padrão (`SEED_ENABLED`). (JWT assimétrico + JWKS: #36, abaixo.)
 Detalhes no `Projeto/Backend/CLAUDE.md`, "Serviço catalog"; diagrama em [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md);
 smoke da stack real em `docs/testes-manuais/smoke-catalog-servico-separado.sh`.
 
-**Decidido, não implementado:** extrair os demais módulos como microsserviços (Opção B — `gateway`, `identity`,
-`admission`; o `notification` saiu na #32, o `reservation` na #33 e o `catalog` na #35);
+**Implementado (Fase 7, issue #36, 2026-10-27):** quarta extração, o `identity` — `users`, `mywallet` (junto, pela FK + trigger 1:1) e
+`pending_verifications` viraram o serviço `identity` (módulo Maven, Dockerfile, imagem e container `gerenciador-identity`, API interna `:8084` só na
+rede, schema `identity` em CRUD com **event store e relay próprios**: `identity.notification` congelado e `identity.user` de ciclo de vida; migração
+`20261028-identity-schema.sql`). O serviço faz login (BCrypt), cadastro em duas fases, MFA, troca de senha, reCAPTCHA e **emite o JWT RS256** (`kid`,
+claims `sub`, `uid`, `isHost`, `iss`; chave RSA gerada no 1º boot e guardada no volume `identity-keys`, sem variável nova no `.env`; `JWT_SECRET`
+saiu de uso) com `GET /.well-known/jwks.json`. O `gateway` (agora o único conteúdo do monólito) o chama pela lib `identity-client` e valida o token
+**sem estado** pelo JWKS em cache (24 h por `kid`, 1 fetch a cada 30 s, tolerante a queda): `currentUserId()` é a claim `uid` e host é a claim
+`isHost`, sem consulta ao banco (some o `LOWER(email)` por reserva da #57). Identity fora → 503 em login/cadastro/`/bff/users/**`/`/bff/my-wallets/**`,
+mas quem tem token válido segue reservando. Consequências aceitas da validação sem estado: desativar conta, trocar senha ou mudar `host` só valem para
+tokens novos; `uid` inexistente não dá mais 401 em `event-wallets`. `TRUNCATE ... RESTART IDENTITY` recicla o `user_id`, então `run-tests.sh` e a limpeza
+da carga apagam a chave do JWT (e o backend reinicia, por causa do cache do JWKS). `/bff/**` com o mesmo contrato (`HttpContractTest`); tokens HS256
+antigos viram 401. Hikari: identity 100, backend 10 (soma no Supavisor 1000 + 10 + 3 + 100 + 100 = 1213 <= 1500). Detalhes no
+`Projeto/Backend/CLAUDE.md`, "Serviço identity"; spec em `docs/superpowers/specs/2026-10-26-identity-servico-design.md`; diagrama em
+[`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md); smoke da stack real em
+`docs/testes-manuais/smoke-identity-servico-separado.sh`.
+
+**Implementado e medido (Batch 1, 2026-10-26 a 2026-10-28, branch de integração `Batch_1`):** além da #36, o compose final e a suíte e2e
+(#37), o harness definitivo (#38: cenário de leitura, `coleta-host.sh`; #113: escada `MAPEAMENTO=sequencial|intercalado`) e os follow-ups de
+corretude e segurança (#56, #57, #58, #59, #60, #61, #89, #133; #81 fechada sem PR). A Rodada R mediu a configuração final em
+`Projeto/carga/results/06-batch1-final`: CAS com overselling 0 (matriz e aleatório), naive no teto, **X definitivo = 56k RPM por evento**
+(escada sequencial, linha quente do `eventcap`; #40) e ≈ 86k no intercalado (teto do host). A comparação das 3 configurações (#39) está em
+`docs/artigo/experimento-monolito.md` (tabela e `docs/artigo/graficos/`). Rodando escada no host: **suba a escada aos poucos**, porque um 1º
+degrau já alto, a frio, enfileira na linha do `eventcap` e não se recupera (ver o README da etapa 06).
+
+**Decidido, não implementado:** extrair os demais módulos como microsserviços (Opção B — `gateway`,
+`admission`; o `notification` saiu na #32, o `reservation` na #33, o `catalog` na #35 e o `identity` na #36);
 camada de alta carga (Redis RPM + fila + worker pool). Nada disso existe no código — ver
 `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.

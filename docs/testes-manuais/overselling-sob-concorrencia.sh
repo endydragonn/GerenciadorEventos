@@ -136,7 +136,7 @@ limpar() {
     psql_db "DELETE FROM reservation.walletevent WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name LIKE 'Evento Overselling %${SUFIXO}');" >/dev/null 2>&1 || true
     psql_db "DELETE FROM reservation.eventcap WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name LIKE 'Evento Overselling %${SUFIXO}');" >/dev/null 2>&1 || true
     psql_db "DELETE FROM catalog.event WHERE event_name LIKE 'Evento Overselling %${SUFIXO}';" >/dev/null 2>&1 || true
-    psql_db "DELETE FROM users WHERE email LIKE 'oversell-%-${SUFIXO}@example.com';" >/dev/null 2>&1 || true
+    psql_db "DELETE FROM identity.users WHERE email LIKE 'oversell-%-${SUFIXO}@example.com';" >/dev/null 2>&1 || true
     echo "    dados do sufixo $SUFIXO removidos"
     rm -rf "$TMP"
 }
@@ -254,8 +254,8 @@ ok "eventcap inicial: quant=$QUANT_INICIAL (esperado $CAPACIDADE)"
 # OBSOLETO; o nginx do frontend e que remove o prefixo /api). /bff/** e
 # permitAll no SecurityConfig -> sem JWT.
 # Corpo: {"userId": <id>, "eventId": <id>}.
-# (O userId vir do corpo em vez do JWT e o IDOR tratado na issue #57 -- fora
-#  do escopo deste roteiro.)
+# (Desde a #57 o userId vem do JWT: userId do corpo diferente do dono do token
+#  da 403. Este roteiro ja nao roda desde a #78/#79 -- cria usuario sem JWT.)
 echo ""
 echo "==> 3. Disparando 2 reservas concorrentes (u1 e u2)"
 
