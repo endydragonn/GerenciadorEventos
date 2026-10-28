@@ -81,9 +81,10 @@
 - **Overselling.** CAS: 0 em 20 de 20 na matriz e 0 no aleatório. Naive: no teto (80 / 180) em 20 de 20. Mesmo resultado dos
   pontos 2 e 3.
 - **X sequencial ≈ 56k RPM** (evento disputado: `U` reservas seguidas no mesmo evento), contra ≈ 58k na etapa 05, que usava o
-  mesmo padrão de disputa antes de a coluna `mapeamento` existir. O limite é a linha quente do `eventcap`: na escada a frio,
-  o `UPDATE` do CAS chegou a 344 ms de média com 186 sessões esperando lock de transação, e as 300 threads do Tomcat do
-  `reservation` ficaram esperando o banco. Depois do joelho, a vazão **cai** para ~42k (colapso por fila), não fica no teto.
+  mesmo padrão de disputa antes de a coluna `mapeamento` existir. O limite é a linha quente do `eventcap`. O `pg_stat_statements` acumulado
+  desde o início da coleta da escada sequencial até o fim do diagnóstico (escada a frio + `Rpm-932720`) deu média de 344 ms
+  no `UPDATE` do CAS, e durante o diagnóstico `Rpm-932720` havia 186 sessões esperando lock de transação e as 300 threads do
+  Tomcat do `reservation` esperando o banco (snapshot e thread dumps ao vivo, fora dos CSVs). Depois do joelho, a vazão **cai** para ~42k (colapso por fila), não fica no teto.
 - **X intercalado ≈ 86k RPM** (a carga se espalha pelos eventos: capacidade do host sem a linha quente). Depois do joelho, o
   efetivo se segura em ~80–82k. A linha quente custa ~35% do teto.
 - **Aleatório.** Reserva e confirmação praticamente iguais às da etapa 05 (p95 6,7 contra 6,6 ms; 5,5 contra 4,5 ms). A leitura

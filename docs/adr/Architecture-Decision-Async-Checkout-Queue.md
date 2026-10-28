@@ -39,8 +39,8 @@ X é o RPM por evento em que o fluxo síncrono de uma instância degrada (prelim
 > **sequencial** (evento disputado) da Rodada R, configuração final distribuída (`Batch_1`, commit `b072346`, 1 réplica do
 > `reservation`): 54k é o último degrau limpo (p95 de janela 357 ms, p50 165 ms), 56k degrada (p95 de janela 1,67 s, sem
 > descarte) e 58k/60k colapsam em ~42k efetivos (p50 ~3,1 s, 15,6k e 18,0k descartes); resolução de 2k RPM, uma escada por
-> configuração. A causa é a linha quente do `eventcap`: o `UPDATE` do CAS chegou a 344 ms de média com 186 sessões esperando
-> lock, e as 300 threads do Tomcat do `reservation` esperaram o banco (diagnóstico ao vivo na escada a frio e no `Rpm-932720`, não nos CSVs do 6b). É "por evento" porque,
+> configuração. A causa é a linha quente do `eventcap`: o `UPDATE` do CAS chegou a 344 ms de média (`pg_stat_statements`
+> acumulado da escada sequencial a frio ao `Rpm-932720`) e, durante esse diagnóstico, 186 sessões esperavam lock e as 300 threads do Tomcat do `reservation` esperavam o banco (ao vivo, não nos CSVs do 6b). É "por evento" porque,
 > no mapeamento sequencial, as chegadas novas caem num único evento a cada instante: a taxa na linha quente é a taxa do degrau
 > (o que é fixo por evento é a contagem, 200 tentativas numa rajada de ~0,2 s). Com a carga espalhada pelos eventos
 > (`intercalado`) o teto do host é ≈ 86k RPM: a linha quente custa ~35%. Números e ameaças em

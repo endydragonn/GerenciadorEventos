@@ -697,8 +697,9 @@ pool do Supavisor 245. O X desta subseção é o que a arquitetura de admissão 
 - **Anomalia fora do X.** A escada grossa sequencial (`degraus-931618`) começou a frio em 40k e colapsou já no 1º degrau
   (efetivo 39–44k, janela de 3,3–3,9 s); os degraus de cima herdaram o host atolado. Fica registrada como medida, não
   como X.
-- **Causa.** Vem do diagnóstico ao vivo durante a escada a frio e do `Rpm-932720` (README da etapa), não do refino 6b e não
-  dos CSVs versionados: o `UPDATE` do CAS chegou a 344 ms de média, com 186 sessões esperando lock de transação, e as 300
+- **Causa.** Vem do diagnóstico ao vivo (README da etapa), não do refino 6b e não dos CSVs versionados: o `pg_stat_statements`
+  acumulado desde o início da escada sequencial a frio até o fim do `Rpm-932720` deu média de 344 ms no `UPDATE` do CAS
+  e, durante o `Rpm-932720`, havia 186 sessões esperando lock de transação e as 300
   threads do Tomcat do `reservation` ficaram esperando o banco. É a contenção na linha do `eventcap` do evento disputado.
 
 **Por que é "por evento".** No mapeamento `sequencial` a iteração `i` vai ao evento `⌊i/U⌋` (U = 200), de modo que, em cada
