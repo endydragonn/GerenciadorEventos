@@ -440,11 +440,11 @@ public final class FakeIdentityServer {
         if (novo.getIsAdmin() != null) {
             c.user.setIsAdmin(novo.getIsAdmin()); // como o serviço: admin é gravável, host NUNCA
         }
-        if (novo.getPassword() != null && !novo.getPassword().isEmpty()) {
-            c.senha = novo.getPassword();
-        }
+        // como o serviço (#171): o PUT IGNORA o password (só /password e /password-with-mfa trocam a senha) e a resposta não leva senha
         c.user.setUpdatedAt(LocalDateTime.now().truncatedTo(ChronoUnit.MICROS));
-        return copiar(c.user);
+        User resposta = copiar(c.user);
+        resposta.setPassword(null);
+        return resposta;
     }
 
     private synchronized boolean trocarSenha(long id, String atual, String nova) {

@@ -139,32 +139,32 @@ public class UserRepository {
     }
 
     /**
-     * Atualiza os campos graváveis (nome, e-mail, fone, senha, nascimento, admin; NUNCA {@code host}) na {@code conn} do chamador.
-     * Campo não informado ({@code password}, {@code birthDate} nulo ou ilegível, {@code isAdmin}) é preservado pelo próprio
-     * {@code UPDATE} ({@code COALESCE}), sem ler-mesclar-gravar (#170): um PUT sem senha concorrente a uma troca de senha não
-     * regrava o hash antigo por cima do novo. Devolve {@code false} se o usuário não existe.
+     * Atualiza os campos graváveis (nome, e-mail, fone, nascimento, admin; NUNCA {@code host} nem {@code password}) na {@code conn} do
+     * chamador. A senha só muda por {@link #updatePassword} e {@link #updatePasswordConsumingMfa}: o {@code user.getPassword()} é
+     * ignorado (#171), então o {@code UPDATE} nem a menciona e uma troca de senha concorrente nunca é desfeita. Campo não informado
+     * ({@code birthDate} nulo ou ilegível, {@code isAdmin}) é preservado pelo próprio {@code UPDATE} ({@code COALESCE}), sem
+     * ler-mesclar-gravar (#170). Devolve {@code false} se o usuário não existe.
      */
     public boolean update(Connection conn, User user) throws SQLException {
-        String sql = "UPDATE identity.users SET user_name = ?, email = ?, fone = ?, password = COALESCE(?, password), "
+        String sql = "UPDATE identity.users SET user_name = ?, email = ?, fone = ?, "
                 + "birthdate = COALESCE(CAST(? AS date), birthdate), admin = COALESCE(CAST(? AS boolean), admin) "
                 + "WHERE user_id = ?";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, user.getName());
             stmt.setString(2, user.getEmail());
             stmt.setString(3, user.getFone());
-            stmt.setString(4, user.getPassword());
             Date birthdateVal = toSqlDate(user.getBirthDate());
             if (birthdateVal != null) {
-                stmt.setDate(5, birthdateVal);
+                stmt.setDate(4, birthdateVal);
             } else {
-                stmt.setNull(5, Types.DATE);
+                stmt.setNull(4, Types.DATE);
             }
             if (user.getIsAdmin() != null) {
-                stmt.setBoolean(6, user.getIsAdmin());
+                stmt.setBoolean(5, user.getIsAdmin());
             } else {
-                stmt.setNull(6, Types.BOOLEAN);
+                stmt.setNull(5, Types.BOOLEAN);
             }
-            stmt.setLong(7, user.getId());
+            stmt.setLong(6, user.getId());
             return stmt.executeUpdate() == 1;
         }
     }
