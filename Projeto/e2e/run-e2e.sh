@@ -26,6 +26,7 @@
 #
 #  Uso:  Projeto/e2e/run-e2e.sh
 #  Variaveis (opcionais): E2E_PROJECT (gerenciador-e2e), MANTER (1 = nao derruba o project), ESPERA_UP (900, segundos do --wait).
+#  E2E_SLIM=1 roda os 5 servicos com as imagens enxutas do Slim (docker-compose.slim.yml; gerar antes com Projeto/slim/gerar-imagens-slim.sh).
 #  Compatibilidade: Linux/macOS e Git Bash do Windows (Docker Desktop).
 # =============================================================================
 
@@ -54,7 +55,9 @@ dexec() {
         *) docker "$@" ;;
     esac
 }
-dc() { dexec compose -p "$PROJETO" -f docker-compose.yml -f e2e/docker-compose.e2e.yml "$@"; }
+# E2E_SLIM=1: roda a suite com as imagens enxutas dos servicos (override docker-compose.slim.yml, issue #177; geradas por slim/gerar-imagens-slim.sh)
+SLIM_ARGS=(); [ "${E2E_SLIM:-0}" = "1" ] && SLIM_ARGS=(-f docker-compose.slim.yml)
+dc() { dexec compose -p "$PROJETO" -f docker-compose.yml -f e2e/docker-compose.e2e.yml ${SLIM_ARGS[@]+"${SLIM_ARGS[@]}"} "$@"; }
 cli() { dexec exec -i "$CLI" "$@"; }
 psql_db() { # a role do app e a do container; -h localhost evita o peer auth do socket
     dc exec -T db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$POSTGRES_DB" -At' <<<"$1" | tr -d '\r'
@@ -149,6 +152,13 @@ if [ $? -ne 0 ] || [ -n "$VIOLACOES" ]; then
 fi
 ok "sem container_name, sem porta no host, rede e volumes com o prefixo do project, notification -> mailpit:1025"
 ISOLADO=1
+SERVICOS_SLIM="backend identity catalog reservation notification"
+if [ "${E2E_SLIM:-0}" = "1" ]; then
+    for svc in $SERVICOS_SLIM; do
+        dexec image inspect "gerenciador-eventos-$svc.slim:latest" >/dev/null 2>&1 || abortar "E2E_SLIM=1 mas falta a imagem gerenciador-eventos-$svc.slim (rode Projeto/slim/gerar-imagens-slim.sh)."
+    done
+    ok "E2E_SLIM=1: imagens *.slim presentes; os 5 servicos vao rodar com elas"
+fi
 
 echo "==> 1. project limpo; 1a) so o redpanda; 1b) um pedido de e-mail PENDENTE no topico; 1c) up -d --build --wait (pode levar varios minutos no 1o build)"
 derrubar
@@ -179,6 +189,13 @@ while read -r servico estado saude codigo; do
     esac
 done <<<"$SAUDE"
 [ "$FALHAS" -eq 0 ] || abortar "stack nao esta toda healthy."
+if [ "${E2E_SLIM:-0}" = "1" ]; then # o override tem que ter valido: cada container roda o ID da imagem *.slim (nao uma gorda reconstruida com o nome slim)
+    for svc in $SERVICOS_SLIM; do
+        confere "$svc roda a imagem *.slim" "$(dexec image inspect -f '{{.Id}}' "gerenciador-eventos-$svc.slim:latest")" \
+            "$(dexec inspect -f '{{.Image}}' "$(dc ps -q "$svc" | head -1)")"
+    done
+    [ "$FALHAS" -eq 0 ] || abortar "algum servico NAO esta rodando a imagem slim."
+fi
 
 echo "==> 2. guarda de e-mail: o notification so fala com o captador"
 confere "MAIL_HOST efetivo do container notification" mailpit "$(dc exec -T notification printenv MAIL_HOST | tr -d '[:space:]')"
