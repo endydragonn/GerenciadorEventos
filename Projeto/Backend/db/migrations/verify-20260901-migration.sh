@@ -30,7 +30,10 @@ CONTAINER="gerenciador-db"
 CHECK_DB="eventcap_mig_check"
 REMOTE_DIR="/tmp/eventcap_mig_check"
 
-INIT_SCRIPTS="01-functions 02-users 03-event 04-eventcap 05-eventpresenter 06-mywallet 07-walletevent 08-pending-verifications"
+# 01/02/06/08 saíram na #36 (viraram o 15-identity.sql): o estado pré-cutover de users/mywallet/pending_verifications em public vem do
+# fixture legacy-fixtures/public-identity-pre-20261028.sql, aplicado antes; o 15 entra só para o 99-tests.sql (que olha identity.*)
+LEGACY_FIXTURE="public-identity-pre-20261028"
+INIT_SCRIPTS="11-event-store 13-reservation 14-catalog 15-identity"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -72,6 +75,7 @@ docker exec -i "$CONTAINER" sh -c "rm -rf '$REMOTE_DIR' && mkdir -p '$REMOTE_DIR
 for f in $INIT_SCRIPTS 99-tests; do
     docker cp "$DB_DIR/init-scripts/$f.sql" "$CONTAINER:$REMOTE_DIR/init/$f.sql"
 done
+docker cp "$DB_DIR/migrations/legacy-fixtures/$LEGACY_FIXTURE.sql" "$CONTAINER:$REMOTE_DIR/init/$LEGACY_FIXTURE.sql"
 docker cp "$DB_DIR/migrations/20260901-eventcap-isolation.sql" "$CONTAINER:$REMOTE_DIR/20260901-eventcap-isolation.sql"
 docker cp "$DB_DIR/migrations/verify-20260901-migration.sql"    "$CONTAINER:$REMOTE_DIR/verify-20260901-migration.sql"
 
@@ -81,7 +85,9 @@ docker exec -i "$CONTAINER" sh -c \
     'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS '"$CHECK_DB"' WITH (FORCE);" -c "CREATE DATABASE '"$CHECK_DB"';"'
 
 echo ""
-echo "==> Aplicando init-scripts 01-08 (schema NOVO) no banco descartavel"
+echo "==> Aplicando o fixture legado (users/mywallet/pending_verifications em public) e os init-scripts do schema NOVO (11, 13, 14, 15; o 04/07/09/10 viraram o 13 na #33, o 03/05 o 14 na #35 e o 01/02/06/08 o 15 na #36) no banco descartavel"
+docker exec -i "$CONTAINER" sh -c \
+    'psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d '"$CHECK_DB"' -f '"$REMOTE_DIR/init/$LEGACY_FIXTURE.sql"
 for f in $INIT_SCRIPTS; do
     echo "    - $f.sql"
     docker exec -i "$CONTAINER" sh -c \

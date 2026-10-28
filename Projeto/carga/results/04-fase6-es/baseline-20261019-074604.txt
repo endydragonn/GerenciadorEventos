@@ -1,0 +1,7 @@
+﻿data: 2026-10-19T07:46:04
+alvo: http://<HOST_IP>:8081
+gerador: <gerador>  (AMD Ryzen 5 7600 6-Core Processor              )
+rede: 1.2 Gbps
+k6: k6.exe v2.2.0 (commit/00a9a1b7f5, go1.26.5, windows/amd64)
+ping: min=4ms media=18,55ms max=180ms perdidos=0/100
+http: p50=26,6ms p95=42,9ms max=93,3ms (n=30)

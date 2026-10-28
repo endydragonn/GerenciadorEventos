@@ -33,7 +33,7 @@ Pense no sistema como um clube de eventos: o back-end é a administração nos b
   - [Guia de Comandos](#guia-de-comandos)
   - [Considerações Finais](#considerações-finais)
 - [Front-end](#front-end)
-  - [Introdução ao Projeto](#introdução-ao-projeto-1)
+  - [Introdução ao Projeto](#introdução-ao-projeto)
   - [Configuração de Implantação (Dockerfile e nginx.conf)](#configuração-de-implantação-dockerfile-e-nginxconf)
   - [Dependências e Configuração (pubspec.yaml)](#dependências-e-configuração-pubspecyaml)
   - [Página de Entrada (index.html)](#página-de-entrada-indexhtml)
@@ -110,7 +110,8 @@ Representa um evento. É como um convite com todos os detalhes.
 
 - **Campos principais**:
   - `event_id`: Número único do evento (gerado automaticamente).
-  - `creator_id`: ID do usuário que criou o evento.
+  - `creator_id`: ID do usuário que criou o evento. Desde a #35 o gateway grava o usuário do token (o `creator_id` do corpo é ignorado) e só o dono edita, apaga ou troca a imagem (403).
+  - `creator_name`: Nome de quem criou (somente leitura, #35). Composto pelo gateway a partir do `creator_id`; vem nulo se a conta estiver desativada.
   - `event_name`: Nome do evento (obrigatório e único).
   - `is_EAD`: Indica se é online (true) ou presencial (false).
   - `address`: Endereço (obrigatório se presencial).
@@ -120,7 +121,7 @@ Representa um evento. É como um convite com todos os detalhes.
   - `quantity`: Quantidade de ingressos disponíveis (não pode ser negativa).
   - `description`: Descrição do evento.
   - `presenters`: Lista de nomes de apresentadores (pode ser vazia).
-  - `image_data`: Imagem do evento (em formato bytes, como uma foto JPG).
+  - `image_data`: Imagem do evento (em formato bytes, como uma foto JPG). Não vem nas listas (busca e eventos de um criador, #35): só no evento por id e em `/bff/events/{id}/image`.
   - `createdAt` e `updatedAt`: Datas automáticas de criação e atualização.
 
 Exemplo: Um evento "Palestra sobre Java" online, criado por João, em 2025-12-01.
@@ -367,7 +368,7 @@ Essas são as "gavetas" principais. Cada uma tem colunas (campos) para guardar d
 - **O que faz**: Guarda detalhes de eventos, como nome, data e local.
 - **Campos principais**:
   - `event_id`: Número único automático.
-  - `creator_id`: ID do usuário que criou (liga à tabela users).
+  - `creator_id`: ID do usuário que criou (referência solta a `users`, sem FK: desde a #35 a tabela fica no schema `catalog`, do serviço `catalog`).
   - `event_name`: Nome único.
   - `ead`: Se é online (sim/não, padrão não).
   - `address`: Endereço (se presencial).
@@ -452,6 +453,7 @@ Exemplo: Uma lista: "Adicionar João, Maria; Eventos: Festa1, Festa2; Inscriçõ
   - Registra sucessos, avisos (como "Já existe") e erros.
   - Retorna um resumo: "X criados, com Y avisos".
 - **Por quê?**: Útil para desenvolvedores testarem ou inicializarem o sistema com dados reais.
+- **Desligado por padrão (#35)**: `POST /bff/seed` só existe com `SEED_ENABLED=true` (senão responde 404). O override de carga (`Projeto/carga/docker-compose.carga.yml`) liga; ligado, ele aceita o `creator_id` do corpo (ferramenta de dev).
 
 Exemplo: Como importar uma planilha de convidados para uma festa — o sistema checa duplicatas e avisa problemas.
 
@@ -477,15 +479,6 @@ Esses são "receitas automáticas" (scripts) para lidar com dados no banco.
 - **Como funciona**: Cria uma lista de usuários e eventos (como João, Maria, Workshops), converte em formato JSON (uma lista organizada) e envia para o servidor. Mostra resumo de sucessos, avisos e erros.
 - **Exemplo**: Como adicionar convidados a uma festa: envia a lista e o servidor cuida do resto.
 - **Uso**: Rode no PowerShell. Certifique-se de que o servidor está ligado.
-
-### export-data.sh (Bash para Linux/Mac)
-- **O que faz**: Exporta dados do banco para um arquivo texto bonito (com tabelas e estatísticas).
-- **Como funciona**: Conecta ao banco via Docker, executa comandos SQL para listar usuários, eventos, inscrições, estatísticas (como total de usuários) e eventos populares. Salva em um arquivo como "database-export-20251123-120000.txt".
-- **Opções**:
-  - `-p`: Enche o banco com dados de teste antes.
-  - `-o arquivo.txt`: Muda o nome do arquivo.
-- **Exemplo**: Como imprimir um relatório de uma agenda: lista tudo formatado com caixas e emojis.
-- **Uso**: Rode o script com opções para encher e exportar.
 
 ## Scripts para Testes
 
@@ -544,7 +537,7 @@ Essa parte configura a caixa (container) onde o banco roda, isolada do resto do 
 Esse arquivo é o "manual de montagem" que define as caixas e como elas se conectam.
 
 - **Serviços (caixas)**:
-  - **db (banco de dados)**: Usa PostgreSQL 16. Porta 5433 no seu computador (dentro da caixa é 5432). Guarda dados em um "armário persistente" (volume db-data) para não perder ao desligar. Verifica se está "saudável" antes de prosseguir.
+  - **db (banco de dados)**: Usa PostgreSQL 17 (imagem do Supabase). Porta 5433 no seu computador (dentro da caixa é 5432). Guarda dados em um "armário persistente" (volume supabase-db-data) para não perder ao desligar. Verifica se está "saudável" antes de prosseguir.
   - **backend (servidor)**: Constrói a partir do Dockerfile. Porta 8081. Espera o banco estar pronto (depends_on). Reinicia sozinho se cair.
 - **Outros itens**:
   - **Volumes**: Armário para dados do banco (não some ao parar).

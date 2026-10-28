@@ -8,8 +8,8 @@ Este guia ajuda o time a subir, parar e usar os containers (db, backend e fronte
 
 ## Estrutura
 - Compose: `Projeto/docker-compose.yml`
-- Credenciais e configs: `Projeto/.env`
-- DB Dockerfile e scripts: `Projeto/db/Dockerfile` e `Projeto/db/init-scripts/`
+- Credenciais e configs: `Projeto/.env` e `Projeto/supabase/.env` (este precisa existir antes do `up`; ver `supabase/README.md`)
+- DB e scripts: `Projeto/Backend/db/supabase-app-init.sql` e `Projeto/Backend/db/init-scripts/` (imagem `supabase/postgres`, sem Dockerfile)
 - Backend (Spring Boot): `Projeto/Backend/`
 - Frontend (Flutter Web via Nginx): `Projeto/frontend/`
 
@@ -53,6 +53,11 @@ docker compose -f Projeto/docker-compose.yml down
 - Frontend: http://localhost:8088
 - Backend:  http://localhost:8081
 - Postgres: host=localhost port=5433 (na rede Docker: host=db port=5432)
+- Serviços internos, **sem porta no host** (só na rede `gerenciador-net`): `reservation` :8082 (#33) e `catalog` :8083 (#35, container
+  `gerenciador-catalog`; o backend depende dele e, com ele parado, `/bff/events/**` e a reserva respondem 503; na reserva, um evento conferido há menos de 30 s
+  ainda está no cache de `exists` do gateway e a reserva segue).
+- `POST /bff/seed` fica desligado (404) por padrão (`SEED_ENABLED`, #35). Para semear, suba com o override de carga:
+  `docker compose -f Projeto/docker-compose.yml -f Projeto/carga/docker-compose.carga.yml up -d --build`.
 
 ## Variáveis de ambiente (.env)
 Arquivo env enviado no grupo do zap por segurança
@@ -109,20 +114,20 @@ docker compose -f Projeto/docker-compose.yml build --no-cache backend
 
 Executar psql dentro do container do DB:
 ```bash
-docker compose -f Projeto/docker-compose.yml exec db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+docker compose -f Projeto/docker-compose.yml exec db psql -h localhost -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
 
-Rodar o script de testes 99-tests.sql (já copiado para a imagem em /docker-entrypoint-initdb.d/):
+Rodar o script de testes 99-tests.sql (montado em /app-init/):
 ```bash
 # opção A: usando o arquivo já presente dentro do container
 docker exec -i gerenciador-db \
-  psql -U admin -d meu_banco \
-  -f /docker-entrypoint-initdb.d/99-tests.sql
+  psql -h localhost -U admin -d meu_banco \
+  -f /app-init/99-tests.sql
 
 # opção B: redirecionando do arquivo local do repo
 docker exec -i gerenciador-db \
-  psql -U admin -d meu_banco \
-  < "$(pwd)/Projeto/db/init-scripts/99-tests.sql"
+  psql -h localhost -U admin -d meu_banco \
+  < "$(pwd)/Projeto/Backend/db/init-scripts/99-tests.sql"
 ```
 
 ## Troubleshooting
@@ -156,7 +161,7 @@ docker system prune -a -f
 
 Remover volume de dados do Postgres explicitamente (dados serão perdidos):
 ```bash
-docker volume rm gerenciador-eventos_db-data || true
+docker volume rm gerenciador-eventos_supabase-db-data gerenciador-eventos_db-config || true
 ```
 
 Listar containers, volumes e redes:
@@ -179,10 +184,10 @@ docker exec -it gerenciador-frontend sh
 Backup e restore do Postgres:
 ```bash
 # Backup
-docker exec -t gerenciador-db pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" > backup.sql
+docker exec -t gerenciador-db pg_dump -h localhost -U "$POSTGRES_USER" -d "$POSTGRES_DB" > backup.sql
 
 # Restore
-cat backup.sql | docker exec -i gerenciador-db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+cat backup.sql | docker exec -i gerenciador-db psql -h localhost -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
 
 Checagens rápidas de saúde e portas:
@@ -200,4 +205,4 @@ ss -ltnp | grep -E ':(8081|8088|5433)'
 ## Nomes de recursos
 - Containers: `gerenciador-db`, `gerenciador-backend`, `gerenciador-frontend`
 - Rede: `gerenciador-net`
-- Volume de dados do Postgres: `db-data` (nome lógico do compose)
+- Volume de dados do Postgres: `supabase-db-data` (nome lógico do compose; o antigo `db-data` é do Postgres 16 e fica órfão)

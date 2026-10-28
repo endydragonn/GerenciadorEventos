@@ -37,15 +37,15 @@
 
     <module name="TreeWalker">
         <!-- Banir saída direta de console em código de produção. O projeto já usa SLF4J em
-             alguns pontos (ver Service/ReservationExpiryService,
-             Service/ReadModelRefreshService) — é a referência do "caminho certo" citada na
+             alguns pontos (ver reservation/ReservationExpiryService,
+             reservation/EventAvailabilityConsumer) — é a referência do "caminho certo" citada na
              mensagem, já que não existe uma classe própria de log adapter. -->
         <module name="RegexpSinglelineJava">
             <property name="id" value="ProibirConsoleDireto"/>
             <property name="format" value="System\.(out|err)\.print(ln)?\("/>
             <property name="ignoreComments" value="true"/>
             <property name="message"
-                value="Não use System.out/err.print*/println em código de produção — logue com SLF4J (org.slf4j.Logger/LoggerFactory), como em Service/ReservationExpiryService."/>
+                value="Não use System.out/err.print*/println em código de produção — logue com SLF4J (org.slf4j.Logger/LoggerFactory), como em reservation/ReservationExpiryService."/>
         </module>
 
         <!-- printStackTrace() joga o stack trace cru no console, mesmo problema do item
@@ -55,7 +55,7 @@
             <property name="format" value="\.printStackTrace\("/>
             <property name="ignoreComments" value="true"/>
             <property name="message"
-                value="Não use printStackTrace() em código de produção — logue a exceção com SLF4J (org.slf4j.Logger/LoggerFactory), como em Service/ReservationExpiryService."/>
+                value="Não use printStackTrace() em código de produção — logue a exceção com SLF4J (org.slf4j.Logger/LoggerFactory), como em reservation/ReservationExpiryService."/>
         </module>
     </module>
 </module>

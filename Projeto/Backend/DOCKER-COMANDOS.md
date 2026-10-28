@@ -7,6 +7,9 @@ Este guia contém todos os comandos necessários para trabalhar com o projeto us
 ## 🚀 Início Rápido (4 passos)
 
 ```powershell
+# 0. Apontar para o compose principal (db = supabase/postgres; exige Projeto/supabase/.env)
+$env:COMPOSE_FILE = "../docker-compose.yml"   # bash: export COMPOSE_FILE=../docker-compose.yml
+
 # 1. Subir os containers (banco + backend)
 docker compose up -d --build
 
@@ -16,8 +19,6 @@ Start-Sleep -Seconds 15
 # 3. Popular banco via API (senhas criptografadas)
 .\populate-data.ps1
 
-# 4. (Opcional) Exportar dados para arquivo
-wsl ./export-data.sh
 ```
 
 **Para parar:**
@@ -42,7 +43,7 @@ docker compose ps
 
 **Serviços disponíveis:**
 
-- `db` - PostgreSQL 16 (porta 5433)
+- `db` - PostgreSQL 17 (imagem supabase/postgres, porta 5433)
   
 - `backend` - API Spring Boot (porta 8081)
 
@@ -147,21 +148,21 @@ docker run --rm --network gerenciador-net --env-file .env \
 
 ```bash
 # Ver estrutura da tabela users
-docker compose exec db psql -U admin -d meu_banco -c "\d+ users"
+docker compose exec db psql -h localhost -U admin -d meu_banco -c "\d+ users"
 
 # Ver todas as tabelas
-docker compose exec db psql -U admin -d meu_banco -c "\dt"
+docker compose exec db psql -h localhost -U admin -d meu_banco -c "\dt"
 
 # Acessar console do PostgreSQL
-docker compose exec db psql -U admin -d meu_banco
+docker compose exec db psql -h localhost -U admin -d meu_banco
 ```
 
 ### Executar Testes do Banco
 
 ```bash
 # Rodar suite de testes SQL
-docker compose exec db psql -U admin -d meu_banco \
-  -f /docker-entrypoint-initdb.d/99-tests.sql
+docker compose exec db psql -h localhost -U admin -d meu_banco \
+  -f /app-init/99-tests.sql
 ```
 
 **Saída esperada:** `NOTICE: Testes mínimos concluídos com sucesso`
@@ -201,29 +202,11 @@ docker compose exec db psql -U admin -d meu_banco \
 **Atenção:** Este método insere dados diretamente no banco **SEM** criptografar senhas. Use apenas para testes básicos de estrutura.
 
 ```bash
-# Opção 1 (Recomendado): Popular e já exportar para arquivo formatado (Unix / WSL / Git Bash)
-./export-data.sh --populate
+# Unix style
+docker compose exec -T db psql -h localhost -U admin -d meu_banco < db/seed-data.sql
 
-# Opção 1 (PowerShell - via WSL ou Git Bash)
-# Use WSL (recomendado no Windows) ou Git Bash para executar o script sem alterações:
-wsl ./export-data.sh --populate
-# ou, se tiver Git Bash instalado
-bash ./export-data.sh --populate
-
-# Opção 2: Apenas popular (sem exportar) - Unix style
-docker compose exec -T db psql -U admin -d meu_banco < db/seed-data.sql
-
-# Opção 2 (PowerShell nativo): pipe do arquivo para o psql dentro do container
-Get-Content db/seed-data.sql -Raw | docker compose exec -T db psql -U admin -d meu_banco
-
-# (Opcional) Exportar depois (o script gera um arquivo com timestamp)
-./export-data.sh
-
-# Exportar em PowerShell (se preferir abrir o arquivo no Windows):
-# - usando WSL/Git Bash (gera o arquivo no diretório do projeto)
-wsl ./export-data.sh
-# - ou executar o script via Git Bash
-bash ./export-data.sh
+# PowerShell nativo: pipe do arquivo para o psql dentro do container
+Get-Content db/seed-data.sql -Raw | docker compose exec -T db psql -h localhost -U admin -d meu_banco
 ```
 
 **O seed (db/seed-data.sql) faz:**
@@ -251,56 +234,32 @@ bash ./export-data.sh
 - Meetup de Spring Boot (EAD, 500 vagas)
 - Curso de Docker (presencial, 30 vagas)
 
-### Exportar Dados do Banco para Arquivo
+### Inspecionar os dados do banco
 
-O script `export-data.sh` gera um relatório completo do banco em formato texto, **incluindo as senhas criptografadas (hash BCrypt)**.
-
-```bash
-# Unix / WSL / Git Bash
-./export-data.sh
-
-# PowerShell (via WSL - recomendado)
-wsl ./export-data.sh
-
-# PowerShell (via Git Bash)
-bash ./export-data.sh
-```
-
-**O export inclui:**
-
-- 👥 Usuários (com **senha hash BCrypt completa**)
-- 🎫 Eventos
-- 💰 Carteiras
-- 📝 Inscrições
-- 📊 Estatísticas
-- 🏆 Eventos mais populares
-
-**Arquivo gerado:** `database-export-<timestamp>.txt`
-
-**Visualizar o arquivo:**
-
-```powershell
-# PowerShell - ver arquivo mais recente
-Get-Content (Get-ChildItem database-export-*.txt | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name
-
-# Abrir no VS Code
-code (Get-ChildItem database-export-*.txt | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name
-```
+Use o **Supabase Studio** (`http://localhost:8000`, login `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` de
+`Projeto/supabase/.env`): o Table Editor mostra as tabelas do schema `public`. Para SQL avulso, use as
+consultas abaixo. (O antigo `export-data.sh` foi removido: estava quebrado desde a #5 e o Studio cobre o uso.)
 
 ### Consultas Úteis
 
 ```bash
 # Contar registros em uma tabela
-docker compose exec db psql -U admin -d meu_banco \
-  -c "SELECT COUNT(*) FROM users;"
+docker compose exec db psql -h localhost -U admin -d meu_banco \
+  -c "SELECT COUNT(*) FROM identity.users;"
 
 # Ver todos os usuários
-docker compose exec db psql -U admin -d meu_banco \
-  -c "SELECT user_id, user_name, email FROM users;"
+docker compose exec db psql -h localhost -U admin -d meu_banco \
+  -c "SELECT user_id, user_name, email FROM identity.users;"
 
-# Limpar todas as tabelas (CUIDADO!)
-docker compose exec db psql -U admin -d meu_banco \
-  -c "TRUNCATE users, event, mywallet, walletevent RESTART IDENTITY CASCADE;"
+# Limpar todas as tabelas (CUIDADO!). Pare antes backend, catalog, reservation e identity (relays/consumers). Uma ÚNICA instrução:
+# catalog.event e reservation.eventcap andam juntos (id de evento reciclado não herda eventcap/reservas), e os event stores
+# vão junto (senão o EventCreated/SlotReserved de um id reciclado bate no UNIQUE do stream antigo). Depois mova os consumer
+# groups para o fim dos tópicos (ver o fim do run-tests.sh), senão a reconciliação recria eventcap de evento apagado. O RESTART IDENTITY
+# recicla o user_id (identity.users): para nenhum token antigo valer como o usuário novo que ganhar o mesmo uid, apague também a chave
+# do identity (docker run --rm -v gerenciador-eventos_identity-keys:/k eclipse-temurin:25-jre-jammy rm -f /k/jwt-signing-key.json) com o
+# identity parado e suba identity e backend de novo (o backend guarda o JWKS em cache por até 24 h; reiniciado, ele busca o novo).
+docker compose exec db psql -h localhost -U admin -d meu_banco \
+  -c "TRUNCATE identity.users, identity.mywallet, identity.pending_verifications, identity.event_store, identity.event_outbox, identity.event_snapshot, identity.projection_checkpoint, event_store, event_outbox, event_snapshot, projection_checkpoint, catalog.event, catalog.eventpresenter, catalog.event_store, catalog.event_outbox, catalog.event_snapshot, catalog.projection_checkpoint, reservation.eventcap, reservation.walletevent, reservation.event_availability, reservation.idempotency_key, reservation.event_store, reservation.event_outbox, reservation.event_snapshot, reservation.projection_checkpoint RESTART IDENTITY CASCADE;"
 ```
 
 ---

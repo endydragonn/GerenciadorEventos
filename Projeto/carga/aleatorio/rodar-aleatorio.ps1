@@ -36,7 +36,7 @@ param(
     [int]$MaxVus = 500,
     [ValidateSet('cas', 'naive')][string]$Rotulo = 'cas',
     [int]$MaxConnections = 0,      # so para registrar no CSV (o gerador nao enxerga o host)
-    [int]$RefreshMs = 5000,
+    [int]$RefreshMs = 0,   # obsoleto (#29): so rotula a coluna refresh_ms
     [ValidateRange(0, 100)][int]$PctConfirma = 100
 )
 
@@ -108,10 +108,6 @@ Info "Semeando $Usuarios usuarios + $eventos eventos (bcrypt no host: pode levar
 $seed = Invoke-Seed -BaseUrl $Base -Usuarios $Usuarios -Eventos $eventos -Capacidade $Capacidade `
     -Prefixo $prefixo -Sufixo "$runId" -UsersFile $uf -EventIdsFile $ef
 Ok "Prefixo '$prefixo': $eventos eventos prontos."
-
-$espera = [math]::Ceiling($RefreshMs / 1000) + 2
-Info "Aguardando $espera s (read model)..."
-Start-Sleep -Seconds $espera
 
 # ---- k6
 $env:BASE_URL = $Base; $env:STAGES_FILE = $pf; $env:USERS_FILE = $uf; $env:EVENTS_FILE = $ef

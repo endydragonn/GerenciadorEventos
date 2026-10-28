@@ -1,2 +1,5 @@
 *.sh text eol=lf
 *.sql text eol=lf
+
+# Supabase vendorizado: montado em container Linux, nunca CRLF
+Projeto/supabase/** text eol=lf

@@ -1,0 +1,2 @@
+﻿data,rotulo,refresh_ms,max_connections,rpm_alvo,rpm_real,duracao_s,usuarios,eventos,capacidade,aceitas,lotado,erros_5xx,outros,sem_login,descartadas,vus_max,p50_ms,p95_ms,p99_ms,max_ms,prefixo,pct_confirma,confirmadas,confirma_4xx_esperado,confirma_5xx,confirma_outros,confirma_p50_ms,confirma_p95_ms,confirma_p99_ms,cenario
+2026-10-28T00:34:51,cas,0,300,40000,37276,112.6,200,385,100,35000,34948,0,0,0,3386,500,404.7,933.2,1152.7,2928.4,Rpm-932720,100,35000,0,0,0,22.9,344.6,613.5,escrita

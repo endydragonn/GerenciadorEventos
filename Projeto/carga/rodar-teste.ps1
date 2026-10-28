@@ -5,19 +5,19 @@
 .DESCRIPTION
   Para cada valor de -Vus (clientes concorrentes):
     1. cria N usuarios e 1 evento com -Capacidade vagas (POST /bff/seed, endpoint publico de dev)
-    2. espera o read model atualizar (relevante no caminho naive)
     3. roda carga.js (k6): N clientes disputam as vagas ao mesmo tempo
     4. acrescenta uma linha em results\resultados.csv e mostra o resumo
 
   O que o gerador mede (cliente): reservas aceitas, "lotado", erros, latencia p50/p95/p99.
   A verdade do banco (overselling real) se confere NO HOST: .\setup-host.ps1 -Verificar -EventId <id>
 
-  IMPORTANTE: -Rotulo e -RefreshMs precisam bater com o que o host esta rodando
-  (setup-host.ps1 -ReadPath ... -RefreshMs ...). O gerador nao tem como descobrir isso.
+  IMPORTANTE: -Rotulo precisa bater com o que o host esta rodando
+  (setup-host.ps1 -ReadPath ...). O gerador nao tem como descobrir isso. -RefreshMs e obsoleto (#29: o refresh
+  por timer saiu, o lag da projecao e o do consumer, medido), aceito so por compatibilidade.
 
 .EXAMPLE
   .\rodar-teste.ps1 -HostIp 192.168.0.10 -Vus 50,100,200 -Capacidade 20 -Rotulo cas
-  .\rodar-teste.ps1 -HostIp 192.168.0.10 -Vus 100 -Capacidade 20 -Rotulo naive -RefreshMs 5000
+  .\rodar-teste.ps1 -HostIp 192.168.0.10 -Vus 100 -Capacidade 20 -Rotulo naive
 #>
 [CmdletBinding()]
 param(
@@ -26,7 +26,7 @@ param(
     [int[]]$Vus = @(50),
     [int]$Capacidade = 20,
     [ValidateSet('cas', 'naive')][string]$Rotulo = 'cas',
-    [int]$RefreshMs = 5000,
+    [int]$RefreshMs = 0,
     [ValidateRange(0, 100)][int]$PctConfirma = 100
 )
 
@@ -73,11 +73,6 @@ foreach ($n in $Vus) {
         -Prefixo "Carga-$runId-N$n" -Sufixo "$runId" -UsersFile $uf -EventIdsFile $ef
     $eventId = $seed.EventIds[0]
     Ok "Evento '$($seed.Prefixo)-E1' (id $eventId) criado com $Capacidade vagas."
-
-    # ---- 4. esperar o read model (so importa no caminho naive)
-    $espera = [math]::Ceiling($RefreshMs / 1000) + 2
-    Info "Aguardando $espera s para o read model refletir o evento..."
-    Start-Sleep -Seconds $espera
 
     # ---- 5. k6
     $env:BASE_URL = $Base
@@ -130,4 +125,8 @@ foreach ($n in $Vus) {
 
 Write-Host ''
 Ok "Resultados acumulados em $Csv"
-Write-Host 'Reservas pending expiram em ~120 s (devolvem a vaga); rode -Verificar logo apos a rodada.'
+if ($PctConfirma -eq 100) {
+    Write-Host 'Reservas confirmadas nao expiram; rode -Verificar quando quiser (esperado: todas confirmed).'
+} else {
+    Write-Host 'As nao confirmadas (pending) expiram em ~120 s e devolvem a vaga; rode -Verificar logo apos a rodada para ver o pending, ou depois para ver o expired.'
+}

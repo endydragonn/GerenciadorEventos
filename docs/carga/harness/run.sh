@@ -13,19 +13,17 @@
 #    5. verify.sh                  corretude lida direto do banco
 #    6. report.sh                  CSV final + gráfico HTML
 #
-#  PENDÊNCIA CONHECIDA (documentada, não fingida como feita — ver README):
-#  esta rodada é disparada da MESMA máquina que roda a stack (BASE_URL default
-#  aponta pra rede Docker local). A execução "de verdade" da issue #11
-#  (disparada da máquina/VM separada da issue #4, com desconto da baseline de
-#  latência de rede) depende da #4, que ainda está aberta -- só o parâmetro
-#  BASE_URL muda quando a VM existir, nada de código.
+#  SÓ SANITY LOCAL (ver README): esta rodada é disparada da MESMA máquina que
+#  roda a stack (BASE_URL default aponta pra rede Docker local), então a
+#  latência não vale como medida do experimento. O runner oficial é o kit
+#  Projeto/carga (gerador separado: make test-matriz).
 #
 #  Variáveis de ambiente (todas opcionais):
 #    BASE_URL_PROBE   URL do backend visto DESTA máquina (probe HTTP inicial)
 #                      (default http://localhost:8081)
 #    BASE_URL_K6      URL do backend visto de DENTRO do container do k6
 #                      (default http://backend:8081 -- nome do serviço na rede
-#                      gerenciador-net; aponte para a VM da #4 quando existir)
+#                      gerenciador-net)
 #    NETWORK          rede Docker do k6                  (default gerenciador-net)
 #    CONTAINER_DB     container do Postgres               (default gerenciador-db)
 #    K6_IMAGE         imagem do k6                         (default grafana/k6)
@@ -38,10 +36,10 @@
 #                      (default cas)
 #    COLLECTOR_INTERVAL_S  intervalo de amostragem do lag, em segundos (default 1)
 #    COLLECTOR_COOLDOWN_S  quanto esperar após o k6 terminar antes de parar o
-#                      collector -- cobre 1 ciclo do job de refresh do read
-#                      model (default 6, > READMODEL_AVAILABILITY_REFRESH_MS
-#                      padrão de 5000ms) para não ficar só com o sentinela -1
-#                      numa rodada curta
+#                      collector -- dá tempo ao consumer da projeção de
+#                      disponibilidade (relay + Redpanda) de aplicar ao menos
+#                      1 evento (default 6) para não ficar só com o sentinela
+#                      -1 numa rodada curta
 #    OUT_DIR          diretório de saída da rodada
 #                      (default docs/carga/harness/resultados/<sufixo>)
 #    MANTER_DADOS     se "1", não limpa host/attendees/evento ao final
@@ -130,7 +128,7 @@ limpar() {
     echo "==> Limpeza da fixture (sufixo $SUFIXO_FIXTURE)"
     dexec exec -i "$CONTAINER_DB" sh -c \
         'psql -v ON_ERROR_STOP=1 -t -A -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' \
-        sh "DELETE FROM walletevent WHERE event_id IN (SELECT event_id FROM event WHERE event_name LIKE 'Evento Carga %${SUFIXO_FIXTURE}'); DELETE FROM event WHERE event_name LIKE 'Evento Carga %${SUFIXO_FIXTURE}'; DELETE FROM users WHERE email LIKE 'carga-%-${SUFIXO_FIXTURE}@example.com';" \
+        sh "DELETE FROM reservation.walletevent WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name LIKE 'Evento Carga %${SUFIXO_FIXTURE}'); DELETE FROM catalog.event WHERE event_name LIKE 'Evento Carga %${SUFIXO_FIXTURE}'; DELETE FROM identity.users WHERE email LIKE 'carga-%-${SUFIXO_FIXTURE}@example.com';" \
         >/dev/null 2>&1 || true
     echo "    dados do sufixo $SUFIXO_FIXTURE removidos"
 }
@@ -209,13 +207,12 @@ if [ "$K6_EXIT" -ne 0 ]; then
 fi
 
 # Um cenário pequeno (N/CAPACITY baixos, como um smoke run) termina em bem
-# menos de 1s -- rápido demais pro job ReadModelRefreshService (default
-# READMODEL_AVAILABILITY_REFRESH_MS=5000ms) ter rodado sequer 1x pro evento
-# desta rodada. Sem esperar, o collector só registraria o sentinela -1 ("sem
-# leitura ainda") e o gráfico de lag ficaria vazio. Dá margem pra pelo menos
-# 1 ciclo de refresh acontecer antes de parar de amostrar.
+# menos de 1s -- pode ser rápido demais pro consumer da projeção (relay +
+# Redpanda) ter aplicado algum evento desta rodada. Sem esperar, o collector só
+# registraria o sentinela -1 ("sem leitura ainda") e o gráfico de lag ficaria
+# vazio. Dá margem pra pelo menos 1 evento ser aplicado antes de parar de amostrar.
 echo ""
-echo "==> 3.1 aguardando ${COLLECTOR_COOLDOWN_S:-6}s (cobre 1 ciclo do job de refresh do read model, default 5000ms) antes de parar o collector"
+echo "==> 3.1 aguardando ${COLLECTOR_COOLDOWN_S:-6}s (o consumer da projeção aplicar ao menos 1 evento) antes de parar o collector"
 sleep "${COLLECTOR_COOLDOWN_S:-6}"
 
 # ---------------------------------------------------------------------------

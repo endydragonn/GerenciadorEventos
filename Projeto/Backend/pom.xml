@@ -8,76 +8,65 @@
         <relativePath/>
     </parent>
     <groupId>com.example.demo</groupId>
-    <artifactId>demo</artifactId>
+    <artifactId>backend</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>demo</name>
-    <description>Demo project for Spring Boot</description>
+    <packaging>pom</packaging>
+    <name>backend</name>
+    <description>Agregador Maven do backend: lib shared + monolito + serviços extraídos (Fase 7)</description>
+
+    <!-- Multi-módulo (issue #32, Fase 7): cada serviço é um módulo com o próprio jar e o próprio Dockerfile;
+         o que é comum vive nas libs (sem spring-boot-maven-plugin: não são executáveis): "shared" (conexão e infra de
+         event sourcing), desde a #33 "reservation-client" (contrato HTTP do serviço reservation: DTOs + cliente) e, desde a
+         #35, "catalog-client" (contrato HTTP do serviço catalog) e, desde a #36, "identity-client" (contrato HTTP do serviço identity). -->
+    <modules>
+        <module>shared</module>
+        <module>reservation-client</module>
+        <module>catalog-client</module>
+        <module>identity-client</module>
+        <module>monolito</module>
+        <module>notification</module>
+        <module>reservation</module>
+        <module>catalog</module>
+        <module>identity</module>
+    </modules>
+
     <properties>
         <java.version>21</java.version>
+        <!-- Nimbus JOSE+JWT: o BOM do Spring Boot NÃO gerencia esta lib. 9.37.4 é a versão que o spring-security-oauth2-jose 6.5.6 (Boot 3.5.7)
+             declara; identity (assina) e gateway (valida, fatia 3) resolvem a MESMA por aqui. -->
+        <nimbus-jose-jwt.version>9.37.4</nimbus-jose-jwt.version>
     </properties>
-    <dependencies>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-        <!-- Actuator: só /actuator/health exposto (ver application.properties) -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
-        <!-- Segurança e JWT -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-security</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-api</artifactId>
-            <version>0.11.5</version>
-        </dependency>
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-impl</artifactId>
-            <version>0.11.5</version>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-jackson</artifactId>
-            <version>0.11.5</version>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-jpa</artifactId>
-        </dependency>
-        <!-- Spring Mail para envio de emails -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-mail</artifactId>
-        </dependency>
-        <!-- ArchUnit: testes de fronteira de camada (issue #83) -->
-        <dependency>
-            <groupId>com.tngtech.archunit</groupId>
-            <artifactId>archunit-junit5</artifactId>
-            <version>1.5.0</version>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.example.demo</groupId>
+                <artifactId>shared</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.example.demo</groupId>
+                <artifactId>reservation-client</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.example.demo</groupId>
+                <artifactId>catalog-client</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.example.demo</groupId>
+                <artifactId>identity-client</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.nimbusds</groupId>
+                <artifactId>nimbus-jose-jwt</artifactId>
+                <version>${nimbus-jose-jwt.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <build>
         <plugins>
             <plugin>
@@ -88,17 +77,10 @@
                     <release>${java.version}</release>
                 </configuration>
             </plugin>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-                <configuration>
-                    <mainClass>com.gerenciador.eventos.Main</mainClass>
-                </configuration>
-            </plugin>
-            <!-- Quality gates de estilo/tamanho (issue #83). Preso à fase "validate" pra
-                 rodar dentro do "mvn clean test" que o run-tests.sh já invoca, sem exigir
-                 um "mvn verify" separado. Regras e baseline em checkstyle.xml /
-                 checkstyle-suppressions.xml (raiz do módulo). -->
+            <!-- Quality gates de estilo/tamanho (issue #83), herdado por todos os módulos. Preso à fase "validate"
+                 pra rodar dentro do "mvn clean test" que o run-tests.sh já invoca, sem exigir um "mvn verify"
+                 separado. Regras e baseline em checkstyle.xml / checkstyle-suppressions.xml (raiz do Backend/, um
+                 só para todos os módulos: ${maven.multiModuleProjectDirectory} é a pasta deste pom). -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-checkstyle-plugin</artifactId>
@@ -114,8 +96,8 @@
                     </dependency>
                 </dependencies>
                 <configuration>
-                    <configLocation>checkstyle.xml</configLocation>
-                    <suppressionsLocation>checkstyle-suppressions.xml</suppressionsLocation>
+                    <configLocation>${maven.multiModuleProjectDirectory}/checkstyle.xml</configLocation>
+                    <suppressionsLocation>${maven.multiModuleProjectDirectory}/checkstyle-suppressions.xml</suppressionsLocation>
                     <includeTestSourceDirectory>false</includeTestSourceDirectory>
                     <consoleOutput>true</consoleOutput>
                     <violationSeverity>error</violationSeverity>

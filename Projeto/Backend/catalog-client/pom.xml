@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.example.demo</groupId>
+        <artifactId>backend</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+    <artifactId>catalog-client</artifactId>
+    <name>catalog-client</name>
+    <description>Contrato HTTP do serviço catalog (issue 35): DTO Event, EventApi, exceções e o cliente que o gateway usa</description>
+
+    <!-- Lib, não executável (sem spring-boot-maven-plugin), como a reservation-client. O serviço catalog depende dela pelo
+         contrato (Event, EventApi, exceções) e a usa nos testes ponta a ponta; o monólito (gateway) passa a depender dela no
+         cutover (fatia 3). Nenhum dos dois enxerga o código do outro: a fronteira física é o HTTP. -->
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-json</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+        </dependency>
+    </dependencies>
+</project>

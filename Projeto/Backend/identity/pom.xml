@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.example.demo</groupId>
+        <artifactId>backend</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+    <artifactId>identity</artifactId>
+    <name>identity</name>
+    <description>Serviço identity (issue 36): usuários, carteira, cadastro, MFA, reCAPTCHA e emissão do JWT (RS256 + JWKS); API interna HTTP chamada pelo gateway</description>
+    <dependencies>
+        <!-- Lib comum: DatabaseConnection e a infra de event sourcing (event store, relay) -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>shared</artifactId>
+        </dependency>
+        <!-- Contrato HTTP DESTE serviço: User, MyWallet, LoginResult, RecaptchaResponse, as interfaces *Api (o UserService e cia. as
+             implementam) e as exceções. Os testes ponta a ponta usam também o IdentityClient real contra este serviço. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>identity-client</artifactId>
+        </dependency>
+        <!-- API interna HTTP (sem Spring Security: só alcançável na rede gerenciador-net; autenticada por X-Internal-Token) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <!-- Escopo compile (não runtime): o InternalApiExceptionHandler lê SQLState/constraint do PSQLException para a violação de unique (23505) -->
+        </dependency>
+        <!-- Só o BCryptPasswordEncoder (sem o starter de Security: nada de filter chain, a autenticação é o InternalTokenFilter) -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+        <!-- JWT RS256: geração da chave RSA (JWK), thumbprint RFC 7638 (kid), assinatura e JWKS. Versão pela propriedade
+             `nimbus-jose-jwt.version` do pom pai (9.37.4, a do spring-security-oauth2-jose 6.5.6): o BOM do Spring Boot não gerencia esta
+             lib e o gateway (fatia 3) deve resolver a mesma. -->
+        <dependency>
+            <groupId>com.nimbusds</groupId>
+            <artifactId>nimbus-jose-jwt</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- LauncherSessionListener (TestSupport/IdentityTestSession): chave de assinatura temporária por JVM e o reCAPTCHA falso -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.gerenciador.eventos.identity.IdentityApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

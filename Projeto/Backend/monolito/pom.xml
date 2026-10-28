@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.example.demo</groupId>
+        <artifactId>backend</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+    <artifactId>monolito</artifactId>
+    <name>monolito</name>
+    <description>Monólito: só o gateway (/bff/**) e a validação do JWT. O e-mail saiu para o serviço notification (issue 32), a reserva para o reservation (33), os eventos para o catalog (35) e usuários/login para o identity (36)</description>
+    <dependencies>
+        <!-- Lib comum: DatabaseConnection + infra de event sourcing (shared.events) -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>shared</artifactId>
+        </dependency>
+        <!-- Contrato HTTP do serviço reservation (issue #33): DTOs + ReservationClient. É só o cliente; o código do serviço
+             (módulo reservation) NÃO está no classpath do monólito. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>reservation-client</artifactId>
+        </dependency>
+        <!-- Contrato HTTP do serviço catalog (issue #35): Event, EventApi, exceções + CatalogClient. O código do serviço (módulo
+             catalog) NÃO está no classpath do monólito; o gateway o chama por /internal/events/**. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>catalog-client</artifactId>
+        </dependency>
+        <!-- Contrato HTTP do serviço identity (issue #36): User, MyWallet, LoginResult, UserApi e demais interfaces, exceções.
+             O gateway fala com o serviço pelo IdentityClient (IdentityClientConfig); o código do serviço (módulo identity) NÃO está no classpath. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>identity-client</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Actuator: só /actuator/health exposto (ver application.properties) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- Segurança: o gateway só VALIDA o JWT RS256 que o serviço identity assina (issue #36): filtro próprio com
+             NimbusJwtDecoder + JWKSource explícito (spring-security-oauth2-jose) e JwtAuthenticationToken
+             (spring-security-oauth2-resource-server; sem o starter e sem oauth2ResourceServer(): bearer inválido em rota pública
+             segue anônimo). O jjwt saiu. A nimbus-jose-jwt é a 9.37.4 do pom pai (a mesma do identity, que assina). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-jose</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-resource-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nimbusds</groupId>
+            <artifactId>nimbus-jose-jwt</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <!-- Kafka-compatível (Redpanda): relay do outbox do catalog e do identity (#27/#28/#32). Versão gerenciada pelo Spring
+             Boot. O spring-boot-starter-mail SAIU daqui na #32 (o e-mail é do serviço notification) e o consumer da
+             projeção de disponibilidade na #33 (é do serviço reservation). -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <!-- Cache em memória do gateway (issue #35): creator_name e exists(eventId). Versão gerenciada pelo Spring Boot. -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+        <!-- LauncherSessionListener (TestSupport/ReservationFakeSession): sobe o servidor falso do reservation antes de
+             qualquer contexto Spring dos testes (versão do BOM do Spring Boot). -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- ArchUnit: testes de fronteira de camada (issue #83) -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>1.5.0</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.gerenciador.eventos.Main</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -19,13 +19,13 @@
     <suppress checks="FileLength" files="BffUserController\.java"/>
     <suppress checks="FileLength" files="UserRepository\.java"/>
 
-    <!-- ProibirConsoleDireto (System.out/err.print*): 5 ocorrências em 3 arquivos, medidas com
+    <!-- ProibirConsoleDireto (System.out/err.print*): 5 ocorrências em 3 arquivos na medição original (hoje 2 em 2: as 3 de
+         EmailVerificationService saíram na issue #23, quando o envio de e-mail foi para o módulo
+         notification, que usa SLF4J), medidas com
          grep -rn 'System\.(out|err)\.print|printStackTrace' src/main/java. Nenhuma delas é
          printStackTrace() (essa regra nasceu com zero violações e já trava sem baseline).
          Suprimida por LINHA (atributo "lines"), não por arquivo inteiro: violação nova em
          qualquer outra linha desses arquivos deve travar o build normalmente. -->
-    <suppress id="ProibirConsoleDireto" files="UserRepository\.java" lines="94"/>
-    <suppress id="ProibirConsoleDireto" files="EmailVerificationService\.java" lines="197,214,216"/>
-    <suppress id="ProibirConsoleDireto" files="EventRepository\.java" lines="237"/>
+    <suppress id="ProibirConsoleDireto" files="UserRepository\.java" lines="98"/>
 
 </suppressions>

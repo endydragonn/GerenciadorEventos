@@ -136,9 +136,8 @@ fi
 # ---------------------------------------------------------------------------
 # ignora o sentinela -1 (read model ainda sem leitura) nas agregações, mas
 # preserva a contagem bruta de amostras (inclui os -1, é sinal do fenômeno).
-# LAG_VALIDAS < LAG_AMOSTRAS é esperado numa rodada curta (o job de refresh
-# roda a cada READMODEL_AVAILABILITY_REFRESH_MS, default 5000ms -- ver
-# README); lag_max/lag_medio = 0.0 com LAG_VALIDAS = 0 significa "sem
+# LAG_VALIDAS < LAG_AMOSTRAS é esperado numa rodada curta (a linha da projeção
+# só nasce quando o consumer aplica o 1º evento -- ver README); lag_max/lag_medio = 0.0 com LAG_VALIDAS = 0 significa "sem
 # leitura ainda", não "lag zero".
 read -r LAG_AMOSTRAS LAG_VALIDAS LAG_MAX LAG_MEDIO < <(awk -F, '
     $1 == "lag_ms" {
@@ -327,7 +326,7 @@ cat <<SVG
   </svg>
 SVG
   else
-    echo "  <p class=\"subtitulo\">Sem amostras válidas de lag nesta rodada (job de refresh não chegou a rodar no intervalo observado).</p>"
+    echo "  <p class=\"subtitulo\">Sem amostras válidas de lag nesta rodada (o consumer não chegou a aplicar evento no intervalo observado).</p>"
   fi )
 
   <h2>Resumo</h2>

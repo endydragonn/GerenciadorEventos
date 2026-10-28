@@ -1,0 +1,363 @@
+﻿===== 2026-10-04 14:18:56 | prefixo Ale-904991 | config: cas / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+    1464 |               0 |           146400 |                       0 |                 0
+(1 row)
+
+ status  | count 
+---------+-------
+ expired | 81109
+(1 row)
+
+===== 2026-10-04 14:28:53 | prefixo Rpm-909189 | config: cas / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+      53 |            2917 |             5300 |                       0 |                 0
+(1 row)
+
+ status  | count 
+---------+-------
+ pending |  2917
+(1 row)
+
+===== 2026-10-04 14:31:47 | prefixo Rpm-909317 | config: cas / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+      53 |            1345 |             5300 |                       0 |                 0
+(1 row)
+
+ status  | count 
+---------+-------
+ expired |  1507
+ pending |  1343
+(2 rows)
+
+===== 2026-10-04 15:33:40 | evento 1 | config: cas / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |              20
+(1 row)
+
+ status  | qtd 
+---------+-----
+ expired |  20
+(1 row)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+      0 |       20 |         -20
+(1 row)
+
+===== 2026-10-04 15:33:40 | evento 2 | config: cas / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |              20
+(1 row)
+
+ status  | qtd 
+---------+-----
+ expired |  20
+(1 row)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+      0 |       20 |         -20
+(1 row)
+
+===== 2026-10-04 15:33:41 | evento 3 | config: cas / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |              20
+(1 row)
+
+ status  | qtd 
+---------+-----
+ expired |  20
+(1 row)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+      0 |       20 |         -20
+(1 row)
+
+===== 2026-10-04 15:35:43 | prefixo Rpm-913181 | config: cas / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+      79 |            7501 |             7900 |                       0 |                 0
+(1 row)
+
+ status  | count 
+---------+-------
+ pending |  7501
+(1 row)
+
+===== 2026-10-04 15:38:59 | prefixo Rpm-913395 | config: cas / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+      79 |            7500 |             7900 |                       0 |                 0
+(1 row)
+
+ status  | count 
+---------+-------
+ pending |  7500
+(1 row)
+
+===== 2026-10-04 16:29:09 | prefixo Ale-913561 | config: cas / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+    1464 |               0 |           146400 |                       0 |                 0
+(1 row)
+
+ status  | count  
+---------+--------
+ expired | 195005
+(1 row)
+
+===== 2026-10-04 16:46:20 | evento 1626 | config: cas / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |               0
+(1 row)
+
+  status   | qtd 
+-----------+-----
+ confirmed |  20
+(1 row)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+     20 |       20 |           0
+(1 row)
+
+===== 2026-10-04 16:46:20 | evento 1627 | config: cas / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |               0
+(1 row)
+
+  status   | qtd 
+-----------+-----
+ confirmed |  20
+(1 row)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+     20 |       20 |           0
+(1 row)
+
+===== 2026-10-04 16:46:20 | evento 1628 | config: cas / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |               0
+(1 row)
+
+  status   | qtd 
+-----------+-----
+ confirmed |  20
+(1 row)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+     20 |       20 |           0
+(1 row)
+
+===== 2026-10-04 16:49:34 | prefixo Rpm-917602 | config: cas / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+      79 |            7501 |             7900 |                       0 |                 0
+(1 row)
+
+  status   | count 
+-----------+-------
+ confirmed |  7501
+(1 row)
+
+===== 2026-10-04 17:00:49 | evento 1710 | config: cas / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |              12
+(1 row)
+
+  status   | qtd 
+-----------+-----
+ confirmed |   8
+ expired   |  12
+(2 rows)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+      8 |       20 |         -12
+(1 row)
+
+===== 2026-10-04 17:00:49 | prefixo Rpm-918245 | config: cas / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+      79 |            6248 |             7900 |                       0 |                 0
+(1 row)
+
+  status   | count 
+-----------+-------
+ confirmed |  4450
+ expired   |  1252
+ pending   |  1798
+(3 rows)
+
+===== 2026-10-04 18:07:57 | prefixo Ale-919068 | config: cas / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+    1464 |          116744 |           146400 |                       0 |                 0
+(1 row)
+
+  status   | count  
+-----------+--------
+ confirmed | 116744
+ expired   |  78245
+(2 rows)
+
+===== 2026-10-04 18:42:18 | evento 4718 | config: naive / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |              20
+(1 row)
+
+  status   | qtd 
+-----------+-----
+ confirmed |  50
+(1 row)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+     50 |       20 |          30
+(1 row)
+
+===== 2026-10-04 18:42:18 | evento 4719 | config: naive / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |              20
+(1 row)
+
+  status   | qtd 
+-----------+-----
+ confirmed | 100
+(1 row)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+    100 |       20 |          80
+(1 row)
+
+===== 2026-10-04 18:42:18 | evento 4720 | config: naive / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |              20
+(1 row)
+
+  status   | qtd 
+-----------+-----
+ confirmed | 200
+(1 row)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+    200 |       20 |         180
+(1 row)
+
+===== 2026-10-04 18:42:18 | evento 4721 | config: naive / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |              20
+(1 row)
+
+  status   | qtd 
+-----------+-----
+ confirmed |  19
+ pending   |  31
+(2 rows)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+     50 |       20 |          30
+(1 row)
+
+===== 2026-10-04 18:42:18 | evento 4722 | config: naive / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |              20
+(1 row)
+
+  status   | qtd 
+-----------+-----
+ confirmed |  52
+ pending   |  48
+(2 rows)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+    100 |       20 |          80
+(1 row)
+
+===== 2026-10-04 18:42:18 | evento 4723 | config: naive / 5000
+  origem  | capacity | vagas_restantes 
+----------+----------+-----------------
+ eventcap |       20 |              20
+(1 row)
+
+  status   | qtd 
+-----------+-----
+ confirmed | 106
+ pending   |  94
+(2 rows)
+
+ ativas | capacity | overselling 
+--------+----------+-------------
+    200 |       20 |         180
+(1 row)
+
+===== 2026-10-04 18:46:43 | prefixo Rpm-924492 | config: naive / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+      79 |           14847 |             7900 |                      75 |              7347
+(1 row)
+
+  status   | count 
+-----------+-------
+ confirmed | 14847
+(1 row)
+
+===== 2026-10-04 18:46:43 | prefixo Rpm-924628 | config: naive / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+      79 |           14485 |             7900 |                      75 |              6985
+(1 row)
+
+  status   | count 
+-----------+-------
+ confirmed |  8851
+ expired   |   327
+ pending   |  5634
+(3 rows)
+
+===== 2026-10-04 19:34:34 | prefixo Ale-924767 | config: naive / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+    1464 |          146400 |           146400 |                       0 |                 0
+(1 row)
+
+  status   | count  
+-----------+--------
+ confirmed | 146400
+(1 row)
+
+===== 2026-10-04 20:22:56 | prefixo Ale-927639 | config: naive / 5000
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+    1464 |          118018 |           146400 |                       0 |                 0
+(1 row)
+
+  status   | count  
+-----------+--------
+ confirmed | 117006
+ expired   |  76978
+ pending   |   1012
+(3 rows)
+

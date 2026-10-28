@@ -5,6 +5,7 @@
 .DESCRIPTION
   - instala o k6 (winget) se faltar
   - plano de energia "Alto desempenho"
+  - confere o psql (so a matriz do experimento, `make test-matriz`, precisa) e a porta 5433 do host
   - testa conectividade com o host-alvo (porta 8081)
   - mede a latencia base de rede (ping x100 + HTTP x30) e salva em results\baseline-<data>.txt
     (valores a descontar nas rodadas da Fase 2 - criterio de aceite da issue #3)
@@ -15,7 +16,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$HostIp,
-    [int]$Porta = 8081
+    [int]$Porta = 8081,
+    [int]$PgPorta = 5433
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,9 +46,21 @@ if (-not (Get-Command k6 -ErrorAction SilentlyContinue)) {
 $k6v = (k6 version) -join ' '
 Ok "k6 pronto: $k6v"
 
+# ---------------------------------------------------------------- psql (matriz do experimento)
+. (Join-Path $PSScriptRoot 'lib-matriz.ps1')   # Find-Psql
+$psql = Find-Psql
+if ($psql) {
+    Ok "psql pronto: $((& $psql --version) -join ' ')"
+} else {
+    Warn 'psql nao encontrado (so o `make test-matriz` precisa dele; os testes 1-3 nao).'
+    Write-Host '  Instale so o cliente: winget install PostgreSQL.PostgreSQL.16 --interactive'
+    Write-Host '  e, no instalador, deixe marcado apenas "Command Line Tools" (desmarque PostgreSQL Server, pgAdmin e Stack Builder).'
+    Write-Host '  Depois abra um novo PowerShell (o instalador nao poe o psql no PATH; o rodar-matriz.ps1 acha em Program Files\PostgreSQL).'
+}
+
 # ---------------------------------------------------------------- energia
 try {
-    powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e9fa6c1f2d 2>$null
+    powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
     if ($LASTEXITCODE -eq 0) { Ok 'Plano de energia: Alto desempenho.' } else { Warn 'Plano Alto desempenho indisponivel; ajuste manualmente.' }
 } catch { Warn 'Nao foi possivel ajustar o plano de energia.' }
 
@@ -60,6 +74,12 @@ try {
     $h = Invoke-WebRequest -Uri "$Base/actuator/health" -UseBasicParsing -TimeoutSec 5
     Ok "Backend respondeu: HTTP $($h.StatusCode)."
 } catch { Fail "Porta aberta, mas /actuator/health falhou: $($_.Exception.Message)" }
+$tncPg = Test-NetConnection -ComputerName $HostIp -Port $PgPorta -WarningAction SilentlyContinue
+if ($tncPg.TcpTestSucceeded) {
+    Ok "Postgres do host acessivel em ${HostIp}:$PgPorta (a senha fica em PGPASSWORD, so na sessao)."
+} else {
+    Warn "Sem conexao TCP com ${HostIp}:$PgPorta (so a matriz precisa): rode no host, como Administrador, make setup-host GERADOR_IP=<ip deste gerador> (regra de firewall do Postgres, restrita a este IP) e confira o container db."
+}
 
 # ---------------------------------------------------------------- latencia base: ping
 Info 'Medindo ping (100 pacotes)...'

@@ -38,7 +38,7 @@ transporte HTTP, complementar, não substituta:
 - `EventWalletTest.testRemoveLinkConcorrenteNaoCausaOverselling` — duas remoções
   concorrentes do mesmo vínculo (barreira real) devolvem no máximo 1 vaga.
 
-Arquivo: `Projeto/Backend/src/test/java/com/gerenciador/eventos/EventWalletTest.java`.
+Arquivo: `Projeto/Backend/monolito/src/test/java/com/gerenciador/eventos/EventWalletTest.java`.
 
 ## Pré-requisitos
 
@@ -62,8 +62,8 @@ Arquivo: `Projeto/Backend/src/test/java/com/gerenciador/eventos/EventWalletTest.
 | corpo do POST de reserva | `{"userId": <id>, "eventId": <id>}` |
 | status da recusa | **HTTP 400** (o `BffEventWalletController` traduz `IllegalArgumentException` para `badRequest`); corpo = texto puro `Evento lotado`. |
 
-> **Nota (fora de escopo):** o `userId` vir do corpo em vez do JWT é o IDOR
-> tratado na **issue #57**. Este roteiro não tenta corrigir isso.
+> **Nota:** desde a **issue #57** o `userId` vem do JWT; um `userId` no corpo diferente do dono do
+> token dá **403**. Este roteiro já não roda desde a #78/#79 (cria usuário sem JWT).
 
 ## Como executar
 
@@ -90,9 +90,9 @@ Variáveis de ambiente (todas opcionais):
   (`timestamp-PID`). `users.email`/`users.fone`/`users.user_name` e
   `event.event_name` são `UNIQUE` e o backend rejeita duplicados — sem o sufixo a
   segunda execução falharia em "já existente".
-- O script tem **rotina de limpeza** no `trap EXIT`: remove `walletevent` → `event`
-  (o `eventcap` cai por `ON DELETE CASCADE`) → `users` (o `mywallet` cai por
-  `CASCADE`), nessa ordem por causa das FKs `ON DELETE RESTRICT` de `walletevent`.
+- O script tem **rotina de limpeza** no `trap EXIT`: remove `reservation.walletevent` e
+  `reservation.eventcap` (do serviço `reservation`, sem FK desde a #33) → `catalog.event` → `identity.users`
+  (o `mywallet` cai por `CASCADE`). As queries do roteiro leem `reservation.eventcap` e `reservation.walletevent`.
 - Roda **duas vezes seguidas** sem falhar (verificado).
 - Limpeza manual alternativa:
   ```bash
@@ -133,8 +133,8 @@ Das duas requisições concorrentes:
 "simultâneos" ainda saem com milissegundos de diferença, e um par serializado
 produziria o mesmo par 201/400):
 
-- `SELECT quant FROM eventcap WHERE event_id = <id>` → **`0`** (nunca negativo).
-- Exatamente **1** linha em `walletevent` com `status = 'pending'` para o evento.
+- `SELECT quant FROM reservation.eventcap WHERE event_id = <id>` → **`0`** (nunca negativo).
+- Exatamente **1** linha em `reservation.walletevent` com `status = 'pending'` para o evento.
 
 > **Qual asserção realmente discrimina:** com um fixture de `capacity = 2` (rode
 > `CAPACIDADE=2`), as duas reservas passam e `quant` **ainda assim termina em `0`** —

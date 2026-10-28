@@ -19,6 +19,8 @@ Schema refinado a partir do README original do sistema (back-end Java/Spring Boo
 > [Implementacao-EventCap-e-Reserva-CAS](Implementacao-EventCap-e-Reserva-CAS.md). Com a decomposição em microsserviços
 > ([Architecture-Decision-Microservices-Split](Architecture-Decision-Microservices-Split.md)) o schema passa a ser **por serviço** e
 > ganha tabelas de stream/projeção/snapshot — ver a seção "Impacto de microsserviços + CQRS/ES".
+> No implementado, desde a #35, `event.creator_id` é `integer` **sem FK** (referência solta a `users`, no schema `catalog`); o `uuid` e o
+> `Ref: User.user_id > Event.creator_id` abaixo são do modelo lógico.
 
 ## DBML atual
 
@@ -151,9 +153,9 @@ Decidido em 2026-09-02 ([Architecture-Decision-Microservices-Split](Architecture
 | `admission` | — (Redis) | — |
 
 Mudanças de referência:
-- **`event.creator_id` → `user.user_id` deixa de ser FK** (cross-service). Vira UUID solto;
-  `creator_name` é composto no `gateway` ou projetado no `catalog` a partir de eventos do
-  `identity`.
+- **`event.creator_id` → `user.user_id` deixa de ser FK** (cross-service). Continua `integer`, como
+  referência solta (sem FK; quem confere o criador é o `gateway`); UUID fica como evolução. `creator_name`
+  é composto no `gateway` (consulta em lote ao `identity` + cache), não projetado no `catalog` (issue #35).
 - `walletevent.event_id` → `event` também cruza serviço (`reservation` ↔ `catalog`): sem FK.
 - Cada schema de serviço tem uma tabela de **event store** (`stream_id`, `version`,
   `event_type`, `payload`, `occurred_at`) com concorrência otimista por `version`, e uma
