@@ -1229,7 +1229,7 @@ O monólito NÃO tem mais o pacote `identity` (nem `public.users`/`mywallet`/`pe
   (login e verify-MFA, inclusive usuário inexistente e código nulo; o 401 do `InternalTokenFilter` NÃO leva o marcador, para um `INTERNAL_API_TOKEN` errado virar
   503 e não "senha errada"); **404** com `X-Identity-Nao-Encontrado`; **500** genérico (detalhe só no log). reCAPTCHA: sempre 200 com o envelope `{status, body}`
   (`status` 200 + `{success, score, action}`, ou 500 + `{success:false, error}`); `RECAPTCHA_VERIFY_URL` (property, default a URL do Google; o teste aponta para um fake local),
-  timeouts 2 s/5 s. `POST`/`PUT /internal/users` gravam `admin` como sempre e **nunca `host`** (senão o IDOR #166 viraria auto-promoção a host). `PUT /internal/users/{id}` com e-mail de OUTRA conta (sem diferenciar caixa) => 400 (#166).
+  timeouts 2 s/5 s. `POST`/`PUT /internal/users` gravam `admin` como sempre e **nunca `host`** (senão o IDOR #166 viraria auto-promoção a host). `PUT /internal/users/{id}` (#170) é UM `UPDATE` com `COALESCE` (senha, nascimento e `admin` não informados ficam como estão, sem ler-mesclar-gravar: um PUT sem senha não desfaz uma troca de senha concorrente); `UserUpdateConcorrenteTest`. `PUT /internal/users/{id}` com e-mail de OUTRA conta (sem diferenciar caixa) => 400 (#166).
 - **Cadastro**: `verify-email` consome uma tentativa por chamada (`UPDATE ... WHERE attempts < max_attempts`, atômico); depois de `max_attempts` até o código certo é
   recusado; o reenvio gera código novo e zera o contador. O fim do `pending_verifications`, o `INSERT` em `users` (a carteira nasce pelo trigger) e o `UserRegistered` entram na
   MESMA transação.
