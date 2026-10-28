@@ -288,5 +288,5 @@ réplicas pelo label), o kit de carga e o braço sem autoescala não mudam; jobs
 
 **Decidido, não implementado:** extrair o `gateway` como microsserviço (Opção B; o `notification` saiu na #32, o `reservation` na #33,
 o `catalog` na #35, o `identity` na #36 e o `admission` nasceu na #41); a camada de alta carga (Redis RPM + fila + worker pool) existe: o contador de RPM
-(`admission` + Redis) desde a #41, a fila (RabbitMQ) e o worker pool desde a #42 e o gatilho por uso de X (histerese, `202` no gateway, consulta de estado) desde a #43; falta a UI de `pending` (#44), a medição (Rodada 4, #179) e escalar workers/réplicas (#111/#112) — ver
+(`admission` + Redis) desde a #41, a fila (RabbitMQ) e o worker pool desde a #42 e o gatilho por uso de X (histerese, `202` no gateway, consulta de estado) desde a #43; a UI de `pending` no Flutter existe desde a #44 (`Projeto/frontend/CLAUDE.md`); falta a medição (Rodada 4, #179) e escalar workers/réplicas (#111/#112) — ver
 `Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.

@@ -21,8 +21,13 @@ lib/
 │   ├── telaGerenciarEventos.dart  abas "Inscritos" / "Criados"
 │   ├── telaPesquisarEvento.dart
 │   └── telaEdicaoPerfil.dart
-├── helpers/date_input_formatter.dart
-└── widgets/recaptcha_widget.dart
+├── helpers/
+│   ├── date_input_formatter.dart
+│   └── reserva_logica.dart  lógica pura da reserva (parse do expiresAt, mm:ss, classificação de status)
+└── widgets/
+    ├── recaptcha_widget.dart
+    └── painel_reserva.dart  reserva em duas fases embutida em telaInscricaoEvento (estado, timers, consulta)
+test/painel_reserva_test.dart  flutter_test da lógica pura (o container do SDK roda `flutter test`)
 ```
 
 `blocoInteiro.dart` (na raiz de `frontend/`, fora de `lib/`) é um **monólito legado de
@@ -62,18 +67,29 @@ referência** — não é compilado, não edite.
   `main.dart` tenta `GET ${AppConfig.apiBaseUrl}/bff/users/me` no boot pra restaurar a
   sessão; token inválido é limpo. "Lembrar de mim" também cacheia `email`/`password` em
   `SharedPreferences`.
-- **Reserva em modo fila (contrato novo da issue #43, aditivo; a tela vem na #44, o Flutter ainda NÃO o consome):**
-  `POST /bff/event-wallets` pode responder **`202 Accepted`** (evento acima de 80% de X) em vez de `201`:
-  headers `Idempotency-Key` (a enviada, ou a gerada pelo gateway) e `Retry-After: 1` (ambos expostos no CORS) e corpo
-  `{"status":"queued","eventId":n,"idempotencyKey":"..."}`; **nenhuma reserva existe ainda**. O cliente consulta
-  `GET /bff/event-wallets/admission?idempotencyKey=<chave>` (autenticado; o usuário é o do token) a cada `Retry-After`
-  até um estado final: `200 {"status":"queued"|"pending"|"rejected"|"timed_out","eventId":n,"idempotencyKey":"...",
-  "expiresAt"?,"reason"?}` (`pending` traz `expiresAt`: a reserva está feita e a confirmação segue em
-  `POST /bff/event-wallets/confirm`, como no `201`; `rejected` traz o motivo, ex. "Evento lotado"; `timed_out` = morreu
-  na fila, repetir o `POST` com a MESMA chave). `404` = chave inexistente ou de outro usuário (indistinguíveis),
-  `400` sem a chave, `503` com o serviço de admissão fora. O `POST` também pode responder `429` (limite de reservas na fila
-  por usuário, ou fila cheia; corpo = mensagem) e `422` (a chave já foi usada em outro evento). Abaixo do gatilho o
-  `201` de sempre segue idêntico.
+- **Reserva em duas fases e modo fila (contrato da #43, consumido pela tela da #44):** `POST /bff/event-wallets` só reserva:
+  `201` traz a reserva `pending` com `expiresAt`; com o evento acima de 80% de X responde **`202 Accepted`** (headers
+  `Idempotency-Key` e `Retry-After: 1`, expostos no CORS; corpo `{"status":"queued","eventId":n,"idempotencyKey":"..."}`; nenhuma reserva ainda).
+  `GET /bff/event-wallets/admission?idempotencyKey=<chave>` (autenticado) devolve `200 {"status":"queued"|"pending"|"rejected"|"timed_out",
+  "eventId", "idempotencyKey", "expiresAt"?, "reason"?}`; `404` = chave inexistente ou de outro usuário, `400` sem chave, `503` admission fora.
+  O `POST` também pode dar `400` (texto: "Evento lotado", "Vínculo já existente"), `422` (chave usada em outro evento) e `429` (limite/fila cheia).
+  A confirmação é sempre `POST /bff/event-wallets/confirm` (`200`; `400` com "Reserva expirada..." ou "Nenhuma reserva pendente...").
+  O `widgets/painel_reserva.dart` (embutido na `telaInscricaoEvento`, no lugar dos botões) faz tudo isso:
+  - **Fluxo:** "Reservar vaga" -> `201` vai à contagem regressiva `mm:ss` + botão "Confirmar inscrição" (o sucesso é o de antes:
+    `AppModals.showSuccess` e volta à `MainScreen`); `202` mostra "aguardando confirmação" e consulta o estado até `pending` (mesma
+    contagem), `rejected` (mostra o `reason`) ou `timed_out` ("Tentar de novo"). Prazo vencido (contagem a 0, ou `/confirm` com 400 de
+    reserva expirada) -> "Reserva expirada" + "Reservar de novo". `/confirm` com 400 "Reserva já confirmada" conta como sucesso. O
+    reservation só varre `pending` vencido a cada ~30 s: um "Reservar de novo" que volte 400 "Vínculo já existente" a partir de "expirada" mostra
+    "a reserva anterior ainda está sendo liberada" no painel (sem modal). Cliques repetidos em reservar/confirmar são ignorados com um POST em voo.
+  - **`expiresAt` é UTC sem offset:** o servidor serializa um `LocalDateTime` do relógio do container (UTC, sem `TZ` no compose), ex.
+    `2026-10-28T18:30:00.123456`. `DateTime.parse` direto daria a hora local do navegador (3 h errada em UTC-3), então
+    `parseExpiresAtUtc` lê string sem `Z`/offset como UTC. A contagem usa o relógio do navegador: relógio de cliente errado desloca o prazo mostrado
+    (o servidor continua sendo quem decide no `/confirm`).
+  - **Consulta:** `Timer` cancelável (cancelado no `dispose`, e respostas de rodada antiga são descartadas) no intervalo do `Retry-After`
+    (1 a 5 s; padrão 1 s), no máximo `kLimiteConsultas` = 60 (60 s, acima do TTL da fila de 30 s); ao estourar, "Tentar de novo". `404` oferece refazer;
+    `503`/erro de rede seguem tentando dentro do limite ("conexão instável"); `401` pede novo login.
+  - **Chave de idempotência:** "Tentar de novo" depois de `timed_out` repete o `POST` com a MESMA chave (header `Idempotency-Key` = a do corpo do `202`) e
+    pode voltar `201` ou `202`. Refazer depois de `pending` expirado ou de `rejected` é um `POST` novo, SEM chave (a antiga repetiria o resultado guardado).
 
 ## Estado e UI
 
@@ -99,7 +115,7 @@ pública, mas mesmo assim não hardcode — mantenha via dart-define.
 
 ```
 docker build --target build -t gerenciador-flutter-sdk Projeto/frontend
-docker run --rm -v "$PWD/Projeto/frontend:/app" -w /app gerenciador-flutter-sdk sh -c "flutter pub get && flutter analyze && sh tool/verifica-tamanho.sh"
+docker run --rm -v "$PWD/Projeto/frontend:/app" -w /app gerenciador-flutter-sdk sh -c "flutter pub get && flutter analyze && sh tool/verifica-tamanho.sh && flutter test"
 ```
 
 Tem que terminar com `No issues found!` e `Tamanho de arquivos OK`. O `pub get` deixa `.dart_tool/`,
@@ -109,8 +125,8 @@ antes de `docker build`/`compose build` do frontend, senão vão para o contexto
 - **Sem `print`:** use `debugPrint` (já vem no `material.dart`). Não há logger no app — achado: logs de
   diagnóstico são só `debugPrint` no console do navegador; um logger/telemetria de verdade fica fora do escopo.
 - **Regra desligada: `file_names`.** As telas são camelCase (`telaLogin.dart`, `telaHomePage.dart`...), convenção
-  já estabelecida; renomear 11 arquivos e todos os imports colidiria com o trabalho seguinte nas telas (issue #44).
-  Reavaliar junto com a #44. Nenhuma outra regra está desligada.
+  já estabelecida. Reavaliada na #44 e mantida desligada: renomear as 11 telas e todos os imports é churn fora do escopo
+  do aceite. Arquivos novos fora de `telas/` são snake_case (`painel_reserva.dart`, `reserva_logica.dart`). Nenhuma outra regra está desligada.
 - **`// ignore:` (um por linha, justificado):**
   - `lib/widgets/recaptcha_widget.dart`, `import 'dart:js'` — `avoid_web_libraries_in_flutter`: o app é só web
     e o reCAPTCHA v3 precisa chamar o `grecaptcha` do `index.html` por interop JS.
