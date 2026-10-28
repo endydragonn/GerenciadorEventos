@@ -43,7 +43,7 @@ IMAGEM_CURL="maven:3.9.7-eclipse-temurin-21-jammy" # tem curl; a mesma do run-e2
 CLI="${PROJETO}-cli"
 JAVA_HOME_IMG="/opt/java/openjdk"
 PERFIS_DIR="$SCRIPT_DIR/perfis"
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d)"; chmod 700 "$TMP" # o env-file com segredos do .env passa por aqui
 mkdir -p "$PERFIS_DIR"
 FALHAS=0
 TODOS=(identity reservation catalog backend notification)
