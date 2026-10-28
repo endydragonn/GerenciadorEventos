@@ -26,8 +26,9 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 /**
  * {@code UserRepository.update} (issue #170): o campo não informado é preservado pelo próprio {@code UPDATE} ({@code COALESCE}),
  * sem ler-mesclar-gravar. Antes, um {@code PUT /internal/users/{id}} sem {@code password}, concorrente a uma troca de senha, relia o
- * hash antigo e o regravava por cima do novo. O teste de concorrência é determinístico (sem corrida de threads): a troca de senha
- * fica aberta, o PUT bloqueia no lock da linha e só então a troca é comitada.
+ * hash antigo e o regravava por cima do novo. Desde a #171 o {@code UPDATE} nem toca em {@code password} (o PUT ignora o campo).
+ * O teste de concorrência é determinístico (sem corrida de threads): a troca de senha fica aberta, o PUT bloqueia no lock da linha e
+ * só então a troca é comitada.
  */
 @SpringBootTest
 @Import(GlobalDbTruncator.class)
@@ -143,7 +144,7 @@ public class UserUpdateConcorrenteTest {
         assertTrue(runUpdate(lixo));
         assertEquals("2000-01-01", userService.findById(u.getId()).getBirthDate());
 
-        // informados sobrescrevem: nascimento (dd/MM/yyyy), admin e senha
+        // informados sobrescrevem: nascimento (dd/MM/yyyy) e admin; a senha enviada é ignorada (#171)
         User tudo = putSemOpcionais(u, "Nome C " + rodada);
         tudo.setBirthDate("15/03/1990");
         tudo.setIsAdmin(false);
@@ -152,7 +153,7 @@ public class UserUpdateConcorrenteTest {
         User c = userService.findById(u.getId());
         assertEquals("1990-03-15", c.getBirthDate());
         assertEquals(Boolean.FALSE, c.getIsAdmin());
-        assertEquals("$2a$10$hashqualquerparaoteste", c.getPassword(), "o repositório grava a senha como veio");
+        assertEquals(hashAntigo, c.getPassword(), "o repositório ignora a senha enviada (#171)");
         assertEquals("Nome C " + rodada, c.getName());
     }
 
