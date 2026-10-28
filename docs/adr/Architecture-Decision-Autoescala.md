@@ -8,7 +8,9 @@ created: 2026-10-28
 
 # Decisão de Arquitetura — Autoescala de `gateway` e `reservation` (regra 50/80)
 
-**Status:** proposta, **aguardando decisão do usuário** sobre o mecanismo (issue #111). Nada desta ADR está implementado.
+**Status:** **decidida (usuário, 2026-10-28): opção A agora, D depois.** A #111 implementa a opção A (override com `docker
+compose --scale` + HAProxy + scaler no host, com os parâmetros abaixo) e a #112 a estende. A opção D (Kubernetes com HPA/KEDA)
+fica para uma issue futura, fora do Batch 2: <!-- issue da opção D: número a definir --> issue a criar.
 Escrita direto no repositório (sem cópia no vault).
 
 Complementa [Architecture-Decision-Async-Checkout-Queue](Architecture-Decision-Async-Checkout-Queue.md) (o gatilho 80/70 do
@@ -120,10 +122,14 @@ Qual mecanismo sobe, coloca em stand-by, promove e derruba réplicas de `gateway
 | Mede tempo de subida | sim | sim | sim | sim | não |
 | Prazo do Batch 2 | cabe | cabe | apertado | não cabe | cabe |
 
-## Recomendação: opção A
+## Decisão: opção A agora, D depois
 
 O menor conjunto de peças que cumpre o aceite (stand-by, promoção, drain, contrato da 8081 intacto) sem mexer no que já mede a
 Rodada R. A ressalva vem junto: a hipótese de que X não cresce com réplicas (linha do `eventcap`) vale para **qualquer** opção.
+
+A opção D (Kubernetes com HPA/KEDA) é o passo seguinte, numa issue futura fora do Batch 2 (número a definir). A regra 50/80, a
+chave de réplicas ativas no Redis e a conta do Supavisor desta ADR valem para ela também; muda quem sobe as réplicas e quem
+balanceia.
 
 ## Parâmetros (opção A)
 
