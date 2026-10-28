@@ -1,0 +1,34 @@
+﻿[
+    {
+        "target":  8769,
+        "duration":  "5s"
+    },
+    {
+        "target":  8769,
+        "duration":  "25s"
+    },
+    {
+        "target":  1342,
+        "duration":  "5s"
+    },
+    {
+        "target":  1342,
+        "duration":  "25s"
+    },
+    {
+        "target":  2909,
+        "duration":  "5s"
+    },
+    {
+        "target":  2909,
+        "duration":  "25s"
+    },
+    {
+        "target":  7448,
+        "duration":  "5s"
+    },
+    {
+        "target":  7448,
+        "duration":  "25s"
+    }
+]
