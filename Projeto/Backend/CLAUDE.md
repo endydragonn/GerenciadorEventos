@@ -1388,6 +1388,13 @@ exigem `E2E_REPLAY=1`, ficam PULADAS no `run-tests.sh`, não truncam nada e reut
 - Pré-requisitos: `Projeto/.env` e `Projeto/supabase/.env`, python, e RAM para ~15 containers a mais (a stack real pode ficar no ar; se faltar,
   `docker compose -p gerenciador-eventos stop`, nunca `down`). O 1º build (inclui o Flutter do frontend) leva vários minutos.
 
+### Imagens enxutas (Slim) — issue #177
+
+Opcional, sem mexer nos Dockerfiles: `Projeto/slim/gerar-imagens-slim.sh` gera as imagens `gerenciador-eventos-<serviço>.slim` (probe nos
+endpoints `/internal/**`, `/bff/**`, actuator, JWKS e no caminho Kafka) e `Projeto/docker-compose.slim.yml` as ativa por override
+(`build: !reset null`). `E2E_SLIM=1 Projeto/e2e/run-e2e.sh` roda a suíte e2e com elas e confere que cada serviço usa o ID da imagem `*.slim`.
+Tabela antes/depois, includes (com motivo) e perfis Seccomp/AppArmor (opcionais, não aplicados por padrão) em `Projeto/slim/README.md`.
+
 ## Cadastro em duas fases + e-mail
 
 1. `POST /bff/users/request-verification` (gateway -> identity) grava em `identity.pending_verifications` (hash da senha +
