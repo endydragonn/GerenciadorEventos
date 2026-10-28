@@ -168,7 +168,7 @@ Restrição: `N_res × H_res + N_gw × 10 + 3 + 100 + 100 ≤ 1500`, contando a 
 
 - No override, o Hikari do `reservation` cai de 1000 para **300 por réplica** (= threads do Tomcat, 300: nenhuma thread espera
   conexão no Hikari; a fila real continua no Supavisor, com o pool real de 45).
-- Com o máximo (3 + 3): `3 × 300 + 3 × 10 + 3 + 100 + 100 = 1133 ≤ 1500`. Sobram 367 para a #112 (réplicas de `identity` e
+- Com o máximo (3 + 3): `3 × 300 + 3 × 10 + 3 + 100 + 100 = 1133 ≤ 1500` (#111, com 1 réplica de `identity`/`catalog`/`notification`). A #112 refez a conta com 3 de cada (ver "Extensão aos demais serviços"): `1239 ≤ 1500`. Sobravam 367 para a #112 (réplicas de `identity` e
   `catalog`, 100 cada, que vão precisar baixar para caber).
 - O compose base mantém 1000 no `reservation` (braço sem autoescala comparável com a Rodada R).
 
@@ -205,3 +205,67 @@ se afasta do texto acima:
 - **Quem o `--scale N-1` remove** é o container de maior `container-number`; o scaler escoa exatamente esse (e se, ao descartar, ele não for a stand-by, não faz nada e avisa).
 - `adm:replicas` vale TTL 15 s e é renovada também durante o drain; só aceita inteiro de 1 a 1000 (qualquer outra coisa cai no `ADMISSION_RESERVATION_REPLICAS`).
 
+
+## Extensão aos demais serviços (#112)
+
+A #112 estende o mesmo mecanismo (opção A, regra 50/80, stand-by, drain) a `admission`, `identity`, `catalog` e `notification`, **sem mecanismo novo**. A passada (a) tratou a corretude de cada serviço com N réplicas; a passada (b) ligou os serviços ao `lb`/ao scaler e fez o dry-run (seção abaixo).
+Máximo de **3 réplicas** em cada um. A auditoria de estado em memória e os testes estão no `Projeto/Backend/CLAUDE.md`, "Os outros quatro serviços com N réplicas (issue #112)". O que muda a decisão de arquitetura:
+
+- **`identity`:** as N réplicas **compartilham a mesma chave** (o volume `identity-keys`); não se publicam várias chaves no JWKS. A chave é criada com `link(2)` (exclusivo; `rename(2)` substituiria o destino em silêncio), então N réplicas subindo juntas com o volume vazio ficam com a mesma chave, e o token de uma valida no JWKS de qualquer outra.
+  Código de cadastro e de MFA moram no banco. Sem fallback para `Files.move`: o volume precisa aceitar hard link.
+- **`catalog`:** o command se serializa pelo `FOR NO KEY UPDATE` da linha de `event` e, em conflito de versão, repete (5 tentativas) ou vira 409. Leitura é `SELECT`.
+- **`admission`:** sem estado em memória (contador, modo, espera e resultado no Redis; fila no RabbitMQ). **Teto de concorrência:** o peso 0 do HAProxy não para os workers, e uma réplica em stand-by já consome a fila. O base tem 32 workers; no override cada réplica ganha `floor(32 / 3) = 10` (30 com as 3 vivas, dentro do teto de 32;
+  `ceil` daria 11 e 33, acima dele). Com uma réplica só a fila drena mais devagar (10 workers em vez de 32): efeito que a Rodada 4 mede no braço C.
+- **Partições dos consumers** (um group usa no máximo uma réplica por partição; os tópicos nascem com 1, e o `reservation.wallet` e o `catalog.event` têm chave `event_id`, o `identity.notification` tem chave = `streamId`):
+
+  | Tópico | Decisão | Efeito na ordem |
+  |---|---|---|
+  | `identity.notification` | **3 partições** | nenhum: cada e-mail é um stream de 1 versão |
+  | `reservation.wallet` | **3 partições** | mantém a ordem por stream/evento (mesma chave, mesma partição); o evento quente continua numa partição só, então o ganho é com vários eventos |
+  | `catalog.event` | **fica 1** | só `EventCreated`, baixo volume, idempotente por `event_id`; réplicas extras ociosas |
+
+  Ampliar de 1 para 3 muda `hash(chave) mod N` uma única vez; versões do mesmo stream podem então chegar por partições diferentes, fora de ordem. O checkpoint por stream (relê do `event_store` as versões que faltam e descarta as já aplicadas) cobre isso (`ReservationRebalanceTest`). O `add-partitions` **não aconteceu na passada (a)**: é irreversível,
+  e o broker é compartilhado com os testes e com o braço sem autoescala da Rodada 4; a passada (b) o pôs num one-shot do override (`particoes`, abaixo). Os beans `NewTopic` ficam em `.partitions(1)`: o `KafkaAdmin` aumenta as partições de um tópico existente quando o bean declara mais (nunca diminui), então um bean com 3
+  ampliaria o tópico real a cada boot; um bean que diz 1 sobre um tópico de 3 é inofensivo.
+- **Rebalance:** nenhum e-mail sai duplicado (`processed_event` com `ON CONFLICT DO NOTHING` na mesma transação do envio: a réplica que recebe a reentrega espera o commit da outra e descarta) e a projeção não é aplicada duas vezes (checkpoint por stream). `40P01` entre lotes concorrentes é repetido (transitório), não trava a partição nem vai ao DLT.
+  Janela at-least-once fora do aceite: queda do processo depois do envio e antes do commit (não é rebalance) reenvia o e-mail.
+- **Pool:** `identity` e `catalog` com Hikari **50 por réplica** no override, contando a stand-by; `notification` 3, `admission` sem datasource. Com 3 réplicas de cada:
+  `3 × 300 + 3 × 10 + 3 × 3 + 3 × 50 + 3 × 50 = 1239 ≤ 1500`.
+
+### Como ficou implementado (#112, passada b, 2026-10-28)
+
+Arquivos: `Projeto/docker-compose.autoescala.yml` (estendido), `Projeto/autoescala/{haproxy.cfg,scaler.sh,scaler.selftest.sh,README.md}`. Nenhum mecanismo novo: a mesma `decidir_acao` decide os 6 serviços.
+
+- **`lb` para os serviços HTTP.** Três backends novos no `haproxy.cfg` (`server-template` de 3 slots, o mesmo `resolvers docker`, TCP check, peso 100 no nascimento e `weight 0` do scaler = stand-by): `catalog` em `:8083`, `identity` em `:8084`, `admission` em `:8085`, só na rede
+  (nenhuma porta nova no host). No override o `backend` (gateway) passa a usar `IDENTITY_SERVICE_URL`/`CATALOG_SERVICE_URL`/`ADMISSION_SERVICE_URL` = `http://lb:<porta>` (o JWKS do identity também, derivado da `IDENTITY_SERVICE_URL`). Motivo, o da #111: os clientes têm pool keep-alive e ficariam
+  presos às réplicas resolvidas no início. Os `evict-idle` dos clientes (20 s) ficam abaixo do `timeout client`/`http-keep-alive` do lb (75 s). `admission`, `identity`, `catalog` e `notification` ganham `container_name: !reset null`; as réplicas do identity compartilham o volume `identity-keys`.
+- **Regra no scaler.** HTTP (`identity`, `catalog`, `admission`): `u = req/s da seção do lb ÷ (AUTOESCALA_<SVC>_RPS × A)`, com o delta de `req_tot` do frontend `<serviço>_interno` entre laços (um par `REQ_ANT`/`T_ANT` por serviço); capacidades **provisórias** `AUTOESCALA_IDENTITY_RPS=100` (login com BCrypt),
+  `AUTOESCALA_CATALOG_RPS=500`, `AUTOESCALA_ADMISSION_RPS=1000` (a Rodada 4 calibra). Consumer (`notification`): `u = lag total do group ÷ AUTOESCALA_NOTIFICATION_LAG` (100), lido por `docker exec` no `redpanda` (`rpk group describe` e `rpk topic list`, sem segredo); **sem stand-by** (`S = 0`: o container novo entra no group
+  e já recebe partições; a stand-by existe só nos HTTP); `ativa` = container `healthy`. Reuso da função de decisão com `S = 0`, `vazia = (lag == 0)` e `u(A−1) = u`: **sobe uma com `u > 0,50`** (sem réplica ainda subindo, `total < máx.`, fora do cooldown) e **desce uma com lag 0 por 60 s** (a mesma condição "sustentada" da descida);
+  o **máximo é `min(AUTOESCALA_NOTIFICATION_MAX, partições de identity.notification)`**, lidas do broker a cada laço e não assumidas (com 1 partição nunca sobe; com `MAX=4` e 3 partições o dry-run parou em 3). Leitura que falha (rpk, group inexistente, `TOTAL-LAG` ou partições não numéricos) = o `notification` não decide e zera a
+  contagem de "condição sustentada" (CSV `sem_leitura`), como a leitura do Redis; o mesmo vale para um `req_tot` ilegível (frontend ausente do `show stat`) nos serviços HTTP: nunca vira carga 0. Os consumers do `reservation` escalam junto com o reservation (#111); o scaler só os registra.
+- **Partições (decisão da passada a).** O serviço one-shot `particoes` do override sobe `identity.notification` e `reservation.wallet` para 3: lê a contagem atual por `rpk topic list` e soma só o que falta com `rpk topic add-partitions --num` (**`--num` é quanto ADICIONAR, não o total**; `-n 3` num tópico de 1 daria 4, para sempre).
+  Idempotente (com 3 não faz nada). O `identity.notification` **não é criado por ele**: o `NewTopic` do identity o cria com a retenção curta (a mensagem tem e-mail e código), então o one-shot espera o `identity` ficar healthy e aborta se o tópico não existir; o `reservation.wallet` (o `NewTopic` não tem config) é criado com 3 se faltar.
+  O `notification-seek`, o `reservation` e (indiretamente) o `notification` esperam o one-shot (`service_completed_successfully`). **Irreversível:** quem sobe o override na stack real aumenta as partições do broker real para sempre; por isso o README avisa e a Rodada 4 roda o braço SEM autoescala antes do braço C. Conferido no dry-run: `identity.notification` 3 partições com
+  `retention.ms=930000` (a do bean, intacta) e `reservation.wallet` 3. Os beans `NewTopic` ficam em `.partitions(1)` (o `KafkaAdmin` só aumenta). O one-shot termina com `restart: "no"` e, por isso, a guarda do `run-tests.sh` (`docker ps`, só containers rodando) não precisa vê-lo.
+  **Não mude a partição padrão do broker** (`default_topic_partitions`): `ReservationRelayConcurrentTest`, `OutboxRelayTest` e outros afirmam a ordem global num tópico auto-criado, que só vale com 1 partição.
+- **Pool.** Inalterado em relação à passada (a): `3 × 300 + 3 × 10 + 3 × 3 + 3 × 50 + 3 × 50 = 1239 ≤ 1500`; o Hikari 50 de `identity`/`catalog` fica abaixo do Tomcat 300 deles (threads esperam no Hikari; `connection-timeout` de 5 s); 90 por réplica ainda caberia (1479). A medir na Rodada 4.
+- **Ritmo do laço.** O período NOMINAL é 2 s (`AUTOESCALA_PERIODO`), mas cada laço faz chamadas ao docker (`ps`, `inspect`, `exec` no lb, no redis e no redpanda) que custam ~0,2 s cada no Windows: com 6 serviços o laço levou ~5 s na 1ª versão (um `docker ps` por serviço) e ~4 s depois de trocar os 6 `docker ps` por um só. Como os critérios são por tempo sustentado (60 s) e cooldown, isso só atrasa a detecção em alguns segundos; a Rodada 4 diz se importa.
+- **Pendências nomeadas.** Rotação da chave com N réplicas do identity (parar TODAS, apagar o arquivo, subir, reiniciar o backend) e o `limpar-banco.sh` do kit de carga (fora do repo, só conhece nomes fixos): README e #178. A 1ª busca do JWKS pelo lb pode cair antes de o slot do identity ficar UP; o gateway só tenta de novo a cada 30 s (o dry-run espera os slots e faz um login antes da carga).
+
+**Dry-run local (não é medição)**, em project isolado `gerenciador-e2e-ae112` (override do e2e + autoescala + um terceiro arquivo local, de duas linhas, que tira a porta 8081 do `lb` (receita no README); Mailpit no lugar do Gmail; `config` validado ANTES do `up`: sem `container_name`, sem porta no host, `notification` com `MAIL_HOST=mailpit`, `backend` → `lb`). Capacidades baixas por variável
+(`AUTOESCALA_{IDENTITY,CATALOG,ADMISSION}_RPS=5`, `AUTOESCALA_NOTIFICATION_LAG=50`, máx. 2 nos HTTP, gateway e reservation com capacidade alta para ficarem em 1), `DESCE_SEG=DESCARTA_SEG=20`, `COOLDOWN_SEG=10`. Slots UP e um login (warm-up do JWKS) antes da carga. O CSV (`ts,servico,ativas,standby,uso,acao`) é gerado pelo scaler em `Projeto/autoescala/saida/` (gitignored: como na #111, nenhum CSV de dry-run é versionado); a tabela abaixo resume as ações.
+Resultado (2 rodadas; a 2ª com estas diferenças: stand-by do `identity` descartada antes da promoção, rajada de 8000 e `AUTOESCALA_NOTIFICATION_MAX=4`):
+
+| Serviço | Carga | Subida | Promoção / escala | Volta |
+|---|---|---|---|---|
+| `identity` | logins 3 req/s, depois 7 | `subir` com `u = 0,600` (stand-by, peso 0 no slot `id2`) | `promover` com `u = 1,200` a 1,600 | `descer` com `u = 0` (sessões abertas ao parar: 0); na 2ª rodada, 3 req/s e ocioso: `descartar` da stand-by com `u = 0` |
+| `catalog` | `GET /bff/events/{id}` 3 req/s, depois 7 | `subir` `u = 0,600` | `promover` `u = 0,8` a 1,0 | `descer` |
+| `admission` | `POST /bff/event-wallets` 3 req/s, depois 7 (40 usuários, evento de capacidade 5) | `subir` `u = 0,600` | `promover` `u = 1,2` | `descer` |
+| `notification` | 2500 (1ª) e 8000 (2ª) eventos válidos produzidos em `identity.notification` | `subir` com lag 1753 (1ª) / 7414 (2ª), `u = 35` a 148 | 2ª rodada: 2ª subida com lag 3394 e **nenhuma 4ª** (3 partições) | `descer` com lag 0 (3 → 2 → 1 na 2ª) |
+
+- **Lag × tempo** (2ª rodada, amostra a cada ~5 s): 7351, 6476, 4861, 2954, 1526 e 772, com 1, 2, 2, 2, 3 e 3 membros no group, e 0 logo depois; os e-mails no Mailpit foram de 780 a 8001.
+- **Overselling 0** nas duas rodadas: evento de capacidade 5, 40 usuários, `ativas = 5` e `eventcap.quant = 0` (respostas: 5 × 201, 169 × 202 pela fila, 71 × 400).
+- **Nenhum e-mail duplicado:** 1ª rodada, 2501 mensagens no Mailpit = 2501 destinatários distintos (2500 do lote + 1 cadastro real, cujo código foi lido do e-mail); 2ª, 8001 = 8001, 0 duplicados. Todas as réplicas do `notification` com `MAIL_HOST=mailpit`; nenhum e-mail real saiu.
+- **Isolamento:** project removido com `down -v` (0 containers, volumes e redes sobrando); o `gerenciador-db` real seguiu com o `working_dir` de sempre; as env-files do checkout principal entraram por referência (`COMPOSE_ENV_FILES`), sem cópia nem leitura.
+- **Fica para a Rodada 4:** a rodada com todos escalando (overselling 0, nenhum e-mail duplicado, gráfico) com capacidades calibradas, o custo do salto pelo `lb` e o efeito do Hikari 50 e dos 10 workers por réplica do `admission`.
