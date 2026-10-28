@@ -38,6 +38,7 @@
 - `summary-ale-913561.json` + perfil: aleatório de 45 min depois do pool.
 - `summary-ale-919068.json` + perfil: aleatório realista (60%).
 - `summary-ale-924767.json` (100%) e `-927639.json` (60%) + perfis: aleatório `naive`.
+- `summary-ale-266475.json` + perfil: aleatório `cas` de 2 min com leitura por endpoint (2026-10-08).
 - `degraus-<id>.csv` + `summary-degraus-<id>.json`: 8 escadas do limiar X (#14). IDs: 953959, 954833, 956799, 958305,
   959190, 959765, 962591 e 963487.
 - `smoke-20261016/`: smoke da matriz e da escada, mais o baseline de rede de 2026-10-16.
