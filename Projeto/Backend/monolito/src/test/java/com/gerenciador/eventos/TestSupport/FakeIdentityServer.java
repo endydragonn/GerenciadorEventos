@@ -430,6 +430,10 @@ public final class FakeIdentityServer {
     private synchronized User atualizar(long id, User novo) {
         Conta c = conta(id);
         validarObrigatorios(novo);
+        Conta dono = porEmailOuNull(novo.getEmail());
+        if (dono != null && dono != c) { // como o serviço (#166): e-mail de outra conta, sem diferenciar caixa
+            throw new IllegalArgumentException("Já existe um cadastro com estes dados (e-mail, telefone ou nome)");
+        }
         c.user.setName(novo.getName());
         c.user.setEmail(novo.getEmail());
         c.user.setFone(novo.getFone());
