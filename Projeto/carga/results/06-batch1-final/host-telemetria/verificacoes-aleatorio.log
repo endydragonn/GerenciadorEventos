@@ -1,0 +1,11 @@
+﻿===== 2026-10-28 03:15:42 | prefixo Ale-939580 | config: cas / true / true
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+    1464 |          146400 |           146400 |                       0 |                 0
+(1 row)
+
+  status   | count  
+-----------+--------
+ confirmed | 146400
+(1 row)
+

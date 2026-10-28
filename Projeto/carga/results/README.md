@@ -10,6 +10,7 @@ Uma pasta por etapa da arquitetura. O `README.md` de cada uma diz o que estava i
 | [`04-fase6-es/`](04-fase6-es/) | Monólito modular com `catalog` e `reservation` (lado wallet) em CQRS + Event Sourcing, Redpanda, relay e consumer no processo. Rodada 2, Wi-Fi | 2026-10-19 |
 | [`04b-fase6-es-cabo/`](04b-fase6-es-cabo/) | O mesmo código do 04 refeito no cabo, com Docker em SSD (controle da Rodada 3) | 2026-10-24 |
 | [`05-distribuido/`](05-distribuido/) | Fase 7: `reservation` e `notification` como serviços; `gateway` chama o `reservation` por HTTP. Rodada 3, cabo, SSD | 2026-10-24 |
+| [`06-batch1-final/`](06-batch1-final/) | Batch 1 (`b072346`): `notification`, `reservation`, `catalog` e `identity` como serviços, `gateway` só roteia e valida o JWT pelo JWKS; harness da #38 (escada `sequencial` e `intercalado`). Rodada R, cabo, SSD | 2026-10-28 |
 
 A análise das rodadas de 2026-10-04 (antes e depois do pool) está em [`02-hikari/ANALISE.md`](02-hikari/ANALISE.md).
 
