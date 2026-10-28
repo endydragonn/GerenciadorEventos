@@ -225,6 +225,32 @@ public class HttpContractTest {
         assertEquals("Nome Atualizado", resp.getBody().getName());
     }
 
+    /**
+     * Mudança de contrato na #171: o corpo do {@code PUT /bff/users/{id}} continua aceitando {@code password} (200, sem 400), mas o campo é
+     * IGNORADO: a senha só muda por {@code /password} e {@code /password-with-mfa}. A resposta não devolve senha nem hash.
+     */
+    @Test
+    public void updateUser_passwordNoCorpoEIgnoradoELoginAntigoSegueValendo() {
+        User created = createUser("update-ignora-senha");
+        String token = loginAndGetToken(created.getEmail(), "senha123");
+        created.setName("Nome Sem Trocar Senha");
+        created.setPassword("senhaNovaNoPut1");
+
+        ResponseEntity<User> resp = restTemplate.exchange(
+                url("/bff/users/" + created.getId()), HttpMethod.PUT, new HttpEntity<>(created, authHeaders(token)), User.class);
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals("Nome Sem Trocar Senha", resp.getBody().getName(), "o resto do PUT vale");
+        assertNull(resp.getBody().getPassword(), "a resposta não devolve a senha enviada nem o hash");
+        assertNotNull(loginAndGetToken(created.getEmail(), "senha123"), "a senha antiga segue valendo");
+        Map<String, String> creds = new HashMap<>();
+        creds.put("email", created.getEmail());
+        creds.put("password", "senhaNovaNoPut1");
+        assertEquals(HttpStatus.UNAUTHORIZED,
+                restTemplate.postForEntity(url("/bff/users/login"), creds, String.class).getStatusCode(),
+                "a senha enviada no PUT não vira a senha da conta");
+    }
+
     @Test
     public void changePassword_returns200PlainTextOnSuccess() {
         User created = createUser("change-password");

@@ -58,7 +58,7 @@ public class UserController {
         return users.findByEmail(email);
     }
 
-    /** O {@code id} do path vale (o do corpo é ignorado). {@code host} NÃO é gravado: o login seguinte continua com o do banco. */
+    /** O {@code id} do path vale (o do corpo é ignorado). {@code host} NÃO é gravado: o login seguinte continua com o do banco. O {@code password} do corpo é IGNORADO (#171). */
     @PutMapping("/{id}")
     public User update(@PathVariable Long id, @RequestBody User user) {
         user.setId(id);
