@@ -22,6 +22,10 @@
 > - **Pré-pooler (referência, "monólito + HikariCP").** A matriz 1a/1b anterior e a escada de carga (limiar X),
 >   com o backend direto no PG 16 (pool e `max_connections` informados no Setup). Ficam como histórico e como
 >   comparação. O X pré-pooler (97k) é a referência do X pelo pooler.
+>
+> A subseção "Comparação das 3 configurações" (issue #39) **junta esses conjuntos de propósito**, lado a lado, com tabela e
+> gráficos e com as ressalvas dela (rede, disco e código diferentes entre os pontos; o X intercalado da Rodada R não é comparável
+> com os X sequenciais).
 
 ## Hipótese
 
@@ -739,6 +743,76 @@ a frio: o aquecimento do 6b e dos refinos intercalados estoura a cauda (o refino
 julgamento, não pela regra automática do report. (iv) O X é uma taxa de chegada na linha quente com rajada de
 ~0,2 s por evento, não um evento sustentado a 56k RPM por 60 s (um evento real esgota a capacidade antes); vale como limiar
 de contenção do `eventcap`. (v) Uma réplica do `reservation`, um host, uma rede; o código medido é o da `Batch_1`.
+
+### Comparação das 3 configurações (issue #39)
+
+Resultado consolidado da série: **monólito CRUD + pooler** (ponto 1), **monólito com CQRS + ES** (ponto 2) e **distribuído com ES**
+(ponto 3: a etapa 05 como intermediária e a Rodada R, etapa 06, como configuração final). Esta subseção **junta de propósito os
+conjuntos** que o "Escopo dos números" do topo manda não misturar, lado a lado e com as ressalvas abaixo. Nenhum número é recalculado:
+todos vêm dos README das etapas (`Projeto/carga/results/<etapa>/README.md`) e das subseções anteriores, e os valores e a fonte de cada
+um estão em [`graficos/comparacao-3-configuracoes.csv`](graficos/comparacao-3-configuracoes.csv). Os gráficos saem de
+[`graficos/gera-graficos.sh`](graficos/gera-graficos.sh) (bash + awk, sem lib). Compara-se sequencial com sequencial (escada do X) e o
+aleatório de 45 min com a mesma semente 617706 (latência); o X **intercalado** da Rodada R não entra na comparação (ver abaixo).
+
+| | Ponto 1: monólito CRUD + pooler (03) | Ponto 2: monólito ES (04 Wi-Fi; 04b cabo) | Ponto 3 intermediário: distribuído (05) | Distribuído final, Rodada R (06) |
+|---|---|---|---|---|
+| Commit / rede | matriz `8ba01b4` (código a partir de `66a46b4`), escada na `main` `a8fc86a`; cabo | `main` `1ee6fbe`; 04 em Wi-Fi (baseline HTTP p50 26,6 / p95 42,9 ms); 04b: + #146, no cabo, SSD | `20aae4e`; cabo, SSD | `b072346`; cabo, SSD (baseline HTTP p50 13,9 / p95 15,6 ms) |
+| Overselling, braço CAS | 0 em 10/10 | 04: 0 em 10/10; 04b: não medido | 0 em 20/20 | 0 em 20/20 e 0 no aleatório |
+| Overselling, braço ingênuo | teto em 36/40 (15 a 180) | 04: teto em 10/10 (80/180); 04b: teto em 10/10 (80/180) | teto em 19/20 (168 na rep 1 de N=200) | teto em 20/20 (80/180) |
+| **X sequencial** (throughput, RPM por evento) | 78k (referência pré-pooler: 97k) | 04: 56k (Wi-Fi); 04b: ≥ 60k (só limite inferior) | 58k | 56k (último degrau limpo 54k) |
+| Teto do host, intercalado (não comparável com o X) | n/d | n/d | n/d | 86k (último limpo 84k) |
+| Reserva p50 / p95 / p99 (ms, aleatório 45 min) | 3,9 / 5,7 / 10,7 (Ale-29057) | 10,8 / 36,2 / 62,0 (Ale-190276, Wi-Fi); 04b sem aleatório | 4,8 / 6,6 / 9,3 (Ale-644172) | 4,7 / 6,7 / 8,0 (Ale-939580) |
+| Confirmação p50 / p95 / p99 (ms, aleatório 45 min) | 2,1 / 5,0 / 8,8 | 8,7 / 29,7 / 56,0 (Wi-Fi) | 3,1 / 4,5 / 6,9 | 3,1 / 5,5 / 8,1 |
+| Leitura p95 (ms): busca / evento / carteira | 15,0 / 3,4 / 12,6 | 128,3 / 32,7 / 56,9 (Wi-Fi) | 19,9 / 3,7 / 10,1 | 32 / 5 / 8 |
+| Lag (a definição muda por ponto) | timer **configurado** de 500 a 10000 ms; `lag_obs_disparo` médio de 241 a 6211 ms | 04: `lag_obs_max` de 19 a 280 ms (13 de 20 linhas) e, no aleatório, offset lag do consumer médio de 2,9 e máximo de 49 mensagens; 04b: `lag_obs_max` = -1 em 9 de 10 linhas (projeção mais rápida que o polling de 250 ms) | `lag_obs_*` = -1 quase sempre (projeção mais rápida que o polling) | `lag_obs_max` lido em poucas linhas (máx. 79 a 158 ms); nas outras a projeção foi mais rápida que o polling de 250 ms |
+| Aceitas, 5xx e descartes no aleatório | 146.400 aceitas, 0 erros 5xx, 0 descartes | 04: 146.400 aceitas, 0 erros 5xx, 0 descartes | 146.400 aceitas, 0 erros 5xx, 0 descartes | 146.400 aceitas, 0 erros 5xx, 0 descartes |
+
+O **lag** não tem uma coluna comparável: no ponto 1 é a variável independente (um timer de refresh), do ponto 2 em diante é medido no
+pipeline real (`lag_obs_*` em ms ou offset lag em mensagens), e `-1` significa que a projeção foi mais rápida que o polling. Por isso o
+lag fica na tabela e não vira gráfico; o overselling também (é uma contagem por repetição, sem escala a comparar). Como o SVG é uma
+imagem estática, a tabela acima é a "table view" dos gráficos.
+
+![Limiar X sequencial por configuração: pré-pooler 97k (referência), ponto 1 78k, ponto 2 56k no Wi-Fi e no mínimo 60k no cabo, ponto 3 intermediário 58k e final 56k; o teto do host intercalado (86k) fica fora da série.](graficos/x-sequencial.svg)
+
+O primeiro gráfico mostra o X sequencial, uma barra por configuração. O ponto 2 no cabo (04b) é só um **limite inferior** (contorno
+tracejado com seta, não barra), porque o refino ficou inconclusivo por banco sujo.
+
+![Latência de reserva e de confirmação (p50, p95, p99) no aleatório de 45 min, mesma semente, em quatro configurações, em dois painéis de mesma escala.](graficos/latencia-aleatorio.svg)
+
+O segundo mostra a latência do aleatório de 45 min por configuração, em dois painéis de mesma escala (reserva e confirmação). O ponto 2
+é o do Wi-Fi (o 04b não tem aleatório).
+
+**Leitura.**
+
+- **Corretude.** O braço CAS ficou em **0 de overselling** em todos os pontos em que foi medido (10/10, 10/10, 20/20 e 20/20, mais 0
+  no aleatório da Rodada R), e o braço ingênuo ficou no teto (80 em N=100 e 180 em N=200) em quase todas as repetições, em todos os
+  pontos: a corretude do CAS não mudou ao introduzir ES nem ao distribuir.
+- **Throughput.** O X caiu de ≈ 78k RPM (ponto 1, sem ES) para ≈ 56k no ponto 2 (Wi-Fi) e ficou na mesma faixa ao distribuir: 58k
+  (05) e 56k (06, com 54k como último degrau limpo). O 04b no cabo só dá um limite inferior (≥ 60k), então o ponto 2 refeito no cabo
+  não fecha um X para comparar com 58k e 56k. A diferença entre 58k e 56k é cerca de um passo de resolução e o código mudou entre as
+  duas (nota da #57 abaixo): não se lê como regressão.
+- **Teto do host.** O X intercalado de ≈ 86k RPM só existe na Rodada R. É o teto do host somado entre eventos, não o X por evento, e
+  por isso não é comparável com os X sequenciais acima.
+- **Latência.** No aleatório, a reserva do distribuído (p95 de 6,6 ms no 05 e 6,7 ms no 06) ficou na faixa do ponto 1 (5,7 ms), e a
+  confirmação também (4,5 e 5,5 contra 5,0 ms). O ponto 2 aparece mais alto (reserva 36,2 ms, confirmação 29,7 ms), mas foi medido no
+  Wi-Fi e a latência dele inclui a rede: o 05, no cabo e também com ES, **indica** que boa parte do aumento vinha da rede (indício, não
+  prova). A confirmação direta, com o aleatório do código do ponto 2 no cabo, não foi feita, então a parte desse aumento que vem do ES
+  e a que vem da rede não estão isoladas.
+
+**Nota da #57 entre os pontos.** Nos pontos 1 a 3 (até a etapa 05) o `userId` da reserva vinha do corpo da requisição. Na Rodada R a
+reserva é amarrada ao token (PR #167, issue #57): em `/bff/event-wallets/**` o `userId` informado fica opcional, o ausente vale o do
+token e o **divergente devolve 403**, antes de qualquer validação ou chamada ao `reservation` (testes
+`HttpContractTest.eventWallet_tokenDeAnaoAgeEmNomeDeBeto_returns403NosEndpoints` e `eventWallet_proprioUsuario_comESemUserId`).
+Com a #36, o `gateway` tira o id da claim `uid` do JWT RS256, validado sem estado pelo JWKS, **sem consulta ao banco** (a #57 sozinha
+faria uma consulta e-mail → `user_id` por requisição). O kit de carga já mandava o `userId` do dono do token, então **a requisição do
+k6 é a mesma**; muda o caminho no servidor (validação do JWT pelo JWKS, sem consulta). **Não é uma variável isolada:** entra junto
+com as outras mudanças entre as etapas 05 e 06 (a saída do `catalog` e do `identity` do processo do `gateway`, #35 e #36).
+
+**Ameaças desta comparação.** (i) **Uma escada por configuração**, com resolução de 1k a 2k RPM no X (56k ± um passo). (ii) **Rede, disco e
+estado do banco diferentes:** o ponto 2 (04) rodou no Wi-Fi e, nos blocos 1 a 3b, sobre banco acumulado; o 04b, no cabo e em SSD, só deu um limite inferior. (iii) **Códigos diferentes entre
+os pontos**, sem isolar uma variável por vez (a arquitetura, o Hikari do monólito, o pool HTTP, o timeout, o token interno e a #57
+mudaram junto). (iv) O ponto 1 rodou com **Tomcat de 200 threads**; do ponto 2 em diante, 300. (v) O X do 04b é **só limite inferior**
+(≥ 60k). (vi) O lag não tem a mesma definição nos pontos: é uma variável configurada no ponto 1 e uma medida do pipeline depois.
 
 ### Resultados preliminares (fora do protocolo)
 
