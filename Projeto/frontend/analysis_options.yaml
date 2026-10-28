@@ -8,6 +8,6 @@ analyzer:
 linter:
   rules:
     # Os arquivos de tela são camelCase (telaLogin.dart, telaHomePage.dart...), convenção já
-    # estabelecida no projeto. Renomear 11 arquivos e todos os imports colidiria com o trabalho
-    # seguinte nas telas (issue #44). Desligada de propósito; reavaliar junto com a #44.
+    # estabelecida no projeto. Reavaliada na #44 e mantida desligada: renomear as 11 telas e todos os
+    # imports é churn fora do escopo do aceite. Arquivos novos fora de telas/ são snake_case.
     file_names: false
