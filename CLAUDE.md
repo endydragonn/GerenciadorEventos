@@ -91,7 +91,8 @@ commitar ou registrar em log.
   `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`; sobe junto `meta` e `kong`).
   O backend em Docker fala com o Postgres pelo `supabase-pooler` (Supavisor, sem porta no host);
   os testes e a porta 5433 vão direto no `db`. Sobe junto o `redpanda` (broker Kafka-compatível da Fase 6, issue #27;
-  só `redpanda:9092` na rede `gerenciador-net`, sem porta no host) e o backend espera ele ficar `healthy`.
+  só `redpanda:9092` na rede `gerenciador-net`, sem porta no host) e o backend espera ele ficar `healthy`. Desde o Batch 2 sobem junto também o
+  `redis` (#41), o `rabbitmq` (#42), o `admission` (#41) e o `stock` (#47, com o one-shot `stock-seek`), todos sem porta no host (detalhes nos itens abaixo).
 - Antes de considerar uma tarefa de backend pronta: `Projeto/Backend/run-tests.sh`
   (precisa dos containers `db`, `redpanda`, `redis` **e** `rabbitmq` no ar — `docker compose -f Projeto/docker-compose.yml up -d db redpanda redis rabbitmq`;
   os testes usam Postgres real, PG17 do Supabase, banco `meu_banco`, Redpanda real, Redis real (#41) e RabbitMQ real (#42); o script aborta com mensagem
@@ -101,9 +102,9 @@ commitar ou registrar em log.
   `stock-client`, `catalog-client`, `identity-client`, `admission-client`, `monolito`, `notification`, `reservation`, `stock`, `catalog`, `identity`, `admission`) e também aborta se o `gerenciador-notification`, o
   `gerenciador-reservation`, o `gerenciador-stock`, o `gerenciador-catalog`, o `gerenciador-identity` ou o `gerenciador-admission` estiverem rodando
   (`docker stop gerenciador-backend gerenciador-notification gerenciador-reservation gerenciador-stock gerenciador-catalog gerenciador-identity gerenciador-admission`; o notification
-  consumiria o tópico dos testes e mandaria e-mail de verdade, o reservation, o catalog e o identity dividiriam o banco e o broker deles); ao fim o script também move o group `notification` para o
+  consumiria o tópico dos testes e mandaria e-mail de verdade, o reservation, o stock, o catalog e o identity dividiriam o banco e o broker deles, e o admission o Redis). Desde a #111 também aborta se houver qualquer container de serviço do project `gerenciador-eventos` no ar achado pelo label (réplicas e `lb` da autoescala, que não têm o nome fixo `gerenciador-*`): derrube o override antes. Ao fim o script também move o group `notification` para o
   fim do tópico (`rpk group seek`), para os eventos de teste nunca virarem e-mail quando o serviço subir (um e-mail real pendente
-  antes da rodada é pulado). Ao fim o script também move os groups `reservation` e `stock` (tópico `reservation.wallet`) e `stock-catalog` (`catalog.event`; era `reservation-catalog` até a #47) para o fim dos tópicos
+  antes da rodada é pulado). Ao fim o script também move os groups `reservation` e `stock` (tópico `reservation.wallet`) e `reservation-catalog` e `stock-catalog` (`catalog.event`; a reconciliação é do `stock` desde a #47, e o `reservation-catalog` segue no laço) para o fim dos tópicos
   `reservation.wallet` / `catalog.event` (a reconciliação criaria `eventcap` para ids de evento de teste). Banco já existente precisa dos
   schemas novos: aplicar `Projeto/Backend/db/migrations/20261024-notification-schema.sql`, **com o backend e o reservation parados**
   `20261025-reservation-schema.sql` e, **com o backend e o catalog parados e depois do backup
@@ -117,7 +118,7 @@ commitar ou registrar em log.
 - **`INTERNAL_API_TOKEN` (desde a #33, volta 3):** as chamadas internas gateway → reservation, gateway → catalog (`/internal/**`; #35) e gateway → identity (#36; só o JWKS é isento) exigem um token de serviço
   (header `X-Internal-Token`; 401 sem/errado). **Acrescente ao `Projeto/.env` (você mesmo; o repo nunca edita nem imprime o `.env`)**
   `INTERNAL_API_TOKEN=<valor aleatório>`, por exemplo gerado com `openssl rand -hex 32`. O compose repassa o MESMO valor ao `backend`, ao `identity`, ao
-  `reservation`, ao `stock` e ao `catalog`. Não há valor default: sem a variável **qualquer `docker compose`** (inclusive o `up -d db redpanda` dos testes)
+  `reservation`, ao `stock`, ao `catalog` e ao `admission` (que também o usam nas chamadas entre si, por exemplo gateway → `admission` (#41), `reservation` e `catalog` → `stock` (#47) e worker do `admission` → `reservation` (#42)). Não há valor default: sem a variável **qualquer `docker compose`** (inclusive o `up -d db redpanda` dos testes)
   recusa com mensagem clara (`${INTERNAL_API_TOKEN:?...}`), e os serviços também falham no boot. O `run-tests.sh` usa um valor de teste
   explícito (não é segredo).
 - **`REDIS_PASSWORD` (desde a #41):** o Redis (`gerenciador-redis`, só o serviço `admission` o usa) exige senha, sem default. **Acrescente ao `Projeto/.env` (você mesmo; o repo nunca edita nem imprime o `.env`)**
@@ -145,7 +146,14 @@ commitar ou registrar em log.
 - **Imagens enxutas com o Slim (#177, opcional):** `Projeto/slim/gerar-imagens-slim.sh` gera `gerenciador-eventos-<serviço>.slim` (backend, identity,
   catalog, reservation, stock, notification, admission) num project isolado `gerenciador-e2e-slim*` (nunca na stack real), e `docker-compose.slim.yml` as usa por
   override (`-f docker-compose.yml -f docker-compose.slim.yml`); a imagem original (Dockerfile intocado) segue o padrão. `E2E_SLIM=1 Projeto/e2e/run-e2e.sh`
-  roda o e2e com elas. Tabela antes/depois, probe, includes e perfis Seccomp/AppArmor em `Projeto/slim/README.md`.
+  roda o e2e com elas. Tabela antes/depois, probe, includes e perfis Seccomp/AppArmor em `Projeto/slim/README.md`. A imagem slim envelhece quando o
+  código muda: regere antes de usar.
+- **Autoescala (#111/#112, opcional):** em `Projeto/`, `docker compose -f docker-compose.yml -f docker-compose.autoescala.yml up -d --build --wait` (réplicas sem
+  nome fixo, HAProxy `lb` na 8081) e o scaler no host, `Projeto/autoescala/scaler.sh` (`--seco` só loga, `--uma-vez` roda um ciclo). **Irreversível na stack
+  real:** o one-shot `particoes` leva `identity.notification` e `reservation.wallet` a 3 partições para sempre. Operação, volta ao compose base e dry-run em
+  project isolado em `Projeto/autoescala/README.md`.
+- **Kit de carga:** `Projeto/carga/README.md` (seções "Rodada 4" e "Rodada 5"); a limpeza entre blocos é o `Projeto/carga/limpar-banco.sh`
+  (`make limpar-banco`, ciente das réplicas).
 - **Primeiro `up` e o group `notification`:** o serviço one-shot `notification-seek` move o group `notification` para o fim de `identity.notification`
   SÓ se o group ainda não existe (stack nova não manda e-mail de evento antigo); o `notification` espera ele terminar. O SMTP do `notification` é
   parametrizável (`MAIL_HOST`/`MAIL_PORT`/`MAIL_SMTP_AUTH`/`MAIL_STARTTLS`; defaults = Gmail).
@@ -249,6 +257,18 @@ antigos viram 401. Hikari: identity 100, backend 10 (soma no Supavisor 1000 + 10
 [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md); smoke da stack real em
 `docs/testes-manuais/smoke-identity-servico-separado.sh`.
 
+**Implementado (Batch 2, 2026-10-28, follow-ups de segurança e identity: #166, #170, #171):** `/bff/users/{id}/**` e `/bff/my-wallets/**` conferem o id do
+path contra a claim `uid` (`gateway/AcessoNegado.barrarSeNaoDono`, antes de chamar o identity; mesmo padrão da #57): 403 se divergir, inclusive id inexistente (não
+mais 404), e o `PUT` recusa e-mail de outra conta (400) (#166, PR #184). `PUT /internal/users/{id}` virou UM `UPDATE` com `COALESCE`, sem ler-mesclar-gravar
+(`UserUpdateConcorrenteTest`; #170, PR #185). Pela decisão (a) da #171 (PR #192), o PUT **ignora** `password` (resposta com `password` nulo; a senha só muda por
+`/password` e `/password-with-mfa`, e o PUT appenda só `UserUpdated`). Contrato no `HttpContractTest`; detalhes no `Projeto/Backend/CLAUDE.md`, "Rotas e segurança" e
+"Serviço identity". Follow-ups abertos: #181, #182 e #183.
+
+**Implementado (Batch 2, 2026-10-28, frontend e figuras da Fase 2: #84, #15):** o frontend ganhou `analysis_options.yaml` com `flutter_lints` (`avoid_print`) e o teto
+de 500 linhas por arquivo (`tool/verifica-tamanho.sh`); `flutter analyze` (em container, sem Flutter local) foi de 96 achados para "No issues found!" (#84, PR #187;
+comando e exceções justificadas no `Projeto/frontend/CLAUDE.md`, "Lint e tamanho de arquivo"; follow-up #188). As 5 figuras da Fase 2 entraram em
+`docs/artigo/graficos/` (#15, PR #186).
+
 **Implementado (Fase 7, issue #41, 2026-10-28, Batch 2):** primeira peça da camada de alta carga — o serviço `admission` (módulo Maven, Dockerfile, imagem e container `gerenciador-admission`, `:8085` só na rede, **sem
 datasource**) mantém um **contador de RPM por evento em Redis** (buckets de 50 ms numa janela de 200 ms, script Lua = 1 ida) e o `gateway` o chama **uma vez por `POST /bff/event-wallets`**, nos dois braços, depois das
 validações e antes do `reservation`, pela lib `admission-client` (HTTP, timeouts curtos, **fail-open** e disjuntor; o `backend` não depende do `admission`). Na #41 o modo devolvido é sempre `sync` e o RPM é só sinal de carga
@@ -271,6 +291,15 @@ liga a fila (`ADMISSION_QUEUE_ON`) e volta ao síncrono só com uso < 0,70 (`ADM
 o e2e ganhou o passo 4b (rajada concorrente, fila drenada, overselling 0 contra o `reservation` REAL; com `E2E_RAJADA_USUARIOS` alto é o dry-run acima do limiar). Detalhes no `Projeto/Backend/CLAUDE.md`, "Gatilho, modo fila e 202 — issue #43"; diagrama em
 [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md).
 
+**Implementado (issue #44, 2026-10-28, Batch 2):** a UI da reserva em duas fases no Flutter (`lib/widgets/painel_reserva.dart`, embutido na `telaInscricaoEvento`):
+`201` vai à contagem até o `expiresAt` + "Confirmar inscrição"; `202` mostra "aguardando confirmação" e consulta `GET /bff/event-wallets/admission` até `pending` (mesma
+contagem), `rejected` ou `timed_out`. O fluxo síncrono não mudou. PR #196; detalhes no `Projeto/frontend/CLAUDE.md`; follow-ups #195 (pending vencido bloqueia nova
+reserva até a varredura do job) e #198 (`Idempotency-Key` gerada no cliente).
+
+**Implementado (issue #177, 2026-10-28, Batch 2):** imagens enxutas com o Slim, por override opcional (`docker-compose.slim.yml`; Dockerfiles intocados), hoje para
+as 7 imagens de serviço (o `admission` entrou na #178 e o `stock` na #47), de −23% a −27%, com a chave do JWT fora da `identity.slim`. PR #189; tabela, probe e perfis em
+`Projeto/slim/README.md` e no `Projeto/Backend/CLAUDE.md`, "Imagens enxutas (Slim)". Follow-up #210 (a sonda do `admission` ainda cria o `eventcap` no `reservation`).
+
 **Implementado e medido (Batch 1, 2026-10-26 a 2026-10-28, branch de integração `Batch_1`):** além da #36, o compose final e a suíte e2e
 (#37), o harness definitivo (#38: cenário de leitura, `coleta-host.sh`; #113: escada `MAPEAMENTO=sequencial|intercalado`) e os follow-ups de
 corretude e segurança (#56, #57, #58, #59, #60, #61, #89, #133; #81 fechada sem PR). A Rodada R mediu a configuração final em
@@ -284,16 +313,36 @@ degrau já alto, a frio, enfileira na linha do `eventcap` e não se recupera (ve
 e um scaler em bash no host (`Projeto/autoescala/scaler.sh`: stand-by com peso 0 no lb, promoção a 0,80, drain antes de descer, CSV réplicas × tempo, selftest sem Docker). O `admission` lê as réplicas ativas da chave
 `adm:replicas` (escrita pelo scaler, com TTL; sem ela vale `ADMISSION_RESERVATION_REPLICAS`) no mesmo script Lua do gatilho e publica o RPM do evento mais quente em `adm:hot`. O compose base, o `run-tests.sh` (que agora também vê as
 réplicas pelo label), o kit de carga e o braço sem autoescala não mudam; jobs com 2+ réplicas (expiração, retenção, relay) provados em teste (`Projeto/Backend/CLAUDE.md`, "Réplicas: estado em memória e jobs" e "Autoescala"). Operação em
-`Projeto/autoescala/README.md`. A medição é da Rodada 4 (#179); o kit de carga com nomes sem `gerenciador-*` é da #178; Kubernetes (opção D) é a #197.
+`Projeto/autoescala/README.md`. Medida no braço C da Rodada 4 (#179, abaixo); o kit de carga com nomes sem `gerenciador-*` é da #178; Kubernetes (opção D) é a #197.
 
 **Implementado (issue #112, 2026-10-28, Batch 2):** a autoescala (mesmo mecanismo da #111, regra 50/80) estendida a `identity`, `catalog`, `admission` e `notification`. Corretude com N réplicas provada em teste (chave do JWT criada com `link(2)` e igual em todas as réplicas, command do catalog sob concorrência, contador de RPM do admission em 2 réplicas, rebalance sem e-mail duplicado
 nem projeção em dobro); `lb` (HAProxy) com `catalog` `:8083`, `identity` `:8084` e `admission` `:8085` (o gateway os chama por ele, o JWKS inclusive); scaler com a mesma decisão para os 6 serviços (HTTP por req/s da seção do lb; o `notification` pelo lag do group, sem stand-by, no máximo uma réplica por partição lida do broker); one-shot `particoes` do override leva
 `identity.notification` e `reservation.wallet` a 3 partições (**irreversível na stack real**: a Rodada 4 roda o braço sem autoescala antes); Hikari 50 por réplica em identity/catalog e 10 workers por réplica no admission (pool 1239 <= 1500). Dry-run em project isolado com Mailpit (overselling 0, nenhum e-mail duplicado). Detalhes no `Projeto/Backend/CLAUDE.md`,
-"Autoescala dos outros quatro", e em `Projeto/autoescala/README.md`; capacidades PROVISÓRIAS e a medição ficam na Rodada 4 (#179).
+"Autoescala dos outros quatro", e em `Projeto/autoescala/README.md`; as capacidades usadas no braço C e a medição estão na Rodada 4 (#179, abaixo).
+
+**Implementado (issue #178, 2026-10-29, Batch 2):** o harness da Rodada 4 em `Projeto/carga/` — escada acima do X (`make test-degraus`) que trata o `202` como aceito,
+acompanha uma amostra das reservas em fila (`PCT_ACOMPANHA`) e para com o código 99 quando o p95 da janela não se recupera (`PARADA_P95_MS`); `coleta-host.sh` com a fila do
+RabbitMQ, o contador do Redis e as réplicas por serviço (31 colunas); `limpar-banco.sh` versionado e ciente das réplicas; braço C pelo `lb`. PR #201; detalhes no
+`Projeto/carga/README.md`, "Rodada 4".
+
+**Medido (Batch 2, Rodada 4, issue #179, 2026-10-29):** braço base (sem autoescala) até 98k RPM com 0 5xx e CAS com overselling 0, estável acima do X (50k–98k: efetivo = alvo, fila drenando) e mais lento que a R abaixo dele (1º degrau degradado em 32k); braço C
+parou em 32k/38k pelos 5xx do health check do `lb` (#207) e pela limitação do sinal `adm:hot` (#206), também com overselling 0. PR #208; resultados em
+`Projeto/carga/results/07-rodada4-admission`.
 
 **Implementado (issue #47, 2026-10-29, Batch 2):** a saga `stock` + `wallet` — o `reservation` foi dividido: o `eventcap` (CAS), um ledger de holds (`stock.hold`) e a API `/internal/eventcaps/**` viraram o serviço **`stock`** (módulos Maven `stock` e `stock-client`, Dockerfile, imagem e container `gerenciador-stock`, `:8086` só na rede, schema `stock`, **uma réplica fixa**, Hikari 250 literal; migração `20261029-stock-schema.sql`), e o `reservation` (mesmo nome, container e porta) é o lado `wallet` e o **orquestrador síncrono** da reserva: tx1 (chave `reserving`), `POST /internal/holds` no `stock` **sem conexão aberta**, tx2 (`reserved` + `walletevent` + `SlotReserved{holdId}`), com compensação inline (`release(holdId)`, lápide contra o "reservar" atrasado) e um **reaper** de órfãs (`reserving`/`compensating` velhas, `FOR UPDATE SKIP LOCKED`). Cancelar e expirar só appendam o evento com o `holdId`; a vaga volta pelo `StockReleaseConsumer` do `stock` (group `stock`, idempotente por `holdId`). `/bff/**` inalterado (`HttpContractTest`), `admission` sem mudança de código, a reconciliação do `eventcap` mudou para o `stock` (group `stock-catalog`). Soma do Supavisor 1463 (base) e 1489 (override de autoescala), folga de 11. Testes com o `stock` REAL (W1–W13, S1–S9), e2e com os passos (a) stock fora e (b) queda do `reservation` no meio da rajada. Detalhes no `Projeto/Backend/CLAUDE.md`, "Serviço stock e saga stock + wallet"; spec em `docs/superpowers/specs/2026-10-29-saga-stock-wallet-design.md`; diagrama e janelas de falha em [`docs/arquitetura/fase7-servicos.md`](docs/arquitetura/fase7-servicos.md). A medição é da Rodada 5 (#180), sobre a mesma configuração da R4.
+As decisões D1–D4 da saga ficaram na opção (a): orquestração síncrona pelo `reservation`, log primeiro no wallet, `stock` com uma réplica fixa e devolução da vaga
+por evento. O `stock` escalável (D3 b) é a #205, junto com a #197.
 
-**Decidido, não implementado:** extrair o `gateway` como microsserviço (Opção B; o `notification` saiu na #32, o `reservation` na #33,
-o `catalog` na #35, o `identity` na #36 e o `admission` nasceu na #41); a camada de alta carga (Redis RPM + fila + worker pool) existe: o contador de RPM
-(`admission` + Redis) desde a #41, a fila (RabbitMQ) e o worker pool desde a #42 e o gatilho por uso de X (histerese, `202` no gateway, consulta de estado) desde a #43; a UI de `pending` no Flutter existe desde a #44 (`Projeto/frontend/CLAUDE.md`); falta a medição (Rodada 4, #179) — ver
-`Architecture-Decision-Microservices-Split.md` e o `BACKLOG.md`.
+**Implementado (issue #204, 2026-10-29, Batch 2):** o harness da Rodada 5, sobre o kit da R4 — o `coleta-host.sh` ganha 5 colunas no fim (`lag_stock`,
+`lag_stock_catalog`, `saga_reservando`, `saga_orfas`, `saga_compensando`; 36 no total, as 31 da R4 inalteradas), o resumo pós-bloco grava as compensações por
+minuto e o tempo até resolver as órfãs, e o `make verificar-rpm` ganha o código 4 (órfã que não se resolve). A latência dos passos sai do logger `saga.timing` do
+`reservation` (DEBUG, desligado por padrão). PR #209; detalhes no `Projeto/carga/README.md`, "Rodada 5".
+
+**Implementado (issue #46, 2026-10-29, Batch 2):** READMEs atualizados ou criados na raiz, em `Projeto/`, `Projeto/Backend/` (e `db/`, `monolito/`), `Projeto/frontend/`,
+em cada serviço e nos `*-client`. Eles só linkam os resultados das etapas. PR #211.
+
+**Decidido, não implementado:** a autoescala em Kubernetes com HPA/KEDA (opção D da ADR `docs/adr/Architecture-Decision-Autoescala.md`, #197) e, junto, o `stock`
+escalável até 3 réplicas (D3 b da saga, #205). O mapa da Opção B (`docs/adr/Architecture-Decision-Microservices-Split.md`) está extraído: `notification` (#32),
+`reservation` (#33), `catalog` (#35), `identity` (#36), `admission` (#41) e `stock` (#47); o `gateway` é o único conteúdo do módulo `monolito` desde a #36. A
+camada de alta carga (#41–#43, com a UI da #44) e a autoescala opção A (#111/#112) existem e foram medidas na Rodada 4; a saga (#47) é medida na Rodada 5 (#180, em andamento, em espera).
+Follow-ups abertos no `BACKLOG.md`, seção Estado.
