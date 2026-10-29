@@ -1144,7 +1144,7 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
 - **Pendências conhecidas**: (a) o healthcheck do compose é "a porta aceita conexão" (`bash /dev/tcp`; o `/bin/sh` da imagem é dash e não tem
   `/dev/tcp`), não há health HTTP; (b) o `HttpContractTest` do monólito roda contra
   o servidor falso — o contrato com o serviço real é do `ReservationApiE2ETest` (e do smoke, até a #37); (c) `idempotency_key` e `event_availability` de eventos apagados
-  ficam órfãs (inofensivas); (d) a limpeza do banco entre blocos da carga (`E:\TCC\carga-overrides\limpar-banco.sh`, fora do repo) trunca
+  ficam órfãs (inofensivas); (d) a limpeza do banco entre blocos da carga (`Projeto/carga/limpar-banco.sh`) trunca
   `public`, `reservation` e `catalog` numa instrução, move os groups `reservation`/`reservation-catalog`/`notification` para o fim dos
   tópicos e sobe `reservation` + `catalog` antes do `backend` (#35; resumo em `Projeto/carga/README.md`).
 
@@ -1297,7 +1297,7 @@ Mecanismo da #111 sem mecanismo novo; detalhe e dry-run na ADR (`docs/adr/Archit
   real aumenta as partições do broker real para sempre (a Rodada 4 roda o braço sem autoescala antes do braço C). Os `NewTopic` seguem em `.partitions(1)`. Não mude `default_topic_partitions`.
 - **Pool:** 1239 <= 1500 (inalterado). O Hikari 50 de identity/catalog fica abaixo do Tomcat 300: as threads esperam conexão no Hikari (`connection-timeout` 5 s); 90 por réplica ainda caberia (1479). A medir na Rodada 4.
 - **Dry-run (não é medição)** em project isolado com Mailpit: os 4 serviços sobem e voltam (stand-by, promoção, descarte nos HTTP; lag subindo e descendo no notification, parando em 3 réplicas = 3 partições), overselling 0 e nenhum e-mail duplicado (8001 mensagens = 8001 destinatários).
-- **Pendências nomeadas:** rotação da chave com N réplicas do identity (parar TODAS, apagar o arquivo, subir, reiniciar o backend) e o `limpar-banco.sh` do kit de carga (fora do repo) que só conhece nomes fixos: README e #178.
+- **Pendências nomeadas:** rotação da chave com N réplicas do identity (parar TODAS, apagar o arquivo, subir, reiniciar o backend) e o `limpar-banco.sh` do kit de carga (resolvidos na #178: `Projeto/carga/limpar-banco.sh`, versionado e ciente de réplicas por label).
 
 ## Serviço catalog — issue #35 (Fase 7: terceira extração)
 
@@ -1403,8 +1403,8 @@ O monólito NÃO tem mais o pacote `identity` (nem `public.users`/`mywallet`/`pe
 - **`uid` reciclado (operação)**: `TRUNCATE ... RESTART IDENTITY` em `identity.users` (testes, limpeza do banco entre blocos da carga) devolve o `user_id` a 1, e o JWT
   é validado sem estado: um token emitido antes passaria a valer como o usuário novo com o mesmo id (reservar, criar evento como host se `isHost`). Regra: **sempre que
   truncar `identity.users` fora de um teste unitário, apague a chave do volume e reinicie o identity E o backend** (o gateway guarda o JWKS em cache por até 24 h; só
-  reiniciar o identity não basta). O `run-tests.sh` apaga a chave no início e ao fim da rodada (identity e backend parados); o `limpar-banco.sh` da carga (`E:\TCC\carga-overrides`,
-  fora do repo) também: logo depois de parar os serviços e ANTES do TRUNCATE apaga o arquivo do volume (se falhar, aborta sem religar identity nem backend), sobe o identity, espera `healthy` e só então religa o backend. Manual:
+  reiniciar o identity não basta). O `run-tests.sh` apaga a chave no início e ao fim da rodada (identity e backend parados); o `limpar-banco.sh` da carga (`Projeto/carga/limpar-banco.sh`)
+  também: logo depois de parar os serviços e ANTES do TRUNCATE apaga o arquivo do volume (se falhar, aborta sem religar identity nem backend), sobe o identity, espera `healthy` e só então religa o backend. Manual:
   `docker run --rm -v gerenciador-eventos_identity-keys:/k maven:3.9.7-eclipse-temurin-21-jammy rm -f /k/jwt-signing-key.json` com o identity parado.
 - **API interna** `/internal/**` (`InternalTokenFilter` com `X-Internal-Token`; 401 em TODA requisição sem/errado, inclusive `/internal;x=1/...`):
   `/internal/users/**` (espelha o `UserApi`: create, `{id}`, `by-email`, update, deactivate, validate, `login`, `password`, `password-reset-mfa` (+ `/verify`),

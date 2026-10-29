@@ -5,7 +5,7 @@ profile gerenciador-e2e-slim-reservation-apparmor-profile flags=(attach_disconne
 
   /opt/java/openjdk/bin/java rix,
 
-  /tmp/hsperfdata_root/17 w,
+  /tmp/hsperfdata_root/18 w,
 
   /app/app.jar r,
   /etc/alternatives/awk r,
@@ -343,9 +343,9 @@ profile gerenciador-e2e-slim-reservation-apparmor-profile flags=(attach_disconne
   /opt/java/openjdk/lib/tzdb.dat r,
   /opt/java/openjdk/release r,
   /run r,
-  /tmp/tomcat-docbase.8082.3870399152976584362 r,
-  /tmp/tomcat.8082.7870314252949017723 r,
-  /tmp/tomcat.8082.7870314252949017723/work/Tomcat/localhost/ROOT r,
+  /tmp/tomcat-docbase.8082.6859121870271743019 r,
+  /tmp/tomcat.8082.3387758551790168502 r,
+  /tmp/tomcat.8082.3387758551790168502/work/Tomcat/localhost/ROOT r,
   /usr/bin/awk r,
   /usr/bin/bash r,
   /usr/bin/cat r,

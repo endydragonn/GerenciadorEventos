@@ -27,9 +27,12 @@ function Lanca($nome, [scriptblock]$bloco, $trecho) {
 
 Write-Host ''
 Write-Host '==> Cabecalho do CSV'
-Confere 'colunas da spec (rpm_alvo, rpm_efetivo, taxa_5xx, p50/p95/p99, throughput, descartadas) + as do criterio (5xx so da reserva: reservas, erros_5xx, taxa_5xx; erros_5xx_confirma e informativa)' $DegrausCabecalho `
+Confere 'colunas da spec (rpm_alvo, rpm_efetivo, taxa_5xx, p50/p95/p99, throughput, descartadas) + as do criterio (5xx so da reserva: reservas, erros_5xx, taxa_5xx; erros_5xx_confirma e informativa)' $DegrausCabecalhoBase `
     'escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit,mapeamento'
-Confere 'mapeamento e a ULTIMA coluna (colunas antigas nao mudam de posicao)' (($DegrausCabecalho -split ',')[-1]) 'mapeamento'
+Confere 'mapeamento e a ultima coluna da parte antiga (colunas antigas nao mudam de posicao)' (($DegrausCabecalhoBase -split ',')[-1]) 'mapeamento'
+Confere 'colunas do modo fila (#178) so no FIM: o cabecalho completo = antigo + admissao' $DegrausCabecalho "$DegrausCabecalhoBase,$AdmissaoCabecalho"
+Confere 'ultima coluna = params_autoescala; parada logo antes' ((($DegrausCabecalho -split ',')[-2, -1]) -join ',') 'parada,params_autoescala'
+Confere 'a linha de um degrau tem tantos campos quanto o cabecalho completo' (((Format-LinhaDegrau -Escada Deg-1 -Degrau ([pscustomobject]@{ rpm_alvo = 1; reservas = 1; erros_5xx = 0; confirma_5xx = 0; outros = 0; descartadas = 0; p50_ms = 1; p95_ms = 1; p99_ms = 1; p95_max_janela_ms = 1 }) -DuracaoS 60 -Braco cas -MaxConnections 1 -PoolHikari 1 -Commit c -Mapeamento sequencial) -split ',').Count) (($DegrausCabecalhoBase -split ',').Count)
 # o rodar-degraus.ps1 imprime a tabela final pelas POSICOES das colunas do CSV: se o cabecalho mudar, este teste acusa
 Confere 'posicoes que o rodar-degraus.ps1 imprime na tabela (rpm_alvo, rpm_efetivo, taxa_5xx, p50, p95, p99, janela, descartadas)' `
     ((($DegrausCabecalho -split ',')[1, 2, 6, 9, 10, 11, 12, 14]) -join ',') 'rpm_alvo,rpm_efetivo,taxa_5xx,p50,p95,p99,p95_max_janela_30s,iteracoes_descartadas'
@@ -101,6 +104,24 @@ Confere '...mas fica visivel em erros_5xx_confirma (informativa)' $c[7] '500'
 Confere 'erros_5xx (coluna 5) = so os 5xx da reserva' ((& $f (Degrau @{ erros_5xx = 7; confirma_5xx = 9 })) -split ',')[5] '7'
 Lanca 'resumo sem p95_max_janela_ms (resumo de outra versao) falha alto, em vez de gravar 0' {
     $d = Degrau @{}; $d.PSObject.Properties.Remove('p95_max_janela_ms'); Format-LinhaDegrau -Escada Deg-1 -Degrau $d -DuracaoS 60 -Braco cas -MaxConnections 300 -PoolHikari 1000 -Commit abc1234 -Mapeamento sequencial } 'p95_max_janela_ms'
+
+Write-Host ''
+Write-Host '==> Modo fila (#178): graceful, espaco e colunas'
+# a mesma tabela esta em degraus/lib-admissao.selftest.mjs (gracefulS)
+Confere 'graceful sem acompanhamento: 30 s' (Get-GracefulS -PctAcompanha 0 -TetoConsultaS 120) 30
+Confere 'graceful com acompanhamento: teto + 10 s' (Get-GracefulS -PctAcompanha 100 -TetoConsultaS 35) 45
+Confere 'graceful nunca abaixo de 30 s' (Get-GracefulS -PctAcompanha 10 -TetoConsultaS 5) 30
+Confere 'espaco entre degraus = graceful + 1 (46 s com o teto de 35 s)' (Get-EspacoS -PctAcompanha 100 -TetoConsultaS 35) 46
+Confere 'espaco sem acompanhamento = 31 s (como antes da #178)' (Get-EspacoS -PctAcompanha 0 -TetoConsultaS 35) 31
+$adm = ([pscustomobject]@{ reservas_202 = 900; acompanhadas = 200; admitidas = 150; rejected = 30; timed_out = 15; sem_estado = 5; recusadas_429 = 7; conflitos_422 = 0
+    consultas_estado = 1234; admitir_p50_ms = 1000.04; admitir_p95_ms = 2500; admitir_p99_ms = 3000; fim_a_fim_p50_ms = 1100; fim_a_fim_p95_ms = 2700.55; fim_a_fim_p99_ms = 3300 }) | ConvertTo-Json | ConvertFrom-Json
+Confere 'linha do modo fila: taxas sobre as acompanhadas, ponto decimal em pt-BR, parada e params sem virgula' `
+    (Format-ColunasAdmissao -Degrau $adm -Arranjo autoescala+slim -PctAcompanha 25 -ConsultaMs 500 -Parada 'p95 > 5000, janela' -ParamsAutoescala 'AUTOESCALA_GATEWAY_RPS=500;AUTOESCALA_X_RPM=56000') `
+    'autoescala+slim,25,500,900,200,150,30,15,5,0.150000,0.075000,7,0,1234,1000.0,2500.0,3000.0,1100.0,2700.6,3300.0,p95___5000__janela,AUTOESCALA_GATEWAY_RPS=500;AUTOESCALA_X_RPM=56000'
+Confere 'o numero de campos das colunas do modo fila = o cabecalho' ((Format-ColunasAdmissao -Degrau $adm -Arranjo a -PctAcompanha 0 -ConsultaMs 1 -Parada nenhuma) -split ',').Count (($AdmissaoCabecalho -split ',').Count)
+$semFila = (Format-ColunasAdmissao -Degrau (Degrau @{}) -Arranjo sem-autoescala -PctAcompanha 100 -ConsultaMs 1000 -Parada nenhuma) -split ','
+Confere 'resumo sem campos do modo fila (degrau sincrono puro): zeros, sem dividir por zero' ($semFila[3..13] -join ',') '0,0,0,0,0,0,0.000000,0.000000,0,0,0'
+Confere 'params vazio = ultima coluna vazia' $semFila[-1] ''
 
 Write-Host ''
 Write-Host '=================================================='

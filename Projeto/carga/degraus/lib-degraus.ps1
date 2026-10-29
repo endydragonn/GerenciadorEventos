@@ -18,7 +18,33 @@
 #   mapeamento            = como a iteracao vira o par (usuario, evento): sequencial | intercalado (degraus/lib-mapeamento.js).
 #                           Ultima coluna: CSV antigo (sem ela) continua valido para o report, que mostra "n/d"
 
-$DegrausCabecalho = 'escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit,mapeamento'
+$DegrausCabecalhoBase = 'escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit,mapeamento'
+
+# Colunas da escada ACIMA do X com o admission ligado (issue #178), SEMPRE no fim (o report le por nome; CSV antigo, sem elas, segue valendo):
+#   arranjo               = rotulo do operador: sem-autoescala | autoescala (braco C), com +slim se as imagens forem as slim. Do HOST, so registrado
+#   pct_acompanha, consulta_ms = fracao das 202 que acompanham o estado e intervalo da consulta (a resolucao de admitir_*)
+#   reservas_202          = POST que responderam 202 (modo fila): contam como ACEITAS, nunca em `outros`
+#   acompanhadas          = 202 que acompanharam o estado; admitidas (-> pending) + rejected + timed_out + sem_estado (teto da consulta) = acompanhadas
+#   taxa_rejected, taxa_timed_out = fracao sobre as ACOMPANHADAS (0 sem acompanhadas)
+#   recusadas_429, conflitos_422  = POST recusados pelo admission (limite por usuario / fila cheia; chave de outro evento): nao entram em outros
+#   consultas_estado      = GET de estado feitos (somam carga no gateway)
+#   admitir_*             = tempo 202 -> pending (ms); fim_a_fim_* = envio -> resultado final (ms; 201 + confirma, ou estado final + confirma)
+#   parada                = 'nenhuma' ou o motivo da parada antecipada (p95 acima do limite numa janela); o degrau da parada tem duracao_s EFETIVA
+#   params_autoescala     = parametros provisorios do HOST (AUTOESCALA_*, X) informados pelo operador (; entre pares): a R4 calibra
+$AdmissaoCabecalho = 'arranjo,pct_acompanha,consulta_ms,reservas_202,acompanhadas,admitidas,rejected,timed_out,sem_estado,taxa_rejected,taxa_timed_out,recusadas_429,conflitos_422,consultas_estado,admitir_p50,admitir_p95,admitir_p99,fim_a_fim_p50,fim_a_fim_p95,fim_a_fim_p99,parada,params_autoescala'
+$DegrausCabecalho = "$DegrausCabecalhoBase,$AdmissaoCabecalho"
+
+# gracefulStop dos degraus (s): a iteracao acompanhada vive ate o teto da consulta. Mesma conta de gracefulS() em degraus/lib-admissao.js
+# (os dois selftests conferem a mesma tabela). Sem acompanhamento (PctAcompanha 0) fica o 30 s de sempre. O espaco entre degraus = graceful + 1.
+function Get-GracefulS {
+    param([Parameter(Mandatory)][double]$PctAcompanha, [Parameter(Mandatory)][int]$TetoConsultaS)
+    if ($PctAcompanha -gt 0) { return [int][math]::Max(30, $TetoConsultaS + 10) }
+    30
+}
+function Get-EspacoS {
+    param([Parameter(Mandatory)][double]$PctAcompanha, [Parameter(Mandatory)][int]$TetoConsultaS)
+    (Get-GracefulS -PctAcompanha $PctAcompanha -TetoConsultaS $TetoConsultaS) + 1
+}
 
 # Degraus (RpmInicio, RpmInicio + RpmPasso, ... <= RpmMax), cota de pares (usuario, evento) de cada um e
 # tamanho do seed. O k6 reinicia scenario.iterationInTest em 0 a cada cenario: cada degrau usa a faixa
@@ -87,4 +113,30 @@ function Format-LinhaDegrau {
         [long]$Degrau.confirma_5xx, $Degrau.outros, $Degrau.p50_ms, $Degrau.p95_ms, $Degrau.p99_ms,
         [double]$Degrau.p95_max_janela_ms, (($reservas - $erros) / $DuracaoS), $Degrau.descartadas,
         $Braco, $MaxConnections, $PoolHikari, $Commit, $Mapeamento)
+}
+
+# Colunas do modo fila (as de $AdmissaoCabecalho, nesta ordem) de um degrau do resumo do k6. Campo ausente (resumo de um k6 sem o modo fila) vale 0.
+# Texto livre (arranjo, parada, params) sem virgula/quebra de linha: so letras, digitos e . _ - + = ; : (o resto vira _).
+function Format-ColunasAdmissao {
+    param(
+        [Parameter(Mandatory)]$Degrau,
+        [Parameter(Mandatory)][string]$Arranjo,
+        [Parameter(Mandatory)][double]$PctAcompanha,
+        [Parameter(Mandatory)][int]$ConsultaMs,
+        [Parameter(Mandatory)][string]$Parada,
+        [string]$ParamsAutoescala = ''
+    )
+    function N($x) { if ($null -eq $x) { 0 } else { $x } }
+    $limpa = { param($t) ($t -replace '[^A-Za-z0-9._+=;:-]', '_') }
+    $ac = [double](N $Degrau.acompanhadas)
+    $txRej = 0.0; $txTo = 0.0
+    if ($ac -gt 0) { $txRej = (N $Degrau.rejected) / $ac; $txTo = (N $Degrau.timed_out) / $ac }
+    [string]::Format([System.Globalization.CultureInfo]::InvariantCulture,
+        '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9:F6},{10:F6},{11},{12},{13},{14:F1},{15:F1},{16:F1},{17:F1},{18:F1},{19:F1},{20},{21}',
+        (& $limpa $Arranjo), $PctAcompanha, $ConsultaMs, [long](N $Degrau.reservas_202), [long]$ac, [long](N $Degrau.admitidas),
+        [long](N $Degrau.rejected), [long](N $Degrau.timed_out), [long](N $Degrau.sem_estado), $txRej, $txTo,
+        [long](N $Degrau.recusadas_429), [long](N $Degrau.conflitos_422), [long](N $Degrau.consultas_estado),
+        [double](N $Degrau.admitir_p50_ms), [double](N $Degrau.admitir_p95_ms), [double](N $Degrau.admitir_p99_ms),
+        [double](N $Degrau.fim_a_fim_p50_ms), [double](N $Degrau.fim_a_fim_p95_ms), [double](N $Degrau.fim_a_fim_p99_ms),
+        (& $limpa $Parada), (& $limpa $ParamsAutoescala))
 }

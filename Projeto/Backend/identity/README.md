@@ -22,4 +22,4 @@ CRUD, **não** event sourcing), do login (BCrypt), do cadastro em duas fases, do
   (migração `20261028`, guarda de boot `PublicSchemaGuard`). Operação e docs completas: `Projeto/Backend/CLAUDE.md` ("Serviço identity"), smoke
   `docs/testes-manuais/smoke-identity-servico-separado.sh`.
 - **`uid` reciclado**: `TRUNCATE ... RESTART IDENTITY` em `identity.users` exige apagar a chave do volume `identity-keys` e reiniciar este serviço E o backend (cache de JWKS do gateway); o
-  `run-tests.sh` e o `limpar-banco.sh` da carga fazem isso.
+  `run-tests.sh` e o `Projeto/carga/limpar-banco.sh` da carga fazem isso.

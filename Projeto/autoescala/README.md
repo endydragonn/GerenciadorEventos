@@ -110,9 +110,9 @@ O scaler tem de rodar na MESMA shell/ambiente do `up` (as mesmas variáveis efê
 
 ## O que muda no kit de carga e nos smokes
 
-Com o override as réplicas se chamam `<project>-<serviço>-<n>` (`backend`, `reservation`, `identity`, `catalog`, `admission`, `notification`), **sem** os nomes `gerenciador-*` que o kit
-(`setup-host.ps1`, `rpm/subir-host-rpm.ps1`, `degraus/rodar-degraus.ps1`) e os smokes de `docs/testes-manuais/` usam em `docker exec`. Adaptar o kit para a autoescala é da
-Rodada 4 (S3/#178); esta issue só entrega o mecanismo e o dry-run. O `run-tests.sh` já enxerga as réplicas e o `lb` (pelo label do compose) e aborta com eles no ar: pare o scaler (Ctrl+C) e os containers listados antes.
+Com o override as réplicas se chamam `<project>-<serviço>-<n>` (`backend`, `reservation`, `identity`, `catalog`, `admission`, `notification`), **sem** os nomes `gerenciador-*`. Desde a #178 o kit de carga
+(`setup-host.ps1`, `rpm/subir-host-rpm.ps1`, `coleta-host.sh`, `limpar-banco.sh`) acha as réplicas por **label** do compose e aceita a lista de `-f` do braço (`COMPOSE_EXTRAS`); ver "Rodada 4" em `../carga/README.md`.
+Os smokes de `docs/testes-manuais/` ainda usam `docker exec gerenciador-*` (rodam na stack base). O `run-tests.sh` já enxerga as réplicas e o `lb` (pelo label do compose) e aborta com eles no ar: pare o scaler (Ctrl+C) e os containers listados antes.
 
 ## Pool (Supavisor)
 
@@ -134,8 +134,8 @@ o pool é metade do base. Efeito a medir na Rodada 4; 90 por réplica ainda cabe
 - Reiniciar o `backend` (cache de JWKS) ou o `lb` é manual; a limpeza de banco do kit continua exigindo reiniciar **todas** as réplicas do gateway.
 - **Rotação da chave do JWT com N réplicas do `identity`:** a chave é um arquivo no volume `identity-keys`. Apagar o arquivo e reiniciar SÓ uma réplica deixa chaves diferentes no ar (as outras seguem com a antiga na memória e o JWKS varia
   conforme a réplica). Rotacionar exige **parar TODAS as réplicas do identity**, apagar o arquivo, subir e reiniciar o `backend` (cache de JWKS de 24 h). O `run-tests.sh` já exige todas paradas.
-- **Pendência do kit de carga (#178):** o `limpar-banco.sh` da carga (fora do repo) só conhece os nomes fixos `gerenciador-*`; com o override as réplicas não têm esses nomes, então ele não para as réplicas do identity
-  ao apagar a chave. Adaptar o kit (parar todas as réplicas, apagar a chave, subir, reiniciar o gateway) é da #178; esta issue NÃO o edita.
+- **Limpeza do banco com N réplicas (#178):** `Projeto/carga/limpar-banco.sh` (versionado) acha as réplicas por label, para TODAS (stand-by inclusive), apaga a chave do volume `<project>_identity-keys`, sobe de volta
+  (identity, reservation/catalog, admission, backend), espera os slots UP no lb e prova o JWKS com um login de sonda. **O scaler tem de estar parado:** o script o detecta pela chave `adm:replicas` no Redis e recusa rodar.
 - **JWKS no boot:** a 1ª busca do JWKS pelo `lb` pode cair antes de o slot do identity ficar UP (`rise 2`, checks de 2 s) e o gateway só tenta de novo a cada 30 s. Depois do `up`, espere os slots UP e faça um login antes de aplicar carga (o dry-run faz).
 - **Stand-by do `admission` consome a fila** (workers rodam; só o HTTP fica sem tráfego) e o one-shot `particoes` não é visto pela guarda do `run-tests.sh` (termina sozinho, `restart: "no"`).
 - A hipótese de que X não cresce com réplicas (todas disputam a linha do `eventcap`) é da Rodada 4 medir.

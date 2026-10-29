@@ -30,7 +30,7 @@
 #
 #  Uso:  Projeto/e2e/run-e2e.sh
 #  Variaveis (opcionais): E2E_PROJECT (gerenciador-e2e), MANTER (1 = nao derruba o project), ESPERA_UP (900, segundos do --wait).
-#  E2E_SLIM=1 roda os 5 servicos com as imagens enxutas do Slim (docker-compose.slim.yml; gerar antes com Projeto/slim/gerar-imagens-slim.sh).
+#  E2E_SLIM=1 roda os 6 servicos (com o admission, #178) com as imagens enxutas do Slim (docker-compose.slim.yml; gerar antes com Projeto/slim/gerar-imagens-slim.sh).
 #  Compatibilidade: Linux/macOS e Git Bash do Windows (Docker Desktop).
 # =============================================================================
 
@@ -193,12 +193,12 @@ if [ $? -ne 0 ] || [ -n "$VIOLACOES" ]; then
 fi
 ok "sem container_name, sem porta no host, rede e volumes com o prefixo do project, notification -> mailpit:1025, redis, rabbitmq e admission isolados"
 ISOLADO=1
-SERVICOS_SLIM="backend identity catalog reservation notification"
+SERVICOS_SLIM="backend identity catalog reservation notification admission"
 if [ "${E2E_SLIM:-0}" = "1" ]; then
     for svc in $SERVICOS_SLIM; do
         dexec image inspect "gerenciador-eventos-$svc.slim:latest" >/dev/null 2>&1 || abortar "E2E_SLIM=1 mas falta a imagem gerenciador-eventos-$svc.slim (rode Projeto/slim/gerar-imagens-slim.sh)."
     done
-    ok "E2E_SLIM=1: imagens *.slim presentes; os 5 servicos vao rodar com elas"
+    ok "E2E_SLIM=1: imagens *.slim presentes; os 6 servicos vao rodar com elas"
 fi
 
 echo "==> 1. project limpo; 1a) so o redpanda; 1b) um pedido de e-mail PENDENTE no topico; 1c) up -d --build --wait (pode levar varios minutos no 1o build)"
