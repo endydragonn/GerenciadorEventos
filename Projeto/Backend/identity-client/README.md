@@ -4,7 +4,7 @@ Lib (jar simples, sem repackage) com o **contrato HTTP** do serviço `identity` 
 `RecaptchaResponse`, as interfaces `UserApi`, `EmailVerificationApi`, `MyWalletApi` e `RecaptchaApi`, as exceções
 `IdentityUnavailableException` e `IdentityNaoEncontradoException` e o `IdentityClient`.
 
-- **Quem usa:** o gateway (monólito) monta o `IdentityClient` pelo `IdentityClientConfig` (desde o cutover, fatia 3) e o injeta como
+- **Quem usa:** o gateway (monólito) monta o `IdentityClient` pelo `IdentityClientConfig` e o injeta como
   `UserApi`/`EmailVerificationApi`/`MyWalletApi`/`RecaptchaApi`; o serviço `identity` implementa os mesmos endpoints e NÃO escaneia o
   pacote `identityclient` (só usa os tipos do contrato e o cliente nos testes ponta a ponta).
 - **`IdentityClient`:** uma chamada HTTP por método, header `X-Internal-Token` em TODA chamada (sem token a construção falha). Apache
@@ -13,9 +13,9 @@ Lib (jar simples, sem repackage) com o **contrato HTTP** do serviço `identity` 
 - **`MyWalletApi.walletExists`** (não `exists`): o `IdentityClient` implementa `UserApi` e `MyWalletApi` na mesma classe e as duas tinham
   `boolean exists(Long)`.
 
-## Contrato `/internal/**` (o que o serviço da fatia 2 implementa)
+## Contrato `/internal/**` (o que o serviço `identity` implementa)
 
-Tudo exige `X-Internal-Token` (401 sem/errado, SEM o marcador de credenciais), menos `GET /.well-known/jwks.json` (fatia 2). Corpo de
+Tudo exige `X-Internal-Token` (401 sem/errado, SEM o marcador de credenciais), menos `GET /.well-known/jwks.json`. Corpo de
 erro = texto puro com a mensagem. JSON dos DTOs como o `/bff` de hoje (`User`: `user_id`, `name`, `email`, `fone`, `password`,
 `birthdate`, `isAdmin`, `isHost`, `isActive`, `created_at`, `updatedAt`).
 
