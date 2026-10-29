@@ -175,9 +175,9 @@ estende a escada (`degraus/`), a coleta do host e a limpeza entre blocos; **nada
 |---|---|---|
 | Sem autoescala | `make host-rpm` / `make setup-host` (base + `carga/docker-compose.carga.yml` [+ `rpm/docker-compose.rpm.yml`]) | `Hikari` do `reservation` = **1000**. Rótulo: `ARRANJO=sem-autoescala` |
 | Com autoescala (braço C) | `make host-rpm COMPOSE_EXTRAS=docker-compose.autoescala.yml` | `Hikari` do `reservation` = **300 por réplica**. `ARRANJO=autoescala`; scaler no host (abaixo) |
-| Slim | `COMPOSE_EXTRAS=docker-compose.slim.yml` (e `,docker-compose.autoescala.yml` no braço C) | só depois de gerar as imagens (`slim/README.md`); `ARRANJO=sem-autoescala+slim` ou `autoescala+slim` |
+| Imagens completas (depuração) | `COMPOSE_EXTRAS=docker-compose.completa.yml` (e `,docker-compose.autoescala.yml` no braço C) | as `*.slim` são o **padrão** (#197): gere-as antes (`slim/README.md`; sem elas o `up` falha com "image not found"). O `completa` constrói os 7 serviços pelo Dockerfile. O `--build` que `setup-host`/`host-rpm` acrescentam só reconstrói o `frontend` no base (com o `completa`, também os 7 serviços) |
 
-- **Ordem dos overrides (importa):** `docker-compose.yml`, `carga/docker-compose.carga.yml`, `rpm/docker-compose.rpm.yml`, depois os extras (`slim` e por último
+- **Ordem dos overrides (importa):** `docker-compose.yml`, `carga/docker-compose.carga.yml`, `rpm/docker-compose.rpm.yml`, depois os extras (`completa`, se usado, e por último
   `autoescala`). O override de carga põe o Hikari do `reservation` em 1000 e o da autoescala em 300; **a autoescala vem depois**, então vale 300 (3 × 1000 estoura o
   Supavisor, 1500). Os scripts montam a lista (`Get-ArquivosCompose` em `lib-servicos.ps1`, coberta por `lib-servicos.selftest.ps1`), conferem o Hikari de **cada** réplica do
   reservation depois do `up` e avisam se divergir do esperado do braço. Para conferir a lista **antes** de subir, sem imprimir segredo (nunca `docker compose config` sem

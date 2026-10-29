@@ -15,8 +15,8 @@ seguem iguais.
 
 ```bash
 cd Projeto
-docker compose -f docker-compose.yml -f docker-compose.autoescala.yml up -d --build --wait
-# com as imagens enxutas (#177): ... -f docker-compose.yml -f docker-compose.slim.yml -f docker-compose.autoescala.yml
+docker compose -f docker-compose.yml -f docker-compose.autoescala.yml up -d --wait   # as imagens *.slim do base têm de existir (slim/gerar-imagens-slim.sh, #197)
+# imagens completas, para depurar: ... -f docker-compose.yml -f docker-compose.completa.yml -f docker-compose.autoescala.yml up -d --build --wait
 ```
 
 Sobe 1 réplica de cada serviço atrás do `lb` (HAProxy 3.2.25, publica a **8081** como sempre; o nginx do frontend chama `lb:8081`; `backend`, `admission` e
@@ -39,7 +39,7 @@ Projeto/autoescala/scaler.sh --seco          # só lê e loga o que faria
 Projeto/autoescala/scaler.sh --uma-vez       # um ciclo e sai
 ```
 
-**Os `-f` do scaler (`AUTOESCALA_COMPOSE_ARQUIVOS`) e o ambiente (ex.: `AUTOESCALA_RESERVATION_HIKARI`) têm de ser os MESMOS do `up`** (inclusive o `docker-compose.slim.yml`, se usado): senão a réplica nova nasce de outra imagem/config ou o `up` dispara um build.
+**Os `-f` do scaler (`AUTOESCALA_COMPOSE_ARQUIVOS`) e o ambiente (ex.: `AUTOESCALA_RESERVATION_HIKARI`, `SLIM_TAG` se definida na shell) têm de ser os MESMOS do `up`** (inclusive o `docker-compose.completa.yml`, se usado): senão a réplica nova nasce de outra imagem/config ou o `up` dispara um build.
 
 Tudo por variável (defaults na ADR): `AUTOESCALA_PROJETO` (`gerenciador-eventos`), `AUTOESCALA_X_RPM` (= `ADMISSION_X_RPM`, 56000), `AUTOESCALA_GATEWAY_RPS` (500,
 **provisório**: a capacidade por réplica do gateway não foi medida; a Rodada 4 calibra), `AUTOESCALA_{RESERVATION,GATEWAY}_{MIN,MAX}` (1/3; o máx. vai até 3, os slots do
@@ -74,7 +74,7 @@ Uma linha por serviço por laço, 6 serviços: `ts` (UTC), `servico` (`reservati
 
 ## Voltar ao normal
 
-Pare o scaler (Ctrl+C) e suba o compose base: `docker compose -f docker-compose.yml up -d --build` (recria `backend`, `reservation`, `identity`, `catalog`, `admission` e `notification` com nome fixo; o `lb` e o one-shot `particoes` ficam
+Pare o scaler (Ctrl+C) e suba o compose base: `docker compose -f docker-compose.yml up -d` (recria `backend`, `reservation`, `identity`, `catalog`, `admission` e `notification` com nome fixo; o `lb` e o one-shot `particoes` ficam
 órfãos: `--remove-orphans`). O compose base nunca foi alterado. **Os tópicos `identity.notification` e `reservation.wallet` continuam com 3 partições** (irreversível): voltar ao base depois do override NÃO devolve a linha de base de 1 partição,
 e por isso a Rodada 4 roda o braço sem autoescala ANTES do braço C.
 
@@ -94,7 +94,7 @@ EOF
 P=gerenciador-e2e-ae; ARQS="docker-compose.yml e2e/docker-compose.e2e.yml docker-compose.autoescala.yml /tmp/sem-porta-lb.yml"   # a ordem importa: e2e ANTES da autoescala
 F=""; for f in $ARQS; do F="$F -f $f"; done
 docker compose -p $P $F config --format json | <confira: sem container_name/ports; notification com MAIL_HOST=mailpit>   # ANTES do up (nunca `config` sem filtro: imprime segredos)
-docker compose -p $P $F up -d --build --wait lb backend admission notification mailpit    # o backend NÃO depende do admission: liste-o
+docker compose -p $P $F up -d --wait lb backend admission notification mailpit    # o backend NÃO depende do admission: liste-o
 AUTOESCALA_PROJETO=$P AUTOESCALA_COMPOSE_ARQUIVOS="$ARQS" autoescala/scaler.sh
 ```
 

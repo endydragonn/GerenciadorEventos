@@ -36,8 +36,8 @@ $base = Get-ArquivosCompose -Projeto $P -Carga $C -Rpm $R
 Confere 'braco sem autoescala: base, carga, rpm' ($base -join '|') "$P\docker-compose.yml|$C|$R"
 $ae = Get-ArquivosCompose -Projeto $P -Carga $C -Rpm $R -Extras @('docker-compose.autoescala.yml')
 Confere 'braco C: a autoescala vem DEPOIS da carga (Hikari 300 por replica vence o 1000)' ($ae -join '|') "$P\docker-compose.yml|$C|$R|$P\docker-compose.autoescala.yml"
-$sl = Get-ArquivosCompose -Projeto $P -Carga $C -Extras @('docker-compose.autoescala.yml', 'docker-compose.slim.yml')
-Confere 'slim sempre antes da autoescala, mesmo informado depois' ($sl -join '|') "$P\docker-compose.yml|$C|$P\docker-compose.slim.yml|$P\docker-compose.autoescala.yml"
+$co = Get-ArquivosCompose -Projeto $P -Carga $C -Extras @('docker-compose.completa.yml', 'docker-compose.autoescala.yml')
+Confere 'completa e autoescala (chaves disjuntas): a ordem informada e mantida' ($co -join '|') "$P\docker-compose.yml|$C|$P\docker-compose.completa.yml|$P\docker-compose.autoescala.yml"
 Confere 'caminho absoluto no extra e mantido' ((Get-ArquivosCompose -Projeto $P -Carga $C -Extras @('D:\x\y.yml'))[-1]) 'D:\x\y.yml'
 Confere '-f para o docker compose' ((ConvertTo-ArgsCompose -Arquivos @('a', 'b')) -join ' ') '-f a -f b'
 Confere 'linha do scaler: relativa a Projeto/ quando esta la dentro' (Get-ArquivosDoScaler -Projeto $P -Arquivos $ae) `

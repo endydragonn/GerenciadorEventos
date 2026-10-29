@@ -1,6 +1,7 @@
 # Override de compose usado SO nos testes de carga (nao altera o compose normal).
 # Uso (feito pelo setup-host.ps1):
 #   docker compose -f docker-compose.yml -f carga/docker-compose.carga.yml up -d --build
+#   (os 7 servicos Java rodam as imagens slim do base, #197: gerar antes com slim/gerar-imagens-slim.sh; o --build so reconstroi o frontend)
 #
 # Desde a #33 (Fase 7) a reserva e um SERVICO separado (container gerenciador-reservation). Cada servico tem a sua config:
 #

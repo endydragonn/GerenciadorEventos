@@ -31,8 +31,8 @@ Um Dockerfile por serviço (`monolito/Dockerfile`, `identity/Dockerfile`, `catal
 (`-pl <serviço> -am`) e roda numa imagem JRE. Pelo compose, da raiz do repositório:
 
 ```bash
-docker compose -f Projeto/docker-compose.yml build identity          # um serviço
-docker compose -f Projeto/docker-compose.yml up -d --build backend   # o gateway (sobe junto o que ele exige)
+Projeto/slim/gerar-imagens-slim.sh identity                          # um serviço (imagem slim, a do compose); completa: -f Projeto/docker-compose.completa.yml build identity
+docker compose -f Projeto/docker-compose.yml up -d backend   # o gateway (sobe junto o que ele exige)
 ```
 
 Com Maven e JDK 21 no host (opcional), tudo a partir desta pasta: `mvn -pl monolito -am test` (módulo e libs de que depende),

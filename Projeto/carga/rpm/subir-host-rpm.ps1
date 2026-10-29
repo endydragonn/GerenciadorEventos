@@ -18,7 +18,7 @@ param(
     [switch]$Verificar,
     [string]$Prefixo = '',
     [int]$OrfaLimiteS = 0,           # issue #204 (R5): limite (s) para uma orfa da saga se resolver no -Verificar; 0 = ORPHAN_MS + 3 x SCAN_MS lidos do container reservation (45 s se nao achar)
-    [string[]]$ComposeExtras = @()   # issue #178: mais overrides (paths relativos a Projeto\), ex. docker-compose.slim.yml e docker-compose.autoescala.yml
+    [string[]]$ComposeExtras = @()   # issue #178: mais overrides (paths relativos a Projeto\), ex. docker-compose.completa.yml (imagens completas; as slim sao o padrao desde a #197) e docker-compose.autoescala.yml
 )
 
 $ErrorActionPreference = 'Stop'
@@ -165,7 +165,7 @@ Ok 'Backend respondendo.'
 Test-HikariDoReservation -Arquivos $arquivos
 if (@($ComposeExtras | Where-Object { $_ -match 'autoescala' }).Count -gt 0) {
     Write-Host 'Braco C: rode o scaler no MESMO ambiente e com os MESMOS -f (Git Bash; PARE-O antes de limpar o banco):' -ForegroundColor Cyan
-    Write-Host ("  AUTOESCALA_COMPOSE_ARQUIVOS='{0}' Projeto/autoescala/scaler.sh" -f (Get-ArquivosDoScaler -Projeto $Projeto -Arquivos $arquivos))
+    Write-Host ("  {1}AUTOESCALA_COMPOSE_ARQUIVOS='{0}' Projeto/autoescala/scaler.sh" -f (Get-ArquivosDoScaler -Projeto $Projeto -Arquivos $arquivos), $(if ($env:SLIM_TAG) { "SLIM_TAG=$($env:SLIM_TAG) " } else { '' }))
 }
 # Via stdin: aspas embutidas em argumento nativo se perdem no PowerShell 5.1.
 $mc = 'SHOW max_connections;' | docker exec -i (Get-ContainerDb) sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -At'

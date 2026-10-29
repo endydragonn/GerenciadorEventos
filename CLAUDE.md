@@ -86,7 +86,8 @@ commitar ou registrar em log.
 
 - Pré-requisito: `Projeto/supabase/.env` existir (o `db` é o `supabase/postgres` e lê os segredos de lá;
   gerar conforme `Projeto/supabase/README.md`).
-- Stack completa: `docker compose -f Projeto/docker-compose.yml up -d --build`
+- Stack completa (desde a #197 os 7 serviços Java rodam as imagens `*.slim` por padrão, sem `build:`): gerar as imagens com `Projeto/slim/gerar-imagens-slim.sh`
+  (sem elas o `up` falha com "image not found", em vez de puxar do Docker Hub) e depois `docker compose -f Projeto/docker-compose.yml up -d`
   (frontend :8088, backend :8081, Postgres host :5433, Supabase Studio :8000 — login com
   `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` de `Projeto/supabase/.env`; sobe junto `meta` e `kong`).
   O backend em Docker fala com o Postgres pelo `supabase-pooler` (Supavisor, sem porta no host);
@@ -130,10 +131,10 @@ commitar ou registrar em log.
   exige usuário e senha, sem default. **Acrescente ao `Projeto/.env` (você mesmo; o repo nunca edita nem imprime o `.env`)** `RABBITMQ_USER=<nome>` e `RABBITMQ_PASSWORD=<valor aleatório>` (ex.: `openssl rand -hex 32`). Sem elas
   **qualquer `docker compose`** recusa com mensagem clara; até lá, exporte-as na shell só para o comando. O `run-tests.sh` usa as do `.env` ou, se exportadas, as da shell (`-e RABBITMQ_USER`, `-e RABBITMQ_PASSWORD`) e exige o
   `gerenciador-rabbitmq` no ar. O backend recebe as duas vazias (sobrepostas no compose). Os testes usam filas com prefixo próprio (nunca as `admission.*` do serviço).
-- O serviço `admission` (#41, container `gerenciador-admission`, API interna `:8085` só na rede `gerenciador-net`, sem datasource) sobe junto com `up -d --build` (depende do `redis` e, desde a #42, do `rabbitmq` e do `reservation`); o `backend`
+- O serviço `admission` (#41, container `gerenciador-admission`, API interna `:8085` só na rede `gerenciador-net`, sem datasource) sobe junto com o `up -d` (depende do `redis` e, desde a #42, do `rabbitmq` e do `reservation`); o `backend`
   **não** depende dele: o gateway conta cada tentativa de reserva por HTTP e, com o `admission` ou o Redis fora, faz fail-open (a reserva segue síncrona, com log). Desde a #42 ele também tem a fila de admissão e o worker pool, e desde a #43 o gatilho (uso de X por evento, histerese) os liga ao
   `POST /internal/admissions` (`ADMISSION_X_RPM`, `ADMISSION_RESERVATION_REPLICAS`, `ADMISSION_QUEUE_ON`, `ADMISSION_SYNC_BELOW`; o gateway responde `202` no modo fila). O e2e sobe `redis`, `rabbitmq` e `admission` isolados, com credenciais efêmeras e X baixo, e faz uma rajada concorrente (passo 4b).
-- O serviço `notification` sobe junto com `up -d --build` (container `gerenciador-notification`); o `backend` não depende dele. O serviço
+- O serviço `notification` sobe junto com o `up -d` (container `gerenciador-notification`); o `backend` não depende dele. O serviço
   `reservation` (container `gerenciador-reservation`, API interna `:8082` só na rede `gerenciador-net`) e o serviço `catalog` (#35, container
   `gerenciador-catalog`, API interna `:8083` só na rede `gerenciador-net`) e o serviço `identity` (#36, container `gerenciador-identity`, API interna `:8084` só na rede, chave do JWT no volume `identity-keys`) também sobem junto, e o `backend` **depende dos três**
   (`service_healthy`); o serviço `stock` (#47, container `gerenciador-stock`, API interna `:8086` só na rede, Hikari 250) também sobe junto e o `reservation` **depende dele** (`service_healthy`, que espera o one-shot `stock-seek`, análogo ao `notification-seek`: move o group `stock` para o fim de `reservation.wallet` só se o group não existe). `POST /bff/seed` fica **desligado** (404) no compose normal; o override de carga (`carga/docker-compose.carga.yml`)
@@ -142,13 +143,14 @@ commitar ou registrar em log.
   porta no host, e-mail num captador Mailpit — nenhum e-mail real), roda cadastro (código lido do e-mail) → evento → reserva → confirmação e o replay
   de `catalog.event` e `reservation.wallet`, e derruba só esse project no fim (`MANTER=1` mantém). Confere o isolamento por `config` antes do `up`.
   Detalhes no `Projeto/Backend/CLAUDE.md`, "Suíte e2e da stack inteira". Os serviços do compose agora têm healthcheck (`backend`, `notification`,
-  `frontend`), então `docker compose -f Projeto/docker-compose.yml up -d --build --wait` espera tudo ficar `healthy`.
-- **Imagens enxutas com o Slim (#177, opcional):** `Projeto/slim/gerar-imagens-slim.sh` gera `gerenciador-eventos-<serviço>.slim` (backend, identity,
-  catalog, reservation, stock, notification, admission) num project isolado `gerenciador-e2e-slim*` (nunca na stack real), e `docker-compose.slim.yml` as usa por
-  override (`-f docker-compose.yml -f docker-compose.slim.yml`); a imagem original (Dockerfile intocado) segue o padrão. `E2E_SLIM=1 Projeto/e2e/run-e2e.sh`
-  roda o e2e com elas. Tabela antes/depois, probe, includes e perfis Seccomp/AppArmor em `Projeto/slim/README.md`. A imagem slim envelhece quando o
-  código muda: regere antes de usar.
-- **Autoescala (#111/#112, opcional):** em `Projeto/`, `docker compose -f docker-compose.yml -f docker-compose.autoescala.yml up -d --build --wait` (réplicas sem
+  `frontend`), então `docker compose -f Projeto/docker-compose.yml up -d --wait` espera tudo ficar `healthy`.
+- **Imagens enxutas com o Slim (#177; padrão desde a #197):** `Projeto/slim/gerar-imagens-slim.sh` gera `gerenciador-eventos-<serviço>.slim:${SLIM_TAG:-latest}` (backend, identity,
+  catalog, reservation, stock, notification, admission) num project isolado `gerenciador-e2e-slim*` (nunca na stack real) e é o único jeito de gerá-las; o
+  `docker-compose.yml` as usa (`pull_policy: never`, sem `build:`). A imagem completa (Dockerfile intocado) fica no override `docker-compose.completa.yml`, para depurar:
+  `docker compose -f Projeto/docker-compose.yml -f Projeto/docker-compose.completa.yml up -d --build <serviço>`. **`up -d --build <serviço>` NÃO reconstrói mais os serviços
+  Java** (roda a slim que existir, possivelmente velha): depois de mudar código, `Projeto/slim/gerar-imagens-slim.sh <serviço>` e `up -d`. `SLIM_TAG` (opcional, default `latest`; vale da shell ou do `Projeto/.env`, como qualquer variável do compose) muda a tag gerada/usada, para um lote novo sem sobrescrever o `:latest`; os scripts perguntam ao próprio compose qual tag ele resolve e a mostram no log. `Projeto/e2e/run-e2e.sh` roda com as slim e confere o ID da imagem
+  de cada serviço (`E2E_COMPLETA=1` usa as completas). Tabela antes/depois, probe, includes e perfis Seccomp/AppArmor em `Projeto/slim/README.md`.
+- **Autoescala (#111/#112, opcional):** em `Projeto/`, `docker compose -f docker-compose.yml -f docker-compose.autoescala.yml up -d --wait` (réplicas sem
   nome fixo, HAProxy `lb` na 8081) e o scaler no host, `Projeto/autoescala/scaler.sh` (`--seco` só loga, `--uma-vez` roda um ciclo). **Irreversível na stack
   real:** o one-shot `particoes` leva `identity.notification` e `reservation.wallet` a 3 partições para sempre. Operação, volta ao compose base e dry-run em
   project isolado em `Projeto/autoescala/README.md`.
@@ -296,7 +298,7 @@ o e2e ganhou o passo 4b (rajada concorrente, fila drenada, overselling 0 contra 
 contagem), `rejected` ou `timed_out`. O fluxo síncrono não mudou. PR #196; detalhes no `Projeto/frontend/CLAUDE.md`; follow-ups #195 (pending vencido bloqueia nova
 reserva até a varredura do job) e #198 (`Idempotency-Key` gerada no cliente).
 
-**Implementado (issue #177, 2026-10-28, Batch 2):** imagens enxutas com o Slim, por override opcional (`docker-compose.slim.yml`; Dockerfiles intocados), hoje para
+**Implementado (issue #177, 2026-10-28, Batch 2):** imagens enxutas com o Slim, por override opcional (`docker-compose.slim.yml`; Dockerfiles intocados; desde a #197 são o padrão do `docker-compose.yml` e o override virou o `docker-compose.completa.yml`, que devolve a imagem completa), hoje para
 as 7 imagens de serviço (o `admission` entrou na #178 e o `stock` na #47), de −23% a −27%, com a chave do JWT fora da `identity.slim`. PR #189; tabela, probe e perfis em
 `Projeto/slim/README.md` e no `Projeto/Backend/CLAUDE.md`, "Imagens enxutas (Slim)". Follow-up #210 (a sonda do `admission` ainda cria o `eventcap` no `reservation`).
 

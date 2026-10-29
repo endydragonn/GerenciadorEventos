@@ -5,28 +5,33 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
 
 ## Rodar
 
-- Via Docker (recomendado): `docker compose -f Projeto/docker-compose.yml up -d --build backend`
+**Imagens (#197):** os 7 serviços Java (backend, identity, catalog, reservation, stock, notification, admission) rodam, por padrão, as imagens enxutas
+`gerenciador-eventos-<serviço>.slim:${SLIM_TAG:-latest}` (sem `build:`, `pull_policy: never`: sem a imagem o `up` falha com "image not found"). Gere com
+`Projeto/slim/gerar-imagens-slim.sh [serviço ...]` — e de novo depois de mudar o código de um serviço, porque `up -d --build <serviço>` **não** o reconstrói mais.
+Para depurar com a imagem completa: `docker compose -f Projeto/docker-compose.yml -f Projeto/docker-compose.completa.yml up -d --build <serviço>`.
+
+- Via Docker (recomendado): `docker compose -f Projeto/docker-compose.yml up -d backend`
   — porta `8081`, container `gerenciador-backend`. Sobe junto `db`, `supabase-pooler` e `redpanda` (o
   backend espera o broker ficar `healthy`); no Docker o backend fala **pelo pooler** (Supavisor), ver
   "Pooler" em Persistência, e com o broker em `redpanda:9092` (`SPRING_KAFKA_BOOTSTRAP_SERVERS`).
-- Serviço `notification` (issue #32): `docker compose -f Projeto/docker-compose.yml up -d --build notification`
+- Serviço `notification` (issue #32): `docker compose -f Projeto/docker-compose.yml up -d notification`
   — container `gerenciador-notification`, sem porta. Ver "Serviço notification". O `backend` NÃO depende dele.
-- Serviço `reservation` (issue #33): `docker compose -f Projeto/docker-compose.yml up -d --build reservation` — container
+- Serviço `reservation` (issue #33): `docker compose -f Projeto/docker-compose.yml up -d reservation` — container
   `gerenciador-reservation`, API interna na `:8082` **só na rede `gerenciador-net`** (sem porta no host). Ver "Serviço reservation".
   O `backend` **depende dele** (`depends_on: reservation: service_healthy`): sem ele não há reserva (o resto do monólito sobe).
-- Serviço `stock` (issue #47): `docker compose -f Projeto/docker-compose.yml up -d --build stock` — container `gerenciador-stock`, API interna na `:8086` **só na rede**; entrypoint
+- Serviço `stock` (issue #47): `docker compose -f Projeto/docker-compose.yml up -d stock` — container `gerenciador-stock`, API interna na `:8086` **só na rede**; entrypoint
   `com.gerenciador.eventos.stock.StockApplication`, `stock/Dockerfile`. Dono do `eventcap` (CAS) e do ledger de holds; o `reservation` **depende dele** (`service_healthy`, que por sua vez espera o
   one-shot `stock-seek`). Ver "Serviço stock e saga stock + wallet".
-- Serviço `catalog` (issue #35): `docker compose -f Projeto/docker-compose.yml up -d --build catalog` — container `gerenciador-catalog`,
+- Serviço `catalog` (issue #35): `docker compose -f Projeto/docker-compose.yml up -d catalog` — container `gerenciador-catalog`,
   API interna na `:8083` **só na rede**; entrypoint `com.gerenciador.eventos.catalog.CatalogApplication`, `catalog/Dockerfile`. O `backend`
   também depende dele (`service_healthy`); com ele parado `/bff/events/**` e a reserva respondem 503 (na reserva, um positivo de `exists`
   ainda no cache de 30 s do gateway deixa a reserva seguir). Ver "Serviço catalog".
-- Serviço `identity` (issue #36): `docker compose -f Projeto/docker-compose.yml up -d --build identity` — container `gerenciador-identity`,
+- Serviço `identity` (issue #36): `docker compose -f Projeto/docker-compose.yml up -d identity` — container `gerenciador-identity`,
   API interna na `:8084` **só na rede**; entrypoint `com.gerenciador.eventos.identity.IdentityApplication`, `identity/Dockerfile`. Gera (1º boot) e
   guarda a chave de assinatura do JWT no volume `identity-keys`. O `backend` **depende dele** (`service_healthy`); com ele parado login, cadastro,
   `/bff/users/**` e `/bff/my-wallets/**` respondem 503, mas quem tem token válido segue reservando (JWKS em cache no gateway). **Não sobe** com a
   migração `20261028` pendente (`PublicSchemaGuard`). Ver "Serviço identity".
-- Serviço `admission` (issue #41): `docker compose -f Projeto/docker-compose.yml up -d --build admission` — container `gerenciador-admission`, API interna
+- Serviço `admission` (issue #41): `docker compose -f Projeto/docker-compose.yml up -d admission` — container `gerenciador-admission`, API interna
   na `:8085` **só na rede**; entrypoint `com.gerenciador.eventos.admission.AdmissionApplication`, `admission/Dockerfile`. Sobe junto o **Redis**
   (`gerenciador-redis`) e, desde a #42, o **RabbitMQ** (`gerenciador-rabbitmq`) e o `reservation` (depende dos três, `service_healthy`: o worker pool da fila de
   admissão chama o reservation). O `backend` **não** depende dele (o gateway faz fail-open): com ele parado a reserva segue
@@ -1747,16 +1752,18 @@ exigem `E2E_REPLAY=1`, ficam PULADAS no `run-tests.sh`, não truncam nada e reut
   (`service_completed_successfully`). Group novo não relê o log (evento de teste de uma stack apagada não vira e-mail); group existente (e-mail
   legítimo pendente com o serviço parado) fica intocado. Tópico inexistente não falha.
 - **Healthchecks** (#37): `backend` (GET cru em `/actuator/health` por `bash /dev/tcp`, espera `200`), `notification` (sem HTTP: há conexão TCP ESTABELECIDA ao broker :9092 em `/proc/net/tcp`/`tcp6`, consumer ligado; o lag do group segue sendo o sinal de que ele consome) e
-  `frontend` (`wget` do busybox do nginx); o `frontend` agora espera o `backend` `service_healthy`. `docker compose up -d --build --wait` termina com
+  `frontend` (`wget` do busybox do nginx); o `frontend` agora espera o `backend` `service_healthy`. `docker compose up -d --wait` termina com
   todo serviço de longa duração `healthy` (o `notification-seek` termina com 0).
 - Pré-requisitos: `Projeto/.env` e `Projeto/supabase/.env`, python, e RAM para ~15 containers a mais (a stack real pode ficar no ar; se faltar,
   `docker compose -p gerenciador-eventos stop`, nunca `down`). O 1º build (inclui o Flutter do frontend) leva vários minutos.
 
 ### Imagens enxutas (Slim) — issue #177
 
-Opcional, sem mexer nos Dockerfiles: `Projeto/slim/gerar-imagens-slim.sh` gera as imagens `gerenciador-eventos-<serviço>.slim` (probe nos
-endpoints `/internal/**`, `/bff/**`, actuator, JWKS e no caminho Kafka) e `Projeto/docker-compose.slim.yml` as ativa por override
-(`build: !reset null`). `E2E_SLIM=1 Projeto/e2e/run-e2e.sh` roda a suíte e2e com elas e confere que cada serviço usa o ID da imagem `*.slim`.
+Sem mexer nos Dockerfiles: `Projeto/slim/gerar-imagens-slim.sh` gera as imagens `gerenciador-eventos-<serviço>.slim:${SLIM_TAG:-latest}` (probe nos
+endpoints `/internal/**`, `/bff/**`, actuator, JWKS e no caminho Kafka). Desde a #197 elas são o padrão do `docker-compose.yml` (sem `build:`, `pull_policy: never`) e
+o `docker-compose.completa.yml` (`build:` + `image: !reset null` + `pull_policy: !reset null`) devolve a imagem completa para depurar; o script usa esse override no build gordo.
+`SLIM_TAG` (opcional, default `latest`; vale da shell ou do `Projeto/.env`, como qualquer variável do compose) muda a tag gerada/usada, para um lote novo sem sobrescrever o `:latest`; os scripts perguntam ao próprio compose qual tag ele resolve e a mostram no log. `Projeto/e2e/run-e2e.sh` roda a suíte e2e com as slim e confere que cada serviço usa o
+ID da imagem `*.slim:$SLIM_TAG` (`E2E_COMPLETA=1`: as completas construídas no project, com o mesmo conferido de ID).
 Tabela antes/depois, includes (com motivo) e perfis Seccomp/AppArmor (opcionais, não aplicados por padrão) em `Projeto/slim/README.md`. Desde a #47 inclui o `stock` (probe de `/internal/holds`,
 `/internal/eventcaps/**` e do `StockReleaseConsumer`, com um `ReservationCancelled` produzido antes do start).
 

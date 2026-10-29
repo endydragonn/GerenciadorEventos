@@ -5,8 +5,9 @@
 # =============================================================================
 #
 #  Gera, por `slim build --target <imagem>`, a versao enxuta de backend, identity, catalog, reservation, stock, notification e admission
-#  (o `admission` entrou na #178, o `stock` na #47). As imagens originais (Dockerfiles intocados) continuam o padrao do
-#  compose; as `*.slim` entram so pelo override Projeto/docker-compose.slim.yml (ver slim/README.md).
+#  (o `admission` entrou na #178, o `stock` na #47). Desde a #197 (D7) as `*.slim` sao o PADRAO do compose (docker-compose.yml, sem `build:`) e este
+#  script e o UNICO jeito de gera-las; a imagem completa (Dockerfiles intocados) e construida aqui pelo override docker-compose.completa.yml
+#  (que tambem serve para depurar, ver slim/README.md). Depois de mudar codigo de um servico, regenere a slim dele antes do `up`.
 #
 #  COMO: sobe, num project docker compose ISOLADO (gerenciador-e2e-slim*, mesmo override de isolamento do run-e2e: sem
 #  container_name, sem porta no host, rede e volumes proprios, e-mail num captador Mailpit), as dependencias reais
@@ -22,8 +23,10 @@
 #  (creport, Dockerfile.reversed) NAO e versionado.
 #
 #  Uso:  Projeto/slim/gerar-imagens-slim.sh [servico ...]      (padrao: identity stock reservation catalog backend notification admission)
-#  Variaveis (opcionais): SLIM_PROJECT (gerenciador-e2e-slim), MANTER (1 = nao derruba o project no fim), ESPERA_UP (900).
-#  Idempotente: cada execucao regenera as imagens `*.slim` (mesmas tags) a partir do codigo atual e derruba o project.
+#  Variaveis (opcionais): SLIM_PROJECT (gerenciador-e2e-slim), MANTER (1 = nao derruba o project no fim), ESPERA_UP (900),
+#  SLIM_TAG (default latest; vale da shell ou do Projeto/.env, como qualquer variavel do compose): tag das imagens geradas. O script NAO a define: pergunta ao proprio
+#  compose base (`config --images`, shell > .env > default) qual tag ele usa e mostra no log, para gerar exatamente o que o `up` vai rodar. Com outra tag o `:latest` NAO e tocado.
+#  Idempotente: cada execucao regenera as imagens `*.slim` (da tag $SLIM_TAG) a partir do codigo atual e derruba o project.
 #  Pre-requisitos: docker (compose v2), python, Projeto/.env e Projeto/supabase/.env. Nada e instalado no host.
 #  Compatibilidade: Linux/macOS e Git Bash do Windows (Docker Desktop).
 # =============================================================================
@@ -55,7 +58,8 @@ dexec() { # Git Bash: o docker e nativo do Windows e a conversao de path do MSYS
         *) docker "$@" ;;
     esac
 }
-dc() { dexec compose -p "$PROJETO" -f docker-compose.yml -f e2e/docker-compose.e2e.yml "$@"; }
+# o completa em TODA chamada: o base aponta para as *.slim com `pull_policy: never`, e aqui os servicos sao os gordos (build, nome <project>-<servico>)
+dc() { dexec compose -p "$PROJETO" -f docker-compose.yml -f e2e/docker-compose.e2e.yml -f docker-compose.completa.yml "$@"; }
 cli() { dexec exec -i "$CLI" "$@"; }
 winpath() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) (cd "$1" && pwd -W) ;; *) (cd "$1" && pwd) ;; esac; }
 
@@ -82,6 +86,9 @@ PY=""
 for c in python3 python; do "$c" -c 'import json' >/dev/null 2>&1 && { PY="$c"; break; }; done
 [ -n "$PY" ] || abortar "preciso de python (python3)."
 [ -f .env ] && [ -f supabase/.env ] || abortar "faltam Projeto/.env e/ou Projeto/supabase/.env (ver supabase/README.md)."
+# tag das slim = a que o compose base resolve (shell > .env > latest); nao exportamos um default que mudaria essa resolucao
+SLIM_TAG="$(dexec compose -f docker-compose.yml config --images 2>/dev/null | sed -n 's/^gerenciador-eventos-backend\.slim://p' | tr -d '\r')"
+[ -n "$SLIM_TAG" ] || abortar "nao consegui resolver a tag das slim (docker compose -f docker-compose.yml config --images nao devolveu gerenciador-eventos-backend.slim:<tag>; faltam variaveis obrigatorias no Projeto/.env?)."
 
 # --- isolamento (config) ANTES de subir qualquer coisa: so imprime violacoes (nomes), nunca valores --------------------------
 VALIDADOR='
@@ -108,7 +115,7 @@ for e in erros: print("   " + e)
 sys.exit(1 if erros else 0)
 '
 echo "=================================================="
-echo "   SLIM #177: imagens enxutas  (PROJETO=$PROJETO, alvos: ${SERVICOS[*]})"
+echo "   SLIM #177: imagens enxutas  (PROJETO=$PROJETO, alvos: ${SERVICOS[*]}, tag das slim: $SLIM_TAG)"
 echo "=================================================="
 echo "==> 0. isolamento (config) ANTES do up"
 VIOLACOES="$(dc config --format json 2>/dev/null | "$PY" -c "$VALIDADOR" "$PROJETO" 2>&1)"
@@ -119,7 +126,7 @@ ISOLADO=1
 # --- por servico: porta HTTP (vazio = sem HTTP) e nomes das imagens -----------------------------------------------------------
 porta_de() { case "$1" in backend) echo 8081 ;; identity) echo 8084 ;; catalog) echo 8083 ;; reservation) echo 8082 ;; admission) echo 8085 ;; stock) echo 8086 ;; *) echo "" ;; esac; }
 fat_de() { echo "${PROJETO}-$1:latest"; }                  # imagem gorda construida pelo compose neste project
-slim_de() { echo "gerenciador-eventos-$1.slim:latest"; }   # a que o override docker-compose.slim.yml usa
+slim_de() { echo "gerenciador-eventos-$1.slim:$SLIM_TAG"; } # a que o docker-compose.yml usa (padrao)
 for s in "${SERVICOS[@]}"; do
     case "$s" in backend|identity|catalog|reservation|stock|notification|admission) ;; *) abortar "servico desconhecido: $s" ;; esac
 done

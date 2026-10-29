@@ -27,7 +27,7 @@ chamada pelo gateway pela lib [`admission-client`](../admission-client/README.md
   transitória faz backoff e a mensagem volta. A dead-letter é reconciliada pelo `replay` do reservation.
 - **Redis e RabbitMQ:** containers `gerenciador-redis` (com senha, sem persistência, `maxmemory` com `volatile-ttl`) e `gerenciador-rabbitmq` (sem management e sem
   volume: reiniciar perde as mensagens em fila), ambos sem porta no host.
-- **Rodar:** `docker compose -f Projeto/docker-compose.yml up -d --build admission` (sobe junto `redis`, `rabbitmq` e `reservation`). O `backend` **não** depende
+- **Rodar:** `docker compose -f Projeto/docker-compose.yml up -d admission` (sobe junto `redis`, `rabbitmq` e `reservation`). O `backend` **não** depende
   dele: com ele ou o Redis fora, o gateway faz fail-open e a reserva segue síncrona, só sem a contagem. **Obrigatórias no `Projeto/.env`, sem default:**
   `REDIS_PASSWORD`, `RABBITMQ_USER` e `RABBITMQ_PASSWORD`. Outras variáveis (só nomes): `INTERNAL_API_TOKEN`, `REDIS_HOST`, `RABBITMQ_HOST`, `RESERVATION_SERVICE_URL`
   e as `ADMISSION_*` (fila, worker, resultado e gatilho; defaults no compose).

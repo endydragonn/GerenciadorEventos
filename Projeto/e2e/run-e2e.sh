@@ -32,7 +32,13 @@
 #
 #  Uso:  Projeto/e2e/run-e2e.sh
 #  Variaveis (opcionais): E2E_PROJECT (gerenciador-e2e), MANTER (1 = nao derruba o project), ESPERA_UP (900, segundos do --wait).
-#  E2E_SLIM=1 roda os 7 servicos (com o admission, #178) com as imagens enxutas do Slim (docker-compose.slim.yml; gerar antes com Projeto/slim/gerar-imagens-slim.sh).
+#  IMAGENS DOS SERVICOS (#197, D7): por padrao os 7 servicos Java (com o admission, #178) rodam as imagens ENXUTAS do Slim, que o docker-compose.yml ja
+#  referencia (`gerenciador-eventos-<servico>.slim:${SLIM_TAG:-latest}`, sem build). Elas precisam existir (Projeto/slim/gerar-imagens-slim.sh): o script
+#  confere antes do `up` e aborta se faltar alguma; depois do `up` confere que cada container roda o ID dessa imagem. SLIM_TAG (default latest; vale da
+#  shell ou do Projeto/.env, como qualquer variavel do compose) escolhe outra tag, p.ex. para testar um lote novo sem tocar o `:latest`. O script NAO a define: pergunta
+#  ao proprio compose (`config --images`) qual tag ele usa, mostra no log e confere essa.
+#  E2E_COMPLETA=1 roda com as imagens COMPLETAS (docker-compose.completa.yml: `up --build` constroi os 7 pelo Dockerfile) e depois do `up` confere que
+#  cada container roda o ID da imagem gorda construida no project (`<project>-<servico>:latest`).
 #  Compatibilidade: Linux/macOS e Git Bash do Windows (Docker Desktop).
 # =============================================================================
 
@@ -72,9 +78,10 @@ dexec() {
         *) docker "$@" ;;
     esac
 }
-# E2E_SLIM=1: roda a suite com as imagens enxutas dos servicos (override docker-compose.slim.yml, issue #177; geradas por slim/gerar-imagens-slim.sh)
-SLIM_ARGS=(); [ "${E2E_SLIM:-0}" = "1" ] && SLIM_ARGS=(-f docker-compose.slim.yml)
-dc() { dexec compose -p "$PROJETO" -f docker-compose.yml -f e2e/docker-compose.e2e.yml ${SLIM_ARGS[@]+"${SLIM_ARGS[@]}"} "$@"; }
+# Padrao: as imagens enxutas (*.slim:$SLIM_TAG) do docker-compose.yml; E2E_COMPLETA=1 troca por build das completas (issue #197, D7)
+# (SLIM_TAG nao e definida aqui: o compose a resolve e o passo 0 a le dele)
+COMPLETA_ARGS=(); [ "${E2E_COMPLETA:-0}" = "1" ] && COMPLETA_ARGS=(-f docker-compose.completa.yml)
+dc() { dexec compose -p "$PROJETO" -f docker-compose.yml -f e2e/docker-compose.e2e.yml ${COMPLETA_ARGS[@]+"${COMPLETA_ARGS[@]}"} "$@"; }
 cli() { dexec exec -i "$CLI" "$@"; }
 psql_db() { # a role do app e a do container; -h localhost evita o peer auth do socket
     dc exec -T db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$POSTGRES_DB" -At' <<<"$1" | tr -d '\r'
@@ -211,12 +218,17 @@ if [ $? -ne 0 ] || [ -n "$VIOLACOES" ]; then
 fi
 ok "sem container_name, sem porta no host, rede e volumes com o prefixo do project, notification -> mailpit:1025, redis, rabbitmq, admission, stock e stock-seek isolados"
 ISOLADO=1
-SERVICOS_SLIM="backend identity catalog reservation stock notification admission"
-if [ "${E2E_SLIM:-0}" = "1" ]; then
-    for svc in $SERVICOS_SLIM; do
-        dexec image inspect "gerenciador-eventos-$svc.slim:latest" >/dev/null 2>&1 || abortar "E2E_SLIM=1 mas falta a imagem gerenciador-eventos-$svc.slim (rode Projeto/slim/gerar-imagens-slim.sh)."
+SERVICOS_JAVA="backend identity catalog reservation stock notification admission"
+if [ "${E2E_COMPLETA:-0}" = "1" ]; then
+    ok "E2E_COMPLETA=1: os 7 servicos serao construidos pelo Dockerfile (imagem completa) neste project"
+else
+    SLIM_TAG="$(dc config --images 2>/dev/null | sed -n 's/^gerenciador-eventos-backend\.slim://p' | tr -d '\r')"
+    [ -n "$SLIM_TAG" ] || abortar "nao consegui resolver a tag das slim (config --images nao devolveu gerenciador-eventos-backend.slim:<tag>)."
+    ok "tag das slim: $SLIM_TAG (a que o compose resolve: shell > Projeto/.env > latest)"
+    for svc in $SERVICOS_JAVA; do
+        dexec image inspect "gerenciador-eventos-$svc.slim:$SLIM_TAG" >/dev/null 2>&1 || abortar "falta a imagem gerenciador-eventos-$svc.slim:$SLIM_TAG (rode Projeto/slim/gerar-imagens-slim.sh, com SLIM_TAG=$SLIM_TAG se for outra tag; ou E2E_COMPLETA=1 para construir as completas)."
     done
-    ok "E2E_SLIM=1: imagens *.slim presentes; os 7 servicos vao rodar com elas"
+    ok "imagens *.slim:$SLIM_TAG presentes; os 7 servicos vao rodar com elas"
 fi
 
 echo "==> 1. project limpo; 1a) so o redpanda; 1b) um pedido de e-mail PENDENTE no topico; 1c) up -d --build --wait (pode levar varios minutos no 1o build)"
@@ -248,13 +260,13 @@ while read -r servico estado saude codigo; do
     esac
 done <<<"$SAUDE"
 [ "$FALHAS" -eq 0 ] || abortar "stack nao esta toda healthy."
-if [ "${E2E_SLIM:-0}" = "1" ]; then # o override tem que ter valido: cada container roda o ID da imagem *.slim (nao uma gorda reconstruida com o nome slim)
-    for svc in $SERVICOS_SLIM; do
-        confere "$svc roda a imagem *.slim" "$(dexec image inspect -f '{{.Id}}' "gerenciador-eventos-$svc.slim:latest")" \
-            "$(dexec inspect -f '{{.Image}}' "$(dc ps -q "$svc" | head -1)")"
-    done
-    [ "$FALHAS" -eq 0 ] || abortar "algum servico NAO esta rodando a imagem slim."
-fi
+# a imagem tem que ser a esperada: a *.slim:$SLIM_TAG (padrao) ou, com E2E_COMPLETA=1, a gorda construida neste project (nao uma gorda com nome slim)
+imagem_esperada() { if [ "${E2E_COMPLETA:-0}" = "1" ]; then echo "$PROJETO-$1:latest"; else echo "gerenciador-eventos-$1.slim:$SLIM_TAG"; fi; }
+for svc in $SERVICOS_JAVA; do
+    confere "$svc roda a imagem $(imagem_esperada "$svc")" "$(dexec image inspect -f '{{.Id}}' "$(imagem_esperada "$svc")")" \
+        "$(dexec inspect -f '{{.Image}}' "$(dc ps -q "$svc" | head -1)")"
+done
+[ "$FALHAS" -eq 0 ] || abortar "algum servico NAO esta rodando a imagem esperada."
 
 echo "==> 2. guarda de e-mail: o notification so fala com o captador"
 confere "MAIL_HOST efetivo do container notification" mailpit "$(dc exec -T notification printenv MAIL_HOST | tr -d '[:space:]')"
