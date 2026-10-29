@@ -3,7 +3,6 @@ package com.gerenciador.eventos.identity;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
-import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -28,8 +27,9 @@ import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
  *
  * <p><b>Arquivo ilegível ou corrompido = falha no boot</b> ({@link IllegalStateException}): nunca regera por cima, senão todo token
  * válido sumiria em silêncio. Rotação = apagar o arquivo e reiniciar. A gravação é atômica e sem sobrescrever (arquivo temporário completo no mesmo diretório publicado por
- * {@code link(2)}, que falha se o destino já existe): duas instâncias subindo juntas acabam com a mesma chave (quem perde a corrida relê a do
- * vencedor).</p>
+ * {@code link(2)}, que falha se o destino já existe; sem fallback para {@code move}, que não é exclusivo): N réplicas do serviço subindo
+ * juntas no mesmo volume vazio (autoescala, issue #112) acabam com a MESMA chave (quem perde a corrida relê a do vencedor), e o JWKS de
+ * qualquer uma valida o token de qualquer outra. O volume precisa aceitar hard link (o volume nomeado do Docker aceita).</p>
  */
 @Component
 public class JwtSigningKey {
@@ -100,17 +100,12 @@ public class JwtSigningKey {
     /**
      * Publica o temporário (já completo) em {@code destino} SEM sobrescrever: {@code link(2)} falha atomicamente com {@code EEXIST}
      * ({@link FileAlreadyExistsException}) se outro boot já publicou, e quem perde relê a chave do vencedor. Um
-     * {@code Files.move(ATOMIC_MOVE)} NÃO serve: no Linux é {@code rename(2)} e substitui o destino em silêncio. Se o sistema de
-     * arquivos não suporta hard link, cai no {@code Files.move} sem opções (que também recusa sobrescrever).
+     * {@code Files.move(ATOMIC_MOVE)} NÃO serve: no Linux é {@code rename(2)} e substitui o destino em silêncio; o {@code move} sem
+     * opções também não (o JDK checa "existe?" e só depois faz o {@code rename}: há janela de corrida). Por isso não há fallback: o
+     * sistema de arquivos precisa aceitar hard link, ou o boot falha com a mensagem de gravação de {@code carregarOuGerar}.
      */
     private static void publicarSemSobrescrever(Path tmp, Path destino) throws IOException {
-        try {
-            Files.createLink(destino, tmp);
-        } catch (FileAlreadyExistsException perdeu) {
-            throw perdeu;
-        } catch (UnsupportedOperationException | FileSystemException semHardLink) {
-            Files.move(tmp, destino);
-        }
+        Files.createLink(destino, tmp);
     }
 
     private static void gravar(Path destino, RSAKey chave) throws IOException {

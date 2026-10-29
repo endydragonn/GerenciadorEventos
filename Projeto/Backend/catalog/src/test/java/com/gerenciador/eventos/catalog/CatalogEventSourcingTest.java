@@ -10,9 +10,11 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -23,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +37,7 @@ import com.gerenciador.eventos.TestSupport.FakeEventCapServer;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.catalogclient.api.EventoEmConflitoException;
+import com.gerenciador.eventos.catalogclient.api.EventoNaoEncontradoException;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 import com.gerenciador.eventos.shared.events.EventReplay;
 import com.gerenciador.eventos.shared.events.EventStore;
@@ -267,6 +271,118 @@ public class CatalogEventSourcingTest {
 
         replay.rebuild(projection, CatalogEventProjection.STREAM_TYPE, SOMBRA);
         assertEquals(List.of(), replay.divergentTables(projection, SOMBRA, COMPARAVEIS));
+    }
+
+    /** Resultado de uma chamada concorrente: sucesso, 409 (conflito de versão esgotado) ou 404 (evento apagado no meio). */
+    private enum Resultado { OK, CONFLITO_409, NAO_ENCONTRADO_404 }
+
+    private Resultado tentar(Runnable chamada) {
+        try {
+            chamada.run();
+            return Resultado.OK;
+        } catch (EventoEmConflitoException ex) {
+            return Resultado.CONFLITO_409;
+        } catch (EventoNaoEncontradoException ex) {
+            return Resultado.NAO_ENCONTRADO_404;
+        }
+    }
+
+    private long contarTipo(long eventId, String tipo) throws Exception {
+        return consultar("SELECT count(*) FROM catalog.event_store WHERE stream_type = 'catalog.event' AND stream_id = '"
+                + eventId + "' AND event_type = '" + tipo + "'");
+    }
+
+    /**
+     * N réplicas do {@code catalog} (autoescala, issue #112) mandando commands DIFERENTES ao MESMO evento ao mesmo tempo (cada thread na
+     * sua conexão; todas largam juntas): {@code EventUpdated} com conjuntos de apresentadores diferentes, o que gera
+     * {@code PresenterAdded}/{@code PresenterRemoved} por diferença. Cada chamada ou conclui ou vira 409 (conflito esgotado), nunca grava
+     * parcial: o stream fica com versões 1..n contíguas, {@code event.version} = n, um {@code EventUpdated} por chamada bem-sucedida,
+     * o saldo de apresentadores bate com a projeção, o outbox tem uma linha por evento (nenhuma duplicada) e o replay reconstrói a viva.
+     */
+    @RepeatedTest(5)
+    void commandsDiferentesConcorrentesNoMesmoEventoNaoDuplicamNemPulamVersao() throws Exception {
+        Event base = eventService.createEvent(novo("ES réplicas", 50, "Hugo"));
+        long id = base.getEvent_id();
+        List<String[]> conjuntos = List.of(new String[] {"Hugo"}, new String[] {"Hugo", "Ana"}, new String[] {"Bia"},
+                new String[] {}, new String[] {"Ana", "Bia", "Caio"}, new String[] {"Hugo", "Caio"}, new String[] {"Dani"},
+                new String[] {"Ana"});
+        int n = conjuntos.size();
+        CyclicBarrier largada = new CyclicBarrier(n);
+        ExecutorService pool = Executors.newFixedThreadPool(n);
+        List<Resultado> resultados = new ArrayList<>();
+        try {
+            List<Future<Resultado>> fs = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                int k = i;
+                fs.add(pool.submit(() -> {
+                    Event e = novo("ES réplicas", 50, conjuntos.get(k));
+                    e.setEvent_id(id);
+                    e.setDescription("réplica " + k);
+                    largada.await();
+                    return tentar(() -> eventService.updateEvent(e));
+                }));
+            }
+            for (Future<Resultado> f : fs) {
+                resultados.add(f.get(60, TimeUnit.SECONDS));
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        long ok = resultados.stream().filter(r -> r == Resultado.OK).count();
+        assertTrue(ok >= 1, "ao menos uma chamada vence (senão as invariantes abaixo passariam vazias): " + resultados);
+        assertTrue(resultados.stream().noneMatch(r -> r == Resultado.NAO_ENCONTRADO_404), "ninguém apagou o evento: " + resultados);
+        List<String> tipos = tiposDoStream(id); // também confere versões 1..n sem buraco
+        assertEquals(ok, contarTipo(id, "EventUpdated"), "um EventUpdated por chamada bem-sucedida (409 não grava nada): " + resultados);
+        assertEquals(1 + ok + contarTipo(id, "PresenterAdded") + contarTipo(id, "PresenterRemoved"), tipos.size());
+        assertEquals(tipos.size(), consultar("SELECT version FROM catalog.event WHERE event_id = " + id), "event.version = último evento");
+        long apresentadores = consultar("SELECT count(*) FROM catalog.eventpresenter WHERE event_id = " + id);
+        assertEquals(1 + contarTipo(id, "PresenterAdded") - contarTipo(id, "PresenterRemoved"), apresentadores,
+                "saldo de PresenterAdded/Removed = apresentadores da projeção");
+        assertEquals(tipos.size(), consultar("SELECT count(*) FROM catalog.event_outbox ob JOIN catalog.event_store es ON "
+                + "es.global_position = ob.global_position WHERE es.stream_id = '" + id + "'"), "uma linha de outbox por evento, nenhuma em dobro");
+        replay.rebuild(projection, CatalogEventProjection.STREAM_TYPE, SOMBRA);
+        assertEquals(List.of(), replay.divergentTables(projection, SOMBRA, COMPARAVEIS));
+    }
+
+    /**
+     * Updates concorrentes com um {@code DELETE} no meio: o cancelamento é o ÚLTIMO evento do stream, uma vez só; update que perde a
+     * corrida vira 404 (evento já apagado) ou termina antes dele. Nenhuma versão depois do {@code EventCancelled}, nenhuma pulada.
+     */
+    @RepeatedTest(3)
+    void deleteConcorrenteComUpdatesCancelaUmaVezEDepoisDeleNadaSeGrava() throws Exception {
+        Event base = eventService.createEvent(novo("ES delete concorrente", 50, "Hugo"));
+        long id = base.getEvent_id();
+        int updates = 5;
+        CyclicBarrier largada = new CyclicBarrier(updates + 2);
+        ExecutorService pool = Executors.newFixedThreadPool(updates + 2);
+        try {
+            List<Future<Resultado>> fs = new ArrayList<>();
+            for (int i = 0; i < updates + 2; i++) {
+                int k = i;
+                fs.add(pool.submit(() -> {
+                    largada.await();
+                    if (k >= updates) { // dois deletes: o segundo é no-op ou 404
+                        return tentar(() -> eventService.delete(id));
+                    }
+                    Event e = novo("ES delete concorrente", 50, k % 2 == 0 ? new String[] {"Hugo", "Ana"} : new String[] {"Bia"});
+                    e.setEvent_id(id);
+                    e.setDescription("upd " + k);
+                    return tentar(() -> eventService.updateEvent(e));
+                }));
+            }
+            for (Future<Resultado> f : fs) {
+                f.get(60, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        List<String> tipos = tiposDoStream(id);
+        assertEquals(1, contarTipo(id, "EventCancelled"), "cancelado uma vez só");
+        assertEquals("EventCancelled", tipos.get(tipos.size() - 1), "nada depois do cancelamento: " + tipos);
+        assertEquals(0, consultar("SELECT count(*) FROM catalog.event WHERE event_id = " + id), "o evento sumiu da projeção");
+        assertEquals(tipos.size(), consultar("SELECT count(*) FROM catalog.event_outbox ob JOIN catalog.event_store es ON "
+                + "es.global_position = ob.global_position WHERE es.stream_id = '" + id + "'"));
     }
 
     /** O reservation recusa apagar a capacidade de evento com reserva (409): o catalog não appenda nem apaga nada. */

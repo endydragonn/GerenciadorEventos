@@ -1169,7 +1169,7 @@ no `identity`. Os únicos campos mutáveis:
 | pools HTTP/JDBC (`ReservationClient`, `CatalogClient`, `IdentityClient`, `AdmissionClient`, Hikari) | conexões | recurso por processo, não estado | **dimensionamento, não correção:** a soma dos Hikari de todas as réplicas tem de caber em `POOLER_MAX_CLIENT_CONN` (hoje 1213 de 1500 com 1 réplica de cada; o Hikari 1000 do `reservation` não pode ser multiplicado) |
 | `reservation`: nenhum campo mutável (só repositórios/serviços injetados e `@Value` imutáveis) | — | — | ok. Offsets dos consumers estão no broker e o checkpoint em `projection_checkpoint` (banco) |
 
-Nenhum item quebra com N réplicas. Fora do escopo desta auditoria: `catalog`, `identity`, `notification` e `admission` (o Redis e o RabbitMQ do admission são o
+Nenhum item quebra com N réplicas. `catalog`, `identity`, `notification` e `admission` foram auditados na #112 (seção "Os outros quatro serviços com N réplicas"; o Redis e o RabbitMQ do admission são o
 estado compartilhado dele por desenho).
 
 **Jobs com 2+ réplicas** (cada réplica roda o seu `@Scheduled`; o que os mantém corretos, e o teste que prova com N execuções simultâneas, cada uma na própria
@@ -1189,7 +1189,77 @@ contagem em dobro.
 **Custo, não correção:** com N réplicas o relay roda N vezes por tick (50 ms); N−1 abrem uma transação curta que só tenta o lock e sai (a ~20 por segundo cada).
 **Consumers Kafka do `reservation`** (group `reservation`, projeção de disponibilidade, e `reservation-catalog`, reconciliação do `eventcap`): tópicos de 1
 partição, então com N réplicas **só uma consome** e as outras ficam ociosas; a queda de quem consome passa a partição às outras por rebalance, e o checkpoint
-atômico (`projection_checkpoint`) / a criação idempotente por `event_id` evitam aplicar duas vezes. O teste de rebalance é da #112.
+atômico (`projection_checkpoint`) / a criação idempotente por `event_id` evitam aplicar duas vezes. O teste de rebalance e a decisão de partições são da #112 (seção "Os outros quatro serviços com N réplicas").
+
+
+### Os outros quatro serviços com N réplicas (issue #112)
+
+Máximo de **3 réplicas** em cada um de `admission`, `identity`, `catalog` e `notification` (como em `backend`/`reservation`), sempre contando a stand-by. O mecanismo
+(scaler, lb, stand-by) é o da #111 e a passada (b) da #112 o liga a eles (ver "Autoescala dos outros quatro", abaixo); esta seção é a corretude de cada serviço com N réplicas.
+
+**Auditoria do estado em memória** (2026-10-28; `identity`, `catalog`, `notification`, `admission`: busca por `Map`/`List`/`Set` estáticos e de instância, `Atomic*`/`volatile`/
+`synchronized`/locks/`Caffeine`/`@Cacheable`/`ThreadLocal`/sessão/`Executor` próprio e por campos não-`final` em beans singleton). Nada de domínio vive na memória. Os únicos campos
+mutáveis do `src/main` são dependências `@Autowired`/`@Value` (imutáveis depois do boot), os POJOs `PendingVerification`/`Event` (por requisição), o `CatalogEventWriter.Tx`
+(um por command, local à thread) e o `AtomicBoolean` do `BrokerBloqueado`:
+
+| Serviço | O que parece estado | Onde mora de verdade | Com N réplicas |
+|---|---|---|---|
+| `identity` | chave RSA do JWT (`JwtSigningKey.key`, `final`) | arquivo no volume `identity-keys`, criado com `link(2)` (exclusivo) | **mesma chave** em todas (teste abaixo); o JWKS de qualquer réplica valida o token de qualquer outra |
+| `identity` | código de **cadastro** (verificação de e-mail) e tentativas | `identity.pending_verifications` (`PendingVerificationRepository`: `INSERT`/`SELECT`/`UPDATE` JDBC) | banco, nenhuma cópia em memória: o `request-verification` numa réplica e o `verify-email` em outra funcionam |
+| `identity` | código **MFA** do reset de senha e a validade | colunas `users.password_reset_mfa_code`/`password_reset_mfa_expiration` (`UserRepository`) | idem |
+| `identity` | reCAPTCHA (`RecaptchaService`), `PasswordEncoder` (BCrypt) | sem estado (a chamada ao Google é por requisição) | ok |
+| `identity` | `@Scheduled` `NotificationEventRetentionService` | `DELETE` em lotes, idempotente (a execução concorrente espera as linhas travadas e depois vê que sumiram; um deadlock raro vira exceção do tick e o próximo repete) | ok. **Sem teste de concorrência próprio** (mesmo padrão da retenção das chaves de idempotência, provada em `IdempotencyRetentionConcurrentTest`) |
+| `identity`, `catalog` | relay do `<schema>.event_outbox` | `pg_try_advisory_xact_lock` com chave derivada do schema (`OutboxRelay.lockKey`) | ok: o lock é por schema, provado para o `reservation` em `ReservationRelayConcurrentTest` (mesma classe) |
+| `catalog` | `CatalogEventWriter.Tx` (`eventId`, `version`) | uma instância por command, na thread dele; a versão vem de `event.version` lida com `FOR NO KEY UPDATE` | ok |
+| `catalog` | nenhuma cache (leituras vão ao banco; `exists`/`creator_name` são caches do GATEWAY) | — | ok. Leitura com N réplicas: `SELECT` puro |
+| `notification` | nenhum campo mutável (sem HTTP) | checkpoint em `notification.processed_event`; offsets no broker | ok |
+| `admission` | `RpmCounter` (campos `final`), `AdmissionStore`, `FilaDeAdmissao`, `AdmissionWorker` | contador, modo, espera e resultado SÓ no Redis (`adm:*`); fila no RabbitMQ | ok. Não há contador em memória para tirar e ver um teste cair |
+| `admission` | `BrokerBloqueado.bloqueado` (`AtomicBoolean`) | estado **da conexão** desta réplica ao RabbitMQ (alarme de memória/disco) | correto por réplica: cada uma tem a sua conexão e a sua condição de bloqueio |
+| `admission` | relógio do `RpmCounter` | cada réplica manda o seu `agora` ao script Lua (que não chama `TIME`); os buckets são `floor(agora / bucketMs)` | réplicas são containers do mesmo host e dividem o relógio do kernel, então os buckets coincidem; em hosts diferentes o desvio de relógio desloca o bucket (impacto: ms no RPM) |
+
+**Testes novos (#112)** (Postgres, Redpanda, Redis reais; cada "réplica" é uma instância própria com a sua conexão/thread; as concorrentes largam juntas numa `CyclicBarrier`):
+
+- **`identity`, `JwtSigningKeyTest.primeirosBootsConcorrentes...`** (5 repetições): 8 primeiros boots ao mesmo tempo no mesmo diretório vazio terminam com a **mesma chave privada** (JSON inteiro, não só o `kid`), que é a do arquivo, com permissão 600 e sem temporário sobrando;
+  um token emitido pela réplica `i` valida no JWKS de toda réplica `j`. Mutação (local, restaurada): trocar o `createLink` por `Files.move(..., ATOMIC_MOVE)` — `rename(2)` no Linux do container de teste — faz o teste cair (cada réplica guarda na memória a chave que gerou e o arquivo fica com a da última).
+  `publicarSemSobrescrever` não tem mais o fallback para `Files.move` sem opções (o JDK faz "existe? então `rename`", com janela de corrida): o volume precisa aceitar hard link (o volume nomeado do Docker aceita) ou o boot falha com a mensagem de gravação.
+- **`catalog`, `CatalogEventSourcingTest.commandsDiferentesConcorrentes...`** (5 repetições): 8 réplicas mandando `EventUpdated` com conjuntos de apresentadores diferentes (gera `PresenterAdded`/`PresenterRemoved`) ao mesmo evento. Cada chamada conclui ou vira
+  409 (`EventoEmConflitoException`); o stream fica com versões 1..n contíguas, `event.version` = n, **um `EventUpdated` por chamada bem-sucedida**, saldo de `PresenterAdded`−`PresenterRemoved` = apresentadores da projeção, uma linha de outbox por evento e replay == viva.
+  `deleteConcorrenteComUpdatesCancelaUmaVezEDepoisDeleNadaSeGrava` (3 repetições): 5 updates e 2 deletes ao mesmo tempo; `EventCancelled` aparece uma vez e é o último evento (update que perde a corrida vira 404), versões contíguas, evento fora da projeção. O `updatesConcorrentes...` e o
+  `conflitoDeVersao...` da #28 seguem cobrindo o retry (5 tentativas) e o conflito permanente (409). Os commands concorrentes se serializam pelo `FOR NO KEY UPDATE` de `catalog.event`; o conflito otimista só aparece com append fora da projeção (o 409 de `conflitoDeVersao...`). Mutação (local, restaurada): sem o `FOR NO KEY UPDATE` o `updatesConcorrentes...` da #28 cai (409 por conflito esgotado entre 8 threads); os novos aceitam o 409, então o que eles travam são as invariantes do log (contíguo, sem duplicata, um `EventUpdated` por sucesso, outbox 1:1); o `ON CONFLICT` do `EventStore.append` e o `FOR NO KEY UPDATE` se cobrem.
+- **`admission`, `RpmCounterReplicasTest`** (Redis real): duas instâncias de `RpmCounter`, cada uma com a sua conexão, 4 threads cada, contando o mesmo evento: o RPM lido por qualquer uma é a soma exata (240 tentativas, nenhuma perdida nem em dobro); e metade da carga em cada réplica
+  já liga a fila do evento, porque o modo mora no Redis (`7 + 7` tentativas = 0,84 de X; sozinha cada uma ficaria em 0,42).
+- **`notification`, `NotificationRebalanceTest`** e **`reservation`, `ReservationRebalanceTest`**: ver "Consumers com N réplicas" abaixo.
+- **`reservation`, `CatalogReconciliationTest.mesmaMensagemEmQuatroReplicas...`**: a mesma mensagem `EventCreated` em 4 réplicas ao mesmo tempo cria o `eventcap` uma vez só (a idempotência do `reservation-catalog` está toda no `ON CONFLICT DO NOTHING`; sem checkpoint).
+
+**Teto de concorrência no `reservation` (workers do `admission`).** O peso 0 do HAProxy NÃO para os workers: uma réplica do `admission` em stand-by já consome a fila do RabbitMQ assim que sobe, e cada worker faz um CAS no `reservation`. O base tem 32 workers (`ADMISSION_WORKER_CONCURRENCY`) numa réplica
+só. No override (`docker-compose.autoescala.yml`, só esta variável do serviço `admission`) cada réplica ganha **`floor(32 / 3) = 10`**: com as 3 vivas são **30 workers** (3 × 10), dentro do teto de 32 (`ceil` daria 11 e 33, acima do teto). O preço: com UMA réplica
+(começo do braço C) a fila drena com 10 workers em vez de 32, mais devagar; o braço sem autoescala (compose base) segue com 32. A Rodada 4 mede. Mudar o máximo de réplicas do `admission` exige refazer a conta (`AUTOESCALA_ADMISSION_WORKER_CONCURRENCY`).
+
+**Consumers com N réplicas (`notification`, `reservation` e `reservation-catalog`) e partições.** Um group só tem tantos membros úteis quanto partições (no máximo uma réplica por partição), e os tópicos nascem com **1**. Decisão (extensão da ADR da autoescala, "Extensão aos demais serviços (#112)"):
+
+| Tópico (group) | Chave | Decisão | Efeito na ordem |
+|---|---|---|---|
+| `identity.notification` (`notification`) | `streamId` (UUID; um stream de uma versão só por e-mail) | **3 partições** (= máx. de réplicas) | nenhuma ordem a manter entre e-mails; cada e-mail é um stream de 1 evento |
+| `reservation.wallet` (`reservation`) | `event_id` | **3 partições** | a ordem por stream (e por evento) se mantém: a mesma chave cai sempre na mesma partição. **Um evento quente continua numa partição só** (a ADR do backbone já dizia: mais partições não ajudam o evento quente); escalar este consumer só ganha com vários eventos |
+| `catalog.event` (`reservation-catalog`) | `event_id` | **fica 1** | só `EventCreated` de baixo volume e idempotente por `event_id`; réplicas extras ficam ociosas no group, sem custo |
+| `identity.user` | — | não muda | sem consumer |
+
+Ampliar de 1 para 3 muda o `hash(chave) mod N` UMA vez: o que já está no log fica onde está, e versões novas de um stream podem cair numa partição diferente das antigas ainda não consumidas, então dois consumers podem receber versões do mesmo stream **fora de ordem**. Isso fica coberto: o
+checkpoint é por stream e, ao receber a versão `v`, o `IdempotentConsumer` relê do `event_store` as versões que faltam (`checkpoint+1 .. v`) e as aplica em ordem, e depois descarta o que chegar com `version <= checkpoint` (teste `versoesForaDeOrdem...`). **O `add-partitions` em si NÃO acontece nos testes**
+nem no broker real: é irreversível e o broker é compartilhado com os testes. É o one-shot `particoes` do override de autoescala (ver abaixo), que roda só em quem sobe o override. **Os beans `NewTopic` seguem com `.partitions(1)` DE PROPÓSITO**: o `KafkaAdmin` AUMENTA as partições de um tópico que já existe quando o bean declara mais (nunca diminui), então um bean com 3
+faria todo boot de serviço e todo contexto de teste ampliar o tópico real; um bean que diz 1 sobre um tópico de 3 é inofensivo.
+
+- **`notification`, `NotificationRebalanceTest`** (tópico e group de teste `t112-*`, 3 partições criadas pelo teste, remetente fake: nenhum e-mail real): A sobe sozinho, B entra no group no meio do fluxo, A fica preso num envio além do `max.poll.interval.ms` (expulso do group com a mensagem sem commit) e depois A sai com mensagens ainda por consumir. Resultado exigido:
+  **exatamente 1 envio por `eventId`** (24 eventos), todos enviados, todos em `processed_event`, **pelo menos uma reentrega observada** (sem ela "1 envio" não provaria nada), as duas réplicas consumiram, offsets do group no fim das 3 partições e o `.DLT` vazio. `reentregaAOutraReplica...`: a réplica A está no meio do envio (transação aberta, `processed_event` inserido sem
+  commit) quando B recebe o mesmo evento; o `INSERT ... ON CONFLICT DO NOTHING` de B espera o commit de A e depois vê o conflito, então B não envia. Mutação (local, restaurada): fazer `registrar` devolver sempre `true` faz os dois testes cairem (2 envios).
+- **`reservation`, `ReservationRebalanceTest`** (política de erro e `IdempotentConsumer` reais, tópico de teste de 3 partições, eventos appendados no `event_store` ANTES de publicar): (1) A e B no mesmo group, B entra e depois A sai, e os offsets de A nunca são comitados (A "morre" depois do commit do banco e antes do commit do offset: a janela at-least-once do rebalance), então B reentrega o que A já
+  aplicou. Confere `ativos` por evento (cada reserva somada uma vez), o checkpoint de cada stream na última versão, reentrega observada, as duas réplicas consumindo, offsets no fim e `.DLT` vazio; (2) **rehash**: as versões v4, v3, v2 de um stream chegam por uma partição e a v1 por outra, depois: a v4 sozinha aplica v1..v4 (preenchimento do buraco) e o resto é descartado, `ativos` 1; (3) **`40P01`**: duas réplicas
+  aplicam lotes dos mesmos dois streams em ordens opostas (o `Projection` de teste espera numa barreira depois da 1ª aplicação, com a vítima controlada pelo `deadlock_timeout`); o Postgres aborta a réplica do container com `40P01`, que sobe como `BatchListenerFailedException` com `SQLException` na causa, é **transitório** (retry, nunca DLT), a mensagem culpada é reentregue
+  (≥ 2 invocações do listener), cada evento é aplicado uma vez, a partição chega ao fim (não travou) e o `.DLT` fica vazio. Mutação (local, restaurada): sem o checkpoint (`checkpoint()` devolvendo 0 e o CAS sempre verdadeiro) `ativos` do evento sobe de 2 para 8 no rebalance e de 1 para 2 no fora de ordem. O `40P01` não tem guarda de produção para tirar: o teste prova que a causa é 40P01 (o Postgres escolhe a vítima), que o retry é do handler real e que nada vai ao DLT.
+- **Janela at-least-once que o aceite NÃO cobre.** Queda do processo DEPOIS do envio do e-mail e ANTES do commit do banco não é rebalance: a transação do `notification` é desfeita, o evento volta e o e-mail sai de novo (o preço de não perder nenhum, já documentado em "Serviço notification"). O mesmo vale para o commit do banco do `reservation` antes do commit do offset, mas ali a reentrega é descartada pelo checkpoint.
+
+**Pool por réplica (a conta do Supavisor).** No override: `identity` e `catalog` com Hikari **50 por réplica** (base: 100; `AUTOESCALA_IDENTITY_HIKARI`/`AUTOESCALA_CATALOG_HIKARI`), contando a stand-by; `notification` segue com 3 e o `admission` não tem datasource. Com o máximo de 3 réplicas de cada:
+`3 × 300 (reservation) + 3 × 10 (backend) + 3 × 3 (notification) + 3 × 50 (catalog) + 3 × 50 (identity) = 900 + 30 + 9 + 150 + 150 = 1239 <= POOLER_MAX_CLIENT_CONN 1500` (sobram 261). O pool real do Supavisor (45/245) continua sem crescer com réplicas. Mudar o Hikari por réplica ou o máximo de réplicas de qualquer serviço exige refazer a conta.
 
 ### Autoescala: pool por réplica, chave de réplicas ativas e guarda do run-tests (issue #111)
 
@@ -1201,7 +1271,7 @@ Mecanismo, regra 50/80 e parâmetros: ADR `docs/adr/Architecture-Decision-Autoes
   `u >= 0,80` e escoa (`state drain`) antes de descer.
 - **Pool por réplica (a conta do Supavisor).** No override o Hikari do `reservation` é **300 por réplica** (`AUTOESCALA_RESERVATION_HIKARI`, = threads do Tomcat: nenhuma thread espera
   conexão no Hikari; a fila real continua no Supavisor, pool real 45/245, que não cresce com réplicas). Com o máximo de 3 réplicas de cada, **contando a stand-by** (ela abre o
-  `minimum-idle`): `3 × 300 (reservation) + 3 × 10 (backend) + 3 (notification) + 100 (catalog) + 100 (identity) = 1133 <= POOLER_MAX_CLIENT_CONN 1500`; sobram 367 para as réplicas de
+  `minimum-idle`): `3 × 300 (reservation) + 3 × 10 (backend) + 3 (notification) + 100 (catalog) + 100 (identity) = 1133 <= POOLER_MAX_CLIENT_CONN 1500` na #111 (a #112 refez a conta com réplicas de `catalog`/`identity`/`notification`: 1239, ver acima; sobravam 367 para as réplicas de
   `identity` e `catalog` da #112. O compose base segue com 1000 (braço sem autoescala comparável com a Rodada R). Mudar o Hikari por réplica ou o máximo exige refazer a conta.
 - **Réplicas ativas do reservation no `admission`.** O `RpmCounter` não fixa mais `X × réplicas` no construtor: o script Lua lê **`adm:replicas`** (escrita pelo scaler, TTL 15 s, renovada a
   cada laço) na MESMA ida ao Redis. Chave ausente (scaler parado) ou inválida (não inteiro, < 1, > 1000, lixo) => vale `ADMISSION_RESERVATION_REPLICAS` (lado seguro: capacidade menor, fila mais
@@ -1213,6 +1283,21 @@ Mecanismo, regra 50/80 e parâmetros: ADR `docs/adr/Architecture-Decision-Autoes
   `com.docker.compose.service`, porque as réplicas do override se chamam `<project>-<serviço>-<n>` e as guardas por nome não as veem), com a lista dos nomes e o `docker stop` a rodar (pare também o scaler: com as réplicas paradas ele repõe o mínimo).
 - **Falha de leitura do scaler (volta 3):** Redis ilegível, lb mudo ou `docker ps`/`inspect` com erro nunca viram "carga 0" nem "nenhum container": o laço não decide (reservation) ou não age (lb/docker) e zera os contadores de histerese; coberto no `scaler.selftest.sh` (`valida_leitura`, `zera_rastreio`, `ler_estado` com `docker`/`lb_cmd` falsos).
 - **Selftest do scaler** (sem Docker): `Projeto/autoescala/scaler.selftest.sh` (decisão, histerese sem oscilar depois da promoção, descer com `A-1`, mínimo/máximo, cooldown e os parsers do HAProxy).
+
+### Autoescala dos outros quatro: lb, regra por serviço e partições (issue #112, passada b)
+
+Mecanismo da #111 sem mecanismo novo; detalhe e dry-run na ADR (`docs/adr/Architecture-Decision-Autoescala.md`, "Como ficou implementado (#112, passada b)") e a operação em `Projeto/autoescala/README.md`.
+
+- **`lb`:** `haproxy.cfg` ganhou `catalog` (`:8083`), `identity` (`:8084`) e `admission` (`:8085`) (`server-template` de 3 slots, TCP check, só na rede). No override o `backend` (gateway) chama os três por `lb:<porta>` (`IDENTITY_SERVICE_URL`, `CATALOG_SERVICE_URL`, `ADMISSION_SERVICE_URL`; o JWKS do identity vem da primeira),
+  porque os clientes têm pool keep-alive e ficariam presos às réplicas do início. `admission`, `identity`, `catalog` e `notification` sem `container_name`; as réplicas do identity dividem o volume `identity-keys` (mesma chave, criação exclusiva por `link(2)`).
+- **Scaler (`autoescala/scaler.sh`):** a mesma `decidir_acao` para os 6 serviços. HTTP: `u = req/s da seção do lb ÷ (AUTOESCALA_<SVC>_RPS × A)` (defaults PROVISÓRIOS: identity 100, catalog 500, admission 1000; a Rodada 4 calibra). `notification` (consumer): `u = lag do group ÷ AUTOESCALA_NOTIFICATION_LAG`
+  (100), sem stand-by, `ativa` = container healthy, sobe uma com `u > 0,50` e desce uma com lag 0 por 60 s, máximo = `min(AUTOESCALA_NOTIFICATION_MAX, partições de identity.notification lidas do broker)`; leitura que falha não age (CSV `sem_leitura`). CSV com a coluna `servico`
+  (6 serviços; no notification `uso` = lag ÷ referência). Selftest (`scaler.selftest.sh`) cobre HTTP genérico (`rps_delta`), lag, máx. = partições, `ler_estado` com os 6 serviços e leitura do Kafka falha.
+- **Partições:** one-shot `particoes` do override (`rpk topic add-partitions --num`, que ADICIONA N: lê a contagem e soma o que falta; só aumenta; não cria `identity.notification`, que nasce com a retenção curta do `NewTopic` do identity) leva `identity.notification` e `reservation.wallet` a 3. **Irreversível**: subir o override na stack
+  real aumenta as partições do broker real para sempre (a Rodada 4 roda o braço sem autoescala antes do braço C). Os `NewTopic` seguem em `.partitions(1)`. Não mude `default_topic_partitions`.
+- **Pool:** 1239 <= 1500 (inalterado). O Hikari 50 de identity/catalog fica abaixo do Tomcat 300: as threads esperam conexão no Hikari (`connection-timeout` 5 s); 90 por réplica ainda caberia (1479). A medir na Rodada 4.
+- **Dry-run (não é medição)** em project isolado com Mailpit: os 4 serviços sobem e voltam (stand-by, promoção, descarte nos HTTP; lag subindo e descendo no notification, parando em 3 réplicas = 3 partições), overselling 0 e nenhum e-mail duplicado (8001 mensagens = 8001 destinatários).
+- **Pendências nomeadas:** rotação da chave com N réplicas do identity (parar TODAS, apagar o arquivo, subir, reiniciar o backend) e o `limpar-banco.sh` do kit de carga (fora do repo) que só conhece nomes fixos: README e #178.
 
 ## Serviço catalog — issue #35 (Fase 7: terceira extração)
 

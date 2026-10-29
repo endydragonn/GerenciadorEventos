@@ -1,4 +1,5 @@
-# Override da AUTOESCALA de `backend` (gateway) e `reservation` (issue #111, ADR docs/adr/Architecture-Decision-Autoescala.md, opção A).
+# Override da AUTOESCALA de `backend` (gateway) e `reservation` (issue #111) e de `identity`, `catalog`, `admission` e `notification` (issue #112)
+# (ADR docs/adr/Architecture-Decision-Autoescala.md, opção A).
 # Opcional: o compose base NÃO muda (run-tests.sh, kit de carga, smokes e o braço "sem autoescala" seguem com os nomes e a porta de sempre).
 #   docker compose -f docker-compose.yml -f docker-compose.autoescala.yml up -d --build --wait
 # Combina com o override enxuto: ... -f docker-compose.yml -f docker-compose.slim.yml -f docker-compose.autoescala.yml
@@ -6,13 +7,21 @@
 # Nenhuma variável deste arquivo é segredo e nenhuma exige o `.env` (todas têm default).
 #
 # Mudanças em relação ao base:
-#  - `backend` e `reservation` sem `container_name` e sem porta no host (`--scale` exige): réplicas se chamam <project>-<serviço>-<n>.
+#  - `backend`, `reservation`, `identity`, `catalog`, `admission` e `notification` sem `container_name` (e o backend sem porta no host; `--scale` exige):
+#    réplicas se chamam <project>-<serviço>-<n>.
 #  - `lb` (HAProxy, autoescala/haproxy.cfg) publica a 8081 (o contrato do Flutter, porta e path, não muda) e balanceia as réplicas do
-#    backend; a porta 8082 interna balanceia as do reservation. backend, admission e catalog chamam o reservation por `lb:8082` e o nginx
-#    do frontend chama `lb:8081`.
+#    backend; as portas internas (só na rede) balanceiam o reservation (8082), o catalog (8083), o identity (8084) e o admission (8085).
+#    backend, admission e catalog chamam o reservation por `lb:8082`; o backend chama identity, catalog e admission por `lb:<porta>` (inclusive o JWKS);
+#    o nginx do frontend chama `lb:8081`. O notification é consumer Kafka (sem lb): as réplicas dividem as partições no mesmo group.
+#  - `particoes` (one-shot, #112): sobe `identity.notification` e `reservation.wallet` para 3 partições (um group usa no máximo uma réplica por partição).
+#    IRREVERSÍVEL e idempotente (só aumenta o que tem menos de 3). Quem sobe este override na stack REAL aumenta as partições do broker real PARA SEMPRE:
+#    rode antes o braço sem autoescala da Rodada 4 (ver autoescala/README.md). Os testes (run-tests.sh) usam tópicos próprios e não dependem disso.
 #  - Hikari do reservation = 300 POR RÉPLICA (= threads do Tomcat; nenhuma thread espera conexão no Hikari). A conta no Supavisor
 #    (POOLER_MAX_CLIENT_CONN 1500), contando a stand-by, com o máximo de 3 réplicas de cada:
-#    3 x 300 (reservation) + 3 x 10 (backend) + 3 (notification) + 100 (catalog) + 100 (identity) = 1133 <= 1500.
+#    3 x 300 (reservation) + 3 x 10 (backend) + 3 x 3 (notification) + 3 x 50 (catalog) + 3 x 50 (identity) = 1239 <= 1500
+#    (issue #112: identity e catalog caem de 100 para 50 por réplica; o notification tem Hikari 3 e até 3 réplicas; o admission não tem datasource).
+#    Hikari 50 fica ABAIXO dos 300 threads do Tomcat de identity e catalog: sob rajada as threads esperam conexão no Hikari (connection-timeout 5 s);
+#    90 por réplica ainda caberia (900 + 30 + 9 + 270 + 270 = 1479 <= 1500). Efeito a medir na Rodada 4 (AUTOESCALA_IDENTITY_HIKARI/_CATALOG_HIKARI).
 
 services:
   backend:
@@ -20,6 +29,10 @@ services:
     ports: !reset []
     environment:
       RESERVATION_SERVICE_URL: http://lb:8082
+      # #112: identity, catalog e admission também pelo lb (pool keep-alive dos clientes; o JWKS do identity vem da IDENTITY_SERVICE_URL).
+      IDENTITY_SERVICE_URL: http://lb:8084
+      CATALOG_SERVICE_URL: http://lb:8083
+      ADMISSION_SERVICE_URL: http://lb:8085
     depends_on:
       lb:
         condition: service_healthy
@@ -28,21 +41,78 @@ services:
     container_name: !reset null
     environment:
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${AUTOESCALA_RESERVATION_HIKARI:-300}
+    depends_on:
+      particoes:
+        condition: service_completed_successfully
 
   # O worker pool da fila de admissão entrega pelo lb: a réplica promovida passa a receber a fila na hora.
   # O ADMISSION_RESERVATION_REPLICAS (1) vira só o fallback sem a chave do scaler (adm:replicas). O X do gatilho segue o ADMISSION_X_RPM do base,
   # e o scaler usa o MESMO valor (AUTOESCALA_X_RPM, default = ADMISSION_X_RPM, default 56000): mude por ADMISSION_X_RPM e os dois acompanham.
+  # Teto de CAS simultâneos no reservation (issue #112): o peso 0 do lb NÃO para os workers, e uma réplica em stand-by do admission já consome
+  # a fila do RabbitMQ assim que sobe. O base tem 32 workers numa réplica; com no máximo 3 réplicas do admission, cada uma ganha
+  # floor(32 / 3) = 10, e o total com as 3 vivas é 30 <= 32 (o ceil daria 11 e 33, acima do teto que o aceite manda respeitar). Efeito:
+  # com UMA réplica só (o braço C no começo) a fila drena com 10 workers em vez de 32, mais devagar (a Rodada 4 mede); o braço sem autoescala
+  # (compose base) segue com 32. Mudar o máximo de réplicas do admission exige refazer a conta (AUTOESCALA_ADMISSION_WORKER_CONCURRENCY).
   admission:
+    container_name: !reset null
     environment:
       RESERVATION_SERVICE_URL: http://lb:8082
+      ADMISSION_WORKER_CONCURRENCY: ${AUTOESCALA_ADMISSION_WORKER_CONCURRENCY:-10}
     depends_on:
       lb:
         condition: service_healthy
 
   # O catalog também chama o reservation (eventcap): pelo lb, para nunca cair numa réplica em stand-by ou escoando.
+  # Hikari 50 POR RÉPLICA (base: 100), contando a stand-by (a conta está no cabeçalho).
   catalog:
+    container_name: !reset null
     environment:
       RESERVATION_SERVICE_URL: http://lb:8082
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${AUTOESCALA_CATALOG_HIKARI:-50}
+
+  # Hikari 50 POR RÉPLICA (base: 100), contando a stand-by (a conta está no cabeçalho).
+  # As réplicas compartilham o volume `identity-keys` (a mesma chave do JWT; a criação exclusiva é do JwtSigningKey, link(2)).
+  identity:
+    container_name: !reset null
+    environment:
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${AUTOESCALA_IDENTITY_HIKARI:-50}
+
+  # Consumer Kafka: as réplicas entram no group `notification` e dividem as partições de identity.notification (rebalance coberto por
+  # NotificationRebalanceTest). Sem lb nem stand-by. O seek do 1º up e o notification esperam o one-shot de partições.
+  notification:
+    container_name: !reset null
+
+  notification-seek:
+    depends_on:
+      particoes:
+        condition: service_completed_successfully
+
+  # One-shot de partições (#112). `rpk topic add-partitions --num N` ADICIONA N (não "ajusta para N"), então lê a contagem atual e soma o que falta.
+  # identity.notification NÃO é criado aqui (o NewTopic do identity o cria com a retenção curta, porque a mensagem tem e-mail e código): este one-shot
+  # espera o identity ficar healthy e aborta se o tópico não existir. reservation.wallet (o NewTopic não tem config) é criado com 3 se faltar.
+  # Os NewTopic dos serviços ficam em .partitions(1): o KafkaAdmin só aumenta, nunca diminui, então não desfazem isto.
+  particoes:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.4
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -eo pipefail
+        export RPK_BROKERS=redpanda:9092
+        topicos="$$(rpk topic list)"
+        n="$$(awk 'NR > 1 && $$1 == "identity.notification" {print $$2}' <<<"$$topicos")"
+        [ -n "$$n" ] || { echo "identity.notification não existe (o identity não o criou?): abortando"; exit 1; }
+        if [ "$$n" -lt 3 ]; then rpk topic add-partitions identity.notification --num $$((3 - n)); else echo "identity.notification já tem $$n partições"; fi
+        n="$$(awk 'NR > 1 && $$1 == "reservation.wallet" {print $$2}' <<<"$$topicos")"
+        if [ -z "$$n" ]; then rpk topic create reservation.wallet -p 3 -r 1
+        elif [ "$$n" -lt 3 ]; then rpk topic add-partitions reservation.wallet --num $$((3 - n))
+        else echo "reservation.wallet já tem $$n partições"; fi
+        rpk topic list
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      identity:
+        condition: service_healthy
+    restart: "no"
 
   # O nginx lê o upstream do template (BACKEND_UPSTREAM, default backend:8081 no Dockerfile do frontend): aqui aponta para o lb.
   frontend:

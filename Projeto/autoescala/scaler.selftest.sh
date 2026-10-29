@@ -11,6 +11,54 @@ confere "uso: 28k RPM de X=56k com 1 ativa" "$(uso_milli 28000 56000 1)" 500
 confere "uso: o mesmo RPM com 2 ativas" "$(uso_milli 28000 56000 2)" 250
 confere "uso: sem réplica ativa = sem capacidade" "$(uso_milli 100 56000 0)" 999999
 
+# --- serviços HTTP genéricos (#112): req/s da seção do lb = delta de req_tot entre dois laços
+confere "rps: 400 requisições em 2000 ms = 200 req/s" "$(rps_delta 1400 1000 2000)" 200
+confere "rps: sem leitura anterior = 0" "$(rps_delta 1400 '' 2000)" 0
+confere "rps: contador que voltou (lb reiniciado) = 0" "$(rps_delta 10 1000 2000)" 0
+confere "rps: tempo que não andou = 0" "$(rps_delta 1400 1000 0)" 0
+confere "rps: req_tot ilegível = 0" "$(rps_delta '' 1000 2000)" 0
+confere "uso HTTP: 200 req/s, capacidade 100 por réplica, 1 ativa = 2,000" "$(uso_milli 200 100 1)" 2000
+confere "uso HTTP: as mesmas 200 req/s com 2 ativas = 1,000" "$(uso_milli 200 100 2)" 1000
+
+# --- consumer (notification, #112): u = lag / AUTOESCALA_NOTIFICATION_LAG, sem stand-by; máx. = partições lidas do tópico
+confere "consumer: lag 150 com referência 100 = 1,500" "$(uso_milli 150 100 1)" 1500
+confere "máx. do consumer: env 3, tópico com 1 partição = 1" "$(max_consumer 3 1)" 1
+confere "máx. do consumer: env 3, tópico com 3 partições = 3" "$(max_consumer 3 3)" 3
+confere "máx. do consumer: env 5, tópico com 3 partições = 3 (uma réplica por partição)" "$(max_consumer 5 3)" 3
+confere "máx. do consumer: env 2, tópico com 3 partições = 2" "$(max_consumer 2 3)" 2
+confere "consumer: lag acima de 0,50, 1 ativa, máx. 3: sobe (S = 0: já entra no group)" "$(decidir_acao 600 1 0 0 1 3 0 0 1)" subir
+confere "consumer: tópico com 1 partição (máx. 1): nunca sobe" "$(decidir_acao 5000 1 0 0 1 "$(max_consumer 3 1)" 0 0 1)" nada
+confere "consumer: lag 0 (u = 0, vazia): a condição de descer vale" "$(condicoes 0 0 1 0)" "1 0"
+confere "consumer: lag > 0 não é 'vazia': não desce" "$(condicoes 300 300 0 0)" "0 0"
+confere "consumer: lag 0 por 60 s desce uma" "$(decidir_acao 0 2 0 0 1 3 60 0 1)" descer
+confere "consumer: lag 0 por 59 s ainda não" "$(decidir_acao 0 2 0 0 1 3 59 0 1)" nada
+confere "consumer: nunca abaixo do mínimo" "$(decidir_acao 0 1 0 0 1 3 600 0 1)" nada
+
+# --- leitura do Kafka (parsers puros sobre `rpk group describe` e `rpk topic list`)
+DESCRIBE='GROUP        notification
+COORDINATOR  0
+STATE        Stable
+BALANCER     cooperative-sticky
+MEMBERS      2
+TOTAL-LAG    42
+
+TOPIC                  PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG  MEMBER-ID
+identity.notification  0          10              30              20   rdkafka-a
+identity.notification  1          10              32              22   rdkafka-b'
+TOPICOS='NAME                   PARTITIONS  REPLICAS
+identity.notification  3           1
+identity.notification.DLT  1       1
+reservation.wallet     3           1'
+confere "kafka: TOTAL-LAG do group" "$(lag_do_group <<<"$DESCRIBE")" 42
+confere "kafka: partições do tópico (nome exato, não o .DLT)" "$(particoes_do_topico identity.notification <<<"$TOPICOS")" 3
+lag_do_group <<<"GROUP_ID_NOT_FOUND" >/dev/null; confere "kafka: group inexistente = leitura inválida" "$?" 1
+lag_do_group <<<"TOTAL-LAG    -" >/dev/null; confere "kafka: lag não numérico = leitura inválida" "$?" 1
+particoes_do_topico outro.topico <<<"$TOPICOS" >/dev/null; confere "kafka: tópico inexistente = leitura inválida" "$?" 1
+confere "kafka: leitura bruta -> '<lag> <partições>'" "$(kafka_leitura identity.notification <<<"$DESCRIBE
+---TOPICOS---
+$TOPICOS")" "42 3"
+kafka_leitura identity.notification <<<"$DESCRIBE" >/dev/null; confere "kafka: leitura bruta sem a lista de tópicos = inválida" "$?" 1
+
 confere "abaixo de 0,50: nada" "$(decidir_acao 500 1 0 0 1 3 0 0 1)" nada
 confere "acima de 0,50 sem stand-by: sobe" "$(decidir_acao 501 1 0 0 1 3 0 0 1)" subir
 confere "acima de 0,50 com stand-by já pronta: não sobe outra" "$(decidir_acao 600 1 1 0 1 3 0 0 1)" nada
@@ -98,9 +146,13 @@ zera_rastreio cego; rastrear cego 1 1 2052
 confere "depois de zera_rastreio recomeça do zero (período cego não conta)" "$SEG_DESCE $SEG_DESCARTA" "0 0"
 
 # --- ler_estado com docker/lb falhando: não age, não inventa E_N=0 (que viraria subir_min -> --scale 1 sem drain)
+# Seis serviços: reservation, backend, identity, catalog, admission (todos atrás do lb) e notification (consumer sem lb; ativa = container healthy)
 LB=lb12 PROJETO=p
 SHOW_STAT='# pxname,svname,scur,status,weight,req_tot,
 entrada,FRONTEND,3,OPEN,,100,
+identity_interno,FRONTEND,0,OPEN,,40,
+catalog_interno,FRONTEND,0,OPEN,,50,
+admission_interno,FRONTEND,0,OPEN,,60,
 gateway,gw1,0,UP,100,,
 reservation,rs1,0,UP,100,,
 reservation,rs2,0,UP,0,,'
@@ -108,23 +160,45 @@ SHOW_SRV='1
 # be_id be_name srv_id srv_name srv_addr srv_op_state srv_admin_state srv_uweight srv_iweight
 3 gateway 1 gw1 10.0.0.1 2 0 100 100
 4 reservation 1 rs1 10.0.0.2 2 0 100 100
-4 reservation 2 rs2 10.0.0.3 2 0 0 100'
-LB_FALHA=0; PS_FALHA=0; INSPECT_FALHA=0; LB_VAZIO=0
+4 reservation 2 rs2 10.0.0.3 2 0 0 100
+5 identity 1 id1 10.0.0.4 2 0 100 100
+5 identity 2 id2 - 0 0 100 100
+6 catalog 1 ct1 10.0.0.5 2 0 100 100
+7 admission 1 ad1 10.0.0.6 2 0 100 100'
+LB_FALHA=0; PS_FALHA=0; INSPECT_FALHA=0; LB_VAZIO=0; NOTIF2=starting
 lb_cmd() { [ "$LB_FALHA" = 1 ] && return 1; [ "$LB_VAZIO" = 1 ] && return 0; echo "$SHOW_STAT"; echo "$SHOW_SRV"; }
 docker() {
     case "$1" in
         ps) [ "$PS_FALHA" = 1 ] && return 1
-            case "$*" in *service=backend*) echo aaaaaaaaaaaa;; *service=reservation*) printf 'bbbbbbbbbbbb
-cccccccccccc
-';; esac ;;
+            # UM `docker ps` do project inteiro (`--format '{{.ID}} {{.Label ...service}}'`), com serviços que o scaler não escala no meio
+            printf 'aaaaaaaaaaaa backend
+bbbbbbbbbbbb reservation
+cccccccccccc reservation
+dddddddddddd identity
+eeeeeeeeeeee catalog
+ffffffffffff admission
+'
+            printf '111111111111 notification
+222222222222 notification
+999999999999 db
+888888888888 redis
+' ;;
         inspect) [ "$INSPECT_FALHA" = 1 ] && return 1
-            echo "aaaaaaaaaaaa0000 backend 1 10.0.0.1"; echo "bbbbbbbbbbbb0000 reservation 1 10.0.0.2"; echo "cccccccccccc0000 reservation 2 10.0.0.3" ;;
+            # <id> <serviço> <container-number> <health> <IPs...>
+            echo "aaaaaaaaaaaa0000 backend 1 healthy 10.0.0.1"; echo "bbbbbbbbbbbb0000 reservation 1 healthy 10.0.0.2"
+            echo "cccccccccccc0000 reservation 2 healthy 10.0.0.3"; echo "dddddddddddd0000 identity 1 healthy 10.0.0.4"
+            echo "eeeeeeeeeeee0000 catalog 1 healthy 10.0.0.5"; echo "ffffffffffff0000 admission 1 healthy 10.0.0.6"
+            echo "1111111111110000 notification 1 healthy 10.0.0.7"; echo "2222222222220000 notification 2 $NOTIF2 10.0.0.8" ;;
     esac
 }
 E_A[reservation]=7 E_S[reservation]=7 E_B[reservation]=7 E_N[reservation]=7
 ler_estado; confere "ler_estado ok: retorno" "$?" 0
 confere "ler_estado ok: reservation A S B N" "${E_A[reservation]} ${E_S[reservation]} ${E_B[reservation]} ${E_N[reservation]}" "1 1 0 2"
 confere "ler_estado ok: backend A S B N" "${E_A[backend]} ${E_S[backend]} ${E_B[backend]} ${E_N[backend]}" "1 0 0 1"
+confere "ler_estado ok: identity A S B N" "${E_A[identity]} ${E_S[identity]} ${E_B[identity]} ${E_N[identity]}" "1 0 0 1"
+confere "ler_estado ok: catalog A S B N" "${E_A[catalog]} ${E_S[catalog]} ${E_B[catalog]} ${E_N[catalog]}" "1 0 0 1"
+confere "ler_estado ok: admission A S B N" "${E_A[admission]} ${E_S[admission]} ${E_B[admission]} ${E_N[admission]}" "1 0 0 1"
+confere "ler_estado ok: notification (consumer sem lb): 1 healthy = ativa, 1 starting = subindo, nunca stand-by" "${E_A[notification]} ${E_S[notification]} ${E_B[notification]} ${E_N[notification]}" "1 0 1 2"
 E_N[reservation]=2
 for falha in LB_FALHA PS_FALHA INSPECT_FALHA LB_VAZIO; do
     LB_FALHA=0 PS_FALHA=0 INSPECT_FALHA=0 LB_VAZIO=0; eval "$falha=1"
@@ -132,50 +206,102 @@ for falha in LB_FALHA PS_FALHA INSPECT_FALHA LB_VAZIO; do
     confere "ler_estado com $falha: não mexe nas contagens" "${E_N[reservation]}" "2"
 done
 LB_FALHA=0 PS_FALHA=0 INSPECT_FALHA=0 LB_VAZIO=0
-unset -f docker lb_cmd
 
 # --- ciclo inteiro com o Redis ilegível: com 2 ativas e carga "zero" o scaler DESCERIA; sem leitura, não pode nem tentar
-SHOW_SRV2='1
+SHOW_SRV='1
 # be_id be_name srv_id srv_name srv_addr srv_op_state srv_admin_state srv_uweight srv_iweight
 3 gateway 1 gw1 10.0.0.1 2 0 100 100
 4 reservation 1 rs1 10.0.0.2 2 0 100 100
-4 reservation 2 rs2 10.0.0.3 2 0 100 100'
-lb_cmd() { echo "$SHOW_STAT"; echo "$SHOW_SRV2"; }
-docker() {
-    case "$1" in
-        ps) case "$*" in *service=backend*) echo aaaaaaaaaaaa;; *service=reservation*) printf 'bbbbbbbbbbbb
-cccccccccccc
-';; esac ;;
-        inspect) echo "aaaaaaaaaaaa0000 backend 1 10.0.0.1"; echo "bbbbbbbbbbbb0000 reservation 1 10.0.0.2"; echo "cccccccccccc0000 reservation 2 10.0.0.3" ;;
-    esac
-}
+4 reservation 2 rs2 10.0.0.3 2 0 100 100
+5 identity 1 id1 10.0.0.4 2 0 100 100
+6 catalog 1 ct1 10.0.0.5 2 0 100 100
+7 admission 1 ad1 10.0.0.6 2 0 100 100'
 CHAMADAS=""; CSV_TESTE=""
-acao_subir() { CHAMADAS="$CHAMADAS subir:$1"; }
+acao_subir() { CHAMADAS="$CHAMADAS subir:$1:$2"; }
 acao_remover() { CHAMADAS="$CHAMADAS remover:$1"; }
 acao_promover() { CHAMADAS="$CHAMADAS promover:$1"; }
 grava_chave() { :; }
 linha_csv() { CSV_TESTE="$CSV_TESTE $1:$5"; }
 aplica_pendentes() { :; }
+T_FALSO=1000000; agora_ms() { echo "$T_FALSO"; }
+KAFKA_SAIDA="0 3"; kafka_ciclo() { [ -n "$KAFKA_SAIDA" ] || return 1; echo "$KAFKA_SAIDA"; }
 SECO=1; COOLDOWN_SEG=0; DESCE_SEG=0; DESCARTA_SEG=0
 redis_ciclo() { return 1; }
 DESDE_DESCE[reservation]=1; DESDE_DESCARTA[reservation]=1
 ciclo 2>/dev/null
 confere "ciclo com Redis falhando: o reservation não chama nenhuma ação" "${CHAMADAS//remover:backend/}" ""
-confere "ciclo com Redis falhando: CSV marca sem_leitura" "$CSV_TESTE" " reservation:sem_leitura backend:nada"
+confere "ciclo com Redis falhando: CSV marca sem_leitura, os outros 5 serviços seguem" "$CSV_TESTE" " reservation:sem_leitura backend:nada identity:nada catalog:nada admission:nada notification:nada"
 confere "ciclo com Redis falhando: zerou o rastreio do reservation" "[${DESDE_DESCE[reservation]}][${DESDE_DESCARTA[reservation]}]" "[][]"
 redis_ciclo() { echo "NOAUTH Authentication required. 0"; }
 CHAMADAS=""; CSV_TESTE=""
 ciclo 2>/dev/null
-confere "ciclo com resposta de erro do Redis (texto): também sem leitura" "$CSV_TESTE" " reservation:sem_leitura backend:nada"
+confere "ciclo com resposta de erro do Redis (texto): também sem leitura" "$CSV_TESTE" " reservation:sem_leitura backend:nada identity:nada catalog:nada admission:nada notification:nada"
 redis_ciclo() { echo "0 0"; }
 CHAMADAS=""; CSV_TESTE=""
 ciclo 2>/dev/null
-confere "ciclo com leitura válida (ocioso, 2 ativas): agora o reservation decide descer" "$CSV_TESTE" " reservation:descer backend:nada"
+confere "ciclo com leitura válida (ocioso, 2 ativas): agora o reservation decide descer" "$CSV_TESTE" " reservation:descer backend:nada identity:nada catalog:nada admission:nada notification:nada"
+
+# --- serviços HTTP genéricos (#112): dois laços; o 2º vê o delta de req_tot da seção do lb de cada um (2 s depois)
+CAP[identity]=100; CAP[catalog]=1000; CAP[admission]=1000
+SHOW_STAT='# pxname,svname,scur,status,weight,req_tot,
+entrada,FRONTEND,3,OPEN,,100,
+identity_interno,FRONTEND,0,OPEN,,0,
+catalog_interno,FRONTEND,0,OPEN,,0,
+admission_interno,FRONTEND,0,OPEN,,0,'
+tem() { [[ "$CHAMADAS" == *"$1"* ]] && echo sim || echo nao; }
+ULTIMA_ACAO=(); REQ_ANT=(); T_ANT=()
+CHAMADAS=""; CSV_TESTE=""; ciclo 2>/dev/null
+confere "1º laço (sem leitura anterior): rps 0, ninguém sobe" "$(tem subir:)" nao
+T_FALSO=1002000
+SHOW_STAT='# pxname,svname,scur,status,weight,req_tot,
+entrada,FRONTEND,3,OPEN,,100,
+identity_interno,FRONTEND,0,OPEN,,400,
+catalog_interno,FRONTEND,0,OPEN,,200,
+admission_interno,FRONTEND,0,OPEN,,2200,'
+CHAMADAS=""; CSV_TESTE=""; ciclo 2>/dev/null
+confere "2º laço: identity 200 req/s / (100 x 1) = 2,0 sobe stand-by; admission 1100 / 1000 = 1,1 sobe stand-by; catalog 100 / 1000 = 0,1 não" \
+    "$(echo ${CHAMADAS//remover:reservation/})" "subir:identity:1 subir:admission:1"
+confere "2º laço: o CSV tem os 6 serviços" "$CSV_TESTE" " reservation:descer backend:nada identity:subir catalog:nada admission:subir notification:nada"
+
+# --- notification: lag do group (u = lag / AUTOESCALA_NOTIFICATION_LAG); nunca stand-by; máx. = partições lidas
+CAP[notification]=100
+NOTIF2=healthy
+DESCE_SEG=60   # de volta ao default: o rastreio decide quando "lag 0" já dura o bastante (DESDE_DESCE primado abaixo)
+SHOW_STAT='# pxname,svname,scur,status,weight,req_tot,
+entrada,FRONTEND,3,OPEN,,100,'
+ULTIMA_ACAO=(); REQ_ANT=(); T_ANT=()
+KAFKA_SAIDA="500 3"; CHAMADAS=""; CSV_TESTE=""; ciclo 2>/dev/null
+confere "notification: lag 500 / 100 com 2 ativas e 3 partições sobe SEM stand-by (flag 0)" "$(tem subir:notification:0)" sim
+KAFKA_SAIDA="500 2"; CHAMADAS=""; ciclo 2>/dev/null
+confere "notification: tópico com 2 partições e 2 ativas = no máximo: não sobe" "$(tem notification)" nao
+KAFKA_SAIDA="0 3"; CHAMADAS=""; ciclo 2>/dev/null
+confere "notification: lag 0 com 2 ativas há menos de 60 s: ainda não desce" "$(tem remover:notification)" nao
+DESDE_DESCE[notification]=1; CHAMADAS=""; ciclo 2>/dev/null
+confere "notification: lag 0 com 2 ativas por mais de 60 s: desce uma" "$(tem remover:notification)" sim
+KAFKA_SAIDA="30 3"; CHAMADAS=""; ciclo 2>/dev/null
+confere "notification: lag 30 (u = 0,30, acima de 0): nem sobe nem desce" "$(tem notification)" nao
+KAFKA_SAIDA=""; CHAMADAS=""; CSV_TESTE=""; DESDE_DESCE[notification]=5
+ciclo 2>/dev/null
+confere "notification: leitura do Kafka falhou: não age" "$(tem notification)" nao
+confere "notification: leitura do Kafka falhou: CSV sem_leitura" "$([[ "$CSV_TESTE" == *notification:sem_leitura* ]] && echo sim || echo nao)" sim
+confere "notification: leitura do Kafka falhou: zerou o rastreio" "[${DESDE_DESCE[notification]}]" "[]"
+NOTIF2=starting; KAFKA_SAIDA="500 3"; CHAMADAS=""; ciclo 2>/dev/null
+confere "notification: réplica ainda subindo (B = 1): não sobe outra" "$(tem subir:notification)" nao
+# req_tot ilegível (frontend ausente do `show stat`): NUNCA vira carga 0 (desceria réplica sob carga real): sem_leitura, sem ação, rastreio zerado
+SHOW_STAT='# pxname,svname,scur,status,weight,req_tot,
+entrada,FRONTEND,3,OPEN,,100,
+identity_interno,FRONTEND,0,OPEN,,400,
+admission_interno,FRONTEND,0,OPEN,,2200,'
+NOTIF2=healthy; KAFKA_SAIDA="0 3"; CHAMADAS=""; CSV_TESTE=""; DESDE_DESCE[catalog]=5; ciclo 2>/dev/null
+confere "req_tot do catalog ilegível: CSV sem_leitura" "$([[ "$CSV_TESTE" == *catalog:sem_leitura* ]] && echo sim || echo nao)" sim
+confere "req_tot do catalog ilegível: não age no catalog" "$(tem catalog)" nao
+confere "req_tot do catalog ilegível: zerou o rastreio" "[${DESDE_DESCE[catalog]}]" "[]"
+confere "req_tot do catalog ilegível: os outros serviços seguem decidindo" "$([[ "$CSV_TESTE" == *identity:* && "$CSV_TESTE" == *admission:* ]] && echo sim || echo nao)" sim
 # lb mudo: o laço inteiro não age e zera o rastreio
 lb_cmd() { return 1; }
 CHAMADAS=""; CSV_TESTE=""; DESDE_DESCE[reservation]=5
 ciclo 2>/dev/null; confere "ciclo com lb mudo: devolve 1, sem ação e sem CSV" "$? [$CHAMADAS][$CSV_TESTE][${DESDE_DESCE[reservation]}]" "1 [][][]"
-unset -f docker lb_cmd acao_subir acao_remover acao_promover grava_chave linha_csv aplica_pendentes redis_ciclo
+unset -f docker lb_cmd acao_subir acao_remover acao_promover grava_chave linha_csv aplica_pendentes redis_ciclo kafka_ciclo agora_ms tem
 
 # parsers da Runtime API
 # cabeçalho reduzido: o parser acha a coluna pelo NOME (o dry-run confere com o `show stat` real)

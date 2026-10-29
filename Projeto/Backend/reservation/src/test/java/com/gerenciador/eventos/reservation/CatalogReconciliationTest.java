@@ -112,6 +112,25 @@ public class CatalogReconciliationTest extends ReservationTestSupport {
         assertNull(eventCapRepository.findByEventId(id));
     }
 
+    /**
+     * Réplicas do reservation (autoescala, issue #112): no rebalance a MESMA mensagem pode chegar a duas réplicas ao mesmo tempo (a que
+     * perdeu a partição ainda processa a sua, a que ganhou a reentrega). A criação é idempotente por {@code event_id}: quatro execuções
+     * simultâneas criam o {@code eventcap} UMA vez e o resto é no-op, sem erro. Este consumer não tem checkpoint; a idempotência está
+     * toda no {@code ON CONFLICT DO NOTHING} de {@code EventCapRepository.create}.
+     */
+    @Test
+    public void mesmaMensagemEmQuatroReplicasAoMesmoTempoCriaOEventcapUmaSoVez() throws Exception {
+        long id = 2_100_000_006L;
+        String msg = eventCreated(id, 8, "2030-01-01T10:00:00");
+
+        java.util.List<Boolean> criou = Concorrencia.emParalelo(4, () -> consumer.reconciliar(msg));
+
+        assertEquals(1, criou.stream().filter(b -> b).count(), "exatamente uma réplica criou: " + criou);
+        EventCap cap = eventCapRepository.findByEventId(id);
+        assertEquals(8, cap.getCapacity());
+        assertEquals(8, cap.getQuant());
+    }
+
     // ===================== helpers =====================
 
     private void reenviarAte(String mensagem, java.util.function.BooleanSupplier condicao) throws Exception {
