@@ -3,7 +3,7 @@
   HOST: transforma o resumo que o k6 gravou no GERADOR (rodado so com `k6 run`, ver preparar-degraus.ps1) no CSV da escada.
 
 .DESCRIPTION
-  Faz o que o rodar-degraus.ps1 faz depois do k6, a partir do plano que o preparar-degraus.ps1 gravou (braco, pool, arranjo, commit...): a trava do resumo
+  Recusa o resumo cujo run_id (o RUN_ID da linha do k6) nao bata com o do plano. Faz o que o rodar-degraus.ps1 faz depois do k6, a partir do plano que o preparar-degraus.ps1 gravou (braco, pool, arranjo, commit...): a trava do resumo
   (Get-FalhaResumo: contadores que nao fecham, k6 interrompido sem parada registrada), as linhas (omitidos pela parada nao viram linha; o parcial usa a
   duracao efetiva) e results\degraus-<id>.csv. Nao ha codigo de saida do k6 aqui: parada vem do campo `parada` do resumo.
 
@@ -27,6 +27,8 @@ if (-not (Test-Path $Resumo)) { Fail "Resumo do k6 nao encontrado: $Resumo (copi
 $p = Get-Content $Plano -Raw | ConvertFrom-Json
 $s = Get-Content $Resumo -Raw | ConvertFrom-Json
 if ($null -eq $s.degraus) { Fail 'O arquivo nao e um resumo do carga-degraus.js (sem `degraus`).' }
+$falhaId = Get-FalhaRunId -Resumo $s -RunId $p.run_id
+if ($falhaId) { Fail $falhaId }
 if ([int]$s.duracao_degrau_s -ne [int]$p.duracao_s) { Fail "O resumo e de outra escada: duracao_degrau_s $($s.duracao_degrau_s) != $($p.duracao_s) do plano." }
 if ([int]$s.usuarios -ne [int]$p.usuarios -or [int]$s.eventos -ne [int]$p.eventos) { Fail "O resumo e de outra escada: $($s.usuarios) usuarios x $($s.eventos) eventos != $($p.usuarios) x $($p.eventos) do plano." }
 

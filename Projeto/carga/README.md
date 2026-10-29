@@ -225,7 +225,7 @@ O `degraus/carga-degraus.js` ganha o modo fila **sem script novo**: o POST pode 
 | `TETO_CONSULTA_S` | `-TetoConsultaS` | `TETO_CONSULTA_S` | 35 | teto do acompanhamento (> TTL da fila, 30 s) |
 | `PARADA_P95_MS` | `-ParadaP95Ms` | `PARADA_P95_MS` | 0 (desligada) | p95 da reserva, numa janela, acima do qual a escada **para** |
 | `PARADA_JANELA_S` | `-ParadaJanelaS` | `PARADA_JANELA_S` | 60 | janela da parada: múltiplo de 30 e divisor de `DEG_DURACAO` |
-| `SETUP_S` | `-SetupS` | `SETUP_S` | 0 = estimativa (`Get-SetupS`: 0,6 s por lote de 25 usuários, piso 30 s) | só com parada: orçamento do `setup()` (logins) no relógio do k6; ver abaixo |
+| `SETUP_S` | `-SetupS` | `SETUP_S` | 0 = estimativa (`Get-SetupS`: 0,6 s por lote de 25 usuários, piso 30 s) | só com parada: orçamento do `setup()` (logins) no relógio do k6; ver abaixo. **`k6 run` direto com parada exige `SETUP_S > 0`** (o `setup()` aborta antes do login com 0); o `setupTimeout` do k6 é `max(300, SETUP_S + 60)` s |
 | `ARRANJO` | `-Arranjo` | (só CSV) | `sem-autoescala` | rótulo do braço do host |
 | `PARAMS_AUTOESCALA` | `-ParamsAutoescala` | (só CSV) | vazio | `k=v;k=v` dos parâmetros do host |
 | `COM_CHAVE=1` | `-ComChave` | `IDEMPOTENCY_KEY=1` | sem chave | manda `Idempotency-Key` própria por iteração (opt-in) |
@@ -311,7 +311,7 @@ Na R4 o gerador roda **sem ninguém para aprovar** e só pode executar: `git che
 | Health check, `git rev-parse`, `runId`, `Test-Path` | `degraus/rodar-degraus.ps1:114-146` | o host (commit, `runId` e prefixo saem do `preparar-degraus.ps1`) |
 | Telemetria do gerador (`Start-Job` + `Get-CimInstance`) | `lib-telemetria.ps1:15-22`, `degraus/rodar-degraus.ps1:181` | **não existe** no modo direto: a saturação do gerador sai de `iteracoes_descartadas` e `rpm_efetivo` do CSV (e do `dropped_iterations` do resumo) |
 | Resumo do k6 → CSV e trava do resumo | `degraus/rodar-degraus.ps1:183-206` | o host (`degraus/csv-do-resumo.ps1`, mesmas funções de `lib-degraus.ps1`) |
-| Instalar o k6 (`winget`), plano de energia (`powercfg`), `Test-NetConnection`, baseline | `setup-gerador.ps1:39`, `:63`, `:69`, `:77`, `:130` | **não entra na R4** (o gerador já está pronto: k6 2.2.0) |
+| Instalar o k6 (`winget`), plano de energia (`powercfg`), `Test-NetConnection`, baseline | `setup-gerador.ps1:39`, `:63`, `:69`, `:77`, `:130` | **não entra na R4** (o gerador já tem o k6; a versão **exigida é a 2.2.0**: ver "Dependências declaradas", item 6) |
 | Desinstalar o k6 e voltar o plano de energia | `limpar-gerador.ps1:53`, `:60` | **não entra na R4** |
 | `make` (`SHELL := powershell.exe`) e `.ps1` | `Makefile:3`, todos os alvos `test-*` | não existem para o gerador (`make` não está na lista); o equivalente é a linha de `k6 run` abaixo |
 | Gráfico/limiar X (`make report-degraus`, Git Bash + awk) | `Makefile:184-186` | host |
@@ -342,7 +342,7 @@ Parâmetros por env do k6 (os valores certos já vêm na linha impressa; os de b
 | `PCT_CONFIRMA`, `MAX_VUS`, `MAPEAMENTO` | `-PctConfirma`, `-MaxVus`, `-Mapeamento` | como antes |
 | `PCT_ACOMPANHA`, `CONSULTA_MS`, `TETO_CONSULTA_S` | idem | modo fila (tabela acima) |
 | `PARADA_P95_MS`, `PARADA_JANELA_S`, `SETUP_S` | `-ParadaP95Ms`, `-ParadaJanelaS`, `-SetupS` | condição de parada |
-| `IDEMPOTENCY_KEY`, `RUN_ID` | `-ComChave`, `runId` | chave própria por iteração (opt-in) / prefixo das chaves |
+| `IDEMPOTENCY_KEY`, `RUN_ID` | `-ComChave`, `runId` | chave própria por iteração (opt-in) / prefixo das chaves; o k6 grava `run_id` no resumo e o `csv-do-resumo.ps1` **recusa** resumo cujo `run_id` não bata com o do plano (mesmos parâmetros de outro bloco não bastam) |
 
 **O que muda por braço é só do host** (a linha do gerador é idêntica; `-Arranjo`, `-PoolHikari`, `-ParamsAutoescala` e `-MaxConnections` só rotulam o CSV):
 
@@ -357,7 +357,7 @@ Parâmetros por env do k6 (os valores certos já vêm na linha impressa; os de b
 
 `preparar-degraus.ps1` aceita os mesmos parâmetros do `rodar-degraus.ps1` (`-Mapeamento intercalado`, `-PctAcompanha`, `-ParadaP95Ms`, ...) e `-SeedUrl` (como o host enxerga o gateway para o seed; padrão `http://localhost:<porta>`).
 `csv-do-resumo.ps1` não vê o código de saída do k6: a **parada** vem do campo `parada` do resumo (o 99 do k6 é esperado com `PARADA_P95_MS > 0`), e um k6 interrompido sem parada registrada é
-recusado pela duração do teste (`Get-FalhaResumo`). Os selftests (`make selftests`) cobrem a linha, as faixas de eventos e o CSV, comparado com o do caminho antigo.
+recusado pela duração do teste (`Get-FalhaResumo`). O `csv-do-resumo.ps1` também só aceita o resumo cujo `run_id` (o `RUN_ID` da linha) bata com o `run_id` do plano. Os selftests (`make selftests`) cobrem a linha, as faixas de eventos e o CSV, comparado com o do caminho antigo.
 
 **Dependências declaradas, que o kit não resolve:**
 
@@ -368,6 +368,9 @@ recusado pela duração do teste (`Get-FalhaResumo`). Os selftests (`make selfte
 4. Quem digita a linha precisa de `k6` no PATH do Windows PowerShell 5.1 e do diretório de trabalho na raiz do clone (os caminhos da linha são relativos).
 5. **Teto do seed pelo `lb`:** o `POST /bff/seed` dos usuários é uma chamada só (bcrypt) e, entrando pelo `lb` (braço C: a 8081 é o `lb`), esbarra no `timeout server 75s` do HAProxy: no dry-run local
    2000 usuários deram **504** e 1000 passaram. Com `-Usuarios` acima de ~1000 no braço C semeie pelo gateway sem o `lb` (`-SeedUrl`) ou use menos usuários (o seed cria mais eventos para fechar os pares).
+6. **Versão do k6 no gerador: exige a 2.2.0.** A semântica de `delayAbortEval` × `setup()` (base do `SETUP_S`) e a forma de `thresholds` no `handleSummary` foram medidas nela (imagem `grafana/k6:2.2.0`, no
+   host); o `setup-gerador.ps1` instala por `winget` **sem versão** e **o kit não confere a versão em tempo de execução** (o k6 não a expõe ao script nem ao resumo). Quem conduz confere `k6 version` no
+   gerador **ANTES** da R4 (fora das três chamadas, pela sessão de interface/usuário); com outra versão o alinhamento das janelas pode mudar sem aviso.
 
 **Matriz: não cabe nas três chamadas.** Cada repetição semeia (host), espera o pipeline ficar quieto com `psql` (`rodar-matriz.ps1:174-188`), dispara o k6 enquanto um laço de `psql` concorrente amostra o lag da
 projeção (`:190-209`, `Start-Process` + polling a cada 250 ms) e lê `confirmed/pending` no banco (`:281`) para gravar uma linha. Isso é um laço que o gerador não pode conduzir

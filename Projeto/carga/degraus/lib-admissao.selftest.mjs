@@ -2,7 +2,7 @@
 // parada por latencia. Sem k6, sem rede, sem banco: so node:assert. Uso: node degraus/lib-admissao.selftest.mjs
 import assert from 'node:assert/strict';
 import {
-  classificarReserva, classificarEstado, acompanhar, gracefulS, erroParametros, esperaDoSetup, indiceJanela, limiaresParada,
+  classificarReserva, classificarEstado, acompanhar, gracefulS, erroParametros, setupTimeoutS, esperaDoSetup, indiceJanela, limiaresParada,
   avaliarParada, situacaoDoDegrau, textoParada, nomeMetricaParada, usuariosDoSufixo, idsDeEventos,
 } from './lib-admissao.js';
 
@@ -89,10 +89,10 @@ confere('parametros validos passam; invalidos dao mensagem', () => {
 });
 confere('janela de parada: so valida com a parada ligada; multiplo de 30 e divisor da duracao', () => {
   assert.equal(erroParametros({ ...ok, paradaJanelaS: 45 }), null);                            // parada desligada: ignora
-  assert.match(erroParametros({ ...ok, paradaP95Ms: 5000, paradaJanelaS: 45 }), /PARADA_JANELA_S/);
-  assert.match(erroParametros({ ...ok, paradaP95Ms: 5000, paradaJanelaS: 120 }), /PARADA_JANELA_S/);   // 120 nao divide 60
-  assert.equal(erroParametros({ ...ok, paradaP95Ms: 5000, paradaJanelaS: 30 }), null);
-  assert.equal(erroParametros({ ...ok, paradaP95Ms: 5000, paradaJanelaS: 60, duracaoS: 120 }), null);
+  assert.match(erroParametros({ ...ok, paradaP95Ms: 5000, setupS: 30, paradaJanelaS: 45 }), /PARADA_JANELA_S/);
+  assert.match(erroParametros({ ...ok, paradaP95Ms: 5000, setupS: 30, paradaJanelaS: 120 }), /PARADA_JANELA_S/);   // 120 nao divide 60
+  assert.equal(erroParametros({ ...ok, paradaP95Ms: 5000, setupS: 30, paradaJanelaS: 30 }), null);
+  assert.equal(erroParametros({ ...ok, paradaP95Ms: 5000, setupS: 30, paradaJanelaS: 60, duracaoS: 120 }), null);
 });
 
 console.log('==> janela de parada e thresholds');
@@ -166,6 +166,18 @@ confere('erroParametros: SETUP_S negativo recusado', () => {
   const ok = { pctAcompanha: 10, consultaMs: 1000, tetoConsultaS: 35, paradaP95Ms: 0, paradaJanelaS: 60, duracaoS: 60 };
   assert.equal(erroParametros(ok), null);
   assert.match(erroParametros({ ...ok, setupS: -1 }), /SETUP_S invalido/);
+});
+confere('SETUP_S=0 com parada ligada e recusado (a parada seria julgada adiantada); sem parada o 0 vale', () => {
+  assert.match(erroParametros({ ...ok, paradaP95Ms: 5000 }), /SETUP_S=0 com parada ligada/);
+  assert.match(erroParametros({ ...ok, paradaP95Ms: 5000, setupS: 0 }), /SETUP_S > 0/);
+  assert.equal(erroParametros({ ...ok, paradaP95Ms: 5000, setupS: 1 }), null);
+  assert.equal(erroParametros({ ...ok, setupS: 0 }), null);
+});
+confere('setupTimeoutS: 300 s no minimo; acima disso SETUP_S + 60 (o sleep do setup() conta no setupTimeout)', () => {
+  assert.equal(setupTimeoutS(0), 300);
+  assert.equal(setupTimeoutS(240), 300);
+  assert.equal(setupTimeoutS(300), 360);
+  assert.equal(setupTimeoutS(3600), 3660);
 });
 confere('textoParada: sem virgula (e CSV); nenhuma sem parada', () => {
   assert.equal(textoParada(null), 'nenhuma');

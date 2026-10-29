@@ -63,7 +63,7 @@ import exec from 'k6/execution';
 import { Counter, Trend } from 'k6/metrics';
 import { erroMapeamento, parDe } from './lib-mapeamento.js';
 import {
-  acompanhar, avaliarParada, classificarReserva, erroParametros, esperaDoSetup, gracefulS, indiceJanela, limiaresParada,
+  acompanhar, avaliarParada, classificarReserva, erroParametros, esperaDoSetup, gracefulS, indiceJanela, limiaresParada, setupTimeoutS,
   idsDeEventos, situacaoDoDegrau, textoParada, usuariosDoSufixo,
 } from './lib-admissao.js';
 
@@ -182,7 +182,7 @@ export function avaliarJanelas(reservas, somaJanelas) {
 export const options = {
   scenarios,
   thresholds,
-  setupTimeout: '300s',
+  setupTimeout: `${setupTimeoutS(SETUP_S)}s`,   // o sleep do setup() ate SETUP_S conta
   summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max', 'count'],
 };
 
@@ -465,6 +465,7 @@ export function handleSummary(data) {
     if (avaliarJanelas(d.reservas, soma).sistemico) inconsistencias.push(`${d.nome}: ${d.reservas - soma} de ${d.reservas} reservas fora das janelas (> ${LIM_FORA_PCT}%): tag janela ou exec.scenario.startTime fora do esperado`);
   }
   const out = {
+    run_id: RUN_ID,   // o csv-do-resumo.ps1 recusa resumo de outra escada (RUN_ID do plano)
     duracao_degrau_s: DURACAO_S,
     duracao_s: (data.state.testRunDurationMs || 0) / 1000,
     usuarios: USERS.length,

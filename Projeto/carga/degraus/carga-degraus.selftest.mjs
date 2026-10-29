@@ -28,7 +28,8 @@ async function confere(nome, fn) {
 }
 
 // ---- servidor falso: respostas roteiradas por rota
-const k6 = globalThis.__k6 = { metricas: {}, exec: { scenario: { name: 'degrau_1000', iterationInTest: 0, startTime: Date.now() }, test: { abort: (m) => { throw new Error('abort: ' + m); } } } };
+const k6 = globalThis.__k6 = { metricas: {}, exec: { scenario: { name: 'degrau_1000', iterationInTest: 0, startTime: Date.now() }, test: { abort: (m) => { throw new Error('abort: ' + m); } },
+  instance: { currentTestRunDuration: 29900 } } };   // setup() ja gastou 29,9 s do orcamento de SETUP_S=30: espera 0,1 s
 let estados = [];            // fila de respostas do GET /admission
 let postStatus = 201;
 let postHeaders = { 'Idempotency-Key': 'srv-key' };   // o 202 do gateway devolve a chave no header (e no corpo)
@@ -44,7 +45,7 @@ k6.http = (metodo, url, corpo, params) => {
 };
 
 const env = { BASE_URL: 'http://h:8081', DURACAO_S: '60', RPMS: '1000,2000', USERS_FILE: 'u', EVENTS_FILE: 'e', SUMMARY_FILE: 's.json',
-  CONSULTA_MS: '50', TETO_CONSULTA_S: '1', PARADA_P95_MS: '5000', PARADA_JANELA_S: '30', RUN_ID: 'teste' };
+  CONSULTA_MS: '50', TETO_CONSULTA_S: '1', PARADA_P95_MS: '5000', PARADA_JANELA_S: '30', SETUP_S: '30', RUN_ID: 'teste' };
 globalThis.__ENV = env;
 globalThis.open = (f) => JSON.stringify(f === 'u' ? Array.from({ length: 100 }, (_, i) => ({ email: `u${i}@x`, password: 'p' })) : Array.from({ length: 40 }, (_, i) => 101 + i));
 
@@ -58,7 +59,8 @@ await confere('gracefulStop = max(30, teto + 10) com acompanhamento; thresholds 
   assert.equal(sc.degrau_1000.gracefulStop, '30s');
   assert.equal(sc.degrau_2000.startTime, '91s');
   const t = script.options.thresholds['reserva_duration{parada:degrau_2000_1}'];
-  assert.deepEqual(t, [{ threshold: 'p(95)<5000', abortOnFail: true, delayAbortEval: '151s' }]);
+  assert.deepEqual(t, [{ threshold: 'p(95)<5000', abortOnFail: true, delayAbortEval: '181s' }]);   // SETUP_S 30 + 91 + 2 x 30
+  assert.equal(script.options.setupTimeout, '300s');
   assert.equal(Object.keys(script.options.thresholds).filter((k) => k.includes('parada:')).length, 4);
   assert.ok(script.options.thresholds['adm_admitir_duration{scenario:degrau_1000}']);
 });
@@ -171,6 +173,9 @@ await confere('com parada na janela 0 do degrau 2000: degrau parcial (30 s efeti
   assert.equal(json.parada_texto, 'p95_acima_de_5000ms_em_janela_de_30s_no_degrau_2000');
   assert.match(texto, /PARADA: /);
 });
+await confere('o resumo grava o RUN_ID recebido (o csv-do-resumo.ps1 o confere com o plano)', () => {
+  assert.equal(resumo({ comParada: false }).json.run_id, 'teste');
+});
 await confere('parada na janela 0 com amostras na janela 1 (o abort cai ~2 s depois do fim da janela): a duracao efetiva continua (pw+1) x 30 = 30 s', () => {
   const dd = dados({ comParada: true });
   dd.metrics['reserva_duration{janela:degrau_2000_1}'] = trend(5, 9500);
@@ -204,6 +209,15 @@ await confere('IDEMPOTENCY_KEY=1: chave propria por iteracao no POST e usada no 
   const post = chamadas.find((c) => c.url.endsWith('/bff/event-wallets'));
   assert.equal(post.params.headers['Idempotency-Key'], 'k6-teste-11');
   assert.ok(chamadas.some((c) => c.url.includes('idempotencyKey=k6-teste-11')));
+});
+
+// k6 run direto com parada e SETUP_S=0 (o default do script): recusa no setup(), antes de qualquer login
+globalThis.__ENV = { ...env, SETUP_S: '0' };
+const semSetup = await import(pathToFileURL(new URL('./carga-degraus.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')).href + '?semsetup');
+await confere('PARADA_P95_MS > 0 com SETUP_S=0: o setup() aborta com a mensagem, sem login', () => {
+  zera();
+  assert.throws(() => semSetup.setup(), /SETUP_S=0 com parada ligada/);
+  assert.equal(chamadas.filter((c) => c.url.endsWith('/login')).length, 0);
 });
 
 // sem USERS_FILE/EVENTS_FILE (o gerador da madrugada so roda k6 run): usuarios por USUARIOS + SUFIXO e eventos por EVENT_IDS; nenhum open()

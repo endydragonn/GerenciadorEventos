@@ -156,6 +156,15 @@ function Format-ColunasAdmissao {
 # Resumo do k6 -> CSV (compartilhado por rodar-degraus.ps1, que roda tudo no gerador, e por csv-do-resumo.ps1, que roda no HOST sobre o resumo
 # que o gerador da madrugada produziu so com `k6 run`; ver README, "Rodada 4 no gerador").
 
+# O resumo tem de ser da escada do plano: o k6 grava o RUN_ID que recebeu na linha (-e RUN_ID=...). Sem isso, duas escadas com os mesmos parametros
+# (duracao/usuarios/eventos) se confundiriam e o CSV sairia rotulado com os dados de outra.
+function Get-FalhaRunId {
+    param([Parameter(Mandatory)]$Resumo, [Parameter(Mandatory)]$RunId)
+    if ($null -eq $Resumo.run_id -or "$($Resumo.run_id)" -eq '') { return "O resumo nao traz run_id (k6 rodado sem -e RUN_ID=$RunId?): nao da para provar que e desta escada." }
+    if ("$($Resumo.run_id)" -ne "$RunId") { return "O resumo e de outra escada: run_id $($Resumo.run_id) != $RunId do plano." }
+    return $null
+}
+
 # Motivo de recusar o resumo (texto) ou $null. 1) a trava de consistencia do k6 (global = soma dos degraus; janelas de 30 s); 2) sem `parada`
 # registrada, a duracao do teste tem de cobrir os degraus (senao o k6 foi interrompido: o codigo de saida nao chega ao HOST, entao a
 # conferencia sai do resumo, que vale com ou sem o codigo).

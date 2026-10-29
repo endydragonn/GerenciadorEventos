@@ -122,7 +122,7 @@ Write-Host 'NO GERADOR (Windows PowerShell, na raiz do clone; so estes dois coma
 Write-Host "  git checkout $commit"
 Write-Host "  $linha"
 Write-Host ''
-Write-Host "Depois, no HOST, com o resumo do gerador ($resumoGerador) copiado para esta maquina:" -ForegroundColor Yellow
+Write-Host "Depois, no HOST, com o resumo do gerador ($resumoGerador) copiado para esta maquina (so e aceito o resumo com run_id $runId, o RUN_ID da linha):" -ForegroundColor Yellow
 Write-Host "  .\degraus\csv-do-resumo.ps1 -Plano $planoArq -Resumo <caminho do summary-$tag.json>"
 Write-Host "  .\rpm\subir-host-rpm.ps1 -Verificar -Prefixo $escada          (overselling; codigo 3 no CAS = criterio de parada)"
 Write-Host "Plano: $planoArq"

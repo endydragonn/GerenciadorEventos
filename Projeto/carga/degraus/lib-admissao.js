@@ -59,6 +59,8 @@ export function erroParametros({ pctAcompanha, consultaMs, tetoConsultaS, parada
   if (!(tetoConsultaS >= 1)) return `TETO_CONSULTA_S invalido: ${tetoConsultaS} (>= 1).`;
   if (!(paradaP95Ms >= 0)) return `PARADA_P95_MS invalido: ${paradaP95Ms} (0 = sem parada).`;
   if (!(setupS >= 0)) return `SETUP_S invalido: ${setupS} (>= 0).`;
+  // delayAbortEval conta o setup(): sem o orcamento a parada seria julgada adiantada (janela incompleta, parada espuria)
+  if (paradaP95Ms > 0 && !(setupS > 0)) return `SETUP_S=0 com parada ligada (PARADA_P95_MS=${paradaP95Ms}): informe SETUP_S > 0 (orcamento do setup(), em s); o preparar-degraus.ps1 ja o calcula.`;
   if (paradaP95Ms > 0) {
     if (!(paradaJanelaS >= 30 && paradaJanelaS % 30 === 0 && duracaoS % paradaJanelaS === 0)) {
       return `PARADA_JANELA_S invalido: ${paradaJanelaS} (multiplo de 30 e divisor de DURACAO_S=${duracaoS}, para a parada cair no fim de uma janela).`;
@@ -93,6 +95,9 @@ export function limiaresParada(plano, janelaS, duracaoS, limiteMs, setupS = 0) {
   }
   return th;
 }
+
+// setupTimeout do k6: o sleep do setup() ate SETUP_S conta no tempo do setup, entao o limite sobe junto (margem de 60 s sobre o orcamento).
+export const setupTimeoutS = (setupS) => Math.max(300, setupS + 60);
 
 // O que o fim do setup() faz com o relogio do teste (`runMs` = exec.instance.currentTestRunDuration): sem SETUP_S (0) nada; com parada ligada e
 // o setup JA passou do orcamento, a parada seria julgada adiantada (janela incompleta): erro (antes de qualquer carga); senao espera o resto.

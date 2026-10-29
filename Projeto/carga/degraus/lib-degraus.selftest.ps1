@@ -142,7 +142,7 @@ function ResumoFixture([hashtable]$extra = @{}) {
         p50_ms = 50; p95_ms = 900; p99_ms = 1200; p95_max_janela_ms = 950; reservas_202 = 400; acompanhadas = 40; admitidas = 30; rejected = 6; timed_out = 3; sem_estado = 1
         consultas_estado = 90; admitir_p50_ms = 1000; admitir_p95_ms = 2000; admitir_p99_ms = 2500; fim_a_fim_p50_ms = 1100; fim_a_fim_p95_ms = 2200; fim_a_fim_p99_ms = 2600 }
     $d3 = @{ nome = 'degrau_3000'; situacao = 'omitido'; duracao_efetiva_s = 0; rpm_alvo = 3000; reservas = 0 }
-    $r = @{ duracao_degrau_s = 60; duracao_s = 200; graceful_s = 45; usuarios = 100; eventos = 40; parada = @{ degrau = 'degrau_2000'; indice = 1; pw = 0; p95_ms = 9000; limite_ms = 5000; janela_s = 30 }
+    $r = @{ run_id = '9'; duracao_degrau_s = 60; duracao_s = 200; graceful_s = 45; usuarios = 100; eventos = 40; parada = @{ degrau = 'degrau_2000'; indice = 1; pw = 0; p95_ms = 9000; limite_ms = 5000; janela_s = 30 }
         parada_texto = 'p95_acima_de_5000ms_em_janela_de_30s_no_degrau_2000'; degraus = @($d1, $d2, $d3); faltando = @(); inconsistencias = @() }
     foreach ($d in $d1, $d2, $d3) { foreach ($c in 'sem_login', 'alem_dos_pares', 'fora_das_janelas', 'recusadas_429', 'conflitos_422') { $d[$c] = 0 } }
     foreach ($k in $extra.Keys) { $r[$k] = $extra[$k] }
@@ -156,6 +156,9 @@ $esperada1 = (Format-LinhaDegrau -Escada Deg-9 -Degrau $rs.degraus[0] -DuracaoS 
 Confere 'a linha do degrau completo e a mesma do caminho antigo (Format-LinhaDegrau + Format-ColunasAdmissao)' $linhasFx[0] $esperada1
 Confere 'a coluna parada leva o motivo do resumo em todas as linhas' ((($linhasFx | ForEach-Object { ($_ -split ',')[-2] }) | Select-Object -Unique) -join '|') 'p95_acima_de_5000ms_em_janela_de_30s_no_degrau_2000'
 Confere 'linha tem tantos campos quanto o cabecalho completo' (($linhasFx[0] -split ',').Count) (($DegrausCabecalho -split ',').Count)
+Confere 'Get-FalhaRunId: o mesmo run_id do plano (numero no plano, texto no resumo do k6) = sem falha' ([string](Get-FalhaRunId -Resumo $rs -RunId 9)) ''
+Confere 'Get-FalhaRunId: run_id de outra escada recusa, com os dois ids na mensagem' ((Get-FalhaRunId -Resumo (ResumoFixture @{ run_id = '8' }) -RunId 9) -match 'outra escada.*8 != 9') $true
+Confere 'Get-FalhaRunId: resumo sem run_id recusa' ((Get-FalhaRunId -Resumo (ResumoFixture @{ run_id = $null }) -RunId 9) -match 'nao traz run_id') $true
 Confere 'Get-FalhaResumo: resumo consistente com parada = sem falha' ([string](Get-FalhaResumo -Resumo $rs)) ''
 Confere 'Get-FalhaResumo: inconsistencia do k6 recusa' ([bool](Get-FalhaResumo -Resumo (ResumoFixture @{ inconsistencias = @('reservas_5xx: global 3 != soma dos degraus 2') }))) $true
 Confere 'Get-FalhaResumo: sem parada e teste que durou o previsto (3 x 60 + 2 x 46 = 272 s) = sem falha' ([string](Get-FalhaResumo -Resumo (ResumoFixture @{ parada = $null; duracao_s = 280 }))) ''
@@ -181,6 +184,12 @@ try {
     $null = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'csv-do-resumo.ps1') -Plano $pa -Resumo $rb -Csv $cb 2>&1 | Out-String
     $rc2 = $LASTEXITCODE
     Confere 'csv-do-resumo.ps1: resumo de outra escada = codigo 1 e nenhum CSV' "$rc2|$(Test-Path $cb)" '1|False'
+    # mesmos parametros (duracao/usuarios/eventos) mas run_id de outro bloco: so o run_id distingue
+    $rc3a = Join-Path $tmpC 'outro-run.json'; (ResumoFixture @{ run_id = '8' } | ConvertTo-Json -Depth 6) | Set-Content $rc3a -Encoding UTF8
+    $cc = Join-Path $tmpC 'c.csv'
+    $saidaC = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'csv-do-resumo.ps1') -Plano $pa -Resumo $rc3a -Csv $cc 2>&1 | Out-String
+    $rc3 = $LASTEXITCODE
+    Confere 'csv-do-resumo.ps1: resumo de outro run_id (mesmos parametros) = codigo 1, mensagem clara e nenhum CSV' "$rc3|$(Test-Path $cc)|$($saidaC -match 'run_id 8 != 9')" '1|False|True'
 } finally { Remove-Item $tmpC -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Host ''
