@@ -58,6 +58,57 @@ Confere 'fila vazia: 0' (Get-MensagensDaFila -Saida @('admission.requests 0 0') 
 Confere 'fila que nao aparece: nulo (nao e "vazia")' ($null -eq (Get-MensagensDaFila -Saida @('outra 1 1') -Fila 'admission.requests')) $true
 Confere 'linha de erro/titulo nao numerica e ignorada' ($null -eq (Get-MensagensDaFila -Saida @('Timeout: 60.0 seconds', 'admission.requests x y') -Fila 'admission.requests')) $true
 
+
+Write-Host ''
+Write-Host '==> Decisao da saga por bloco (R5, #204): codigo 4 = invariante que nao convergiu no limite (o 3, overselling, NAO e decidido aqui)'
+$d = Get-DecisaoSaga -LimiteS 45
+Confere 'tudo zero: codigo 0' $d.Codigo 0
+Confere 'tudo zero: mensagem de convergencia' $d.Mensagem 'sagas convergidas (velhas 0, hold held com saga compensated 0, devolucao pendente 0, orfa inversa 0, quant divergente 0).'
+$casos = @(
+    @{ Nome = 'saga reserving/compensating mais velha que o limite'; Arg = @{ SagasVelhas = 2 };            Trecho = 'sagas reserving/compensating mais velhas que 45s: 2' },
+    @{ Nome = 'hold held cuja saga esta compensated';                Arg = @{ HoldHeldSagaCompensada = 3 }; Trecho = 'hold held com saga compensated: 3' },
+    @{ Nome = 'devolucao pendente depois do lag drenar';             Arg = @{ DevolucaoPendente = 4 };      Trecho = 'hold held com ReservationCancelled/Expired no event_store ha mais de 45s (devolucao pendente): 4' },
+    @{ Nome = 'orfa inversa';                                        Arg = @{ OrfaInversa = 5 };            Trecho = 'walletevent pending/confirmed sem hold held (orfa inversa): 5' },
+    @{ Nome = 'quant diferente de capacity - holds debitados';       Arg = @{ QuantDivergente = 6 };        Trecho = 'eventos limitados com quant <> capacity - holds held debitados: 6' }
+)
+foreach ($c in $casos) {
+    $a = $c.Arg
+    $d = Get-DecisaoSaga -LimiteS 45 @a
+    Confere "isolada, $($c.Nome): codigo 4" $d.Codigo 4
+    Confere "isolada, $($c.Nome): mensagem com a contagem" ([bool]$d.Mensagem.Contains($c.Trecho)) $true
+}
+$d = Get-DecisaoSaga -LimiteS 30 -SagasVelhas 1 -OrfaInversa 2
+Confere 'varias: codigo 4 e todas na mensagem' ("$($d.Codigo)|" + [bool]$d.Mensagem.Contains('mais velhas que 30s: 1') + '|' + [bool]$d.Mensagem.Contains('orfa inversa): 2')) '4|True|True'
+Confere 'a mensagem de falha nao diz "convergidas"' ([bool]$d.Mensagem.Contains('convergidas')) $false
+
+Write-Host ''
+Write-Host '==> Limite da orfa: ORPHAN_MS + 3 x SCAN_MS (spec, "Parada da R5")'
+Confere 'defaults do servico (30000 / 5000): 45 s' (Get-OrfaLimiteS -OrphanMs 30000 -ScanMs 5000) 45
+Confere 'dry-run com limiar reduzido (4000 / 1000): 7 s' (Get-OrfaLimiteS -OrphanMs 4000 -ScanMs 1000) 7
+Confere 'sem leitura do container: 45 s (default)' (Get-OrfaLimiteS) 45
+Confere 'valor nao numerico cai no default' (Get-OrfaLimiteS -OrphanMs 'abc' -ScanMs '') 45
+Confere 'arredonda para cima ao segundo' (Get-OrfaLimiteS -OrphanMs 1500 -ScanMs 100) 2
+
+Write-Host ''
+Write-Host '==> Lag do group do stock (saida simulada do rpk group describe)'
+Confere 'TOTAL-LAG do group' (Get-TotalLag -Saida @('GROUP        stock', 'STATE        Stable', 'TOTAL-LAG    17', '', 'TOPIC PARTITION LAG')) 17
+Confere 'lag 0: 0' (Get-TotalLag -Saida @('TOTAL-LAG 0')) 0
+Confere 'group ausente (sem TOTAL-LAG numerico): nulo, nao 0' ($null -eq (Get-TotalLag -Saida @('Error: group not found', 'TOTAL-LAG x'))) $true
+
+Write-Host ''
+Write-Host '==> docker que escreve em stderr (PS 5.1 + EAP=Stop: `2>$null` num exe lanca NativeCommandError; a espera tem que cair no nulo, nao morrer)'
+# docker.cmd falso no PATH (nao e o Docker): escreve em stderr e sai com 1, como "No such container" com o project errado
+$dirFake = Join-Path ([IO.Path]::GetTempPath()) ("fake-docker-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $dirFake | Out-Null
+[IO.File]::WriteAllText((Join-Path $dirFake 'docker.cmd'), "@echo off`r`necho Error: No such container: x 1>&2`r`nexit /b 1`r`n")
+$pathAntes = $env:PATH; $env:PATH = "$dirFake;$env:PATH"
+try {
+    $r = 'nao-lancou'; try { $r = Wait-LagDoGroup -Group stock -TetoS 1 } catch { $r = "lancou: $($_.Exception.Message)" }
+    Confere 'Wait-LagDoGroup: docker com erro em stderr = nulo (sem excecao)' ($null -eq $r) $true
+    $r = 'nao-lancou'; try { $r = Wait-FilaDeAdmissao -TetoS 1 } catch { $r = "lancou: $($_.Exception.Message)" }
+    Confere 'Wait-FilaDeAdmissao: docker com erro em stderr = nulo (sem excecao)' ($null -eq $r) $true
+} finally { $env:PATH = $pathAntes; Remove-Item -Recurse -Force $dirFake -ErrorAction SilentlyContinue }
+Confere 'o EAP do chamador nao foi alterado' $ErrorActionPreference 'Stop'
 Write-Host ''
 Write-Host '=================================================='
 if ($script:falhas -eq 0) { Write-Host '   RESULTADO: OK -- lib-servicos.ps1 passou em todas as assercoes.' }

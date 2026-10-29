@@ -103,12 +103,69 @@ function Get-MensagensDaFila {
 # Devolve o que restou ($null = nao deu para ler a fila: sem rabbitmq/admission; 0 = drenada). O TTL da fila e 30 s: o teto padrao cobre uma rodada.
 function Wait-FilaDeAdmissao {
     param([int]$TetoS = 90, [string]$Container = $(if ($env:CARGA_RABBITMQ) { $env:CARGA_RABBITMQ } else { 'gerenciador-rabbitmq' }))
+    # PS 5.1 + EAP=Stop (topo do subir-host-rpm.ps1): `2>$null` num exe que escreve em stderr LANCA NativeCommandError; aqui o erro tem que virar $null (sem leitura)
+    $ErrorActionPreference = 'Continue'
     $fim = (Get-Date).AddSeconds($TetoS)
     $n = $null
     do {
         $saida = & docker exec $Container rabbitmqctl -q list_queues name messages_ready messages_unacknowledged 2>$null
         if ($LASTEXITCODE -ne 0) { return $null }
         $n = Get-MensagensDaFila -Saida @($saida) -Fila 'admission.requests'
+        if ($null -eq $n -or $n -eq 0) { return $n }
+        Start-Sleep -Seconds 2
+    } while ((Get-Date) -lt $fim)
+    $n
+}
+
+# ---- Rodada 5 (#204): saga stock + wallet por bloco (subir-host-rpm.ps1 -Verificar) ----
+
+# Pura: limite (s) para uma orfa se resolver = ORPHAN_MS + 3 x SCAN_MS (spec da saga, "Parada da R5"), arredondado para cima ao segundo. Valor ausente ou
+# nao numerico (container sem a variavel) cai no default do servico (30000 / 5000 = 45 s).
+function Get-OrfaLimiteS {
+    param([string]$OrphanMs = '', [string]$ScanMs = '')
+    $o = 30000; $s = 5000
+    if ($OrphanMs -match '^\d+$') { $o = [int64]$OrphanMs }
+    if ($ScanMs -match '^\d+$') { $s = [int64]$ScanMs }
+    [int][math]::Ceiling(($o + 3 * $s) / 1000.0)
+}
+
+# Pura: a DECISAO da saga no fim do bloco a partir das contagens (o SQL e o polling ficam no subir-host-rpm.ps1). Codigo 4 = alguma invariante da saga
+# nao convergiu dentro do limite (orfa que nao se resolve). NAO decide overselling: o codigo 3 (CAS) continua sendo so overselling e tem precedencia no script.
+function Get-DecisaoSaga {
+    param([int]$LimiteS = 45, [int64]$SagasVelhas = 0, [int64]$HoldHeldSagaCompensada = 0, [int64]$DevolucaoPendente = 0, [int64]$OrfaInversa = 0, [int64]$QuantDivergente = 0)
+    $falhas = @()
+    if ($SagasVelhas -gt 0) { $falhas += "sagas reserving/compensating mais velhas que ${LimiteS}s: $SagasVelhas" }
+    if ($HoldHeldSagaCompensada -gt 0) { $falhas += "hold held com saga compensated: $HoldHeldSagaCompensada" }
+    if ($DevolucaoPendente -gt 0) { $falhas += "hold held com ReservationCancelled/Expired no event_store ha mais de ${LimiteS}s (devolucao pendente): $DevolucaoPendente" }
+    if ($OrfaInversa -gt 0) { $falhas += "walletevent pending/confirmed sem hold held (orfa inversa): $OrfaInversa" }
+    if ($QuantDivergente -gt 0) { $falhas += "eventos limitados com quant <> capacity - holds held debitados: $QuantDivergente" }
+    if ($falhas.Count -eq 0) {
+        return [pscustomobject]@{ Codigo = 0; Mensagem = "sagas convergidas (velhas $SagasVelhas, hold held com saga compensated $HoldHeldSagaCompensada, devolucao pendente $DevolucaoPendente, orfa inversa $OrfaInversa, quant divergente $QuantDivergente)." }
+    }
+    [pscustomobject]@{ Codigo = 4; Mensagem = "invariante(s) da saga que nao convergiram: " + ($falhas -join '; ') + '.' }
+}
+
+# Pura: TOTAL-LAG na saida de `rpk group describe <group>`; $null se nao ha (group ausente / erro)
+function Get-TotalLag {
+    param([string[]]$Saida)
+    foreach ($l in $Saida) {
+        $p = "$l".Trim() -split '\s+'
+        if ($p.Count -ge 2 -and $p[0] -eq 'TOTAL-LAG' -and $p[1] -match '^\d+$') { return [int64]$p[1] }
+    }
+    $null
+}
+
+# Espera o lag do group chegar a 0 (devolucao da vaga: o StockReleaseConsumer do stock consome ReservationCancelled/Expired do bloco que acabou; devolucao
+# ainda no topico seria falsa "devolucao pendente"). Devolve o lag que restou ($null = nao deu para ler: sem redpanda/group; 0 = drenado). Teto curto.
+function Wait-LagDoGroup {
+    param([string]$Group = 'stock', [int]$TetoS = 30, [string]$Container = $(if ($env:CARGA_REDPANDA) { $env:CARGA_REDPANDA } else { 'gerenciador-redpanda' }))
+    $ErrorActionPreference = 'Continue'   # ver Wait-FilaDeAdmissao: stderr do docker/rpk nao pode lancar
+    $fim = (Get-Date).AddSeconds($TetoS)
+    $n = $null
+    do {
+        $saida = & docker exec $Container rpk group describe $Group 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $n = Get-TotalLag -Saida @($saida)
         if ($null -eq $n -or $n -eq 0) { return $n }
         Start-Sleep -Seconds 2
     } while ((Get-Date) -lt $fim)

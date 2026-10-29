@@ -34,3 +34,7 @@ services:
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-1000}
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-5}
       # LOGGING_LEVEL_EVENTS_LAG: "DEBUG"
+      # Latencia dos passos da saga (tx1_ms / stock_ms / tx2_ms / total_ms) no logger saga.timing do RESERVATION (Rodada 5, issue #204): DESLIGADO por padrao
+      # (um log por reserva aceita, como o events.lag acima, infla a latencia medida). Descomente SO no bloco que mede a latencia dos passos; o
+      # coleta-host.sh le por `docker logs --since` de todas as replicas e imprime p50/p95/max no resumo-saga-*.txt.
+      # LOGGING_LEVEL_SAGA_TIMING: "DEBUG"

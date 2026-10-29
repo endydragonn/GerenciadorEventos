@@ -7,6 +7,7 @@
   .\subir-host-rpm.ps1                              # max_connections=300, caminho CAS
   .\subir-host-rpm.ps1 -MaxConnections 100          # padrao do Postgres (pool do pooler = 45)
   .\subir-host-rpm.ps1 -Verificar -Prefixo Rpm-123456     # sai com codigo 3 se houver overselling no braco CAS (criterio de parada do bloco, #178)
+  .\subir-host-rpm.ps1 -Verificar -Prefixo Deg-123456 -OrfaLimiteS 45   # R5 (#204): depois do overselling (3), espera o lag do group stock e as sagas do prefixo; codigo 4 = invariante da saga que nao convergiu no limite
   .\subir-host-rpm.ps1 -ComposeExtras docker-compose.autoescala.yml   # braco C: overrides extras DEPOIS dos de carga e rpm (Hikari 300 por replica); a R4 roda o braco sem autoescala antes
 #>
 [CmdletBinding()]
@@ -16,6 +17,7 @@ param(
     [switch]$SemBuild,
     [switch]$Verificar,
     [string]$Prefixo = '',
+    [int]$OrfaLimiteS = 0,           # issue #204 (R5): limite (s) para uma orfa da saga se resolver no -Verificar; 0 = ORPHAN_MS + 3 x SCAN_MS lidos do container reservation (45 s se nao achar)
     [string[]]$ComposeExtras = @()   # issue #178: mais overrides (paths relativos a Projeto\), ex. docker-compose.slim.yml e docker-compose.autoescala.yml
 )
 
@@ -82,6 +84,55 @@ SELECT coalesce(sum(n - capacity) FILTER (WHERE n > capacity), 0) FROM ativas;
         else { Write-Host "[erro] OVERSELLING $over no braco '$(if ($readpath) { $readpath } else { 'cas?' })': criterio de parada do bloco. NAO prossiga." -ForegroundColor Red; exit 3 }
     } elseif ($over -notmatch '^\d+$') { Write-Host "[erro] nao consegui ler o overselling ('$over')." -ForegroundColor Red; exit 1 }
     else { Write-Host '[ ok ] overselling 0.' -ForegroundColor Green }
+    # ---- Rodada 5 (#204): saga stock + wallet. O overselling (codigo 3) tem precedencia e segue sendo SO overselling; aqui o codigo 4 = invariante da saga que nao
+    # convergiu dentro do limite (orfa que nao se resolve). Ordem: lag do group stock a 0 (devolucao drenada) -> polling das sagas do prefixo ate o limite.
+    $cr = Get-ContainerDoServico reservation
+    $limite = $OrfaLimiteS
+    $origemLimite = "parametro -OrfaLimiteS (ORFA_LIMITE_S)"
+    if ($limite -le 0) {
+        $origemLimite = "ORPHAN_MS + 3 x SCAN_MS $(if ($cr) { 'lidos do container reservation' } else { 'padrao do servico: container reservation nao achado' })"
+        $om = if ($cr) { ((docker exec $cr printenv RESERVATION_SAGA_ORPHAN_MS 2>$null) | Out-String).Trim() } else { '' }
+        $sm = if ($cr) { ((docker exec $cr printenv RESERVATION_SAGA_REAPER_SCAN_MS 2>$null) | Out-String).Trim() } else { '' }
+        $limite = Get-OrfaLimiteS -OrphanMs $om -ScanMs $sm
+    }
+    $lag = Wait-LagDoGroup -Group stock
+    if ($null -eq $lag) { Write-Host '[aviso] nao consegui ler o lag do group stock (redpanda/group ausente): a devolucao pendente abaixo pode estar incompleta.' -ForegroundColor Yellow }
+    elseif ($lag -gt 0) { Write-Host "[aviso] group stock ainda com lag $lag depois da espera: a devolucao pendente abaixo pode estar incompleta." -ForegroundColor Yellow }
+    # Uma linha: velhas, hold_held_saga_compensada, devolucao_pendente, orfa_inversa, quant_divergente. "Velhas" = reserving/compensating que SOBRARAM no polling:
+    # o bloco ja acabou, entao toda saga pendente tem idade >= o tempo ja esperado; no fim da espera (= o limite) ela e mais velha que o limite.
+    # Devolucao pendente = hold `held` do prefixo cuja devolucao (ReservationCancelled/Expired no reservation.event_store, por holdId) tem MAIS DE $limite s (occurred_at, timestamptz):
+    # reservas pending nao acompanhadas expiram ~120 s depois do bloco, em cima da verificacao, e o consumer do stock ainda as esta drenando; o codigo 4 significa "nao convergiu dentro do limite".
+    # Parte do event_store (a fonte da devolucao), SEM JOIN com walletevent: o UPSERT que revive expired/cancelled troca o walletevent.hold_id, e o hold antigo preso sairia da conta.
+    # Custo: sem pre-filtro, o EXISTS varre o event_store (sem indice em payload->>'holdId') para todo hold held do prefixo a cada poll. Aceitavel SO aqui (pos-bloco, a cada 2 s ate o limite);
+    # NUNCA leve esta consulta para a coleta por amostra (regra de custo da R5).
+    $qSaga = @"
+WITH ev AS (SELECT e.event_id, c.capacity, c.quant FROM catalog.event e JOIN stock.eventcap c USING (event_id) WHERE e.event_name LIKE '$Prefixo-%')
+SELECT (SELECT count(*) FROM reservation.idempotency_key k WHERE k.event_id IN (SELECT event_id FROM ev) AND k.saga_status IN ('reserving','compensating')),
+       (SELECT count(*) FROM stock.hold h JOIN reservation.idempotency_key k ON k.hold_id = h.hold_id
+         WHERE h.event_id IN (SELECT event_id FROM ev) AND h.status = 'held' AND k.saga_status = 'compensated'),
+       (SELECT count(*) FROM stock.hold h
+         WHERE h.event_id IN (SELECT event_id FROM ev) AND h.status = 'held'
+          AND EXISTS (SELECT 1 FROM reservation.event_store es WHERE es.event_type IN ('ReservationCancelled','ReservationExpired')
+                      AND es.payload->>'holdId' = h.hold_id::text AND es.occurred_at < now() - interval '$limite seconds')),
+       (SELECT count(*) FROM reservation.walletevent w WHERE w.event_id IN (SELECT event_id FROM ev) AND w.status IN ('pending','confirmed')
+         AND NOT EXISTS (SELECT 1 FROM stock.hold h WHERE h.hold_id = w.hold_id AND h.status = 'held')),
+       (SELECT count(*) FROM ev WHERE capacity <> -1
+         AND quant <> capacity - (SELECT count(*) FROM stock.hold h WHERE h.event_id = ev.event_id AND h.status = 'held' AND h.decremented));
+"@
+    Write-Host "[info] sagas: esperando as invariantes convergirem (limite ${limite}s; origem: $origemLimite)..." -ForegroundColor Cyan
+    $fimSaga = (Get-Date).AddSeconds($limite)
+    while ($true) {
+        $lin = ($qSaga | docker exec -i (Get-ContainerDb) sh -c 'psql -v ON_ERROR_STOP=1 -At -F, -U $POSTGRES_USER -d $POSTGRES_DB' | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $lin -notmatch '^\d+(,\d+){4}$') { Write-Host "[erro] nao consegui ler as sagas do prefixo ('$lin')." -ForegroundColor Red; exit 1 }
+        $p = $lin -split ','
+        $dec = Get-DecisaoSaga -LimiteS $limite -SagasVelhas $p[0] -HoldHeldSagaCompensada $p[1] -DevolucaoPendente $p[2] -OrfaInversa $p[3] -QuantDivergente $p[4]
+        # a decisao sai de uma consulta FEITA agora: o tempo so encerra o laco depois de uma consulta nova (nunca decide com o resultado de 2 s atras)
+        if ($dec.Codigo -eq 0 -or (Get-Date) -ge $fimSaga) { break }
+        Start-Sleep -Seconds 2
+    }
+    Registrar "saga prefixo $Prefixo (limite ${limite}s)" $dec.Mensagem
+    if ($dec.Codigo -ne 0) { Write-Host "[erro] SAGA: $($dec.Mensagem) Criterio de parada do bloco (codigo 4). NAO prossiga." -ForegroundColor Red; exit $dec.Codigo }
+    Write-Host "[ ok ] $($dec.Mensagem)" -ForegroundColor Green
     exit 0
 }
 

@@ -60,6 +60,8 @@ ARRANJO        ?= sem-autoescala
 PARAMS_AUTOESCALA ?=
 COM_CHAVE      ?=
 COMPOSE_EXTRAS ?=
+# Rodada 5 (#204, saga stock + wallet): limite (s) para uma orfa da saga se resolver no verificar-rpm (codigo 4 se nao convergir); vazio = ORPHAN_MS + 3 x SCAN_MS lidos do container reservation (45 s se nao achar)
+ORFA_LIMITE_S  ?=
 
 need_ip = $(if $(HOST_IP),,$(error Informe HOST_IP=<ip do host>))
 
@@ -97,6 +99,10 @@ help:
 	@Write-Host '  make setup-host | host-rpm  COMPOSE_EXTRAS=docker-compose.autoescala.yml   (no HOST: braco C; slim antes: docker-compose.slim.yml,docker-compose.autoescala.yml; replicas achadas por label)'
 	@Write-Host '  make limpar-banco    (no HOST, entre blocos; scaler PARADO: trunca, FLUSHDB, purge das filas, apaga a chave do JWT de TODAS as replicas do identity, sobe de volta e prova o JWKS)'
 	@Write-Host '  make verificar-rpm   PREFIXO=Deg-<id>   (no HOST, ao fim de CADA bloco: codigo 3 se houver overselling no braco CAS = criterio de parada)'
+	@Write-Host 'RODADA 5 (#204) - saga stock + wallet; protocolo igual ao da R4, so a saga muda (README, secao Rodada 5)'
+	@Write-Host '  make coleta-host     (no HOST: +5 colunas no fim do CSV -- lag_stock, lag_stock_catalog, saga_reservando, saga_orfas, saga_compensando --. ORDEM POR BLOCO: ao fim do k6 a coleta CONTINUA ate saga_reservando e saga_compensando = 0 no CSV ou ate passar ORFA_LIMITE_S; so entao Ctrl+C (gera saga-*.csv e resumo-saga-*.txt), depois verificar-rpm, depois limpar-banco)'
+	@Write-Host '  make verificar-rpm   PREFIXO=Deg-<id> [ORFA_LIMITE_S=45]   (no HOST: overselling (codigo 3), depois o lag do group stock e as sagas do prefixo; codigo 4 = orfa/invariante da saga que nao convergiu no limite)'
+	@Write-Host '  LOGGING_LEVEL_SAGA_TIMING=DEBUG no reservation (linha comentada no carga/docker-compose.carga.yml): latencia dos passos da saga no resumo, SO no bloco que mede'
 	@Write-Host '  make selftests       (sem Docker/stack: lib-degraus, lib-servicos, lib-admissao, carga-degraus (k6 stub), coleta-host, limpar-banco)'
 
 setup-host:
@@ -124,7 +130,7 @@ test-rpm:
 # '; exit $$LASTEXITCODE': o codigo 3 (overselling no braco CAS) chega ao make (ver o comentario do test-matriz)
 verificar-rpm:
 	$(if $(PREFIXO),,$(error Informe PREFIXO=Rpm-<id>))
-	.\rpm\subir-host-rpm.ps1 -Verificar -Prefixo $(PREFIXO); exit $$LASTEXITCODE
+	.\rpm\subir-host-rpm.ps1 -Verificar -Prefixo $(PREFIXO) $(if $(ORFA_LIMITE_S),-OrfaLimiteS $(ORFA_LIMITE_S)); exit $$LASTEXITCODE
 
 test-aleatorio:
 	$(need_ip)
