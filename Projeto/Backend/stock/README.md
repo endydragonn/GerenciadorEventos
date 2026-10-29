@@ -6,9 +6,8 @@ schema `stock`. Expõe uma **API interna HTTP** (`/internal/**`, porta **8086**)
 `catalog` (capacidade). Processo, imagem (`stock/Dockerfile`) e container (`gerenciador-stock`) próprios; **sem porta no host**. Desenho
 completo: `docs/superpowers/specs/2026-10-29-saga-stock-wallet-design.md`.
 
-> **Estado (passada a1):** o serviço, a lib `stock-client`, o schema (`db/init-scripts/16-stock.sql`) e os testes estão prontos e **aditivos**. O
-> `reservation` ainda não o chama (a saga é a passada a2) e `reservation.eventcap` coexiste com `stock.eventcap` até a migração
-> `20261029-stock-schema.sql`. Compose, `stock-seek`, e2e e carga entram na passada b.
+> **Estado:** o `reservation` orquestra a saga chamando este serviço, e o `eventcap` mora só em `stock.eventcap` (bancos existentes: migração
+> `db/migrations/20261029-stock-schema.sql`).
 
 - **Autenticação:** toda requisição exige o header `X-Internal-Token` = `INTERNAL_API_TOKEN` (401 sem/errado; sem filtro por caminho); sem a
   variável o serviço não sobe.

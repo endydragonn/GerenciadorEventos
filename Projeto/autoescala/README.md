@@ -117,11 +117,11 @@ Os smokes de `docs/testes-manuais/` ainda usam `docker exec gerenciador-*` (roda
 ## Pool (Supavisor)
 
 No override o Hikari do `reservation` é **300 por réplica** (= threads do Tomcat) e o de `identity` e `catalog` é **50 por réplica** (base: 100). Com o máximo de 3 réplicas de cada, contando a stand-by:
-`3 × 300 (reservation) + 3 × 10 (backend) + 3 × 3 (notification) + 3 × 50 (catalog) + 3 × 50 (identity) = 900 + 30 + 9 + 150 + 150 = 1239 <= POOLER_MAX_CLIENT_CONN 1500` (o `admission` não tem datasource).
+`3 × 300 (reservation) + 3 × 10 (backend) + 3 × 3 (notification) + 3 × 50 (catalog) + 3 × 50 (identity) + 250 (stock, 1 réplica fixa, #47) = 900 + 30 + 9 + 150 + 150 + 250 = 1489 <= POOLER_MAX_CLIENT_CONN 1500` (o `admission` não tem datasource; sem o `stock`, da #47, eram 1239).
 (A conta de 1133 era a da #111, com uma réplica de `identity`/`catalog`/`notification`.) O pool real ao Postgres (45/245) não cresce. Mudar `AUTOESCALA_*_HIKARI` ou o máximo exige refazer a conta.
 
 O Hikari 50 de `identity` e `catalog` fica **abaixo dos 300 threads do Tomcat** deles: sob rajada as threads esperam conexão no Hikari (`connection-timeout` de 5 s) antes de falhar. Com 1 réplica (começo do braço C)
-o pool é metade do base. Efeito a medir na Rodada 4; 90 por réplica ainda caberia (`900 + 30 + 9 + 270 + 270 = 1479 <= 1500`).
+o pool é metade do base. Efeito a medir na Rodada 4. **Desde a #47 a folga é de 11:** com o `stock` (Hikari 250), `identity`/`catalog` cabem com no máximo 51 por réplica; acima disso o Hikari do `stock` tem de cair para `1500 − soma` (pré-condição da Rodada 5).
 
 ## Limites conhecidos
 

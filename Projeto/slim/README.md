@@ -1,6 +1,6 @@
 # Imagens enxutas dos serviços com o Slim (issue #177)
 
-Versões mínimas das imagens de `backend`, `identity`, `catalog`, `reservation`, `notification` e `admission` (esta desde a #178), geradas com o
+Versões mínimas das imagens de `backend`, `identity`, `catalog`, `reservation`, `stock` (desde a #47), `notification` e `admission` (esta desde a #178), geradas com o
 [Slim](https://github.com/slimtoolkit/slim) (`slim build --target <imagem>`): ele roda o contêiner, observa (ptrace) quais arquivos o
 processo realmente usa enquanto um probe exercita os endpoints, e monta uma imagem só com eles. **Os Dockerfiles não mudam** e a imagem
 original continua o padrão do compose; as `*.slim` entram por um override opcional.
@@ -8,13 +8,13 @@ original continua o padrão do compose; as `*.slim` entram por um override opcio
 ## Usar
 
 ```bash
-# 1. gerar as 6 imagens (project isolado gerenciador-e2e-slim; leva ~15-25 min na 1ª vez, o build gordo vem do cache depois)
+# 1. gerar as 7 imagens (project isolado gerenciador-e2e-slim; leva ~15-25 min na 1ª vez, o build gordo vem do cache depois)
 Projeto/slim/gerar-imagens-slim.sh                # ou só alguns: Projeto/slim/gerar-imagens-slim.sh identity notification admission
 
 # 2. subir a stack com elas (precisa das imagens locais; o `build: !reset null` do override impede o rebuild da gorda com o nome slim)
 docker compose -f Projeto/docker-compose.yml -f Projeto/docker-compose.slim.yml up -d --wait
 
-# 3. suíte e2e da stack inteira com as imagens slim (o e2e confere que cada um dos 6 serviços roda o ID da imagem *.slim)
+# 3. suíte e2e da stack inteira com as imagens slim (o e2e confere que cada um dos 7 serviços roda o ID da imagem *.slim)
 E2E_SLIM=1 Projeto/e2e/run-e2e.sh
 ```
 
@@ -32,6 +32,7 @@ Idempotente: cada execução regenera as mesmas tags a partir do código atual e
 | `identity` | 523 MB | 386 MB | -26% |
 | `catalog` | 522 MB | 384 MB | -26% |
 | `reservation` | 522 MB | 384 MB | -26% |
+| `stock` (#47) | 521 MB | 384 MB | -26% |
 | `notification` | 509 MB | 371 MB | -27% |
 | `admission` (#178) | 503 MB | 365 MB | -27% |
 
@@ -43,19 +44,20 @@ A redução é moderada de propósito: o fat jar e o JRE (`lib/modules`) são um
 Cada alvo sobe como contêiner temporário na rede do project isolado, com o ambiente real do compose (`--env-file`, gerado por
 `docker compose config` num arquivo temporário; nunca impresso, e a saída do Slim passa por um filtro que mascara qualquer valor), com
 o resto da stack gordo ao redor. O serviço gordo de mesmo nome é parado antes, para que os consumer groups de 1 partição
-(`notification`, `reservation`) caiam no contêiner-alvo. `--http-probe-cmd-file` com `protocol: http` (sem tentativa em https):
+(`notification`, `reservation`, `stock`) caiam no contêiner-alvo. `--http-probe-cmd-file` com `protocol: http` (sem tentativa em https):
 
 | Serviço | Chamadas do probe |
 |---|---|
 | `identity` | JWKS (`/.well-known/jwks.json`); `/internal/**` com `X-Internal-Token`: criar usuário, login (200 e 401), by-email, names, wallets, validate, registrations (+resend, verify), `recaptcha/verify` (HTTPS de saída ao Google); chamada sem token (401). O relay do outbox publica `identity.notification`/`identity.user` no Redpanda. |
 | `catalog` | `/internal/events/**`: validate, criar, search, por criador, buscar, exists, creator, image, atualizar; sem token (401). O relay publica `catalog.event`; o `reservation` gordo recebe o `eventcap` por HTTP. |
-| `reservation` | `/internal/eventcaps/**` (PUT/GET/batch/PATCH/DELETE), `/internal/reservations` (cas e naive, replay, active, confirm, user, cancelar), disponibilidade; sem token (401). Os consumers (`reservation`, `reservation-catalog`) e o relay sobem junto. |
+| `reservation` | `/internal/reservations` (cas e naive, replay, active, confirm, user, cancelar), disponibilidade; sem token (401). Desde a #47 o `eventcap` é do `stock`: o script cria `900001`/`900002` no `stock` GORDO antes do probe e o `reservation`-alvo o chama por HTTP (a saga: um hold por reserva `cas`/`naive`). O consumer (`reservation`) e o relay sobem junto. |
+| `stock` (#47) | `/internal/eventcaps/**` (PUT/GET/batch/PATCH/DELETE com 409 por hold), `/internal/holds` (201, repetição 200, `naive`, 409 de lápide, 400 sem capacidade e malformado) e `/internal/holds/{id}/release` (idempotente, lápide); sem token (401). **Prova do consumer:** antes do start o script cria um hold no `stock` gordo e produz um `ReservationCancelled` com o `holdId` em `reservation.wallet`; depois do Slim exige o hold `released` e a vaga devolvida (`quant` 5): o `StockReleaseConsumer` da imagem-alvo rodou. O `CatalogReconciliationConsumer` sobe junto (group `stock-catalog`, `latest`: só o join é exercitado). |
 | `backend` (gateway) | `/actuator/health`; `/bff/**` com um JWT real (usuário de probe criado e promovido a host no identity gordo): login (200/401), `me`, criar/buscar evento, reservar e confirmar, carteira, cadastro em duas fases; token inválido (401). A validação do token busca o JWKS do identity. |
 | `admission` (#178) | Sobe com `redis` e `rabbitmq` do project isolado e o `reservation` gordo (o worker pool o chama). O alvo roda com `ADMISSION_X_RPM=60` (imposto no arquivo de ambiente do alvo): `POST /internal/admissions` ×60 (as primeiras ficam `sync`; passando de 80% de X o evento entra em **modo fila**: script Lua do contador, `enfileirar.lua`, publicação no RabbitMQ), `GET .../result` das 60 chaves, `GET .../events/{id}/rpm`, repetição da chave, chave de outro evento (422), 404 e chamada sem token (401). O `eventcap` do evento do probe (910001) é criado antes no `reservation` gordo. **Prova de que o listener AMQP e o worker rodaram na imagem-alvo:** depois do Slim, o script exige reservas do evento 910001 em `reservation.walletevent` (só o worker as cria; o `POST /internal/admissions` nunca reserva) |
 | `notification` | Sem HTTP (`--http-probe=false --continue-after 120`): um `VerificationCodeRequested` é produzido em `identity.notification` antes do start; o script exige que o consumer da imagem-alvo o processe (1 e-mail no captador Mailpit). |
 
 Depois de gerar, o script confere que cada imagem slim tem `bash head grep awk` (healthchecks do compose; `printf` é builtin do bash) e que `/var/lib/identity` da `identity.slim` está **vazio** (guarda da chave do JWT, abaixo). O critério final é
-`E2E_SLIM=1 Projeto/e2e/run-e2e.sh` verde: cadastro por e-mail, evento, reserva, confirmação, replay e a rajada do modo fila (passo 4b), com as 6 imagens slim.
+`E2E_SLIM=1 Projeto/e2e/run-e2e.sh` verde: cadastro por e-mail, evento, reserva, confirmação, replay e a rajada do modo fila (passo 4b), com as 7 imagens slim.
 
 ## Includes e motivo
 

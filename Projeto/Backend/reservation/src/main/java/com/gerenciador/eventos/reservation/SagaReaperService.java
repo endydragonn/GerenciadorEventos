@@ -22,12 +22,12 @@ import com.gerenciador.eventos.stockclient.StockClient;
  *
  * <p>Cada tick, em lotes de {@code reservation.saga.reaper.batch}:</p>
  * <ol>
- *   <li>uma transação seleciona as {@code reserving} paradas há mais de {@code reservation.saga.orphan-ms} OU qualquer
- *       {@code compensating}, as mais antigas primeiro, com {@code FOR UPDATE SKIP LOCKED} (vale para N réplicas, como a expiração);</li>
+ *   <li>uma transação seleciona as {@code reserving} E as {@code compensating} paradas há mais de
+ *       {@code reservation.saga.orphan-ms} ({@code updated_at}; a compensação inline em curso não é tomada), as mais antigas primeiro, com {@code FOR UPDATE SKIP LOCKED} (vale para N réplicas, como a expiração);</li>
  *   <li>na mesma transação passa as {@code reserving} para {@code compensating} (por PK + {@code hold_id}) e comita: é isso que faz a
  *       tx2 atrasada do dono perder o CAS {@code reserving -> reserved};</li>
  *   <li>fora da transação, {@code release(holdId)} no stock com o evento e o usuário da linha; com 200 a linha vai a
- *       {@code compensated} ({@code resolved_by = reaper}); com falha fica {@code compensating} e entra no próximo tick.</li>
+ *       {@code compensated} ({@code resolved_by = reaper}); com falha fica {@code compensating} (sem renovar o {@code updated_at}) e volta a ser tomada quando completar a mesma idade.</li>
  * </ol>
  * Regra de ouro: nunca libera o hold de uma saga {@code reserved} (a seleção não a devolve e o CAS impede a corrida). Também não decide
  * nada pelo lado do stock nem pelo lag do tópico. Liga/desliga por {@code reservation.saga.reaper.enabled} (ligado por padrão).

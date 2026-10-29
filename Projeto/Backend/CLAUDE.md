@@ -14,6 +14,9 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
 - Serviço `reservation` (issue #33): `docker compose -f Projeto/docker-compose.yml up -d --build reservation` — container
   `gerenciador-reservation`, API interna na `:8082` **só na rede `gerenciador-net`** (sem porta no host). Ver "Serviço reservation".
   O `backend` **depende dele** (`depends_on: reservation: service_healthy`): sem ele não há reserva (o resto do monólito sobe).
+- Serviço `stock` (issue #47): `docker compose -f Projeto/docker-compose.yml up -d --build stock` — container `gerenciador-stock`, API interna na `:8086` **só na rede**; entrypoint
+  `com.gerenciador.eventos.stock.StockApplication`, `stock/Dockerfile`. Dono do `eventcap` (CAS) e do ledger de holds; o `reservation` **depende dele** (`service_healthy`, que por sua vez espera o
+  one-shot `stock-seek`). Ver "Serviço stock e saga stock + wallet".
 - Serviço `catalog` (issue #35): `docker compose -f Projeto/docker-compose.yml up -d --build catalog` — container `gerenciador-catalog`,
   API interna na `:8083` **só na rede**; entrypoint `com.gerenciador.eventos.catalog.CatalogApplication`, `catalog/Dockerfile`. O `backend`
   também depende dele (`service_healthy`); com ele parado `/bff/events/**` e a reserva respondem 503 (na reserva, um positivo de `exists`
@@ -37,7 +40,7 @@ Leia também o CLAUDE.md da raiz (regras gerais) e o de `db/` (schema).
   `notification`: `com.gerenciador.eventos.notification.NotificationApplication`; o do `reservation`:
   `com.gerenciador.eventos.reservation.ReservationApplication`; o do `identity`: `com.gerenciador.eventos.identity.IdentityApplication`; o do
   `admission`: `com.gerenciador.eventos.admission.AdmissionApplication`.
-- Build da imagem: um Dockerfile por serviço (`monolito/Dockerfile`, `notification/Dockerfile`, `reservation/Dockerfile`, `catalog/Dockerfile`, `identity/Dockerfile`, `admission/Dockerfile`), contexto = `Projeto/Backend/`
+- Build da imagem: um Dockerfile por serviço (`monolito/Dockerfile`, `notification/Dockerfile`, `reservation/Dockerfile`, `catalog/Dockerfile`, `identity/Dockerfile`, `admission/Dockerfile`, `stock/Dockerfile`), contexto = `Projeto/Backend/`
   (a raiz do multi-módulo); multi-stage — compila com `maven:3.9.7-temurin-21` (`-pl <serviço> -am`), roda em `temurin:25-jre`.
 
 ## Layout multi-módulo Maven — issue #32 (Fase 7)
@@ -48,7 +51,7 @@ serviço é um módulo com o próprio jar e Dockerfile; o que é comum é uma li
 
 ```
 Backend/
-  pom.xml                agregador (módulos: shared, reservation-client, catalog-client, identity-client, admission-client, monolito, notification, reservation, catalog, identity, admission)
+  pom.xml                agregador (módulos: shared, reservation-client, stock-client, catalog-client, identity-client, admission-client, monolito, notification, reservation, stock, catalog, identity, admission)
   checkstyle*.xml        um só para todos os módulos (${maven.multiModuleProjectDirectory})
   run-tests.sh           roda o reactor inteiro
   shared/                LIB (jar simples, sem repackage): DatabaseConnection + shared.events (EventStore, relay, consumer,
@@ -74,6 +77,10 @@ Backend/
                          fail-open e disjuntor). O gateway (monólito) o usa pelo AdmissionClientConfig; o serviço admission, pelos DTOs e nos testes ponta a ponta
   admission/             serviço novo (#41; README.md próprio): contador de RPM por evento em Redis (janela deslizante por buckets), fila de admissão em
                          RabbitMQ com worker pool que chama o reservation (#42) e API interna /internal/admissions na :8085; src/, Dockerfile, pom.xml. SEM datasource e SEM dependência de `shared`. Chamado pelo gateway por HTTP
+  stock-client/          LIB (#47; README.md próprio): HoldRequest/HoldResponse/ReleaseRequest, EventCap, EventCapacityApi, StockConflictException, HoldLiberadoException e o StockClient (pool).
+                         Usada pelo reservation (orquestrador da saga) e pelo catalog (capacidade)
+  stock/                 serviço novo (#47; README.md próprio): eventcap (CAS) + ledger de holds (stock.hold) + API interna /internal/holds e /internal/eventcaps na :8086,
+                         StockReleaseConsumer (devolução da vaga por evento) e CatalogReconciliationConsumer; src/, Dockerfile, pom.xml. SEM event store
   db/                    schema (fora do Maven)
 ```
 
@@ -102,8 +109,10 @@ Backend/
 
 `./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`
 (URL direta `db:5432`, **sem passar pelo pooler**),
-e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `catalog-client`, `identity-client`, `admission-client`, `monolito`, `notification`,
-`reservation`, `catalog`, `identity`, `admission`; `-fae` = um módulo vermelho não esconde o resultado dos outros). **Pré-requisito do `catalog` (#35):** o banco
+e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `stock-client`, `catalog-client`, `identity-client`, `admission-client`, `monolito`, `notification`,
+`reservation`, `stock`, `catalog`, `identity`, `admission`; `-fae` = um módulo vermelho não esconde o resultado dos outros). **Pré-requisito do `stock` (#47):** o banco migrado (`db/migrations/20261029-stock-schema.sql`): o script ABORTA se `reservation.eventcap` ainda existe ou se faltam `stock.eventcap`/`stock.hold`, e se o
+`gerenciador-stock` (ou réplica com o label do serviço) estiver rodando; ao fim move os groups `stock`/`stock-catalog` para o fim dos tópicos. `TEST_DB_NAME` (default `meu_banco`) e `ENV_FILE` (default
+`../.env`) permitem rodar os testes num banco isolado (o `meu_banco` fica no schema da R4); o banco novo é criado com os init scripts da worktree. **Pré-requisito do `catalog` (#35):** o banco
 migrado (`db/migrations/20261026-catalog-schema.sql`): o script ABORTA se `public.event` ainda existe ou `catalog.event` não existe (não
 aplica o `14-catalog.sql`, que num banco não migrado criaria `catalog.event` vazia ao lado de `public.event`), e aborta se o
 `gerenciador-catalog` estiver rodando (o relay dele drenaria o `catalog.event_outbox` dos testes). Antes disso apaga `target/surefire-reports` sozinho, então o total do
@@ -469,7 +478,7 @@ mantém o default de dev direto em `localhost:5433`, e os testes (`run-tests.sh`
   nomeado): em transaction mode ele vaza entre clientes ou some.
 - **Dimensionamento** (números literais em `Projeto/supabase/docker-compose.pooler.yml`): `POOLER_MAX_CLIENT_CONN=1500` tem de ser >= a
   SOMA dos Hikari de todos os serviços no tenant (senão o Supavisor recusa cliente): **reservation 1000 + monólito (gateway) 10 + notification 3
-  + catalog 100 + identity 100 = 1213** (1353 na #33, 1453 na #35, 1213 na #36: o gateway deixou de tocar em tabela de domínio e caiu de 350 para 10, e o identity entrou com 100; antes era um Hikari de 1000 só, no monólito). O override de carga (`carga/docker-compose.carga.yml`) mantém o backend em 10 (com 350 a soma seria 1553 > 1500). Conexões reais ao Postgres: `POOLER_DEFAULT_POOL_SIZE=45` para o `max_connections=100`
+  + catalog 100 + identity 100 = 1213** (1463 com o `stock` e seus 250, #47) (1353 na #33, 1453 na #35, 1213 na #36: o gateway deixou de tocar em tabela de domínio e caiu de 350 para 10, e o identity entrou com 100; antes era um Hikari de 1000 só, no monólito). O override de carga (`carga/docker-compose.carga.yml`) mantém o backend em 10 (com 350 a soma seria 1553 > 1500). Conexões reais ao Postgres: `POOLER_DEFAULT_POOL_SIZE=45` para o `max_connections=100`
   do compose padrão (+ `DB_POOL_SIZE=5` do próprio Supavisor, 3 reservadas do superuser,
   testes e psql); com `carga/rpm` (`max_connections=300`) o pool vai para 245 sozinho (override + `subir-host-rpm.ps1`). Ou seja,
   o `too many clients` não vem mais do Hikari, e sim do pool do Supavisor + o resto passar do
@@ -846,6 +855,10 @@ Erros de validação = `IllegalArgumentException` (vira HTTP 400 no controller).
 
 ## Inscrição em evento — reserva em duas fases (CAS)
 
+> **Desde a #47** o `addLink` é uma **saga** de duas transações curtas no `reservation` com um `POST /internal/holds` no `stock` entre elas (sem conexão aberta durante a chamada);
+> o CAS vive no `stock` e `removeLink`/expiração só appendam o evento (a vaga volta pelo consumer do `stock`). A lista abaixo é a da #24/#29 (uma transação só); a atual está em
+> "Serviço stock e saga stock + wallet".
+
 **Desde a #33 isto roda no serviço `reservation`** (ver "Serviço reservation"): o `gateway` (`EventWalletGateway`) confere a carteira no
 monólito e o evento no serviço `catalog` (desde a #35, por HTTP, com cache positivo de 30 s) e chama a API interna dele por HTTP; o CAS, a guarda e o append continuam exatamente como abaixo, só que dentro do outro processo
 e do schema `reservation`. `EventWalletService` (módulo `reservation`):
@@ -1030,6 +1043,10 @@ Rodada 1 (`docs/carga/resultados-*`) foram medidos com o refresh e ficam como hi
 
 ## Serviço reservation — issue #33 (Fase 7: segunda extração)
 
+> **Desde a #47** o `eventcap`, o CAS, a API `/internal/eventcaps/**` e a reconciliação pelo `EventCreated` (group `stock-catalog`) moraram no serviço **`stock`**
+> (schema `stock`); o `reservation` é o lado `wallet` e **orquestra a saga** (`POST /internal/holds` no `stock`, ver "Serviço stock e saga stock + wallet"). O texto abaixo
+> descreve a #33; onde fala de `eventcap`/CAS "dentro do serviço", leia "no `stock`"; o `CapacityReserver` virou o `StockClient` e a Hikari soma 1463 com o `stock` (250).
+
 `eventcap` (CAS), `walletevent` (event sourcing, stream `reservation.wallet`), `idempotency_key` e a projeção `event_availability` saíram do
 monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, README próprio): processo, imagem (`reservation/Dockerfile`), container
 (`gerenciador-reservation`, API interna na `:8082` **sem porta no host**) e schema (`reservation`) próprios. O contrato `/bff/**` não mudou
@@ -1149,6 +1166,9 @@ monólito e viraram o módulo/serviço `reservation` (`Backend/reservation/`, RE
   tópicos e sobe `reservation` + `catalog` antes do `backend` (#35; resumo em `Projeto/carga/README.md`).
 
 ## Réplicas: estado em memória e jobs (issue #111)
+
+> **Desde a #47** o `stock` é UMA réplica fixa (fora do scaler e do lb) e o `reservation` ganha o `SagaReaperService` (N réplicas se dividem as órfãs por `FOR UPDATE SKIP LOCKED` + CAS
+> por (PK, `hold_id`, status), provado em `SagaReaperConcorrenteTest`); a soma dos Hikari do override é 1489 (ver "Serviço stock e saga stock + wallet").
 
 Pré-requisito da autoescala de `gateway` (monólito) e `reservation`: com 2+ réplicas do mesmo serviço, (1) nenhum estado de domínio pode morar na memória
 de uma réplica e (2) os `@Scheduled` rodam em TODAS as réplicas ao mesmo tempo e têm de continuar corretos. O mecanismo de subir/descer réplicas
@@ -1300,6 +1320,10 @@ Mecanismo da #111 sem mecanismo novo; detalhe e dry-run na ADR (`docs/adr/Archit
 - **Pendências nomeadas:** rotação da chave com N réplicas do identity (parar TODAS, apagar o arquivo, subir, reiniciar o backend) e o `limpar-banco.sh` do kit de carga (resolvidos na #178: `Projeto/carga/limpar-banco.sh`, versionado e ciente de réplicas por label).
 
 ## Serviço catalog — issue #35 (Fase 7: terceira extração)
+
+> **Desde a #47** o `catalog` chama o **`stock`** (`STOCK_SERVICE_URL`, `StockClient` com pool 100) onde este texto diz `reservation`/`eventcap`: mesmos verbos e caminhos de
+> `/internal/eventcaps/**`, o 409 de apagar evento com reserva é a `StockConflictException`, e a reconciliação do `eventcap` (group `stock-catalog`) é do `stock`. O `catalog` NÃO
+> depende do `stock` no boot.
 
 O monólito NÃO tem mais o pacote `catalog` (nem `public.event`): o `gateway` usa o
 `CatalogClient` (lib `catalog-client`) contra o serviço `catalog` (container `gerenciador-catalog`, `:8083` só na rede
@@ -1460,6 +1484,9 @@ O monólito NÃO tem mais o pacote `identity` (nem `public.users`/`mywallet`/`pe
 
 ## Serviço admission — issue #41 (Fase 7: contador de RPM por evento)
 
+> **Desde a #47** nenhum código do `admission` mudou: o worker chama o mesmo `POST /internal/reservations?path=cas`; os 503 novos (stock fora, saga em andamento, dono que perdeu para o
+> reaper) caem no caminho de 5xx existente (backoff, `nack` com requeue, mesma chave). O `replay` só vê sagas `reserved`. O teto de 32 workers passa a ser o teto de holds simultâneos.
+
 Primeira peça da camada de alta carga (ADR "Async-Checkout-Queue"): o `gateway` conta **cada tentativa** de `POST /bff/event-wallets` no serviço `admission` (container
 `gerenciador-admission`, `:8085` só na rede `gerenciador-net`, `admission/Dockerfile`), que mantém **um contador de RPM por evento em Redis**. Na #41 o RPM é **só sinal de carga** e o modo devolvido é
 **sempre `sync`**: a reserva segue exatamente como antes (`HttpContractTest` sem mudança de expectativa, overselling 0 no `cas`). A fila (RabbitMQ, worker pool) é a #42 e o gatilho por uso de X, a histerese e o `202` são a #43 (subseção "Gatilho, modo fila e 202" abaixo; abaixo do gatilho nada muda).
@@ -1611,6 +1638,78 @@ existentes; overselling 0 no `cas`); acima dele a tentativa vai para a fila e te
   a fila `admission.requests` com profundidade **0** (`rabbitmqctl list_queues`, amostrada durante e depois da rajada e impressa) e **overselling 0** (reservas ativas ≤ capacidade, `eventcap.quant` = capacidade −
   ativas, pending = reservas ativas), imprimindo as contagens de 201/202/400/429 e dos estados. O mesmo passo com `E2E_RAJADA_USUARIOS` alto (ex.: 2000) é o **dry-run local acima do limiar** (não é medição).
 
+## Serviço stock e saga stock + wallet — issue #47 (Fase 7: quinta extração)
+
+Spec: `docs/superpowers/specs/2026-10-29-saga-stock-wallet-design.md` (D1–D4, janelas de falha, conta do Supavisor, migração). O `reservation` foi
+dividido em **`stock`** (o `eventcap`/CAS, o ledger de holds e a API `/internal/eventcaps/**`) e **`reservation`** (o lado `wallet`: `walletevent`, a
+`idempotency_key` que agora é também o log da saga, a projeção `event_availability`, expiração, retenção, relay e o **orquestrador da reserva**).
+O `reservation` mantém nome, container, porta `:8082` e a API `/internal/reservations*` (o `admission`, o gateway, o `lb:8082` e o scaler não mudam).
+`/bff/**` não mudou (`HttpContractTest`).
+
+- **Módulos** (reactor de 11 para 13): `stock` (serviço, `:8086` só na rede, container `gerenciador-stock`, schema `stock`, README próprio) e `stock-client`
+  (lib: `HoldRequest`/`HoldResponse`/`ReleaseRequest`, `EventCap`, `EventCapacityApi`, `StockConflictException`, `HoldLiberadoException` e o `StockClient`
+  com pool; `ReservationClient` deixou de implementar `EventCapacityApi`). Nenhuma lib de contrato depende de outra; o `ModuleBoundaryArchTest` ganhou
+  `stockclient`. `catalog` troca só o alvo da capacidade (`STOCK_SERVICE_URL`, `StockClient` com pool 100, captura `StockConflictException` no delete).
+- **Ledger `stock.hold`** (`hold_id uuid PK, event_id, user_id, decremented, status held|released`): cada tentativa de reserva tem um `holdId` (UUID gerado pelo
+  `reservation`), que é a chave de idempotência dos passos no `stock`. `POST /internal/holds` (uma transação: `eventcap`? → `INSERT hold ON CONFLICT DO NOTHING`
+  → janela de compra → CAS como último comando; 201 / 200 repetição / 400 "Capacidade não configurada", "Janela de compra encerrada", "Evento lotado" / 409
+  lápide) e `POST /internal/holds/{holdId}/release` (UM statement, upsert: libera o hold e devolve a vaga se `decremented`, ou grava a **lápide** se o hold
+  ainda não existia; sempre 200, idempotente por chave). Braço `naive` e evento ilimitado também criam hold (`decremented = false`). A conversão ilimitado →
+  limitado marca `decremented` nos holds `held` e `deleteIfNoReservations` olha `stock.hold` (qualquer status). `LEAST(quant + 1, capacity)` é só rede de
+  segurança (WARN se cortar).
+- **Saga da reserva** (`ReservationSaga`, orquestração síncrona, D1 = a): o estado é a linha de `reservation.idempotency_key` (colunas novas `hold_id`,
+  `saga_status reserving|reserved|compensating|compensated`, `updated_at`, `resolved_at`, `resolved_by inline|reaper`). Passos: pré-checagem (`existsActive`) →
+  **tx1** `INSERT` da chave (`reserving`) e COMMIT → `POST /internal/holds` **sem conexão aberta** → **tx2** (`reserving → reserved` por CAS em
+  PK + `hold_id` + status, `reservePending(hold_id)`, `SlotReserved{holdId}`). Toda transição é `UPDATE` condicional por (PK, `hold_id`, status esperado).
+  Respostas do `stock`: 400 apaga a linha `reserving` e devolve o texto (não consome a chave, não é compensação); 409, timeout, 5xx, conexão recusada ou 401 →
+  **compensação inline** (`reserving → compensating`, `release(holdId)`, `→ compensated`). Chave repetida: `reserved` devolve o salvo; `compensated` reabre
+  com `hold_id` novo; `reserving` espera relendo a cada 50 ms até `RESERVATION_SAGA_WAIT_MS` (8000, abaixo do timeout de 10 s dos chamadores; linha apagada
+  volta ao `INSERT`); `compensating` dá 503 na hora. **Desfecho incerto da tx2** (exceção de banco, inclusive no `commit()`): NÃO compensa inline, responde 503 e deixa
+  para o reaper; toda compensação que perde o CAS relê a linha e só libera se ela não estiver `reserved` com este `hold_id`. Falha do `stock` sai como 503 da
+  API interna e **500 genérico no `/bff`** (contrato de hoje com o `reservation` fora); o worker do `admission` trata como transitória (backoff + requeue).
+  Failpoint de teste `reservation.saga.failpoint=after-hold` (vazio em produção, sem variável no compose).
+- **Reaper** (`SagaReaperService`, `@Scheduled` a cada `RESERVATION_SAGA_REAPER_SCAN_MS` = 5000, lote `RESERVATION_SAGA_REAPER_BATCH` = 100): seleciona
+  `reserving` **e** `compensating` com `updated_at < now() - RESERVATION_SAGA_ORPHAN_MS` (30000) com `FOR UPDATE SKIP LOCKED` (N réplicas), passa as `reserving` para
+  `compensating` (é isso que faz a tx2 atrasada do dono perder) e comita; fora da transação faz `release(holdId)` e fecha em `compensated` (`resolved_by = reaper`).
+  Falha no release deixa `compensating` **sem renovar o `updated_at`** (é relida a cada tick). Nunca libera hold de saga `reserved`. Tempo para resolver uma órfã
+  com o stock no ar: ≤ `ORPHAN_MS + SCAN_MS + latência do release` (~35 s); com o stock fora é ilimitado, mas seguro (vaga presa, sem overselling). A retenção das
+  chaves (#130) só apaga `reserved`/`compensated`. O scheduler do `reservation` passou a 4 threads (relay, expiração, retenção e o reaper, o único com HTTP).
+- **Devolução ao cancelar/expirar por evento** (D4 = a): `removeLink` e `ReservationExpiryService` não chamam mais `release`; só a guarda e o append, agora com
+  `holdId` (`SlotReserved`, `ReservationCancelled`, `ReservationExpired` em `schema_version` 2). O **`StockReleaseConsumer`** do `stock` lê `reservation.wallet`
+  em lote (group `stock`, `STOCK_RELEASE_CONSUMER_ENABLED`, `auto.offset.reset=earliest`), libera os holds por `UPDATE ... WHERE status = 'held'` e devolve a vaga
+  com **um** `UPDATE eventcap` por evento; ignora tipos que não sejam Cancelled/Expired e os v1 sem `holdId`. O one-shot **`stock-seek`** (compose) move o group `stock`
+  para o fim de `reservation.wallet` só se o group não existe (cria o tópico antes, idempotente: `rpk group seek` falha com `UNKNOWN_TOPIC_OR_PARTITION` num tópico que ainda não existe). Com o stock fora, cancelar e expirar seguem respondendo; a vaga volta quando ele volta (venda a
+  menos, nunca a mais). A reconciliação do `eventcap` pelo `EventCreated` mudou para o `stock` (`CatalogReconciliationConsumer`, group `stock-catalog`,
+  `STOCK_CATALOG_RECONCILIATION_ENABLED`); `RESERVATION_CATALOG_RECONCILIATION_ENABLED` deixou de existir.
+- **Disponibilidade do `naive`**: `capacity` (lida do `stock` por `GET /internal/eventcaps/{id}`) − `ativos` (local); 404 do `stock` → 404, falha do `stock` →
+  503 (nunca 404). O gateway continua com 2 chamadas; dentro do `reservation` cada uma ganha um salto.
+- **Compose / escala**: `stock` fixo em 1 réplica (fora do scaler e do `haproxy.cfg`; as réplicas do `reservation` o chamam por `http://stock:8086`),
+  **Hikari 250 literal** no base e no override (nunca `${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE...}`: o kit de carga exporta essa variável para o
+  `reservation`). Só o `reservation` depende do `stock` (`service_healthy`, que espera o `stock-seek`); o `catalog` não (a criação de evento segue com o `stock`
+  fora e o `eventcap` vem pela reconciliação). Cliente `reservation → stock`: pool 400 (≥ Tomcat 300), conectar 2 s, pool 5 s, resposta 10 s, evict 20 s, sem retry
+  (`STOCK_CLIENT_*`). **Conta do Supavisor (≤ 1500):** base 1000 (reservation) + 250 (stock) + 10 (backend) + 3 (notification) + 100 (catalog) + 100 (identity) =
+  **1463**; override de autoescala 3×300 + 3×10 + 3×3 + 3×50 + 3×50 + 250 = **1489** (folga de 11; pré-condição da R5: Hikari de identity/catalog da R4 ≤ 51 por
+  réplica, senão o Hikari do `stock` = 1500 − soma da R4). Nenhum Hikari da R4 muda.
+- **Schema e migração**: `db/init-scripts/16-stock.sql` (schema `stock`, `eventcap` movido do `13-reservation.sql`, `hold`), na lista do `db/supabase-app-init.sql`;
+  banco existente: `db/migrations/20261029-stock-schema.sql` (+ `verify-20261029-migration.{sh,sql}`) — **com backend, reservation, catalog e stock parados e depois do
+  backup `pg_dump -h localhost -U admin --clean --if-exists -n reservation meu_banco`**; move `reservation.eventcap` para `stock`, cria `stock.hold`, as colunas da saga
+  e faz o backfill dos holds (por evento limitado, exatamente `capacity − quant` holds `decremented`; aborta se `capacity − quant` > ativas). Rollback no cabeçalho
+  (perde as sagas em voo: com tudo parado). O `run-tests.sh` aborta se `reservation.eventcap` ainda existe ou se faltam `stock.eventcap`/`stock.hold`, se há container
+  `gerenciador-stock` (ou réplica com o label) rodando, e ao fim move os groups `stock` (`reservation.wallet`) e `stock-catalog` (`catalog.event`) para o fim.
+- **Testes do `run-tests.sh` com banco isolado**: `TEST_DB_NAME` (default `meu_banco`) escolhe o banco dos testes (conferências por `psql` e `SPRING_DATASOURCE_URL` do
+  container, com `meu_banco` trocado por ele) e `ENV_FILE` (default `../.env`) o arquivo de ambiente; foi o que deixou o `meu_banco` no schema da R4 enquanto a #47 era
+  desenvolvida (`meu_banco_s5` criado com os init scripts da worktree). O módulo `reservation` trunca também o schema `stock` (`test.db.schemas=reservation,stock`).
+- **Testes** (Postgres e Redpanda reais): módulo `stock` — `StockHoldTest` (S1–S4, S7, S8: idempotência por `holdId`, `release` idempotente e lápide, overselling 0
+  com releases misturados, release × reservar em voo), `StockReleaseConsumerTest` (S5/S5b: lote com duplicatas/tipos misturados, `quant` agregado, rebalance, `Cancelled`
+  v1 sem `holdId`, `earliest`), `EventCapUpdatePolicyTest` (S6: conversão ilimitado → limitado), `CatalogReconciliationTest`, `StockApiE2ETest`, `StockConfigTest`;
+  módulo `reservation` — `ReservationSagaTest` (W1, W3, W5, W6, W8, W10–W12), `SagaReaperTest` (W2, W4, W7, W13), `SagaReaperConcorrenteTest` (W9), com o `stock` REAL
+  atrás do `StockProxy` (JDK `HttpServer` que fica fora, atrasa ou comita e perde a resposta), `SagaDb` e o helper `InvariantesDaSaga` (o único código de teste que lê os
+  dois schemas: `quant = capacity − holds debitados`, nenhum `walletevent` ativo sem hold `held`, **e no sentido inverso** todo hold `held` tem `walletevent` ativo, saga em
+  curso ou devolução pendente, e ao fim nenhuma saga `reserving`/`compensating`). O reaper vem desligado por padrão nos testes (surefire); as classes que o usam o religam e
+  usam `@DirtiesContext`. e2e: passos 4c (stock fora) e 4d (queda do `reservation` no meio de uma rajada), ver "Suíte e2e".
+- **O que a R5 coleta** (spec, "O que a R5/S6 coleta"): compensações por minuto por `resolved_by`, órfãs, tempo até resolver, devolução pendente, órfã inversa (0),
+  overselling + invariante, `saga.timing` (logger DEBUG, desligado por padrão).
+
 ## Suíte e2e da stack inteira — issue #37 (Fase 7)
 
 `Projeto/e2e/run-e2e.sh` sobe **tudo** (gateway, identity, catalog, reservation, notification, frontend, `supabase-*`, redpanda) num project
@@ -1619,6 +1718,12 @@ captador**, não do banco) → promover a host por SQL → login → criar event
 esvaziarem e o lag dos groups `reservation`/`reservation-catalog`/`notification` chegar a 0 e roda o **replay** dos streams `catalog.event` e
 `reservation.wallet` (`CatalogReplayE2eTest`, `ReservationReplayE2eTest`: `EventReplay.rebuild` + `divergentTables`, sombra == projeção viva;
 exigem `E2E_REPLAY=1`, ficam PULADAS no `run-tests.sh`, não truncam nada e reutilizam a projeção do `ReservationReplayTest`). Verde = saída 0.
+- **Saga stock + wallet (#47), passos 4c e 4d.** O `stock` e o `stock-seek` entram como `*isolado`; o override e2e dá ao `reservation` `RESERVATION_SAGA_ORPHAN_MS=5000` e `RESERVATION_SAGA_REAPER_SCAN_MS=1000`
+  (o `run-e2e.sh` exporta `SAGA_ORPHAN_MS`/`SAGA_SCAN_MS`; o validador exige ORPHAN_MS entre 1000 e 10000, `STOCK_SERVICE_URL` no reservation e o Hikari 250 literal do stock) e as consultas de capacidade leem `stock.eventcap`.
+  **(a) stock fora:** `docker stop` do `stock` do project → `POST /bff/event-wallets` com `Idempotency-Key` dá **500** genérico; no banco a saga fica `compensating`, `quant` intacto, nenhum `walletevent`;
+  `start` + healthy → em até `ORPHAN_MS + SCAN_MS` a saga fica `compensated` (`resolved_by = reaper`), o hold `released`, invariantes verdes, e a MESMA chave reserva (201); cancelar a reserva devolve a vaga
+  pelo consumer do `stock` (`quant` volta a 5). **(b) queda do `reservation` no meio de uma rajada** (20 usuários, capacidade 8; como a rajada acaba em ~100 ms, o `stock` fica em `docker pause` até a queda: as 20 sagas já estão `reserving` e penduradas no hold; `docker stop -t 0` do `reservation`, `unpause` do `stock` (que processa os holds com o chamador morto: 8 órfãs `held`) e `start`): depois da janela do reaper
+  as invariantes valem (`quant = capacity − holds debitados`, sem wallet sem hold, sem hold preso, sem saga sobrando) e overselling 0; a contagem de 201 não é exigida. Os groups conferidos no passo 5 agora são `reservation`, `stock`, `stock-catalog`, `notification`.
 - **`rabbitmq` (#42)** também entra como `*isolado`; o `run-e2e.sh` exporta `RABBITMQ_USER` e `RABBITMQ_PASSWORD` **efêmeros** (`openssl rand -hex`) e o validador de isolamento confere que o broker existe, que o `admission` aponta para ele
   com essas credenciais e que o `backend` NÃO as recebe. O passo 4b (#43) exercita a fila com uma rajada (abaixo).
 - **`redis` e `admission` (#41)** entram no project como os demais serviços (`*isolado`: sem `container_name`, sem porta no host); o `run-e2e.sh` **exporta uma `REDIS_PASSWORD` efêmera** (`openssl rand -hex 16`, só
@@ -1652,7 +1757,8 @@ exigem `E2E_REPLAY=1`, ficam PULADAS no `run-tests.sh`, não truncam nada e reut
 Opcional, sem mexer nos Dockerfiles: `Projeto/slim/gerar-imagens-slim.sh` gera as imagens `gerenciador-eventos-<serviço>.slim` (probe nos
 endpoints `/internal/**`, `/bff/**`, actuator, JWKS e no caminho Kafka) e `Projeto/docker-compose.slim.yml` as ativa por override
 (`build: !reset null`). `E2E_SLIM=1 Projeto/e2e/run-e2e.sh` roda a suíte e2e com elas e confere que cada serviço usa o ID da imagem `*.slim`.
-Tabela antes/depois, includes (com motivo) e perfis Seccomp/AppArmor (opcionais, não aplicados por padrão) em `Projeto/slim/README.md`.
+Tabela antes/depois, includes (com motivo) e perfis Seccomp/AppArmor (opcionais, não aplicados por padrão) em `Projeto/slim/README.md`. Desde a #47 inclui o `stock` (probe de `/internal/holds`,
+`/internal/eventcaps/**` e do `StockReleaseConsumer`, com um `ReservationCancelled` produzido antes do start).
 
 ## Cadastro em duas fases + e-mail
 
@@ -1678,12 +1784,12 @@ Tabela antes/depois, includes (com motivo) e perfis Seccomp/AppArmor (opcionais,
   `RESERVATION_SERVICE_URL` e `RESERVATION_CLIENT_*` (cliente HTTP do gateway, ver "Serviço reservation"),
   **do serviço `reservation`** (mesmos nomes de antes, valores no `reservation/application.properties`): `SPRING_DATASOURCE_*` (Hikari default 1000),
   `SERVER_TOMCAT_THREADS_MAX` (300), `SERVER_TOMCAT_MAX_KEEP_ALIVE_REQUESTS` (-1), `SERVER_TOMCAT_KEEP_ALIVE_TIMEOUT` (60s),
-  `EVENTS_*` (relay/consumer ligados no compose; `EVENTS_CONSUMER_GROUP` default `reservation`), `RESERVATION_CATALOG_RECONCILIATION_ENABLED`/`_GROUP`,
+  `EVENTS_*` (relay/consumer ligados no compose; `EVENTS_CONSUMER_GROUP` default `reservation`), (`RESERVATION_CATALOG_RECONCILIATION_*` saiu na #47: a reconciliação é do `stock`), `RESERVATION_SAGA_WAIT_MS` (8000), `RESERVATION_SAGA_ORPHAN_MS` (30000), `RESERVATION_SAGA_REAPER_ENABLED`/`_SCAN_MS` (5000)/`_BATCH` (100) e `STOCK_SERVICE_URL`/`STOCK_CLIENT_*` (#47),
   `RESERVATION_EXPIRY_SCAN_MS` (`reservation.expiry.scan.ms`, 30000), `IDEMPOTENCY_RETENTION_HOURS` (default `24`; prazo de retenção das chaves
   de idempotência) e `IDEMPOTENCY_RETENTION_SCAN_MS` (default `600000` = 10 min; intervalo do job de limpeza, issue #130),
   `NOTIFICATION_EVENTS_RETENTION_SCAN_MS` (default `30000`; intervalo do job que apaga do `event_store` os pedidos de e-mail
   vencidos há mais de 30 s, #32),
-  `SPRING_TASK_SCHEDULING_POOL_SIZE` (default `3`, em cada serviço; threads do scheduler dos `@Scheduled`. O default do Boot é
+  `SPRING_TASK_SCHEDULING_POOL_SIZE` (default `3`, `4` no `reservation` desde a #47 por causa do reaper; threads do scheduler dos `@Scheduled`. O default do Boot é
   **1**, compartilhada pelo `OutboxRelay`, `ReservationExpiryService` e
   `IdempotencyKeyRetentionService` (no reservation) ou pelo relay e o `NotificationEventRetentionService` (no monólito): um purge em massa seguraria o relay e falsearia o lag medido do braço `naive`).
   Valores reais vêm de `Projeto/.env` — não commitar, não imprimir.
@@ -1702,6 +1808,9 @@ Tabela antes/depois, includes (com motivo) e perfis Seccomp/AppArmor (opcionais,
   **Aviso:** com o `gerenciador-backend`, o `gerenciador-reservation`, o `gerenciador-catalog` ou o `gerenciador-identity` no ar, o relay deles drena o `event_outbox` do
   mesmo banco que o `run-tests.sh` usa e o consumer move `ativos`: o `run-tests.sh` **aborta** se algum dos containers estiver
   rodando (`docker stop gerenciador-backend gerenciador-reservation gerenciador-catalog gerenciador-identity gerenciador-notification gerenciador-admission` antes; o `admission` por usar o mesmo Redis dos testes).
+- Serviço stock (#47), variáveis do SERVIÇO (`stock/application.properties`): `SPRING_DATASOURCE_*` (Hikari 250, literal no compose), `SERVER_TOMCAT_THREADS_MAX` (300), `INTERNAL_API_TOKEN` (sem default),
+  `EVENTS_CONSUMER_ENABLED`, `STOCK_RELEASE_CONSUMER_ENABLED`/`_GROUP` (`stock`)/`_TOPIC` (`reservation.wallet`), `STOCK_CATALOG_RECONCILIATION_ENABLED`/`_GROUP` (`stock-catalog`). Do `reservation` e do `catalog`:
+  `STOCK_SERVICE_URL` (`http://stock:8086`) e `STOCK_CLIENT_MAX_CONNECTIONS` (400 no reservation, 100 no catalog), `STOCK_CLIENT_{CONNECT,CONNECTION_REQUEST,RESPONSE}_TIMEOUT_MS`, `STOCK_CLIENT_EVICT_IDLE_MS`. Nenhuma variável nova no `.env`.
 - Serviço catalog e seed (#35): `CATALOG_SERVICE_URL` e `CATALOG_CLIENT_MAX_CONNECTIONS` (cliente HTTP do gateway, ver "Serviço catalog"),
   `SEED_ENABLED` (`seed.enabled`, default `false`: `POST /bff/seed` responde 404; só o override de carga liga).
 - Serviço identity (#36), variáveis do SERVIÇO (`identity/application.properties`): `SPRING_DATASOURCE_*` (Hikari 100), `SERVER_TOMCAT_THREADS_MAX` (300), `INTERNAL_API_TOKEN` (sem default),

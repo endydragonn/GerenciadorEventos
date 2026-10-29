@@ -54,6 +54,7 @@ for i in $(seq 1 "$N"); do
     [ -s "$DIR/tok.$i" ] || { echo "ERRO sem token do usuario $i (login)"; exit 1; }
 done
 
+echo "DISPARANDO" # marcador lido pelo passo (b) do run-e2e.sh (queda do reservation no meio da rajada)
 T0="$(date +%s%3N)"
 seq 1 "$N" | xargs -P "$PARALELO" -I{} bash -c 'disparar {}'
 T1="$(date +%s%3N)"

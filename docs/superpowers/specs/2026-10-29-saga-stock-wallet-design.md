@@ -260,7 +260,7 @@ comparação do replay, como hoje ficam as linhas `version = 0`.
    5 s + resposta 10 s do cliente do `stock` + margem) **ou** `saga_status = 'compensating'` com a mesma idade, com `ORDER BY updated_at LIMIT n FOR UPDATE
    SKIP LOCKED`. Vale para N réplicas, como a expiração. A idade também nas `compensating` (revisão da passada b1) evita tomar
    compensações inline ainda em curso, o que distorceria o `resolved_by` e o tempo até resolver medidos na R5. O reaper relê a
-   `compensating` velha a cada tick, e cada tentativa renova o `updated_at`.
+   `compensating` velha a cada tick, até o release dar certo.
 2. Passa as `reserving` para `compensating` (CAS por PK + `hold_id`) e comita. É isso que faz a tx2 atrasada do dono perder.
 3. Para cada linha, `release(holdId)` no `stock` fora da transação, com o `eventId` e o `userId` da linha. Com 200, a linha vai a
    `compensated` (por PK + `hold_id`; `resolved_at`, `resolved_by = 'reaper'`). Com falha, fica `compensating` e entra no próximo tick.
@@ -463,7 +463,7 @@ proxy HTTP de teste (JDK `HttpServer`) que sabe ficar **fora**, **atrasar** e **
 - **W12** espera: com o `stock` atrasado e o dono recebendo 400 "lotado", o pedido concorrente da mesma chave recebe o próprio 400 em
   menos de 1 s. Com a saga `compensating` (`stock` fora), repetir a chave dá 503 em menos de 1 s.
 - **W13** `updated_at` com o default: INSERT da tx1 sem `updated_at` explícito, mais o failpoint `after-hold` → o reaper resolve em ≤
-  `ORPHAN_MS + SCAN_MS`.
+  `ORPHAN_MS + SCAN_MS + 1 s`.
 
 **Invariante checada em todos os W.** Um helper de teste é o único código que lê os dois schemas:
 - `quant = capacity − count(hold held AND decremented)` por evento limitado;

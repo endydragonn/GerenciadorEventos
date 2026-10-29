@@ -160,10 +160,10 @@ function Get-AmostraLag([int]$EventId) {
 function Wait-Evento([int]$EventId) {
     $limite = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $limite) {
-        if ((Invoke-Psql -Silencioso -Sql "SELECT 1 FROM reservation.eventcap WHERE event_id = $EventId;") -eq '1') { return }
+        if ((Invoke-Psql -Silencioso -Sql "SELECT 1 FROM stock.eventcap WHERE event_id = $EventId;") -eq '1') { return }
         Start-Sleep -Milliseconds 250
     }
-    Fail "reservation.eventcap sem linha para o evento $EventId apos 30 s (o catalog cria o eventcap por chamada sincrona ao servico reservation; ele esta no ar?)."
+    Fail "stock.eventcap sem linha para o evento $EventId apos 30 s (o catalog cria o eventcap por chamada sincrona ao servico reservation; ele esta no ar?)."
 }
 
 # Desde a #33 o pipeline e o do servico reservation (relay/outbox/consumer no schema reservation; consumer group `reservation`).
@@ -279,7 +279,7 @@ try {
             # uma repeticao invalida, exit 2); no naive a invalida continua nao dependendo do psql.
             if ($Rotulo -eq 'cas' -or $motivos.Count -eq 0) {
                 $linhaDb = Invoke-Psql -Sql ("SELECT count(*) FILTER (WHERE status = 'confirmed'), count(*) FILTER (WHERE status = 'pending'), " +
-                    "(SELECT capacity FROM reservation.eventcap WHERE event_id = $eventId) FROM reservation.walletevent WHERE event_id = $eventId;")
+                    "(SELECT capacity FROM stock.eventcap WHERE event_id = $eventId) FROM reservation.walletevent WHERE event_id = $eventId;")
                 $c = $linhaDb -split ','
                 if ($c.Count -ne 3) { Fail "Resposta inesperada do Postgres para o evento ${eventId}: '$linhaDb'" }
                 $confirmed = [int]$c[0]; $pending = [int]$c[1]

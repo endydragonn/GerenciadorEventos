@@ -4,8 +4,8 @@
 #  gerar-imagens-slim.sh  -  issue #177 (Batch 2, T4): imagens enxutas dos servicos com o Slim
 # =============================================================================
 #
-#  Gera, por `slim build --target <imagem>`, a versao enxuta de backend, identity, catalog, reservation, notification e admission
-#  (o `admission` entrou na #178). As imagens originais (Dockerfiles intocados) continuam o padrao do
+#  Gera, por `slim build --target <imagem>`, a versao enxuta de backend, identity, catalog, reservation, stock, notification e admission
+#  (o `admission` entrou na #178, o `stock` na #47). As imagens originais (Dockerfiles intocados) continuam o padrao do
 #  compose; as `*.slim` entram so pelo override Projeto/docker-compose.slim.yml (ver slim/README.md).
 #
 #  COMO: sobe, num project docker compose ISOLADO (gerenciador-e2e-slim*, mesmo override de isolamento do run-e2e: sem
@@ -21,7 +21,7 @@
 #  mascara qualquer valor. Os perfis Seccomp/AppArmor (sem segredo) vao para slim/perfis/; o resto dos artefatos do Slim
 #  (creport, Dockerfile.reversed) NAO e versionado.
 #
-#  Uso:  Projeto/slim/gerar-imagens-slim.sh [servico ...]      (padrao: identity reservation catalog backend notification admission)
+#  Uso:  Projeto/slim/gerar-imagens-slim.sh [servico ...]      (padrao: identity stock reservation catalog backend notification admission)
 #  Variaveis (opcionais): SLIM_PROJECT (gerenciador-e2e-slim), MANTER (1 = nao derruba o project no fim), ESPERA_UP (900).
 #  Idempotente: cada execucao regenera as imagens `*.slim` (mesmas tags) a partir do codigo atual e derruba o project.
 #  Pre-requisitos: docker (compose v2), python, Projeto/.env e Projeto/supabase/.env. Nada e instalado no host.
@@ -46,7 +46,7 @@ PERFIS_DIR="$SCRIPT_DIR/perfis"
 TMP="$(mktemp -d)"; chmod 700 "$TMP" # o env-file com segredos do .env passa por aqui
 mkdir -p "$PERFIS_DIR"
 FALHAS=0
-TODOS=(identity reservation catalog backend notification admission)
+TODOS=(identity stock reservation catalog backend notification admission)
 SERVICOS=("$@"); [ ${#SERVICOS[@]} -gt 0 ] || SERVICOS=("${TODOS[@]}")
 
 dexec() { # Git Bash: o docker e nativo do Windows e a conversao de path do MSYS reescreveria "/var/..." e "/work"
@@ -117,18 +117,18 @@ ok "sem container_name, sem porta no host, rede/volumes com o prefixo do project
 ISOLADO=1
 
 # --- por servico: porta HTTP (vazio = sem HTTP) e nomes das imagens -----------------------------------------------------------
-porta_de() { case "$1" in backend) echo 8081 ;; identity) echo 8084 ;; catalog) echo 8083 ;; reservation) echo 8082 ;; admission) echo 8085 ;; *) echo "" ;; esac; }
+porta_de() { case "$1" in backend) echo 8081 ;; identity) echo 8084 ;; catalog) echo 8083 ;; reservation) echo 8082 ;; admission) echo 8085 ;; stock) echo 8086 ;; *) echo "" ;; esac; }
 fat_de() { echo "${PROJETO}-$1:latest"; }                  # imagem gorda construida pelo compose neste project
 slim_de() { echo "gerenciador-eventos-$1.slim:latest"; }   # a que o override docker-compose.slim.yml usa
 for s in "${SERVICOS[@]}"; do
-    case "$s" in backend|identity|catalog|reservation|notification|admission) ;; *) abortar "servico desconhecido: $s" ;; esac
+    case "$s" in backend|identity|catalog|reservation|stock|notification|admission) ;; *) abortar "servico desconhecido: $s" ;; esac
 done
 
 echo "==> 1. project limpo; imagens gordas (build deste codigo); dependencias reais + servicos gordos no ar"
 dc down -v --remove-orphans >/dev/null 2>&1
-COMPOSE_PARALLEL_LIMIT=2 dc build identity reservation catalog backend notification admission >"$TMP/build.log" 2>&1 || { tail -15 "$TMP/build.log"; abortar "build das imagens gordas falhou"; }
-# so o que o probe precisa (com as dependencias do compose: db, supabase-pooler, redpanda, mailpit, notification-seek, redis, rabbitmq); sem frontend/studio/kong/meta
-dc up -d --wait --wait-timeout "$ESPERA_UP" identity reservation catalog backend notification admission || { dc ps -a; abortar "up --wait falhou (algum servico nao ficou healthy)"; }
+COMPOSE_PARALLEL_LIMIT=2 dc build identity stock reservation catalog backend notification admission >"$TMP/build.log" 2>&1 || { tail -15 "$TMP/build.log"; abortar "build das imagens gordas falhou"; }
+# so o que o probe precisa (com as dependencias do compose: db, supabase-pooler, redpanda, mailpit, notification-seek, stock-seek, redis, rabbitmq); sem frontend/studio/kong/meta
+dc up -d --wait --wait-timeout "$ESPERA_UP" identity stock reservation catalog backend notification admission || { dc ps -a; abortar "up --wait falhou (algum servico nao ficou healthy)"; }
 dexec rm -f "$CLI" >/dev/null 2>&1
 dexec run -d --rm --name "$CLI" --network "$REDE" --entrypoint sleep "$IMAGEM_CURL" infinity >/dev/null || abortar "container auxiliar de curl"
 
@@ -163,6 +163,7 @@ env_arquivo identity "$TMP/env-identity"; TOKEN_INT="$(valor identity INTERNAL_A
 [ -n "$TOKEN_INT" ] || abortar "sem INTERNAL_API_TOKEN no Projeto/.env (ver CLAUDE.md, 'INTERNAL_API_TOKEN')."
 
 SUFIXO="$(date +%s)-$RANDOM"
+HOLD_CONSUMER="5a1f0000-0000-4000-8000-000000920101"
 EMAIL_PROBE="slim-$SUFIXO@example.com"
 FONE_PROBE="11$(printf '%09d' $(( (RANDOM * 32768 + RANDOM) % 1000000000 )))"
 
@@ -208,22 +209,40 @@ elif svc == "catalog":
         cmd("GET", "/internal/events/1", headers=[]),
     ]
 elif svc == "reservation":
-    cap = {"capacity": 5, "buyTimeLimit": "2035-12-01T14:00:00", "maxTimeInLine": 600}
+    # Desde a #47 o eventcap e do stock: slimar() cria 900001 e 900002 no stock GORDO antes do probe. O reservation orquestra a saga (hold no stock),
+    # le a disponibilidade (capacidade do stock) e o cancelamento so appenda o evento (quem devolve a vaga e o consumer do stock).
     cmds = [
-        cmd("PUT", "/internal/eventcaps/900001", cap), cmd("GET", "/internal/eventcaps/900001"),
-        cmd("POST", "/internal/eventcaps/batch", [900001]),
-        cmd("PATCH", "/internal/eventcaps/900001/policy", cap),
         cmd("GET", "/internal/events/900001/availability"),
         cmd("POST", "/internal/reservations?path=cas", {"userId": 900001, "eventId": 900001}, H + ["Idempotency-Key:slim-1"]),
         cmd("GET", "/internal/reservations/replay?userId=900001&eventId=900001&idempotencyKey=slim-1"),
         cmd("GET", "/internal/reservations/active?userId=900001&eventId=900001"),
         cmd("POST", "/internal/reservations/confirm", {"userId": 900001, "eventId": 900001}),
         cmd("GET", "/internal/reservations/user/900001"),
-        cmd("PUT", "/internal/eventcaps/900002", cap),
         cmd("POST", "/internal/reservations?path=naive", {"userId": 900002, "eventId": 900002}),
         cmd("DELETE", "/internal/reservations?userId=900002&eventId=900002"),
-        cmd("DELETE", "/internal/eventcaps/900002"),
-        cmd("GET", "/internal/eventcaps/900001", headers=[]),
+        cmd("POST", "/internal/reservations?path=cas", {"userId": 900003, "eventId": 900001}, H + ["Idempotency-Key:slim-3"]),
+        cmd("GET", "/internal/reservations/active?userId=900001&eventId=900001", headers=[]),
+    ]
+elif svc == "stock":
+    cap = {"capacity": 5, "buyTimeLimit": "2035-12-01T14:00:00", "maxTimeInLine": 600}
+    h1, h2, h3 = ("5a1f0000-0000-4000-8000-00000092000%d" % i for i in (1, 2, 3))
+    hold = lambda h, u, e, m: {"holdId": h, "userId": u, "eventId": e, "mode": m}
+    cmds = [
+        cmd("PUT", "/internal/eventcaps/920001", cap), cmd("GET", "/internal/eventcaps/920001"),
+        cmd("POST", "/internal/eventcaps/batch", [920001]),
+        cmd("PATCH", "/internal/eventcaps/920001/policy", cap),
+        cmd("POST", "/internal/holds", hold(h1, 920001, 920001, "cas")),            # 201: debita
+        cmd("POST", "/internal/holds", hold(h1, 920001, 920001, "cas")),            # 200: repeticao do mesmo holdId, sem novo debito
+        cmd("POST", "/internal/holds", hold(h2, 920002, 920001, "naive")),          # 201: hold sem debito
+        cmd("POST", "/internal/holds/" + h1 + "/release", {"eventId": 920001, "userId": 920001}),   # 200: devolve a vaga
+        cmd("POST", "/internal/holds/" + h1 + "/release", {"eventId": 920001, "userId": 920001}),   # 200: idempotente
+        cmd("POST", "/internal/holds/" + h3 + "/release", {"eventId": 920001, "userId": 920003}),   # 200: lapide
+        cmd("POST", "/internal/holds", hold(h3, 920003, 920001, "cas")),            # 409: lapide barra o reservar atrasado
+        cmd("POST", "/internal/holds", hold("5a1f0000-0000-4000-8000-000000920004", 920004, 999999999, "cas")),   # 400: sem eventcap
+        cmd("POST", "/internal/holds", {}),                                         # 400: pedido malformado
+        cmd("DELETE", "/internal/eventcaps/920001"),                                # 409: tem hold
+        cmd("PUT", "/internal/eventcaps/920002", cap), cmd("DELETE", "/internal/eventcaps/920002"),
+        cmd("GET", "/internal/eventcaps/920001", headers=[]),                       # 401
     ]
 elif svc == "admission":
     # X baixo (ADMISSION_X_RPM=60, imposto no env-file do alvo): as 1as tentativas ficam sync, as seguintes passam de 80% de X e o evento entra em modo
@@ -294,6 +313,21 @@ print(json.dumps({"eventId": str(uuid.uuid4()), "streamType": "identity.notifica
     dc exec -T redpanda rpk topic produce identity.notification -k slim <<<"$envelope" 2>&1 | grep -q offset
 }
 
+# stock: o "probe" do consumer e processar uma devolucao de vaga (ReservationCancelled com holdId) produzida em reservation.wallet antes do start
+produzir_cancelamento() { # holdId userId eventId
+    local envelope
+    envelope="$("$PY" -c '
+import datetime, json, sys, uuid
+agora = datetime.datetime.now(datetime.timezone.utc)
+fmt = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+print(json.dumps({"eventId": str(uuid.uuid4()), "streamType": "reservation.wallet", "streamId": sys.argv[2] + ":" + sys.argv[3],
+    "version": 1, "globalPosition": 0, "eventType": "ReservationCancelled", "schemaVersion": 2, "occurredAt": fmt(agora),
+    "payload": {"userId": int(sys.argv[2]), "eventId": int(sys.argv[3]), "holdId": sys.argv[1]}, "metadata": {}}, separators=(",", ":")))
+' "$1" "$2" "$3")"
+    dc exec -T redpanda rpk topic create reservation.wallet -p 1 -r 1 >/dev/null 2>&1 # idempotente; o producer nao cria sozinho se o topico faltar
+    dc exec -T redpanda rpk topic produce reservation.wallet -k "$3" <<<"$envelope" 2>&1 | grep -q offset
+}
+
 # includes (motivos em slim/README.md, "Includes e motivo")
 INCLUDES_COMUM=(
     --include-shell
@@ -312,6 +346,19 @@ slimar() { # servico
         grep -q '^ADMISSION_X_RPM=' "$TMP/env-$s" && sed -i 's/^ADMISSION_X_RPM=.*/ADMISSION_X_RPM=60/' "$TMP/env-$s" || echo 'ADMISSION_X_RPM=60' >> "$TMP/env-$s"
         http PUT "http://reservation:8082/internal/eventcaps/910001" '{"capacity":500,"buyTimeLimit":"2035-12-01T14:00:00","maxTimeInLine":600}'
         [ "$HTTP_CODE" = 200 ] || [ "$HTTP_CODE" = 201 ] || erro "admission: nao consegui criar o eventcap do probe no reservation gordo (HTTP $HTTP_CODE)"
+    fi
+    if [ "$s" = reservation ]; then # os eventcaps do probe nascem no stock GORDO (que segue no ar): o reservation-alvo chama o stock por HTTP
+        for id in 900001 900002; do
+            http PUT "http://stock:8086/internal/eventcaps/$id" '{"capacity":5,"buyTimeLimit":"2035-12-01T14:00:00","maxTimeInLine":600}'
+            [ "$HTTP_CODE" = 200 ] || [ "$HTTP_CODE" = 201 ] || erro "reservation: nao consegui criar o eventcap $id no stock gordo (HTTP $HTTP_CODE)"
+        done
+    fi
+    if [ "$s" = stock ]; then # um hold debitado no stock gordo + o ReservationCancelled dele no topico: o consumer da imagem-alvo tem que liberar o hold
+        http PUT "http://stock:8086/internal/eventcaps/920101" '{"capacity":5,"buyTimeLimit":"2035-12-01T14:00:00","maxTimeInLine":600}'
+        [ "$HTTP_CODE" = 200 ] || [ "$HTTP_CODE" = 201 ] || erro "stock: nao consegui criar o eventcap do consumer no stock gordo (HTTP $HTTP_CODE)"
+        http POST "http://stock:8086/internal/holds" "{\"holdId\":\"$HOLD_CONSUMER\",\"userId\":920101,\"eventId\":920101,\"mode\":\"cas\"}"
+        [ "$HTTP_CODE" = 201 ] || erro "stock: nao consegui criar o hold do consumer no stock gordo (HTTP $HTTP_CODE)"
+        produzir_cancelamento "$HOLD_CONSUMER" 920101 920101 || erro "stock: nao consegui produzir o ReservationCancelled em reservation.wallet"
     fi
     dc stop "$s" >/dev/null 2>&1                                  # o consumer group de 1 particao tem que cair no container-alvo
     case "$s" in
@@ -337,6 +384,13 @@ slimar() { # servico
         n_res="$(psql_probe "SELECT count(*) FROM reservation.walletevent WHERE event_id = 910001")"
         if [ "${n_res:-0}" -ge 1 ] 2>/dev/null; then ok "admission: o worker da imagem-alvo consumiu a fila e criou $n_res reserva(s) (AMQP + Lua exercitados)"
         else erro "admission: nenhuma reserva do evento 910001: o listener AMQP/worker da imagem-alvo nao rodou (obtido '${n_res:-}')"; fi
+    fi
+    if [ "$s" = stock ]; then # o StockReleaseConsumer da imagem-alvo liberou o hold e devolveu a vaga (hold 920101 do gordo)
+        local st_h q
+        st_h="$(psql_probe "SELECT status FROM stock.hold WHERE hold_id = '$HOLD_CONSUMER'")"
+        q="$(psql_probe "SELECT quant FROM stock.eventcap WHERE event_id = 920101")"
+        if [ "$st_h" = released ] && [ "$q" = 5 ]; then ok "stock: o consumer da imagem-alvo liberou o hold do ReservationCancelled e devolveu a vaga (quant 5)"
+        else erro "stock: o consumer nao liberou o hold (status '${st_h:-}', quant '${q:-}')"; fi
     fi
     if [ -z "$porta" ]; then # notification: o consumer da imagem-alvo tem que ter processado o pedido (e-mail no captador)
         local n

@@ -13,17 +13,17 @@
 #      inclusive), RECUSA (project errado?).
 #   1. Anota os containers EM EXECUCAO de cada servico por LABEL do compose (com.docker.compose.project + .service): com a autoescala as
 #      replicas se chamam <project>-<servico>-<n>, nao gerenciador-<servico>. Stand-by inclusive. db, redpanda, redis e rabbitmq seguem com nome fixo.
-#   2. Para backend, admission, reservation, catalog, identity (TODAS as replicas) e o notification, se no ar.
+#   2. Para backend, admission, reservation, catalog, stock (#47), identity (TODAS as replicas) e o notification, se no ar.
 #   3. Apaga a chave de assinatura do JWT do volume ${PROJETO}_identity-keys (o nome do volume deriva do project; um container descartavel o monta;
 #      so quando o volume existe, ver o passo 0).
 #      O TRUNCATE ... RESTART IDENTITY recicla o user_id e o JWT e validado sem estado (claim uid): um token de antes valeria como o usuario novo de mesmo
 #      uid. Se nao conseguir apagar, ABORTA sem religar nada (religar com a chave antiga deixaria os tokens antigos valendo).
-#   4. Move os consumer groups reservation / reservation-catalog / notification para o fim dos topicos (rpk group seek), trunca public, reservation,
-#      catalog e identity numa UNICA instrucao, da FLUSHDB no Redis e faz purge das filas admission.* do RabbitMQ (FLUSHDB sem OK ou purge que falha
+#   4. Move os consumer groups reservation / stock (reservation.wallet) / stock-catalog (catalog.event) / notification para o fim dos topicos (rpk group
+#      seek), trunca public, reservation, stock (#47), catalog e identity numa UNICA instrucao, da FLUSHDB no Redis e faz purge das filas admission.* do RabbitMQ (FLUSHDB sem OK ou purge que falha
 #      ABORTA: o bloco seguinte herdaria modo/contagem/espera dos ids reciclados; o que o script parou e religado).
 #   5. Sobe de volta, so o que o PROPRIO script parou (docker start nos mesmos containers: preserva o ambiente da rodada, o --scale e o -f do up; e
 #      diferente de reaproveitar um container antigo de outra rodada), esperando todas as replicas healthy em cada etapa: TODAS as replicas do identity,
-#      depois reservation e catalog, depois admission, depois TODAS as replicas do backend (cache de JWKS vazio), e por fim o notification.
+#      depois o stock (#47: o reservation o espera healthy), depois reservation e catalog, depois admission, depois TODAS as replicas do backend (cache de JWKS vazio), e por fim o notification.
 #   6. Janela do JWKS no boot: o gateway so tenta o JWKS de novo a cada 30 s. Com o lb no ar (braco C) espera os slots do identity (e do backend) UP no
 #      lb; depois faz um LOGIN DE SONDA (usuario criado por POST /bff/seed, que o override de carga liga) e chama um endpoint autenticado do gateway
 #      varias vezes (round-robin pelas replicas) ate nenhuma dar 401: isso prova o JWKS em cache em TODAS as replicas do gateway. A sonda deixa 1
@@ -49,8 +49,8 @@ CONTAINER_REDIS="${CONTAINER_REDIS:-gerenciador-redis}"
 CONTAINER_RABBIT="${CONTAINER_RABBIT:-gerenciador-rabbitmq}"
 VOLUME_CHAVES="${PROJETO}_identity-keys"
 ARQUIVO_CHAVE="jwt-signing-key.json"
-# ordem de subida; a de parada e a inversa (backend primeiro). admission depende do reservation; o backend, de identity/catalog/reservation
-SERVICOS="identity reservation catalog admission backend"
+# ordem de subida; a de parada e a inversa (backend primeiro). admission depende do reservation; o backend, de identity/catalog/reservation; o reservation, do stock (#47)
+SERVICOS="identity stock reservation catalog admission backend"
 
 dk() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker "$@"; }
 log() { printf '%s [limpar] %s\n' "$(date '+%H:%M:%S')" "$*" >&2; }
@@ -137,7 +137,7 @@ parar_ids() { # docker stop; guarda em PARADOS o que parou
 # religar <com_sonda 0|1>: sobe o que ESTE script parou, na ordem, esperando healthy em cada etapa
 religar() {
     local svc ids
-    for svc in identity "reservation catalog" admission backend; do
+    for svc in identity stock "reservation catalog" admission backend; do
         ids=""
         for s in $svc; do ids="$ids ${IDS[$s]:-}"; done
         ids="$(echo $ids)"
@@ -240,7 +240,7 @@ principal() {
     trap religar_se_abortou EXIT
 
     # 2. parar (inversa da subida: backend primeiro), TODAS as replicas
-    for svc in backend admission catalog reservation identity; do
+    for svc in backend admission catalog reservation stock identity; do
         # shellcheck disable=SC2086
         parar_ids ${IDS[$svc]:-} || { log "ERRO: docker stop $svc falhou"; return 1; }
     done
@@ -256,9 +256,9 @@ principal() {
     fi
 
     # 4a. consumer groups para o fim dos topicos. O seek falha se um consumer parado ainda nao saiu do group (sessao nao expirou): repete; se ainda
-    # falhar, reservation / reservation-catalog caem no reset antigo (apaga o topico e o group), senao o group releria eventos de ids reciclados. O topico
+    # falhar, reservation / stock / stock-catalog caem no reset antigo (apaga o topico e o group), senao o group releria eventos de ids reciclados. O topico
     # identity.notification NUNCA e apagado: la a falha so avisa.
-    for gt in reservation:reservation.wallet reservation-catalog:catalog.event notification:identity.notification; do
+    for gt in reservation:reservation.wallet stock:reservation.wallet stock-catalog:catalog.event notification:identity.notification; do
         g="${gt%%:*}"; tp="${gt#*:}"; seek_ok=0
         for i in 1 2 3 4 5 6; do
             dk exec "$CONTAINER_RPK" rpk group seek "$g" --to end --topics "$tp" --allow-new-topics >/dev/null 2>&1 && { seek_ok=1; break; }
@@ -274,14 +274,14 @@ principal() {
             fi
         fi
     done
-    # 4b. TRUNCATE numa UNICA instrucao (catalog.event e reservation.eventcap andam juntos: ids de evento reciclados nunca herdam eventcap/reservas antigos;
+    # 4b. TRUNCATE numa UNICA instrucao (catalog.event e stock.eventcap andam juntos: ids de evento reciclados nunca herdam eventcap/reservas antigos;
     # o event store/outbox/snapshot/checkpoint de cada schema vao junto)
     dk exec "$CONTAINER_DB" sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U admin -d meu_banco -v ON_ERROR_STOP=1 -q -c "
 DO \$\$ DECLARE t text; BEGIN
-  SELECT string_agg(format('\''%I.%I'\'', schemaname, tablename), '\'', '\'') INTO t FROM pg_tables WHERE schemaname IN ('\''public'\'', '\''reservation'\'', '\''catalog'\'', '\''identity'\'');
+  SELECT string_agg(format('\''%I.%I'\'', schemaname, tablename), '\'', '\'') INTO t FROM pg_tables WHERE schemaname IN ('\''public'\'', '\''reservation'\'', '\''stock'\'', '\''catalog'\'', '\''identity'\'');
   EXECUTE '\''TRUNCATE '\'' || t || '\'' RESTART IDENTITY CASCADE'\'';
 END \$\$;" -c "VACUUM ANALYZE;" 2>/dev/null' || { log "ERRO: TRUNCATE falhou"; return 1; }
-    log "banco truncado (public, reservation, catalog, identity)"
+    log "banco truncado (public, reservation, stock, catalog, identity)"
     # 4c. admission (#41/#42): estado transitorio zerado com o admission PARADO (os ids de evento e de usuario reciclados nao herdam contagem, modo, espera nem resultado)
     # (compara a SAIDA do FLUSHDB: o codigo de saida do redis-cli nao e confiavel em resposta de erro, ex.: NOAUTH)
     if dk inspect "$CONTAINER_REDIS" >/dev/null 2>&1; then
@@ -313,7 +313,7 @@ END \$\$;" -c "VACUUM ANALYZE;" 2>/dev/null' || { log "ERRO: TRUNCATE falhou"; r
 
     log "health do backend: $(curl -s "$BASE_URL/actuator/health")"
     # estado final (contagens do banco)
-    dk exec "$CONTAINER_DB" sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U admin -d meu_banco -Atc "select '\''event(catalog)='\''||count(*) from catalog.event; select '\''walletevent='\''||count(*) from reservation.walletevent; select '\''eventcap='\''||count(*) from reservation.eventcap; select '\''event_store(reservation)='\''||count(*) from reservation.event_store; select '\''users(identity)='\''||count(*) from identity.users"' 2>/dev/null || true
+    dk exec "$CONTAINER_DB" sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U admin -d meu_banco -Atc "select '\''event(catalog)='\''||count(*) from catalog.event; select '\''walletevent='\''||count(*) from reservation.walletevent; select '\''eventcap(stock)='\''||count(*) from stock.eventcap; select '\''event_store(reservation)='\''||count(*) from reservation.event_store; select '\''users(identity)='\''||count(*) from identity.users"' 2>/dev/null || true
     dk exec "$CONTAINER_RPK" rpk topic list 2>/dev/null || true
     return 0
 }

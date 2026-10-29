@@ -124,14 +124,15 @@ public class IdempotencyKeyRepository {
     public record Orfa(Long userId, String chave, Long eventId, UUID holdId, String status, long idadeMs) { }
 
     /**
-     * Varredura do reaper, NA transação do chamador: as {@code reserving} paradas há mais de {@code orfaMs} OU qualquer {@code compensating},
+     * Varredura do reaper, NA transação do chamador: as {@code reserving} E as {@code compensating} paradas há mais de {@code orfaMs}
+     * ({@code updated_at}; a compensação inline em curso não é tomada),
      * as mais antigas primeiro, até {@code limite}, com {@code FOR UPDATE SKIP LOCKED} (N reapers/réplicas não pegam a mesma linha). Nunca
      * devolve {@code reserved}: o reaper não libera hold de saga concluída.
      */
     public List<Orfa> selecionarOrfas(Connection conn, long orfaMs, int limite) throws SQLException {
         String sql = "SELECT user_id, idempotency_key, event_id, hold_id, saga_status, "
                 + "(extract(epoch FROM (now() - updated_at)) * 1000)::bigint FROM reservation.idempotency_key "
-                + "WHERE (saga_status = 'reserving' AND updated_at < now() - make_interval(secs => ?)) OR saga_status = 'compensating' "
+                + "WHERE saga_status IN ('reserving', 'compensating') AND updated_at < now() - make_interval(secs => ?) "
                 + "ORDER BY updated_at LIMIT ? FOR UPDATE SKIP LOCKED";
         List<Orfa> orfas = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {

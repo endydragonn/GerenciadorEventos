@@ -13,7 +13,16 @@ services:
   backend: *isolado
   identity: *isolado
   catalog: *isolado
-  reservation: *isolado
+  # Saga stock + wallet (#47): o reaper e a janela de órfã CURTOS (o run-e2e.sh exporta SAGA_ORPHAN_MS/SAGA_SCAN_MS, default 5000/1000; o validador exige
+  # ORPHAN_MS entre 1000 e 10000), para os passos (a) stock fora e (b) queda do reservation esperarem segundos, não os 35 s do default.
+  reservation:
+    <<: *isolado
+    environment:
+      RESERVATION_SAGA_ORPHAN_MS: ${SAGA_ORPHAN_MS:-5000}
+      RESERVATION_SAGA_REAPER_SCAN_MS: ${SAGA_SCAN_MS:-1000}
+  # stock e stock-seek (#47): sem container_name nem porta no host, como os demais (o stock só fala na rede do project).
+  stock: *isolado
+  stock-seek: *isolado
   # Redis e admission (issue #41): sem container_name nem porta no host, como os demais. A senha do Redis do project temporário é
   # efêmera (o run-e2e.sh exporta REDIS_PASSWORD, nunca a do Projeto/.env); o Redis não tem volume nem persistência.
   redis: *isolado

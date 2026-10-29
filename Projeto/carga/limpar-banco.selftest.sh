@@ -32,7 +32,7 @@ LOG="$(mktemp)"
 FALHA_CHAVE=0
 sleep() { :; }
 # containers por servico (ids de 12 caracteres): braco C, 2 replicas de identity e backend
-declare -A FAKE_IDS=( [identity]="aaaaaaaaaa01 aaaaaaaaaa02" [reservation]="bbbbbbbbbb01" [catalog]="cccccccccc01" [admission]="dddddddddd01"
+declare -A FAKE_IDS=( [identity]="aaaaaaaaaa01 aaaaaaaaaa02" [stock]="gggggggggg01" [reservation]="bbbbbbbbbb01" [catalog]="cccccccccc01" [admission]="dddddddddd01"
     [backend]="eeeeeeeeee01 eeeeeeeeee02" [notification]="ffffffffff01" [lb]="1111111111lb" )
 declare -A FAKE_TODOS=( [identity]="aaaaaaaaaa01 aaaaaaaaaa02" )   # `ps -a`: inclui os parados
 SCALER_EXISTE=0
@@ -101,7 +101,7 @@ confere "para TODAS as replicas do identity e do backend (stand-by inclusive)" "
 p_back="$(linha 'docker stop eeeeeeeeee01')"; p_id="$(linha 'docker stop aaaaaaaaaa01')"; p_key="$(linha 'docker run --rm -v gerenciador-eventos_identity-keys')"
 p_trunc="$(linha 'TRUNCATE')"; p_flush="$(linha 'FLUSHDB')"; p_purge="$(linha 'purge_queue admission.requests')"
 s_id="$(linha 'docker start aaaaaaaaaa01 aaaaaaaaaa02')"; s_rc="$(linha 'docker start bbbbbbbbbb01 cccccccccc01')"; s_ad="$(linha 'docker start dddddddddd01')"; s_gw="$(linha 'docker start eeeeeeeeee01 eeeeeeeeee02')"
-s_nt="$(linha 'docker start ffffffffff01')"
+s_nt="$(linha 'docker start ffffffffff01')"; p_stock="$(linha 'docker stop gggggggggg01')"; p_res="$(linha 'docker stop bbbbbbbbbb01')"; s_st="$(linha 'docker start gggggggggg01')"
 confere "ordem de parada: backend antes do identity" "$([ "$p_back" -lt "$p_id" ] && echo sim || echo nao)" "sim"
 confere "a chave so e apagada DEPOIS de parar o identity e o backend" "$([ "$p_id" -lt "$p_key" ] && echo sim || echo nao)" "sim"
 confere "a chave e apagada ANTES do TRUNCATE" "$([ "$p_key" -lt "$p_trunc" ] && echo sim || echo nao)" "sim"
@@ -109,6 +109,9 @@ confere "volume derivado do project (${PROJETO}_identity-keys), nao fixo" "$(gre
 confere "FLUSHDB e purge das filas admission.* com os servicos parados (depois do TRUNCATE, antes de religar)" "$([ "$p_trunc" -lt "$p_flush" ] && [ "$p_flush" -lt "$s_id" ] && [ "$p_purge" -lt "$s_id" ] && echo sim || echo nao)" "sim"
 confere "so purga filas admission.*" "$(grep -c 'purge_queue other' "$LOG")" "0"
 confere "religa: TODAS as replicas do identity, depois reservation+catalog, depois admission, depois TODAS as do backend" "$([ "$s_id" -lt "$s_rc" ] && [ "$s_rc" -lt "$s_ad" ] && [ "$s_ad" -lt "$s_gw" ] && echo sim || echo nao)" "sim"
+confere "stock (#47): parado depois do reservation e antes do identity, religado depois do identity e ANTES do reservation+catalog" "$([ "$p_res" -lt "$p_stock" ] && [ "$p_stock" -lt "$p_id" ] && [ "$s_id" -lt "$s_st" ] && [ "$s_st" -lt "$s_rc" ] && echo sim || echo nao)" "sim"
+confere "o TRUNCATE inclui o schema stock" "$(grep -c "'stock'" "$LOG")" "1"
+confere "move os groups stock e stock-catalog (e nao mais reservation-catalog) para o fim dos topicos" "$(grep -c 'rpk group seek stock --to end --topics reservation.wallet' "$LOG")$(grep -c 'rpk group seek stock-catalog --to end --topics catalog.event' "$LOG")$(grep -c 'seek reservation-catalog' "$LOG")" "110"
 confere "notification volta por ultimo (estava no ar)" "$([ "$s_gw" -lt "$s_nt" ] && echo sim || echo nao)" "sim"
 confere "religa com docker start nos MESMOS containers (nunca recria: nao ha 'compose up')" "$(grep -c 'compose up' "$LOG")" "0"
 confere "braco C: consulta os slots do identity e do gateway no lb" "$(grep -c 'show stat' "$LOG" | awk '{print ($1>=2)?"sim":"nao"}')" "sim"

@@ -63,12 +63,12 @@ function Registrar($alvo, $saida) {
 if ($Verificar) {
     if ($EventId -le 0) { Fail 'Informe -EventId com o id do evento da rodada.' }
     $sql = @"
-SELECT 'eventcap' AS origem, capacity, quant AS vagas_restantes FROM reservation.eventcap WHERE event_id = $EventId;
+SELECT 'eventcap' AS origem, capacity, quant AS vagas_restantes FROM stock.eventcap WHERE event_id = $EventId;
 SELECT status, count(*) AS qtd FROM reservation.walletevent WHERE event_id = $EventId GROUP BY status ORDER BY status;
 SELECT count(*) FILTER (WHERE status IN ('pending','confirmed')) AS ativas,
-       (SELECT capacity FROM reservation.eventcap WHERE event_id = $EventId) AS capacity,
+       (SELECT capacity FROM stock.eventcap WHERE event_id = $EventId) AS capacity,
        count(*) FILTER (WHERE status IN ('pending','confirmed'))
-         - (SELECT capacity FROM reservation.eventcap WHERE event_id = $EventId) AS overselling
+         - (SELECT capacity FROM stock.eventcap WHERE event_id = $EventId) AS overselling
 FROM reservation.walletevent WHERE event_id = $EventId;
 "@
     $saida = $sql | docker exec -i (Get-ContainerDb) sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' | Out-String

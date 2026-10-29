@@ -67,6 +67,10 @@ public class SagaReaperConcorrenteTest extends ReservationTestSupport {
     @Test
     public void w9_quatroReapersSimultaneosSobreTrintaOrfasCadaUmaLiberadaUmaVez() throws Exception {
         Evento e = novoEvento(null, "R-W9", 40);
+        // uma reserva viva fica no evento: o quant final (39) fica ABAIXO da capacidade, então uma devolução a mais seria vista
+        // (sem ela, o LEAST(quant + 1, capacity) cortaria a devolução dupla e a asserção de "nem a mais" nunca falharia)
+        Usuario viva = novoUsuario("viva");
+        assertEquals("pending", eventWalletService.addLink(new EventWallet(viva.getId(), e.getEvent_id()), "r-w9-viva").getStatus());
         ReflectionTestUtils.setField(saga, "failpoint", "after-hold");
         for (int i = 0; i < ORFAS; i++) {
             Usuario u = novoUsuario("u");
@@ -76,7 +80,7 @@ public class SagaReaperConcorrenteTest extends ReservationTestSupport {
         ReflectionTestUtils.setField(saga, "failpoint", "");
         assertEquals(ORFAS, sdb.contar("SELECT count(*) FROM reservation.idempotency_key WHERE event_id = ? AND saga_status = 'reserving'",
                 e.getEvent_id()));
-        assertEquals(40 - ORFAS, estoque.findByEventId(e.getEvent_id()).getQuant(), "30 vagas presas pelos holds órfãos");
+        assertEquals(40 - 1 - ORFAS, estoque.findByEventId(e.getEvent_id()).getQuant(), "a reserva viva e as 30 órfãs seguram vagas");
         Thread.sleep(700); // todas passam de ORPHAN_MS
         ReflectionTestUtils.setField(reaper, "lote", 7); // vários lotes por reaper: as seleções se intercalam
         proxy.limparChamadas();
@@ -88,10 +92,10 @@ public class SagaReaperConcorrenteTest extends ReservationTestSupport {
         assertEquals(ORFAS, sdb.contar("SELECT count(*) FROM reservation.idempotency_key WHERE event_id = ? AND saga_status = 'compensated' "
                 + "AND resolved_by = 'reaper'", e.getEvent_id()));
         assertEquals(ORFAS, sdb.contar("SELECT count(*) FROM stock.hold WHERE event_id = ? AND status = 'released'", e.getEvent_id()));
-        assertEquals(0, sdb.contar("SELECT count(*) FROM stock.hold WHERE event_id = ? AND status = 'held'", e.getEvent_id()));
-        assertEquals(40, estoque.findByEventId(e.getEvent_id()).getQuant(), "cada vaga voltou uma vez (nem a mais)");
+        assertEquals(1, sdb.contar("SELECT count(*) FROM stock.hold WHERE event_id = ? AND status = 'held'", e.getEvent_id()), "só o hold da reserva viva");
+        assertEquals(40 - 1, estoque.findByEventId(e.getEvent_id()).getQuant(), "cada vaga voltou uma vez (nem a mais): só a reserva viva segue debitada");
         assertTrue(proxy.releasesRecebidos() >= ORFAS, "pelo menos um release por saga: " + proxy.releasesRecebidos());
-        assertEquals(0, sdb.contar("SELECT count(*) FROM reservation.walletevent WHERE event_id = ?", e.getEvent_id()));
+        assertEquals(1, sdb.contar("SELECT count(*) FROM reservation.walletevent WHERE event_id = ?", e.getEvent_id()), "só a reserva viva");
         InvariantesDaSaga.verificar(databaseConnection, e.getEvent_id());
     }
 }
