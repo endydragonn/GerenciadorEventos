@@ -12,9 +12,12 @@ commit. A compensação hoje é o `rollback`. `EventCapRepository.release` devol
 **não é idempotente por chave**: quem impede a devolução dupla é a guarda de `walletevent` na mesma transação (`cancelIfActive`,
 `expireIfStale`). No split, essa guarda fica do outro lado da rede.
 
-## Pendências de decisão (o resto da spec assume as recomendações)
+## Decisões D1–D4 (aceitas em 2026-10-29: opção (a) nas quatro)
 
-| # | Pergunta | Opções (trade-off em uma frase) | Recomendação |
+Aceitas pela sessão de interface em caráter provisório; o merge do PR da #47 na `Batch_2` aguarda a confirmação do usuário. Se a
+R5 mostrar o `stock` saturado, a D3 é reaberta.
+
+| # | Pergunta | Opções (trade-off em uma frase) | Decidido |
 |---|---|---|---|
 | D1 | Orquestração ou coreografia na reserva? | **(a) Orquestração síncrona pelo `wallet`**: o `reservation` chama o `stock` por HTTP dentro do pedido, e o 201 `pending` com `expiresAt`, o 400 "Evento lotado" e o read-your-writes seguem iguais (`HttpContractTest` intacto). Custa +1 salto HTTP e +2 commits por tentativa. **(b) Coreografia por eventos** (`SlotRequested` → `stock` consome → `SlotHeld`/`SlotRejected` → `wallet` consome): sem salto síncrono, mas a resposta do `POST` não sabe se havia vaga. O contrato `/bff` mudaria (sempre 202 + consulta) ou o gateway teria de esperar o evento, e toda reserva pagaria o lag do relay + consumer, que na Rodada 2 chegou a ~793 mil mensagens de backlog. | **(a)**. A (b) quebra o aceite ("`HttpContractTest` sem mudança de expectativa") |
 | D2 | Onde mora o estado da saga e em que ordem os passos rodam? | **(a) Log primeiro no `wallet`**: a linha da saga é gravada e comitada antes de chamar o `stock`. Conclusão e compensação disputam um `UPDATE` condicional nessa linha, um só ponto de decisão, e não há janela de overselling. Custa +2 commits por tentativa, inclusive na rejeição "lotado", que é o caminho quente sob sobrecarga. **(b) `stock` primeiro, com prazo (lease)**: a rejeição não escreve nada no `wallet` (mais barata). Mas a órfã só é achada do lado do `stock`, que pergunta ao `wallet` em lote se a reserva existe, e uma transação do `wallet` ainda em voo responde "não existe". Fechar isso exige uma cerca de tempo (prazo no relógio do Postgres + margem), e a corretude passa a depender de nenhuma transação demorar mais que a margem. | **(a)**. Overselling > 0 é parada da R5; a R5 deve medir o custo de uma saga sem janela |
@@ -456,6 +459,16 @@ proxy HTTP de teste (JDK `HttpServer`) que sabe ficar **fora**, **atrasar** e **
 - **no sentido inverso**, todo hold `held` tem `walletevent` ativo com o mesmo `hold_id`, ou uma saga `reserving`/`compensating` com ele,
   ou um `Cancelled`/`Expired` com ele ainda não consumido. Sem essa checagem, uma vaga presa para sempre passaria com tudo verde;
 - ao fim, nenhuma saga `reserving` ou `compensating`.
+
+**Banco dos testes enquanto a R4 está parada:**
+- O `meu_banco` do `gerenciador-db` tem de seguir no schema de `35955ef` para a R4 retomar. Por isso a #47 **não** aplica a migração
+  nele.
+- O `run-tests.sh` ganha `TEST_DB_NAME` (default `meu_banco`, comportamento de hoje): as conferências por `psql` usam esse banco, e
+  dentro do container de teste o `SPRING_DATASOURCE_URL` do `.env` tem `meu_banco` trocado por ele (substituição de string no bash, sem
+  ler nem imprimir o `.env`).
+- Os testes da #47 rodam com `TEST_DB_NAME=meu_banco_s5`, um banco do mesmo container criado com os init scripts **da worktree**,
+  passados por stdin.
+- A migração `20261029` é provada num clone descartável (`CREATE DATABASE ... TEMPLATE meu_banco`): migração, verify e rollback.
 
 **Isolamento dos testes:** o módulo `reservation` passa a truncar também o schema `stock` (`test.db.schemas=reservation,stock`). Hoje o
 default é `reservation`, e `eventcap`/`hold` sobrariam entre as classes: o `PUT eventcap` responderia "já existia" com a capacidade
