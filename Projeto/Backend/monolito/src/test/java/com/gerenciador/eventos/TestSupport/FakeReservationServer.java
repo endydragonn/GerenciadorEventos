@@ -21,7 +21,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;

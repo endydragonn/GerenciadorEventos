@@ -38,7 +38,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.gerenciador.eventos.TestSupport.EventsTestSupport;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.TestSupport.KafkaDeTeste;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.shared.events.EventEnvelope;
 import com.gerenciador.eventos.shared.events.EventsKafkaConfig;
 import com.gerenciador.eventos.stockclient.api.HoldRequest;

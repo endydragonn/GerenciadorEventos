@@ -23,7 +23,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.shared.events.EventEnvelope;
 import com.gerenciador.eventos.shared.events.InvalidEventMessageException;
 

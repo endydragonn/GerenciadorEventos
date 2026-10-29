@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 
 /**
  * API INTERNA da capacidade do evento (issue #33, movida para o stock na #47), chamada pelo catalog do monólito. O {@code eventcap} nasce aqui por

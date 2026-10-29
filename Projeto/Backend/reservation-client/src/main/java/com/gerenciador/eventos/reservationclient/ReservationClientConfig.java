@@ -8,8 +8,7 @@ import org.springframework.context.annotation.Configuration;
 
 
 /**
- * Bean do {@link ReservationClient} do monólito (ele é, ao mesmo tempo, o {@code EventWalletApi} e o {@code EventCapacityApi}
- * que o gateway e o catalog injetam). Tudo por env var (nomes no application.properties do monólito):
+ * Bean do {@link ReservationClient} do monólito (o {@code EventWalletApi} que o gateway injeta; a capacidade é do serviço stock desde a #47). Tudo por env var (nomes no application.properties do monólito):
  * {@code RESERVATION_SERVICE_URL}, {@code INTERNAL_API_TOKEN} (obrigatória: o contexto não sobe sem ela),
  * {@code RESERVATION_CLIENT_MAX_CONNECTIONS}, {@code RESERVATION_CLIENT_*_TIMEOUT_MS}.
  */

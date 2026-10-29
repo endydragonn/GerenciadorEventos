@@ -2,45 +2,38 @@ package com.gerenciador.eventos.reservation;
 
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import com.gerenciador.eventos.reservationclient.api.EventCap;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
-import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictException;
 import com.gerenciador.eventos.shared.DatabaseConnection;
+import com.gerenciador.eventos.stockclient.StockClient;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 
 /**
- * Regras de inscrição/reserva em eventos.
+ * Regras de inscrição/reserva em eventos: o lado WALLET do split stock + wallet (issue #47).
  *
- * <p>A reserva é feita em duas etapas: {@link #addLink} debita a vaga em {@code eventcap}
- * (via UPDATE condicional atômico) e cria a linha {@code pending} com {@code expires_at};
- * {@link #confirm} efetiva ({@code pending -> confirmed}). O job
- * {@link ReservationExpiryService} devolve vagas de reservas {@code pending} vencidas.</p>
+ * <p>A reserva é uma saga orquestrada por {@link ReservationSaga}: o stock segura a vaga (hold) e este serviço grava a reserva
+ * {@code pending} com {@code expires_at}; {@link #confirm} efetiva ({@code pending -> confirmed}). O job
+ * {@link ReservationExpiryService} expira as {@code pending} vencidas. Cancelar e expirar NÃO falam com o stock: appendam o evento com o
+ * {@code holdId} e o consumer do stock devolve a vaga (idempotente por hold).</p>
  *
- * <p>A checagem de capacidade em {@link #addLink} tem dois caminhos, escolhidos por quem CHAMA (o gateway decide pela
- * feature flag {@code reservation.readpath} do monólito e manda o modo no pedido; este serviço não tem a flag):</p>
- * <ul>
- *   <li><b>{@code cas}</b> — UPDATE condicional atômico em {@code eventcap}, numa chamada só; nunca oversella.</li>
- *   <li><b>{@code naive}</b> — insere em {@code walletevent} SEM tocar {@code eventcap}. A leitura da disponibilidade
- *       (projeção ASSÍNCRONA {@code event_availability}, consumer do tópico {@code reservation.wallet}) NÃO acontece aqui:
- *       é a chamada anterior do gateway ({@link #disponibilidade}), então a janela check-then-act inclui uma ida e volta
- *       de rede. OVERSELLA proporcional ao lag do consumer. Braço de controle do experimento de concorrência.</li>
- * </ul>
+ * <p>Os dois caminhos de capacidade são escolhidos por quem CHAMA (o gateway decide pela feature flag {@code reservation.readpath} do
+ * monólito e manda o modo no pedido): {@code cas} (o hold debita o {@code eventcap} no stock; nunca oversella) e {@code naive} (o hold NÃO
+ * debita; a disponibilidade, da projeção ASSÍNCRONA {@code event_availability}, é lida na chamada anterior do gateway,
+ * {@link #disponibilidade}, então a janela check-then-act inclui a rede; OVERSELLA proporcional ao lag do consumer, é o braço de
+ * controle do experimento).</p>
  *
- * <p><b>Fronteira de serviço (issue #33).</b> Este serviço não enxerga {@code users}/{@code mywallet}/{@code event}: a
- * carteira do usuário e a existência do evento no catálogo são conferidas pelo gateway antes da chamada; aqui a existência
- * do {@code eventcap} é o "evento existe".</p>
+ * <p><b>Fronteira de serviço (issue #33).</b> Este serviço não enxerga {@code users}/{@code mywallet}/{@code event}: a carteira do
+ * usuário e a existência do evento no catálogo são conferidas pelo gateway; a existência do {@code eventcap} (no stock) é o "evento
+ * existe" ("Capacidade do evento não configurada").</p>
  *
- * <p><b>Event sourcing (issue #29).</b> {@code walletevent} é a projeção inline do stream
- * {@code reservation.wallet}: cada transição é um UPDATE condicional com {@code RETURNING version} e o evento
- * ({@link ReservationEvents}) é appendado SÓ quando ele afetou 1 linha, na mesma transação. {@code eventcap} + CAS
- * continuam relacionais e síncronos.</p>
+ * <p><b>Event sourcing (issue #29).</b> {@code walletevent} é a projeção inline do stream {@code reservation.wallet}: cada transição é um
+ * UPDATE condicional com {@code RETURNING version} e o evento ({@link ReservationEvents}) é appendado SÓ quando ele afetou 1 linha, na
+ * mesma transação.</p>
  */
 @Service
 public class EventWalletService {
@@ -48,15 +41,11 @@ public class EventWalletService {
     @Autowired
     private EventWalletRepository eventWalletRepository;
     @Autowired
-    private EventCapRepository eventCapRepository;
-    @Autowired
     private EventAvailabilityRepository eventAvailabilityRepository;
     @Autowired
-    private CapacityReserver capacityReserver;
+    private ReservationSaga reservationSaga;
     @Autowired
-    private ReservationWriter reservationWriter;
-    @Autowired
-    private IdempotencyKeyRepository idempotencyKeyRepository;
+    private StockClient stockClient;
     @Autowired
     private ReservationEvents reservationEvents;
     @Autowired
@@ -73,72 +62,52 @@ public class EventWalletService {
     }
 
     /**
-     * Cria uma reserva {@code pending}: debita a vaga em {@code eventcap} e grava a linha em
-     * {@code walletevent}, tudo numa transação. Se o evento estiver lotado, nada é gravado.
+     * Cria uma reserva {@code pending} pela saga ({@link ReservationSaga}): o stock segura a vaga e a reserva é gravada depois, com o
+     * {@code expiresAt} calculado a partir do {@code maxTimeInLine} do stock. Se o evento estiver lotado, nada é gravado e a chave não é
+     * consumida.
      *
-     * <p><b>Idempotência (issue #24).</b> A chave é gravada em {@code idempotency_key} na MESMA
-     * transação do CAS e da reserva. Repetição com a mesma chave e o mesmo usuário/evento devolve o
-     * resultado da primeira ({@code pending} + {@code expiresAt} salvo) sem tocar {@code eventcap};
-     * o mesmo usuário com outro evento ⇒ {@link IdempotencyConflictException}. A chave tem escopo por
-     * usuário (issue #129): outro usuário com a mesma chave é uma reserva independente. Reserva que falha faz rollback
-     * e não deixa chave (a mesma chave pode ser repetida). Vale para os caminhos {@code cas} e
+     * <p><b>Idempotência (issues #24 e #47).</b> A chave é o log da saga ({@code idempotency_key}). Repetição com a mesma chave e o mesmo
+     * usuário/evento devolve o resultado da primeira ({@code pending} + {@code expiresAt} salvo) sem tocar o stock; o mesmo usuário com
+     * outro evento => {@link com.gerenciador.eventos.reservationclient.api.IdempotencyConflictException}. A chave tem escopo por usuário
+     * (issue #129). Reserva que falha não consome a chave (a mesma chave pode ser repetida). Vale para os caminhos {@code cas} e
      * {@code naive}. Sem chave (null/em branco), o servidor gera uma.</p>
      *
-     * @param naive {@code true} = braço de controle: reserva SEM CAS (a checagem de disponibilidade é do chamador)
+     * @param naive {@code true} = braço de controle: o hold não debita (a checagem de disponibilidade é do chamador)
+     * @throws SagaIndisponivelException 503: reserva em andamento ou não concluída; repetir com a mesma chave é seguro
      */
     public EventWallet addLink(EventWallet ew, String idempotencyKey, boolean naive) {
         validateBasic(ew);
         boolean chaveDoCliente = idempotencyKey != null && !idempotencyKey.isBlank();
         String chave = normalizarChave(idempotencyKey);
         ew.setIdempotencyKey(chave);
-
-        EventCap cap;
-        try {
-            cap = validarPreRequisitos(ew);
-        } catch (IllegalArgumentException ex) {
-            // Se é a repetição de uma reserva que já vale, as checagens acima ("Vínculo já
-            // existente"...) falham; a resposta certa é a salva.
-            // Chave gerada pelo servidor nunca existe: não consulta (rejeição é o caminho quente
-            // sob carga, e o naive não pode pagar um SELECT a mais que o cas).
-            if (chaveDoCliente) {
-                IdempotencyKeyRepository.Salvo salvo = idempotencyKeyRepository.find(chave, ew.getUserId());
-                if (salvo != null) return resultadoSalvo(salvo, ew);
-            }
-            throw ex;
-        }
-
-        int maxTimeInLine = cap.getMaxTimeInLine() != null ? cap.getMaxTimeInLine() : 120;
-        // micros: o Postgres guarda microssegundos; a repetição devolve o mesmo expiresAt da primeira
-        LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(maxTimeInLine).truncatedTo(ChronoUnit.MICROS);
-
-        // evento ilimitado (capacity = -1) e caminho ingênuo: reserva sem CAS
-        IdempotencyKeyRepository.Salvo salvo =
-                reservarNaTransacao(ew, chave, cap.isUnlimited() || naive, expiresAt);
-        if (salvo != null) return resultadoSalvo(salvo, ew);
-
-        ew.setStatus("pending");
-        ew.setExpiresAt(expiresAt);
-        return ew;
+        return reservationSaga.reservar(ew, chave, chaveDoCliente, naive);
     }
 
     /**
      * Resultado salvo da reserva feita com a chave (a mesma resposta que a repetição de {@link #addLink} devolve), ou
-     * {@code null} se a chave não existe. O gateway chama quando o braço naive vê o evento "lotado" mas o cliente mandou
-     * a chave: a resposta certa de uma repetição é a primeira reserva, não "lotado". Chave de outro evento => conflito.
+     * {@code null} se a chave não existe ou a saga não está {@code reserved}. O gateway chama quando o braço naive vê o evento "lotado"
+     * mas o cliente mandou a chave: a resposta certa de uma repetição é a primeira reserva, não "lotado". Chave de outro evento => conflito.
      */
     public EventWallet replay(Long userId, Long eventId, String idempotencyKey) {
-        EventWallet ew = new EventWallet(userId, eventId);
-        validateBasic(ew);
-        IdempotencyKeyRepository.Salvo salvo = idempotencyKeyRepository.find(idempotencyKey, userId);
-        return salvo == null ? null : resultadoSalvo(salvo, ew);
+        validateBasic(new EventWallet(userId, eventId));
+        return reservationSaga.replay(userId, eventId, idempotencyKey);
     }
 
     /**
      * Disponibilidade DEFASADA do evento (braço naive): {@code capacity - ativos} da projeção assíncrona, {@code -1} =
-     * ilimitado, {@code null} = o evento não tem {@code eventcap}. Nunca lê {@code eventcap.quant}.
+     * ilimitado, {@code null} = o evento não tem {@code eventcap}. A capacidade vem do stock (GET do eventcap); nunca lê
+     * {@code eventcap.quant}.
+     * @throws SagaIndisponivelException 503 se o stock falhar (fora, timeout, 5xx): nunca 404, que o gateway traduziria em "Capacidade do
+     *         evento não configurada" para um evento que tem capacidade
      */
     public Integer disponibilidade(Long eventId) {
-        return eventAvailabilityRepository.findAvailable(eventId);
+        EventCap cap;
+        try {
+            cap = stockClient.findByEventId(eventId);
+        } catch (RuntimeException ex) {
+            throw new SagaIndisponivelException("Stock indisponível, tente novamente", ex);
+        }
+        return cap == null ? null : eventAvailabilityRepository.findAvailable(eventId, cap.getCapacity());
     }
 
     /** Existe reserva ativa ({@code pending}/{@code confirmed}) do usuário para o evento? */
@@ -151,72 +120,6 @@ public class EventWalletService {
         if (idempotencyKey.length() > 255)
             throw new IllegalArgumentException("Idempotency-Key deve ter no máximo 255 caracteres");
         return idempotencyKey;
-    }
-
-    private EventCap validarPreRequisitos(EventWallet ew) {
-        EventCap cap = eventCapRepository.findByEventId(ew.getEventId());
-        if (cap == null) throw new IllegalArgumentException("Capacidade do evento não configurada");
-        if (cap.getBuyTimeLimit() != null && LocalDateTime.now().isAfter(cap.getBuyTimeLimit()))
-            throw new IllegalArgumentException("Janela de compra encerrada para este evento");
-
-        if (eventWalletRepository.existsActive(ew.getUserId(), ew.getEventId()))
-            throw new IllegalArgumentException("Vínculo já existente");
-        return cap;
-    }
-
-    /** Resultado da primeira reserva do usuário com a chave; outro evento ⇒ conflito (HTTP 422). */
-    private EventWallet resultadoSalvo(IdempotencyKeyRepository.Salvo salvo, EventWallet ew) {
-        if (!salvo.eventId().equals(ew.getEventId()))
-            throw new IdempotencyConflictException(
-                    "Idempotency-Key já usada em outra requisição (evento diferente)");
-        ew.setStatus("pending");
-        ew.setExpiresAt(salvo.expiresAt());
-        return ew;
-    }
-
-    /**
-     * Transação única da reserva, numa {@link Connection}: reivindica a chave → decrementa a
-     * capacidade ({@link CapacityReserver}, pulado se {@code semCas}) → grava a reserva
-     * ({@link ReservationWriter}; a versão sai da guarda) → appenda {@code SlotReserved} → commit. Qualquer falha
-     * após o decremento faz rollback da conexão inteira: é o ponto de compensação (a vaga, a chave, a reserva e o
-     * evento voltam juntos). O braço {@code naive} também appenda (só não toca {@code eventcap}), então a projeção
-     * vê as reservas dos dois braços.
-     *
-     * @return {@code null} se reservou; o {@link IdempotencyKeyRepository.Salvo} existente se a
-     *         chave já estava gravada (repetição, ou perdeu a corrida para outra com a mesma chave).
-     */
-    private IdempotencyKeyRepository.Salvo reservarNaTransacao(
-            EventWallet ew, String chave, boolean semCas, LocalDateTime expiresAt) {
-        try (Connection conn = databaseConnection.getConnection()) {
-            conn.setAutoCommit(false);
-            try {
-                if (!idempotencyKeyRepository.claim(conn, chave, ew.getUserId(), ew.getEventId(), expiresAt)) {
-                    // já existe (o INSERT esperou a transação concorrente terminar): nada foi tocado
-                    IdempotencyKeyRepository.Salvo salvo = idempotencyKeyRepository.find(conn, chave, ew.getUserId());
-                    conn.rollback();
-                    if (salvo == null) throw new IllegalStateException("Idempotency-Key sumiu durante a reserva");
-                    return salvo;
-                }
-                if (!semCas && !capacityReserver.tryReserve(conn, ew.getEventId()))
-                    throw new IllegalArgumentException("Evento lotado");
-                int versao = reservationWriter.reservePending(conn, ew.getUserId(), ew.getEventId(), expiresAt);
-                // versao 0 = corrida: já havia reserva ativa. Conflito no append não deveria ocorrer (a versão sai
-                // da guarda), mas tem a mesma resposta. Nos dois casos o rollback desfaz decremento e chave.
-                if (versao == 0 || !reservationEvents.slotReserved(
-                        conn, ew.getUserId(), ew.getEventId(), versao, expiresAt, chave))
-                    throw new IllegalArgumentException("Vínculo já existente");
-                conn.commit();
-                return null;
-            } catch (SQLException | RuntimeException ex) {
-                conn.rollback();
-                throw ex instanceof RuntimeException ? (RuntimeException) ex
-                        : new RuntimeException("Erro ao reservar: " + ex.getMessage(), ex);
-            } finally {
-                conn.setAutoCommit(true);
-            }
-        } catch (SQLException ex) {
-            throw new RuntimeException("Erro ao reservar: " + ex.getMessage(), ex);
-        }
     }
 
     /** {@code pending -> confirmed}. */
@@ -255,12 +158,14 @@ public class EventWalletService {
     }
 
     /**
-     * Cancela a inscrição e devolve a vaga ao evento, tudo numa transação.
+     * Cancela a inscrição, numa transação. A vaga NÃO é devolvida aqui (#47): o evento {@code ReservationCancelled} leva o
+     * {@code holdId} e o consumer do stock a devolve, idempotente por hold (com o stock fora, o cancelamento responde igual e a
+     * devolução espera no tópico).
      *
-     * <p>O cancelamento é um UPDATE condicional único ({@code cancelIfActive}): a vaga só é
-     * devolvida se ESTA chamada foi a que tirou a reserva do estado ativo
+     * <p>O cancelamento é um UPDATE condicional único ({@code cancelIfActive}): o evento só é appendado
+     * se ESTA chamada foi a que tirou a reserva do estado ativo
      * ({@code pending}/{@code confirmed}). Duas remoções concorrentes — ou uma corrida com o
-     * job de expiração — não conseguem devolver a mesma vaga duas vezes (sem overselling).</p>
+     * job de expiração — não geram dois eventos (a vaga volta uma vez só).</p>
      *
      * <p>Se a reserva já estava {@code cancelled}/{@code expired} ou não existe, a operação é
      * um no-op silencioso (semântica idempotente de DELETE): não é erro cancelar de novo.</p>
@@ -272,10 +177,9 @@ public class EventWalletService {
         try (Connection conn = databaseConnection.getConnection()) {
             conn.setAutoCommit(false);
             try {
-                int versao = eventWalletRepository.cancelIfActive(conn, userId, eventId);
-                if (versao > 0) {
-                    eventCapRepository.release(conn, eventId);
-                    reservationEvents.cancelled(conn, userId, eventId, versao);
+                EventWalletRepository.Transicao t = eventWalletRepository.cancelIfActive(conn, userId, eventId);
+                if (t.aplicada()) {
+                    reservationEvents.cancelled(conn, userId, eventId, t.versao(), t.holdId());
                 }
                 conn.commit();
             } catch (SQLException | RuntimeException ex) {

@@ -24,7 +24,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.client.RestClient;
 
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.stockclient.StockClient;
 import com.gerenciador.eventos.stockclient.api.HoldRequest;
 

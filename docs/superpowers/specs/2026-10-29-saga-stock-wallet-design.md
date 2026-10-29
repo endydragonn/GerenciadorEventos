@@ -174,7 +174,12 @@ Passos e respostas:
      se o reaper já liberou, é no-op; se a linha foi reaberta com outro `hold_id`, ninguém mais liberaria este) e **503** "Reserva não
      concluída, tente novamente".
    - `reservePending` = 0 (corrida de "vínculo"), ou o append falhou: rollback da tx2, compensação inline e 400 "Vínculo já existente".
-     Erro de banco dá 500.
+     Essas são as únicas falhas da tx2 com desfecho conhecido: o rollback é explícito e nada comitou.
+   - **Desfecho incerto (revisão da passada a2-1):** exceção de banco na tx2, inclusive no próprio `commit()` (ack perdido, conexão
+     morta). A tx2 pode ter comitado. Então **não** compensa inline: responde 503 e deixa para o reaper. Se a tx2 não comitou, a linha
+     segue `reserving` e o reaper compensa depois de `ORPHAN_MS`; se comitou, está `reserved` e ninguém toca. Pelo mesmo motivo, toda
+     compensação que encontra 0 linhas no `reserving → compensating` **relê a linha** e só libera o hold se ela não estiver `reserved`
+     com este `hold_id`. Se a releitura falhar, não libera.
 
 **Regra das transições:** toda transição da linha da saga é um `UPDATE` condicional por **(PK, `hold_id`, status esperado)**, nunca só
 pela PK. Assim o fim atrasado de uma tentativa antiga nunca fecha a saga de uma tentativa nova da mesma chave.

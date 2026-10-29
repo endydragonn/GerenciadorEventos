@@ -13,8 +13,8 @@ import java.util.regex.Pattern;
  */
 public final class TestSchemas {
 
-    /** Default do harness DESTE serviço: só o schema reservation (cópia enxuta do TestSupport do monólito; cada módulo trunca só o que é seu). */
-    public static final String DEFAULT = "reservation";
+    /** Default do harness DESTE serviço: o schema reservation e o schema stock (#47: o stock REAL sobe dentro dos testes; sem truncá-lo, eventcap/hold de uma classe sobrariam para a próxima) (cópia enxuta do TestSupport do monólito; cada módulo trunca só o que é seu). */
+    public static final String DEFAULT = "reservation,stock";
 
     public static final String PROPERTY = "${test.db.schemas:" + DEFAULT + "}";
 

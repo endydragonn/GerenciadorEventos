@@ -17,18 +17,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 /**
- * Servidor HTTP de verdade (JDK {@code HttpServer}, porta sorteada) no papel do serviço reservation nos testes do módulo
+ * Servidor HTTP de verdade (JDK {@code HttpServer}, porta sorteada) no papel do serviço stock (capacidade, #47) nos testes do módulo
  * {@code catalog} (issue #35): só a parte de capacidade que o catalog chama ({@code /internal/eventcaps}: PUT idempotente, GET,
  * POST {@code batch}, PATCH {@code policy} com 404 sem eventcap, DELETE com 409 se o evento "tem reserva"). Versão enxuta do
  * {@code FakeReservationServer} do monólito; o serviço real e o cliente real são testados no módulo {@code reservation}.
  *
  * <p>Uma instância por JVM de teste, iniciada pelo {@link EventCapFakeSession} antes de qualquer contexto Spring (URL na
- * propriedade de sistema {@code reservation.service.url}).</p>
+ * propriedade de sistema {@code stock.service.url}).</p>
  */
 public final class FakeEventCapServer {
 

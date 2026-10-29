@@ -32,7 +32,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.stockclient.StockClient;
 import com.gerenciador.eventos.stockclient.api.HoldLiberadoException;
 import com.gerenciador.eventos.stockclient.api.HoldRequest;

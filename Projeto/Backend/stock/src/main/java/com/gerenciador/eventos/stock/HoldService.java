@@ -8,7 +8,7 @@ import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 import com.gerenciador.eventos.stockclient.api.HoldLiberadoException;
 import com.gerenciador.eventos.stockclient.api.HoldRequest;

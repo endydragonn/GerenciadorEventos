@@ -20,7 +20,6 @@ import org.springframework.test.context.TestPropertySource;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.reservation.EventCapRepository;
 import com.gerenciador.eventos.reservation.EventWalletRepository;
 import com.gerenciador.eventos.reservation.EventWalletService;
 import com.gerenciador.eventos.reservation.ReservationEvents;
@@ -42,7 +41,6 @@ import com.gerenciador.eventos.shared.events.NovoEvento;
 @TestPropertySource(properties = "reservation.expiry.scan.ms=3600000")
 public class ReservationEventSourcingTest extends ReservationTestSupport {
     @Autowired private EventWalletService eventWalletService;
-    @Autowired private EventCapRepository eventCapRepository;
     @Autowired private EventWalletRepository eventWalletRepository;
     @Autowired private ReservationExpiryService reservationExpiryService;
     @Autowired private EventStore eventStore;
@@ -73,7 +71,7 @@ public class ReservationEventSourcingTest extends ReservationTestSupport {
         assertEquals(List.of(1, 2, 3, 4, 5), log.stream().map(Ev::version).toList(), "versões contíguas, do mesmo stream");
         assertEquals(5, versaoDaLinha(uid, eid), "walletevent.version = versão do último evento");
         assertEquals("expired", eventWalletRepository.currentStatus(uid, eid));
-        assertEquals(5, eventCapRepository.findByEventId(eid).getQuant(), "todas as vagas devolvidas");
+        assertEquals(5, capacidade(eid).getQuant(), "todas as vagas devolvidas");
 
         // SlotReserved leva os valores calculados (o expiresAt devolvido ao cliente) e a chave de idempotência
         Ev slot = log.get(0);
@@ -95,12 +93,12 @@ public class ReservationEventSourcingTest extends ReservationTestSupport {
         Long eid = e.getEvent_id();
         eventWalletService.addLink(new EventWallet(uid, eid));
         assertEquals("pending", eventWalletRepository.currentStatus(uid, eid));
-        assertEquals(2, eventCapRepository.findByEventId(eid).getQuant());
+        assertEquals(2, capacidade(eid).getQuant());
 
         eventWalletService.removeLink(uid, eid);
 
         assertEquals("cancelled", eventWalletRepository.currentStatus(uid, eid));
-        assertEquals(3, eventCapRepository.findByEventId(eid).getQuant(), "a vaga da pending volta");
+        assertEquals(3, capacidade(eid).getQuant(), "a vaga da pending volta");
         List<Ev> log = ler(uid, eid);
         assertEquals(List.of("SlotReserved", "ReservationCancelled"), log.stream().map(Ev::tipo).toList());
         assertEquals(2, log.get(1).version());
@@ -119,7 +117,7 @@ public class ReservationEventSourcingTest extends ReservationTestSupport {
         for (Ev ev : ler(u.getId(), e.getEvent_id())) {
             List<String> campos = new ArrayList<>();
             ev.payload().fieldNames().forEachRemaining(campos::add);
-            assertTrue(List.of("userId", "eventId", "expiresAt").containsAll(campos),
+            assertTrue(List.of("userId", "eventId", "expiresAt", "holdId").containsAll(campos),
                     "payload só com ids e valores calculados, veio: " + campos);
             assertTrue(!ev.payload().toString().contains("@") && !ev.payload().toString().contains("es-fone"),
                     "nada de e-mail/telefone no payload");
@@ -152,7 +150,7 @@ public class ReservationEventSourcingTest extends ReservationTestSupport {
                 ler(u1.getId(), eid).stream().map(Ev::tipo).toList());
     }
 
-    /** O evento só vale com o commit: conflito de versão no append desfaz a reserva inteira (vaga, chave, linha). */
+    /** O evento só vale com o commit: conflito de versão no append desfaz a reserva inteira (walletevent e evento) e compensa o hold (#47). */
     @Test
     public void conflitoNoAppendDaReservaFazRollbackDeTudoEDizVinculoJaExistente() throws Exception {
         Usuario creator = novoUsuario("es-conf1-creator@example.com", "es-fone-08");
@@ -165,9 +163,10 @@ public class ReservationEventSourcingTest extends ReservationTestSupport {
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> eventWalletService.addLink(new EventWallet(uid, eid), "es-chave-conf1"));
         assertTrue(ex.getMessage().contains("Vínculo já existente"), ex.getMessage());
-        assertEquals(3, eventCapRepository.findByEventId(eid).getQuant(), "a vaga voltou com o rollback");
+        assertEquals(3, capacidade(eid).getQuant(), "a vaga voltou com o rollback");
         assertEquals(null, eventWalletRepository.currentStatus(uid, eid), "walletevent não foi gravado");
-        assertEquals(0, contarChave("es-chave-conf1", uid), "a chave voltou junto");
+        assertEquals("compensated", statusDaSaga("es-chave-conf1", uid), "a saga foi compensada (a vaga voltou pelo release, a linha da chave fica como log)");
+        InvariantesDaSaga.verificar(databaseConnection, eid);
         assertEquals(1, ler(uid, eid).size(), "só o evento intruso (a reserva não appendou)");
     }
 
@@ -198,7 +197,7 @@ public class ReservationEventSourcingTest extends ReservationTestSupport {
 
         assertThrows(RuntimeException.class, () -> eventWalletService.removeLink(uid, eid));
         assertEquals("pending", eventWalletRepository.currentStatus(uid, eid));
-        assertEquals(2, eventCapRepository.findByEventId(eid).getQuant(), "a devolução da vaga foi desfeita junto");
+        assertEquals(2, capacidade(eid).getQuant(), "a devolução da vaga foi desfeita junto");
     }
 
     @Test
@@ -220,7 +219,7 @@ public class ReservationEventSourcingTest extends ReservationTestSupport {
         assertEquals("expired", eventWalletRepository.currentStatus(boa.getId(), eid), "o job não parou na que falhou");
         assertEquals(List.of("SlotReserved", "ReservationExpired"),
                 ler(boa.getId(), eid).stream().map(Ev::tipo).toList());
-        assertEquals(2, eventCapRepository.findByEventId(eid).getQuant(), "só a vaga da expirada voltou");
+        assertEquals(2, capacidade(eid).getQuant(), "só a vaga da expirada voltou");
     }
 
     // ===================== helpers =====================
@@ -266,15 +265,14 @@ public class ReservationEventSourcingTest extends ReservationTestSupport {
         }
     }
 
-    private int contarChave(String chave, Long userId) throws Exception {
+    private String statusDaSaga(String chave, Long userId) throws Exception {
         try (Connection conn = databaseConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(
-                 "SELECT count(*) FROM reservation.idempotency_key WHERE idempotency_key = ? AND user_id = ?")) {
+                 "SELECT saga_status FROM reservation.idempotency_key WHERE idempotency_key = ? AND user_id = ?")) {
             ps.setString(1, chave);
             ps.setLong(2, userId);
             try (ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                return rs.getInt(1);
+                return rs.next() ? rs.getString(1) : null;
             }
         }
     }

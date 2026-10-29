@@ -63,11 +63,11 @@ public class IdempotencyRetentionConcurrentTest {
     @RepeatedTest(3)
     public void execucoesConcorrentesApagamSoAsVencidasCadaUmaUmaVez() throws Exception {
         String prefixo = "conc-" + UUID.randomUUID() + "-";
-        exec("INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at, created_at) "
-                + "SELECT ? || g, g, 1, now(), now() - interval '48 hours' FROM generate_series(1, " + VENCIDAS + ") g",
+        exec("INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at, created_at, saga_status) "
+                + "SELECT ? || g, g, 1, now(), now() - interval '48 hours', 'reserved' FROM generate_series(1, " + VENCIDAS + ") g",
                 prefixo + "v-");
-        exec("INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at) "
-                + "SELECT ? || g, g, 1, now() FROM generate_series(1, " + RECENTES + ") g", prefixo + "r-");
+        exec("INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at, saga_status) "
+                + "SELECT ? || g, g, 1, now(), 'reserved' FROM generate_series(1, " + RECENTES + ") g", prefixo + "r-");
 
         List<Integer> apagadas = Concorrencia.emParalelo(REPLICAS, retentionService::purgeExpired);
 

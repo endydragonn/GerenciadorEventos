@@ -20,11 +20,6 @@
             <groupId>com.example.demo</groupId>
             <artifactId>stock-client</artifactId>
         </dependency>
-        <!-- TEMPORÁRIO (passada a1): o DTO EventCap ainda mora na reservation-client; passa para a stock-client na passada a2. -->
-        <dependency>
-            <groupId>com.example.demo</groupId>
-            <artifactId>reservation-client</artifactId>
-        </dependency>
         <!-- API interna HTTP (sem Spring Security: o serviço só é alcançável na rede gerenciador-net, sem porta no host) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -56,6 +51,10 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
                     <mainClass>com.gerenciador.eventos.stock.StockApplication</mainClass>
+                    <!-- O jar repackaged vai com o classificador exec: o jar simples (classes na raiz) segue sendo o artefato principal, que o
+                         módulo reservation usa como dependência de TESTE (o stock real sobe dentro dos testes dele). Sem isto, num build com
+                         "package" o reactor entregaria o jar repackaged (BOOT-INF/classes) e o testCompile do reservation não enxergaria as classes. -->
+                    <classifier>exec</classifier>
                 </configuration>
             </plugin>
         </plugins>

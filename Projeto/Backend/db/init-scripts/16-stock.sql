@@ -3,8 +3,8 @@
 -- reservation vira o lado wallet (reserva, event sourcing) e orquestra a saga; o stock guarda a capacidade e o ledger de holds.
 -- Spec: docs/superpowers/specs/2026-10-29-saga-stock-wallet-design.md.
 --
--- Passada a1: o reservation.eventcap (13-reservation.sql) ainda existe e coexiste com este; a passada a2 o tira do 13 e traz a
--- migração a quente (db/migrations/20261029-stock-schema.sql, que MOVE reservation.eventcap para cá preservando quant).
+-- Banco novo: o eventcap nasce AQUI (saiu do 13-reservation.sql). Banco existente: migração a quente (passada b,
+-- db/migrations/20261029-stock-schema.sql, que MOVE reservation.eventcap para cá preservando quant).
 --
 -- Idempotente (sem DROP, tudo IF NOT EXISTS). SEM FK cross-schema: hold.event_id/user_id são referências soltas.
 --

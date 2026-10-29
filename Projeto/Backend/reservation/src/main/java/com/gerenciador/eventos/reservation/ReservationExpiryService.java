@@ -20,7 +20,8 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
  * {@code expires_at}. Roda periodicamente e trabalha em <b>lotes</b> de até {@code reservation.expiry.batch-size}
  * linhas: cada lote é UMA transação que seleciona as vencidas com {@code FOR UPDATE SKIP LOCKED} (duas execuções
  * concorrentes não pegam a mesma linha) e, linha a linha, faz a marcação condicional ({@code expireIfStale}, de onde
- * sai a versão do evento) + libera a vaga em {@code eventcap} + appenda {@code ReservationExpired}. Cada linha roda
+ * sai a versão do evento e o {@code hold_id}) + appenda {@code ReservationExpired} com o {@code holdId}; a vaga NÃO é devolvida aqui
+ * (#47): o consumer do stock a devolve ao consumir o evento, então o lote não segura a linha quente do {@code eventcap} nem fala com o stock. Cada linha roda
  * num savepoint: o erro numa linha desfaz só aquela linha e as outras do lote seguem. O job repete lotes até um voltar
  * incompleto ou sem nenhuma linha expirada (uma linha que falha sempre continua pending/vencida e seria
  * reselecionada para sempre).
@@ -32,8 +33,6 @@ public class ReservationExpiryService {
 
     @Autowired
     private EventWalletRepository eventWalletRepository;
-    @Autowired
-    private EventCapRepository eventCapRepository;
     @Autowired
     private ReservationEvents reservationEvents;
     @Autowired
@@ -57,7 +56,7 @@ public class ReservationExpiryService {
             log.warn("[ReservationExpiry] falha ao processar um lote de expiração: {}", ex.getMessage());
         }
         if (released > 0) {
-            log.info("[ReservationExpiry] {} reserva(s) expirada(s), vagas devolvidas", released);
+            log.info("[ReservationExpiry] {} reserva(s) expirada(s) (a vaga volta pelo consumer do stock)", released);
         }
     }
 
@@ -86,11 +85,10 @@ public class ReservationExpiryService {
     private boolean expireOne(Connection conn, EventWallet ew) throws SQLException {
         Savepoint sp = conn.setSavepoint();
         try {
-            int versao = eventWalletRepository.expireIfStale(conn, ew.getUserId(), ew.getEventId());
-            boolean expired = versao > 0;
+            EventWalletRepository.Transicao t = eventWalletRepository.expireIfStale(conn, ew.getUserId(), ew.getEventId());
+            boolean expired = t.aplicada();
             if (expired) {
-                eventCapRepository.release(conn, ew.getEventId());
-                reservationEvents.expired(conn, ew.getUserId(), ew.getEventId(), versao);
+                reservationEvents.expired(conn, ew.getUserId(), ew.getEventId(), t.versao(), t.holdId());
             }
             conn.releaseSavepoint(sp);
             return expired;

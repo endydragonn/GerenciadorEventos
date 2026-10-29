@@ -3,6 +3,11 @@ package com.gerenciador.eventos.stockclient;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.apache.hc.client5.http.config.ConnectionConfig;
@@ -13,6 +18,7 @@ import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.core5.util.TimeValue;
 import org.apache.hc.core5.util.Timeout;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
@@ -21,23 +27,32 @@ import org.springframework.web.client.RestClient;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.gerenciador.eventos.stockclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCapacityApi;
 import com.gerenciador.eventos.stockclient.api.HoldLiberadoException;
 import com.gerenciador.eventos.stockclient.api.HoldRequest;
 import com.gerenciador.eventos.stockclient.api.HoldResponse;
 import com.gerenciador.eventos.stockclient.api.ReleaseRequest;
+import com.gerenciador.eventos.stockclient.api.StockConflictException;
 
 /**
- * Cliente HTTP da API interna do serviço stock (issue #47, saga stock + wallet): o salto {@code reservation -> stock}. Mesmo desenho
- * do {@code ReservationClient}: Apache HttpClient 5 com pool dimensionável (total e por rota; deve ser >= às threads do Tomcat do
+ * Cliente HTTP da API interna do serviço stock (issue #47, saga stock + wallet): o salto {@code reservation -> stock}. Mesmo desenho do
+ * {@code ReservationClient}: Apache HttpClient 5 com pool dimensionável (total e por rota; deve ser >= às threads do Tomcat do
  * chamador, senão a fila se forma aqui), timeouts explícitos (conectar, esperar conexão livre do pool, esperar a resposta),
  * {@code evictIdle} menor que o keep-alive do servidor (60 s) e SEM retry automático: repetir é decisão do chamador, e o
  * {@code holdId} existe para isso (idempotente nos dois passos).
  *
+ * <p>É também o {@link EventCapacityApi} (a API {@code /internal/eventcaps/**}, que o catalog usa e o reservation lê para a
+ * disponibilidade): os mesmos verbos, caminhos e códigos que o {@code ReservationClient} tinha antes da #47.</p>
+ *
  * <p><b>Erros</b> (corpo da resposta de erro = mensagem em texto puro): 400 => {@link IllegalArgumentException} (regra de negócio:
- * "Evento lotado" etc.); 409 em {@code hold} => {@link HoldLiberadoException} (lápide); qualquer outro status (inclusive 401 e 5xx),
- * timeout e conexão recusada => {@link RuntimeException}, que o orquestrador trata como falha do passo e compensa.</p>
+ * "Evento lotado" etc.); 409 => {@link StockConflictException} (em {@code hold}, {@link HoldLiberadoException}: a lápide); 404 =>
+ * depende do método; qualquer outro status (inclusive 401 e 5xx), timeout e conexão recusada => {@link RuntimeException}, que o
+ * orquestrador trata como falha do passo e compensa.</p>
  */
-public class StockClient {
+public class StockClient implements EventCapacityApi {
 
     private static final MediaType JSON = MediaType.APPLICATION_JSON;
 
@@ -60,6 +75,9 @@ public class StockClient {
                 .setDefaultConnectionConfig(ConnectionConfig.custom()
                         .setConnectTimeout(Timeout.ofMilliseconds(connectTimeout.toMillis()))
                         .setSocketTimeout(Timeout.ofMilliseconds(responseTimeout.toMillis()))
+                        // socket fechado pelo stock (queda e volta em menos que o evict de 20 s) é descartado na retirada do pool, sem
+                        // depender do default da lib
+                        .setValidateAfterInactivity(TimeValue.ofSeconds(2))
                         .build())
                 .build();
         this.httpClient = HttpClients.custom()
@@ -72,7 +90,9 @@ public class StockClient {
                 .evictExpiredConnections()
                 .disableAutomaticRetries()
                 .build();
-        ObjectMapper mapper = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule())
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         this.http = RestClient.builder()
                 .baseUrl(baseUrl)
                 .defaultHeader(HEADER_TOKEN_INTERNO, internalToken)
@@ -102,7 +122,7 @@ public class StockClient {
     public HoldResponse hold(HoldRequest pedido) {
         try {
             return http.post().uri("/internal/holds").contentType(JSON).body(pedido).retrieve().body(HoldResponse.class);
-        } catch (Conflito ex) {
+        } catch (StockConflictException ex) {
             throw new HoldLiberadoException(ex.getMessage());
         }
     }
@@ -113,19 +133,73 @@ public class StockClient {
                 .body(new ReleaseRequest(eventId, userId)).retrieve().toBodilessEntity();
     }
 
+    // ===================== EventCapacityApi =====================
+
+    @Override
+    public void create(EventCap cap) {
+        http.put().uri("/internal/eventcaps/{id}", cap.getEventId()).contentType(JSON).body(cap)
+                .retrieve().toBodilessEntity();
+    }
+
+    @Override
+    public EventCap findByEventId(Long eventId) {
+        try {
+            return http.get().uri("/internal/eventcaps/{id}", eventId).retrieve().body(EventCap.class);
+        } catch (NaoEncontrado ex) {
+            return null;
+        }
+    }
+
+    @Override
+    public Map<Long, EventCap> findByEventIds(Collection<Long> eventIds) {
+        Map<Long, EventCap> out = new HashMap<>();
+        if (eventIds == null || eventIds.isEmpty()) {
+            return out;
+        }
+        // ids no CORPO (POST): a busca de eventos hidrata a lista inteira (milhares de ids) e a query string estouraria o
+        // limite de header do Tomcat do stock
+        List<EventCap> caps = http.post().uri("/internal/eventcaps/batch").contentType(JSON).body(List.copyOf(eventIds))
+                .retrieve().body(new ParameterizedTypeReference<List<EventCap>>() { });
+        if (caps != null) {
+            caps.forEach(c -> out.put(c.getEventId(), c));
+        }
+        return out;
+    }
+
+    @Override
+    public boolean updatePolicy(Long eventId, Integer newCapacity, LocalDateTime buyTimeLimit) {
+        EventCap politica = new EventCap();
+        politica.setEventId(eventId);
+        politica.setCapacity(newCapacity);
+        politica.setBuyTimeLimit(buyTimeLimit);
+        try {
+            http.patch().uri("/internal/eventcaps/{id}/policy", eventId).contentType(JSON).body(politica)
+                    .retrieve().toBodilessEntity();
+            return true;
+        } catch (NaoEncontrado ex) {
+            return false;
+        }
+    }
+
+    @Override
+    public void delete(Long eventId) {
+        http.delete().uri("/internal/eventcaps/{id}", eventId).retrieve().toBodilessEntity();
+    }
+
     private static RuntimeException erro(int status, String mensagem) {
         return switch (status) {
             case 400 -> new IllegalArgumentException(mensagem);
-            case 409 -> new Conflito(mensagem);
+            case 404 -> new NaoEncontrado(mensagem);
+            case 409 -> new StockConflictException(mensagem);
             default -> new RuntimeException("Serviço stock respondeu HTTP " + status + ": " + mensagem);
         };
     }
 
-    /** 409 do serviço; cada método decide o que ele significa. */
-    private static final class Conflito extends RuntimeException {
+    /** 404 do serviço; cada método decide se vira {@code null} ou erro. */
+    private static final class NaoEncontrado extends RuntimeException {
         private static final long serialVersionUID = 1L;
 
-        Conflito(String mensagem) {
+        NaoEncontrado(String mensagem) {
             super(mensagem);
         }
     }

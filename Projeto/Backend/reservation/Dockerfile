@@ -1,12 +1,16 @@
 ## Imagem do serviço RESERVATION (issue #33). Contexto de build = Projeto/Backend/ (raiz do multi-módulo Maven):
 ## `docker build -f reservation/Dockerfile Projeto/Backend` ou o `build:` do compose. Porta 8082 (só na rede gerenciador-net).
-## Estágio de build: compila só o reservation e as libs que ele usa (shared, reservation-client; -pl reservation -am) com Java 21 e Maven 3.9
+## Estágio de build: compila só o reservation e as libs que ele usa (shared, reservation-client, stock-client e, nos testes, stock; -pl reservation -am) com Java 21 e Maven 3.9
 FROM maven:3.9.7-eclipse-temurin-21-jammy AS build
 WORKDIR /build
 COPY pom.xml checkstyle.xml checkstyle-suppressions.xml ./
 COPY shared ./shared
 COPY reservation-client ./reservation-client
 COPY reservation ./reservation
+# stock-client é dependência de compilação do reservation (StockClient); o módulo stock entra só pelos TESTES (o stock real sobe dentro deles):
+# -DskipTests ainda compila os testes, então o código dele precisa estar no contexto (o jar de teste é o simples, não o repackaged: classificador exec)
+COPY stock-client ./stock-client
+COPY stock ./stock
 # O agregador lista todos os módulos: o Maven exige o pom de cada um, mas não o código (aqui só o pom dos outros serviços).
 COPY monolito/pom.xml ./monolito/pom.xml
 COPY notification/pom.xml ./notification/pom.xml
@@ -16,8 +20,6 @@ COPY catalog/pom.xml ./catalog/pom.xml
 COPY identity/pom.xml ./identity/pom.xml
 COPY admission/pom.xml ./admission/pom.xml
 COPY admission-client/pom.xml ./admission-client/pom.xml
-COPY stock/pom.xml ./stock/pom.xml
-COPY stock-client/pom.xml ./stock-client/pom.xml
 RUN mvn -B -DskipTests -pl reservation -am clean package
 
 # Estágio runtime: imagem pequena apenas para executar o jar (Java 25)

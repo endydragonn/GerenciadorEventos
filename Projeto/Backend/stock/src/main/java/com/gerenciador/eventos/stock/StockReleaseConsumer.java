@@ -76,7 +76,7 @@ public class StockReleaseConsumer {
     }
 
     /** @return quantos holds passaram de {@code held} para {@code released} neste lote */
-    int liberar(List<String> mensagens) {
+    public int liberar(List<String> mensagens) {
         Set<UUID> holds = new HashSet<>();
         for (String m : mensagens) {
             UUID holdId = holdIdDe(m);

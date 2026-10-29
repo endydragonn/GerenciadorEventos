@@ -75,7 +75,7 @@ public class ReservationExpiryBatchTest extends ReservationTestSupport {
     }
 
     private int quant(long eventId) {
-        return eventCapRepository.findByEventId(eventId).getQuant();
+        return capacidade(eventId).getQuant();
     }
 
     private long eventosExpired(long eventId) throws Exception {
@@ -152,7 +152,7 @@ public class ReservationExpiryBatchTest extends ReservationTestSupport {
         List<Long> usuarios = reservasVencidas(eventId, 5);
         Long ruim = usuarios.get(0); // a mais antiga: sempre a primeira de cada lote
         doThrow(new IllegalStateException("falha forçada")).when(reservationEvents)
-                .expired(any(Connection.class), eq(ruim), eq(eventId), anyInt());
+                .expired(any(Connection.class), eq(ruim), eq(eventId), anyInt(), any());
 
         reservationExpiryService.expireStaleReservations();
 
@@ -170,7 +170,7 @@ public class ReservationExpiryBatchTest extends ReservationTestSupport {
         long eventId = novoEvento(null, "evento", CAPACIDADE).getEvent_id();
         List<Long> usuarios = reservasVencidas(eventId, 2); // lote cheio (2) em que nada expira
         doThrow(new IllegalStateException("falha forçada")).when(reservationEvents)
-                .expired(any(Connection.class), any(), eq(eventId), anyInt());
+                .expired(any(Connection.class), any(), eq(eventId), anyInt(), any());
 
         assertTimeoutPreemptively(Duration.ofSeconds(20), () -> reservationExpiryService.expireStaleReservations());
 

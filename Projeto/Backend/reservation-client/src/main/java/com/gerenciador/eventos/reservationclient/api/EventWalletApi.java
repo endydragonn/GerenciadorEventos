@@ -6,7 +6,7 @@ import java.util.List;
  * Inscrição/reserva em eventos, do ponto de vista de quem CHAMA o serviço reservation (o gateway do monólito). Cada
  * método é uma chamada HTTP à API interna; o {@code userId} vai sempre como parâmetro explícito (a correção do IDOR
  * #57 mexe só no gateway). Erros: {@link IllegalArgumentException} (regra de negócio, HTTP 400),
- * {@link IdempotencyConflictException} (422), {@link IllegalStateException} (409) ou {@link RuntimeException} (falha do
+ * {@link IdempotencyConflictException} (422) ou {@link RuntimeException} (falha do
  * serviço ou da rede).
  */
 public interface EventWalletApi {

@@ -30,7 +30,6 @@ import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.reservation.EventAvailabilityConsumer;
 import com.gerenciador.eventos.reservation.EventAvailabilityProjection;
 import com.gerenciador.eventos.reservation.EventAvailabilityRepository;
-import com.gerenciador.eventos.reservation.EventCapRepository;
 import com.gerenciador.eventos.reservation.EventWalletService;
 import com.gerenciador.eventos.reservation.ReservationEvents;
 import com.gerenciador.eventos.reservationclient.ReservationClient;
@@ -60,7 +59,6 @@ public class EventAvailabilityProjectionTest extends ReservationTestSupport {
     private static final Duration ESPERA = Duration.ofSeconds(60);
     @Autowired private EventWalletService eventWalletService;
     @Autowired private EventAvailabilityRepository eventAvailabilityRepository;
-    @Autowired private EventCapRepository eventCapRepository;
     @Autowired private IdempotentConsumer idempotentConsumer;
     @Autowired private EventStore eventStore;
     @Autowired private DatabaseConnection databaseConnection;
@@ -72,7 +70,7 @@ public class EventAvailabilityProjectionTest extends ReservationTestSupport {
     public void disponibilidadeEhCapacidadeMenosReservasAtivasDepoisDoConsumer() throws Exception {
         Usuario creator = novoUsuario("proj-cap-creator@example.com", "proj-fone-01");
         Evento e = novoEvento(creator.getId(), "Proj Cap5", 5);
-        assertEquals(5, eventAvailabilityRepository.findAvailable(e.getEvent_id()), "sem reservas: a capacidade inteira");
+        assertEquals(5, eventWalletService.disponibilidade(e.getEvent_id()), "sem reservas: a capacidade inteira");
 
         for (int i = 0; i < 2; i++) {
             Usuario u = novoUsuario("proj-cap-u" + i + "@example.com", "proj-fone-1" + i);
@@ -89,10 +87,10 @@ public class EventAvailabilityProjectionTest extends ReservationTestSupport {
         Evento e = novoEvento(creator.getId(), "Proj Ilimitado", -1);
         Usuario u = novoUsuario("proj-ilim-u@example.com", "proj-fone-20");
 
-        assertEquals(-1, eventAvailabilityRepository.findAvailable(e.getEvent_id()));
+        assertEquals(-1, eventWalletService.disponibilidade(e.getEvent_id()));
         eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
         aguardarAtivos(e.getEvent_id(), 1);
-        assertEquals(-1, eventAvailabilityRepository.findAvailable(e.getEvent_id()),
+        assertEquals(-1, eventWalletService.disponibilidade(e.getEvent_id()),
                 "capacity -1 => -1, com ou sem ativos na projeção");
     }
 
@@ -166,7 +164,7 @@ public class EventAvailabilityProjectionTest extends ReservationTestSupport {
         assertEquals(1, log.size());
         EventAvailabilityProjection projecao = new EventAvailabilityProjection();
         assertFalse(idempotentConsumer.process(projecao, log.get(0)), "já aplicado: descartado");
-        assertEquals(3, eventAvailabilityRepository.findAvailable(e.getEvent_id()));
+        assertEquals(3, eventWalletService.disponibilidade(e.getEvent_id()));
     }
 
     /**
@@ -191,7 +189,7 @@ public class EventAvailabilityProjectionTest extends ReservationTestSupport {
             cliente.addLink(new EventWallet(u2.getId(), e.getEvent_id()), null, true);
             aguardarDisponivel(e.getEvent_id(), 0);
 
-            assertEquals(2, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+            assertEquals(2, capacidade(e.getEvent_id()).getQuant(),
                     "o naive não toca o CAS: a queda veio só da projeção");
             IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                     () -> cliente.addLink(new EventWallet(u3.getId(), e.getEvent_id()), null, true));
@@ -215,7 +213,7 @@ public class EventAvailabilityProjectionTest extends ReservationTestSupport {
 
     private void aguardarDisponivel(Long eventId, int esperada) throws Exception {
         EventsTestSupport.aguardar(ESPERA, () -> {
-            Integer atual = eventAvailabilityRepository.findAvailable(eventId);
+            Integer atual = eventWalletService.disponibilidade(eventId);
             return atual != null && atual == esperada;
         }, "disponibilidade do evento " + eventId + " = " + esperada);
     }

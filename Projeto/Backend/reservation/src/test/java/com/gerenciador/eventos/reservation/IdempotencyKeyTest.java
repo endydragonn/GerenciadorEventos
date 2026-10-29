@@ -23,7 +23,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.reservation.EventCapRepository;
 import com.gerenciador.eventos.reservation.EventWalletService;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictException;
@@ -39,7 +38,6 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 @Import(GlobalDbTruncator.class)
 public class IdempotencyKeyTest extends ReservationTestSupport {
     @Autowired private EventWalletService eventWalletService;
-    @Autowired private EventCapRepository eventCapRepository;
     @Autowired private DatabaseConnection databaseConnection;
 
     @Test
@@ -55,7 +53,7 @@ public class IdempotencyKeyTest extends ReservationTestSupport {
         assertEquals("pending", repetida.getStatus());
         assertEquals(primeira.getExpiresAt(), repetida.getExpiresAt(), "mesmo corpo: expiresAt idêntico");
         assertEquals(chave, repetida.getIdempotencyKey());
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "um único decremento");
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant(), "um único decremento");
         assertEquals(1, contar("walletevent", e.getEvent_id()));
         assertEquals(1, contar("idempotency_key", e.getEvent_id()));
     }
@@ -72,7 +70,7 @@ public class IdempotencyKeyTest extends ReservationTestSupport {
 
         assertEquals("pending", repetida.getStatus(), "resultado da primeira, não o estado atual");
         assertEquals(primeira.getExpiresAt(), repetida.getExpiresAt());
-        assertEquals(2, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(2, capacidade(e.getEvent_id()).getQuant());
     }
 
     @Test
@@ -86,7 +84,7 @@ public class IdempotencyKeyTest extends ReservationTestSupport {
         EventWallet repetida = eventWalletService.addLink(
                 new EventWallet(u.getId(), e.getEvent_id()), r.getIdempotencyKey());
         assertEquals(r.getExpiresAt(), repetida.getExpiresAt());
-        assertEquals(1, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(1, capacidade(e.getEvent_id()).getQuant());
     }
 
     @Test
@@ -99,8 +97,8 @@ public class IdempotencyKeyTest extends ReservationTestSupport {
 
         assertThrows(IdempotencyConflictException.class,
                 () -> eventWalletService.addLink(new EventWallet(u.getId(), e2.getEvent_id()), chave));
-        assertEquals(4, eventCapRepository.findByEventId(e1.getEvent_id()).getQuant());
-        assertEquals(5, eventCapRepository.findByEventId(e2.getEvent_id()).getQuant(), "conflito não reserva nada");
+        assertEquals(4, capacidade(e1.getEvent_id()).getQuant());
+        assertEquals(5, capacidade(e2.getEvent_id()).getQuant(), "conflito não reserva nada");
     }
 
     /** Issue #129: a chave é escopada por usuário — a mesma chave em dois usuários não colide. */
@@ -116,7 +114,7 @@ public class IdempotencyKeyTest extends ReservationTestSupport {
 
         assertEquals("pending", r1.getStatus());
         assertEquals("pending", r2.getStatus());
-        assertEquals(3, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "um decremento por usuário");
+        assertEquals(3, capacidade(e.getEvent_id()).getQuant(), "um decremento por usuário");
         assertEquals(2, contar("walletevent", e.getEvent_id()));
         assertEquals(2, contar("idempotency_key", e.getEvent_id()));
 
@@ -125,11 +123,11 @@ public class IdempotencyKeyTest extends ReservationTestSupport {
         EventWallet rep2 = eventWalletService.addLink(new EventWallet(u2.getId(), e.getEvent_id()), chave);
         assertEquals(r1.getExpiresAt(), rep1.getExpiresAt(), "o lookup devolve a reserva do próprio usuário");
         assertEquals(r2.getExpiresAt(), rep2.getExpiresAt(), "o lookup devolve a reserva do próprio usuário");
-        assertEquals(3, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(3, capacidade(e.getEvent_id()).getQuant());
     }
 
     @Test
-    public void reservaQueFalhaNaoGravaAChaveEPodeSerRepetida() {
+    public void reservaQueFalhaNaoGravaAChaveEPodeSerRepetida() throws Exception {
         Usuario creator = novoUsuario("idem-lot-creator@example.com");
         Evento e = novoEvento(creator.getId(), "Idem Lotado", 1);
         Usuario u1 = novoUsuario("idem-lot-u1@example.com");
@@ -143,9 +141,10 @@ public class IdempotencyKeyTest extends ReservationTestSupport {
 
         // libera a vaga: a MESMA chave agora reserva (a falha não ficou gravada)
         eventWalletService.removeLink(u1.getId(), e.getEvent_id());
+        drenarDevolucoes(); // a vaga volta pelo consumer do stock (assíncrono)
         EventWallet r = eventWalletService.addLink(new EventWallet(u2.getId(), e.getEvent_id()), chave);
         assertEquals("pending", r.getStatus());
-        assertEquals(0, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(0, capacidade(e.getEvent_id()).getQuant());
     }
 
     @Test
@@ -184,7 +183,7 @@ public class IdempotencyKeyTest extends ReservationTestSupport {
         } finally {
             pool.shutdownNow();
         }
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "um único decremento");
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant(), "um único decremento");
         assertEquals(1, contar("walletevent", e.getEvent_id()));
         assertEquals(1, contar("idempotency_key", e.getEvent_id()));
     }

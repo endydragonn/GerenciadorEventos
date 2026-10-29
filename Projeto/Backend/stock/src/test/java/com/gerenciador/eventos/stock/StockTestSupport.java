@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import com.gerenciador.eventos.TestSupport.EventsTestSupport;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**

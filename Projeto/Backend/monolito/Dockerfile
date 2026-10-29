@@ -9,6 +9,8 @@ COPY reservation-client ./reservation-client
 COPY catalog-client ./catalog-client
 COPY identity-client ./identity-client
 COPY admission-client ./admission-client
+# stock-client entra só pelos testes (o DTO EventCap dos servidores falsos); -DskipTests ainda compila os testes
+COPY stock-client ./stock-client
 COPY monolito ./monolito
 # O agregador lista todos os módulos: o Maven exige o pom de cada um, mas não o código (aqui só o pom dos outros serviços).
 COPY notification/pom.xml ./notification/pom.xml
@@ -17,7 +19,6 @@ COPY catalog/pom.xml ./catalog/pom.xml
 COPY identity/pom.xml ./identity/pom.xml
 COPY admission/pom.xml ./admission/pom.xml
 COPY stock/pom.xml ./stock/pom.xml
-COPY stock-client/pom.xml ./stock-client/pom.xml
 RUN mvn -B -DskipTests -pl monolito -am clean package
 
 # Estágio runtime: imagem pequena apenas para executar o jar (Java 25)
