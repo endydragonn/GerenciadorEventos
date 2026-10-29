@@ -41,6 +41,20 @@
 #                                     containers EM EXECUCAO de cada servico (1 `docker ps` filtrado por label do compose/amostra; stand-by
 #                                     inclusive: ativas x stand-by estao no CSV do scaler). Replicas x tempo. `docker ps` estourou TIMEOUT_S = -1
 #      duracao_amostra_ms             quanto a amostra levou (se passar do INTERVALO_S, o intervalo real e esse)
+#    Colunas da Rodada 5 (issue #204, saga stock + wallet), DEPOIS de duracao_amostra_ms (as 31 anteriores nao mudam; -1 = sem leitura):
+#      lag_stock, lag_stock_catalog   TOTAL-LAG dos groups `stock` (devolucao da vaga, reservation.wallet) e `stock-catalog` (catalog.event), num UNICO
+#                                     `rpk group describe stock stock-catalog`; group ausente (ou Dead) = -1
+#      saga_reservando, saga_orfas, saga_compensando
+#                                     sagas em reservation.idempotency_key: `reserving`; `reserving` com updated_at mais velho que ORPHAN_MS (orfas);
+#                                     `compensating`. So contagens do indice parcial idx_idempotency_key_saga_pendente, num 2o `-c` do MESMO psql da
+#                                     amostra (nenhum docker exec a mais alem do rpk): a R5 compara com a R4, a coleta nao pode custar mais
+#      Regra de custo: todo JOIN entre schemas e todo percentil ficam no FIM da coleta (finalizar), nunca por amostra
+#    saga-<rotulo>-<ts>.csv         (no fim) compensacoes por minuto: minuto,compensadas_inline,compensadas_reaper (resolved_at/resolved_by da janela)
+#    resumo-saga-<rotulo>-<ts>.txt  (no fim; tambem impresso) tempo ate resolver (resolved_at - created_at das compensated, por inline/reaper: p50/p95/max),
+#                                   lag de devolucao (hold.updated_at - occurred_at do Cancelled/Expired, p50/p95/max), estado no fim do bloco
+#                                   (devolucao pendente, orfa inversa, sagas reserving/compensating) e a latencia dos passos (logger saga.timing das
+#                                   replicas do reservation, `docker logs --since` o inicio da coleta; so existe com LOGGING_LEVEL_SAGA_TIMING=DEBUG).
+#                                   Janela: linhas >= o inicio desta coleta. RODE ANTES do limpar-banco.sh: ele trunca as linhas que o resumo le.
 #    eventos-<rotulo>-<ts>.csv      formato longo, um registro por evento em cada amostra com SCAN: epoch_ms,evento,soma_buckets,rpm_aprox,modo,espera
 #                                   (soma_buckets = contagem dos buckets vivos do Redis; rpm_aprox = soma x 60000 / ADMISSION_WINDOW_MS: aproximado, ate
 #                                   ~25% a mais por causa do bucket extra vivo; o exato do mais quente e redis_hot). modo 1 = adm:mode:<evento> existe
@@ -56,6 +70,8 @@
 #        PROJETO (gerenciador-eventos: o project do compose; as replicas dos servicos se acham por label), EVENTOS_CADA_S (5),
 #        ADMISSION_WINDOW_MS (200, so para o rpm_aprox), TIMEOUT_S (5: teto de cada coleta lenta -- rabbitmqctl e Redis rodam sob `timeout` DENTRO do
 #        container (as imagens alpine tem o `timeout` do busybox) E o `docker exec`/`docker ps` sob `timeout` no host (+2 s) --; estourou = -1 nas colunas, o laco nao trava)
+#        ORPHAN_MS (lido UMA vez do RESERVATION_SAGA_ORPHAN_MS do container reservation do project; 30000 se nao achar: o limiar de saga_orfas; exporte
+#        para forcar outro, ex. o dry-run com limiar reduzido)
 # =============================================================================
 set -uo pipefail
 
@@ -71,11 +87,39 @@ ADMISSION_WINDOW_MS="${ADMISSION_WINDOW_MS:-200}"
 TIMEOUT_S="${TIMEOUT_S:-5}"
 GRUPOS="reservation reservation-catalog notification"
 SERVICOS_REPL="backend reservation identity catalog admission notification"
-CABECALHO="epoch_ms,lag_projecao_ms,lag_reservation,lag_reservation_catalog,lag_notification,outbox_reservation,outbox_catalog,outbox_identity,pg_conexoes,pg_ativas,pg_idle,pg_idle_tx,pg_espera_lock,walletevent_ins,rabbit_requests,rabbit_requests_unacked,rabbit_consumidores,rabbit_timed_out,walletevent_ins_delta,redis_hot,redis_replicas,redis_dbsize,redis_eventos_em_fila,redis_espera_total,repl_backend,repl_reservation,repl_identity,repl_catalog,repl_admission,repl_notification,duracao_amostra_ms"
+CABECALHO="epoch_ms,lag_projecao_ms,lag_reservation,lag_reservation_catalog,lag_notification,outbox_reservation,outbox_catalog,outbox_identity,pg_conexoes,pg_ativas,pg_idle,pg_idle_tx,pg_espera_lock,walletevent_ins,rabbit_requests,rabbit_requests_unacked,rabbit_consumidores,rabbit_timed_out,walletevent_ins_delta,redis_hot,redis_replicas,redis_dbsize,redis_eventos_em_fila,redis_espera_total,repl_backend,repl_reservation,repl_identity,repl_catalog,repl_admission,repl_notification,duracao_amostra_ms,lag_stock,lag_stock_catalog,saga_reservando,saga_orfas,saga_compensando"
 CABECALHO_EVENTOS="epoch_ms,evento,soma_buckets,rpm_aprox,modo,espera"
 
 # TOTAL-LAG da saida do "rpk group describe" (stdin); -1 se nao houver.
 lag_do_rpk() { awk '$1=="TOTAL-LAG"{v=$2} END{print (v=="" ? -1 : v)}'; }
+
+# Lag dos groups do stock num UNICO `rpk group describe g1 g2` (stdin; um bloco "GROUP <nome>" por group). Argumentos = os groups, na ordem desejada;
+# saida "lag1 lag2 ..." com -1 para o group ausente, sem TOTAL-LAG ou em STATE Dead (nunca existiu / sem offsets).
+lags_do_rpk_multi() {
+    awk -v lista="$*" 'BEGIN{n=split(lista, g, " ")}
+        $1=="GROUP"{cur=$2}
+        $1=="STATE" && $2=="Dead"{dead[cur]=1}
+        $1=="TOTAL-LAG"{lag[cur]=$2}
+        END{for(i=1;i<=n;i++) printf "%s%s", ((g[i] in lag) && !(g[i] in dead) ? lag[g[i]] : -1), (i<n?" ":"\n")}'
+}
+
+# Linhas do logger saga.timing (stdin; "tx1_ms=<n> stock_ms=<n> tx2_ms=<n> total_ms=<n>", so no sucesso) -> "<passo>: n N p50 X p95 Y max Z (ms)" por passo;
+# nada se nao houver linha. p50/p95 = posicao ceil(p x n) da lista ordenada (mesma regra do resumo_csv).
+percentis_timing() {
+    local f k; f="$(mktemp)"; grep 'tx1_ms=' > "$f"
+    for k in tx1_ms stock_ms tx2_ms total_ms; do
+        grep -o "$k=[0-9]*" "$f" | cut -d= -f2 | sort -n | awk -v k="$k" '{v[NR]=$1}
+            END{if(!NR) exit; a=int(0.5*NR+0.999999); b=int(0.95*NR+0.999999); printf "%s: n %d p50 %s p95 %s max %s (ms)\n", k, NR, v[a], v[b], v[NR]}'
+    done
+    rm -f "$f"
+}
+
+# Linhas "nome,n,p50,p95,max" do banco (stdin) -> "<nome>: n N p50 .. p95 .. max .. (ms)" para cada nome da lista ($1, na ordem); sem linha ou n=0 = "sem amostra"
+formata_percentis() {
+    awk -F, -v lista="$1" 'BEGIN{n=split(lista, nome, " ")}
+        $2+0>0{l[$1]=sprintf("n %d p50 %s p95 %s max %s (ms)", $2, $3, $4, $5)}
+        END{for(i=1;i<=n;i++) printf "%s: %s\n", nome[i], (nome[i] in l ? l[nome[i]] : "sem amostra")}'
+}
 
 # Resumo do CSV da coleta: max e p95 de cada coluna (valores -1 = sem amostra, ignorados).
 resumo_csv() {
@@ -143,6 +187,8 @@ dexec() {
 # `redis-cli` filho bloqueado pode segurar a saida do `docker exec` e o laco travaria; o do host mata o `docker exec` em qualquer caso
 dexect() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' timeout "$((TIMEOUT_S + 2))" docker "$@"; }
 psql_db() { dexec exec -i "$CONTAINER_DB" psql -h localhost -U "$PG_ADMIN" -d meu_banco -v ON_ERROR_STOP=1 -At -F, -c "$1"; }
+# a amostra: as colunas da R4 (-c 1) e as contagens da saga (-c 2) no MESMO exec; com ON_ERROR_STOP o 2o -c que falha (stack sem a saga) nao tira a saida do 1o
+psql_amostra() { dexec exec -i "$CONTAINER_DB" psql -h localhost -U "$PG_ADMIN" -d meu_banco -v ON_ERROR_STOP=1 -At -F, -c "$SQL_AMOSTRA" -c "$SQL_SAGA"; }
 
 RESULTS="$(cd "$(dirname "$0")" && pwd)/results"
 mkdir -p "$RESULTS"
@@ -155,8 +201,11 @@ case "$EVENTOS_CADA_S" in ''|*[!0-9]*|0) echo "ERRO: EVENTOS_CADA_S deve ser int
 case "$TIMEOUT_S" in ''|*[!0-9]*|0) echo "ERRO: TIMEOUT_S deve ser inteiro >= 1" >&2; exit 1 ;; esac
 TMPD="$(mktemp -d)"
 
-psql_db "CREATE EXTENSION IF NOT EXISTS pg_stat_statements; SELECT pg_stat_statements_reset();" >/dev/null \
+# Inicio da coleta pelo relogio do BANCO (mesmo now() dos created_at/resolved_at/occurred_at e do `docker logs --since`, relogio da VM do Docker, que pode derivar do host no
+# WSL2); o ultimo statement do -c devolve o instante. Sem leitura valida, o do host.
+INICIO_ISO="$(psql_db "CREATE EXTENSION IF NOT EXISTS pg_stat_statements; SELECT pg_stat_statements_reset(); SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"');" | tr -d '\r' | tail -1)" \
     || { echo "ERRO: pg_stat_statements indisponivel em $CONTAINER_DB (stack no ar?)" >&2; exit 1; }
+case "$INICIO_ISO" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*Z) ;; *) INICIO_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)" ;; esac
 
 SQL_AMOSTRA="SELECT
   COALESCE((SELECT round(MAX(EXTRACT(EPOCH FROM (applied_at - last_occurred_at)) * 1000)) FROM reservation.event_availability
@@ -166,6 +215,25 @@ SQL_AMOSTRA="SELECT
   count(*) FILTER (WHERE state LIKE 'idle in transaction%'), count(*) FILTER (WHERE wait_event_type = 'Lock'),
   COALESCE((SELECT n_tup_ins FROM pg_stat_user_tables WHERE schemaname = 'reservation' AND relname = 'walletevent'), -1)
 FROM pg_stat_activity WHERE datname = 'meu_banco' AND pid <> pg_backend_pid();"
+
+# Limiar de "orfa" (saga_orfas): o RESERVATION_SAGA_ORPHAN_MS do container reservation DO PROJECT, lido UMA vez (o dry-run usa um limiar reduzido: um valor
+# fixo rotularia errado). ORPHAN_MS no ambiente deste shell vale mais; sem leitura, o default do servico (30000).
+descobre_orphan_ms() {
+    local c v="${ORPHAN_MS:-}"
+    if [ -z "$v" ]; then
+        c="$(dexec ps -q --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=reservation" | head -1 | tr -d '\r')"
+        [ -n "$c" ] && v="$(dexect exec "$c" printenv RESERVATION_SAGA_ORPHAN_MS 2>/dev/null | tr -d '\r')"
+    fi
+    case "$v" in ''|*[!0-9]*) v=30000 ;; esac
+    ORPHAN_MS="$v"
+}
+descobre_orphan_ms
+
+# So contagens do indice parcial idx_idempotency_key_saga_pendente (WHERE saga_status IN (reserving, compensating)): custo da amostra = o da R4
+SQL_SAGA="SELECT count(*) FILTER (WHERE saga_status = 'reserving'),
+  count(*) FILTER (WHERE saga_status = 'reserving' AND updated_at < now() - interval '${ORPHAN_MS} milliseconds'),
+  count(*) FILTER (WHERE saga_status = 'compensating')
+FROM reservation.idempotency_key WHERE saga_status IN ('reserving', 'compensating');"
 
 # Redis (um docker exec/amostra): H sempre; com $1=1 tambem o SCAN de adm:cnt:* (contadores por evento) e adm:mode:* (modo e espera por evento).
 # A senha vem do ambiente DO CONTAINER (REDISCLI_AUTH dentro do sh -c, aspas simples): nada de segredo no host. SCAN, nunca KEYS.
@@ -191,9 +259,11 @@ escreve_registro() {
         for svc in $SERVICOS_REPL lb; do
             echo "containers $svc: $(dexec ps --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=$svc" --format '{{.Names}}' | tr -d '\r' | tr '\n' ' ')"
         done
+        echo "saga: ORPHAN_MS=$ORPHAN_MS (limiar de saga_orfas desta coleta; lido do RESERVATION_SAGA_ORPHAN_MS do reservation ou 30000)"
         echo "ambiente deste shell (AUTOESCALA_*, ADMISSION_*; exporte aqui os do scaler/up):"
         env_publico | sed 's/^/  /'
-        for par in "backend RESERVATION_READPATH" "reservation SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE SERVER_TOMCAT_THREADS_MAX" \
+        for par in "backend RESERVATION_READPATH" "reservation SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE SERVER_TOMCAT_THREADS_MAX RESERVATION_SAGA_ORPHAN_MS RESERVATION_SAGA_REAPER_SCAN_MS" \
+                   "stock SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE" \
                    "admission ADMISSION_X_RPM ADMISSION_RESERVATION_REPLICAS ADMISSION_QUEUE_ON ADMISSION_SYNC_BELOW ADMISSION_WORKER_CONCURRENCY ADMISSION_QUEUE_TTL_MS ADMISSION_QUEUE_MAX_LENGTH ADMISSION_MAX_WAITING_PER_USER ADMISSION_WINDOW_MS ADMISSION_BUCKET_MS"; do
             svc="${par%% *}"; vars="${par#* }"
             c="$(dexec ps -q --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=$svc" | head -1 | tr -d '\r')"
@@ -202,6 +272,58 @@ escreve_registro() {
             for v in $vars; do echo "  $v=$(dexec exec "$c" printenv "$v" 2>/dev/null | tr -d '\r')"; done
         done
     } > "$REGISTRO"
+}
+
+# Resumo da saga (issue #204), no FIM da coleta e depois do pgss (as consultas daqui nao entram no pg_stat_statements da rodada): janela >= INICIO_ISO.
+# Cada parte falha sozinha (a linha diz "falhou") e nunca derruba o resto do finalizar. Roda ANTES do limpar-banco.sh (ele trunca estas linhas).
+resumo_saga() {
+    local sg_csv="$RESULTS/saga-$ROTULO-$TS.csv" sg_txt="$RESULTS/resumo-saga-$ROTULO-$TS.txt" o dp oi rs rc c tim
+    {
+        echo "resumo da saga $ROTULO (janela >= $INICIO_ISO; ORPHAN_MS $ORPHAN_MS)"
+        if o="$(psql_db "SELECT to_char(date_trunc('minute', resolved_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD HH24:MI'),
+                           count(*) FILTER (WHERE resolved_by = 'inline'), count(*) FILTER (WHERE resolved_by = 'reaper')
+                         FROM reservation.idempotency_key WHERE saga_status = 'compensated' AND resolved_at >= '$INICIO_ISO' GROUP BY 1 ORDER BY 1;" 2>/dev/null)"; then
+            { echo "minuto,compensadas_inline,compensadas_reaper"; printf '%s\n' "$o" | sed '/^$/d'; } > "$sg_csv"
+            echo "compensacoes por minuto: $sg_csv ($(printf '%s\n' "$o" | sed '/^$/d' | wc -l | tr -d ' ') minuto(s) com compensacao; a subcontagem do reabrir de chave compensated apaga o resolved_at: ~0 na R5)"
+        else echo "consulta das compensacoes por minuto falhou (stack sem a saga?)"; fi
+        if o="$(psql_db "SELECT 'resolver_' || resolved_by, count(*), round(percentile_cont(0.5) WITHIN GROUP (ORDER BY ms)), round(percentile_cont(0.95) WITHIN GROUP (ORDER BY ms)), round(max(ms))
+                         FROM (SELECT resolved_by, EXTRACT(EPOCH FROM resolved_at - created_at) * 1000 AS ms FROM reservation.idempotency_key
+                               WHERE saga_status = 'compensated' AND resolved_at >= '$INICIO_ISO') t GROUP BY resolved_by
+                         UNION ALL
+                         SELECT 'devolucao', count(*), round(percentile_cont(0.5) WITHIN GROUP (ORDER BY ms)), round(percentile_cont(0.95) WITHIN GROUP (ORDER BY ms)), round(max(ms))
+                         FROM (SELECT EXTRACT(EPOCH FROM h.updated_at - e.occurred_at) * 1000 AS ms FROM stock.hold h
+                               JOIN reservation.event_store e ON e.payload->>'holdId' = h.hold_id::text AND e.event_type IN ('ReservationCancelled', 'ReservationExpired')
+                               WHERE h.status = 'released' AND e.occurred_at >= '$INICIO_ISO') t;" 2>/dev/null)"; then
+            echo "tempo ate resolver (compensated: resolved_at - created_at; o do reaper e o tempo ate a orfa se resolver):"
+            printf '%s\n' "$o" | formata_percentis "resolver_inline resolver_reaper" | sed 's/^/  /'
+            echo "lag de devolucao (hold.updated_at - occurred_at do ReservationCancelled/Expired com o mesmo holdId, hold released):"
+            printf '%s\n' "$o" | formata_percentis "devolucao" | sed 's/^/  /'
+        else echo "consulta dos tempos (resolver / devolucao) falhou (stack sem a saga ou sem o stock?)"; fi
+        # devolucao_pendente: hold held com ReservationCancelled/Expired no event_store (a fonte da devolucao), sem JOIN com walletevent (o UPSERT que revive troca o hold_id).
+        # Sem filtro de idade: aqui e o retrato do fim do bloco, informativo (a parada com idade > limite e do verificar-rpm). O EXISTS varre o event_store: custa so pos-bloco, nunca por amostra.
+        if o="$(psql_db "SELECT (SELECT count(*) FROM stock.hold h WHERE h.status = 'held'
+                                  AND EXISTS (SELECT 1 FROM reservation.event_store es WHERE es.event_type IN ('ReservationCancelled', 'ReservationExpired')
+                                              AND es.payload->>'holdId' = h.hold_id::text)) AS devolucao_pendente,
+                                (SELECT count(*) FROM reservation.walletevent w WHERE w.status IN ('pending', 'confirmed')
+                                  AND NOT EXISTS (SELECT 1 FROM stock.hold h WHERE h.hold_id = w.hold_id AND h.status = 'held')) AS orfa_inversa,
+                                (SELECT count(*) FROM reservation.idempotency_key WHERE saga_status = 'reserving'),
+                                (SELECT count(*) FROM reservation.idempotency_key WHERE saga_status = 'compensating');" 2>/dev/null)"; then
+            IFS=, read -r dp oi rs rc <<< "$o"
+            echo "fim do bloco: devolucao_pendente ${dp:--1}, orfa_inversa ${oi:--1}, sagas_reserving ${rs:--1}, sagas_compensating ${rc:--1}"
+        else echo "consulta do estado no fim do bloco falhou (stack sem a saga ou sem o stock?)"; fi
+        # latencia dos passos: logger saga.timing de TODAS as replicas do reservation (o braco C tem varias; -a inclui a que o scaler parou no meio do bloco), desde o inicio da coleta
+        tim="$(for c in $(dexec ps -aq --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=reservation" | tr -d '\r'); do
+                   MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' timeout 120 docker logs --since "$INICIO_ISO" "$c" 2>&1
+               done | percentis_timing)"
+        if [ -n "$tim" ]; then
+            echo "latencia dos passos (logger saga.timing, replicas do reservation no project):"
+            printf '%s\n' "$tim" | sed 's/^/  /'
+        else
+            echo "latencia dos passos: logger saga.timing desligado (LOGGING_LEVEL_SAGA_TIMING=DEBUG so no bloco que mede): latencia dos passos fora"
+        fi
+    } > "$sg_txt" 2>&1
+    cat "$sg_txt"
+    echo "resumo da saga: $sg_txt"
 }
 
 finalizar() {
@@ -213,6 +335,7 @@ finalizar() {
     rm -f "$PGSS.tmp"; rm -rf "$TMPD"
     echo ""
     resumo_csv "$CSV"
+    resumo_saga || true
     echo "CSV: $CSV"
     echo "pg_stat_statements: $PGSS"
     echo "eventos (Redis, formato longo): $EVENTOS"
@@ -237,8 +360,13 @@ while [ "$DURACAO_S" -eq 0 ] || [ "$(date +%s)" -lt "$FIM" ]; do
     ( o="$(amostra_redis "$scan")" || o=""; printf '%s\n' "$o" | redis_resumo "$ADMISSION_WINDOW_MS" > "$TMPD/redis" ) &
     ( o="$(timeout "$TIMEOUT_S" docker ps --filter "label=com.docker.compose.project=$PROJETO" --format '{{.Label "com.docker.compose.service"}} {{.Status}}' 2>/dev/null)" || o=""
       printf '%s\n' "$o" | tr -d '\r' | contar_replicas > "$TMPD/repl" ) &
-    banco="$(psql_db "$SQL_AMOSTRA" 2>/dev/null | head -1)"
+    # lag dos groups do stock: UM rpk (multi-group), em paralelo com o resto como as outras coletas lentas (estourou = -1 -1)
+    ( o="$(dexect exec "$CONTAINER_RPK" timeout 3 rpk group describe stock stock-catalog 2>/dev/null)" || o=""
+      printf '%s\n' "$o" | tr -d '\r' | lags_do_rpk_multi stock stock-catalog > "$TMPD/lagstock" ) &
+    # psql: linha 1 = colunas da R4, linha 2 = contagens da saga (so a saga falha = -1 nela, as antigas intactas)
+    banco=""; saga=""; { IFS= read -r banco; IFS= read -r saga; } <<< "$(psql_amostra 2>/dev/null)"
     [ -n "$banco" ] || banco="-1,-1,-1,-1,-1,-1,-1,-1,-1,-1"
+    case "$saga" in [0-9]*,[0-9]*,[0-9]*) ;; *) saga="-1,-1,-1" ;; esac
     l1="$(dexec exec "$CONTAINER_RPK" timeout 3 rpk group describe reservation 2>/dev/null | lag_do_rpk)"
     l2="$(dexec exec "$CONTAINER_RPK" timeout 3 rpk group describe reservation-catalog 2>/dev/null | lag_do_rpk)"
     l3="$(dexec exec "$CONTAINER_RPK" timeout 3 rpk group describe notification 2>/dev/null | lag_do_rpk)"
@@ -252,8 +380,9 @@ while [ "$DURACAO_S" -eq 0 ] || [ "$(date +%s)" -lt "$FIM" ]; do
     read -r rhot rrep rdb rmod resp <<< "$linha_redis"
     if [ "$scan" = 1 ]; then tail -n +2 "$TMPD/redis" | sed "s/^/$t0,/" >> "$EVENTOS"; fi
     repl="$(cat "$TMPD/repl" 2>/dev/null)"; [ -n "$repl" ] || repl="-1,-1,-1,-1,-1,-1"
+    read -r ls1 ls2 < "$TMPD/lagstock" 2>/dev/null || { ls1=-1; ls2=-1; }
     dur=$(( $(date +%s%3N) - t0 ))
-    echo "$t0,$proj,$l1,$l2,$l3,$resto,${rq:--1},${ru:--1},${rc:--1},${rt:--1},$delta,${rhot:--1},${rrep:--1},${rdb:--1},${rmod:--1},${resp:--1},$repl,$dur" >> "$CSV"
+    echo "$t0,$proj,$l1,$l2,$l3,$resto,${rq:--1},${ru:--1},${rc:--1},${rt:--1},$delta,${rhot:--1},${rrep:--1},${rdb:--1},${rmod:--1},${resp:--1},$repl,$dur,${ls1:--1},${ls2:--1},$saga" >> "$CSV"
     resta=$(( INTERVALO_S * 1000 - ($(date +%s%3N) - t0) ))
     [ "$resta" -gt 0 ] && sleep "$(awk -v r="$resta" 'BEGIN{printf "%.3f", r/1000}')"
 done

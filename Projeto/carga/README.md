@@ -269,7 +269,7 @@ A **trava do resumo** continua fechando com os contadores novos (global = soma d
 
 Além do que a #38 coleta (colunas antigas inalteradas e nas mesmas posições), o `coleta-host.sh` grava **no fim** de `results\coleta-host-<rótulo>-<data>.csv`: `walletevent_ins`, `rabbit_requests`,
 `rabbit_requests_unacked`, `rabbit_consumidores`, `rabbit_timed_out`, `walletevent_ins_delta`, `redis_hot`, `redis_replicas`, `redis_dbsize`, `redis_eventos_em_fila`, `redis_espera_total`,
-`repl_backend`, `repl_reservation`, `repl_identity`, `repl_catalog`, `repl_admission`, `repl_notification` e `duracao_amostra_ms` (31 colunas; `-1` = sem leitura). Detalhes no cabeçalho do script.
+`repl_backend`, `repl_reservation`, `repl_identity`, `repl_catalog`, `repl_admission`, `repl_notification` e `duracao_amostra_ms` (31 colunas; `-1` = sem leitura; a Rodada 5 acrescenta mais 5 depois, 36 no total). Detalhes no cabeçalho do script.
 
 - **Fila (RabbitMQ):** UMA chamada `rabbitmqctl list_queues` por amostra (CLI Erlang, lenta: veja `duracao_amostra_ms` no resumo final; as coletas lentas rodam em paralelo com o `psql`/`rpk`, e o intervalo
   real passa a ser o da amostra se ela levar mais que `INTERVALO_S`). Colunas disponíveis sem o management (confirmado na imagem fixada): `messages_ready`, `messages_unacknowledged`, `consumers`.
@@ -378,6 +378,96 @@ projeção (`:190-209`, `Start-Process` + polling a cada 250 ms) e lê `confirme
 `k6 run` + `psql` nesta passada (e a escada acima do X, que é o cenário da R4, não precisa dela).
 
 **Dry-run local X(1) × X(2) (#178, não é medição):** num project isolado, com o k6 no mesmo host da stack, `ADMISSION_X_RPM` enorme (a fila nunca liga: 0 respostas 202 nas duas escadas), `MAPEAMENTO=sequencial` e a mesma escada (5k a 60k RPM, passo 5k, 60 s, 1000 usuários) pelo caminho direto acima, o `reservation` com 1 réplica ativa deu X(1) = 40k RPM e com 2 réplicas ativas (sem scaler; o `lb` repartiu 224.118 × 224.119 sessões entre elas) deu X(2) = 40k RPM por evento, os dois firmes pelo critério do report (o host degradou antes de o k6 descartar iteração) e com overselling 0; mas a CPU do host já estava em 84-95% desde 30k RPM, com o pooler e o banco acima de 2 núcleos e o `reservation` abaixo de 1, então o teto local é do host compartilhado e **não separa o efeito da segunda réplica** (limite inferior do X do sistema; só compara X(1) com X(2) entre si). X(2) ≈ X(1): a regra segue "× réplicas" (ADR da #111).
+
+## Rodada 5: saga stock + wallet (issue #204)
+
+A Rodada 5 (#180) repete a R4 sobre a **saga `stock` + `wallet`** (#47): o `reservation` orquestra tx1 → `stock` (hold + CAS) → tx2, com compensação inline e o reaper de órfãs. **O protocolo é o da R4**
+(braços, ordem sem autoescala → braço C, escada acima do X, limpeza entre blocos, gerador só com `git checkout` + `k6 run`); **só a saga muda**, e este kit só acrescenta a coleta e a parada dela.
+A configuração é a final da R4, mais o `stock` fixo (uma réplica). Os selftests rodam sem Docker: `make selftests`.
+
+### Regra de custo da coleta
+
+O host é limitado por CPU (S3: X(1) = X(2)) e a R5 compara com a R4, então **a coleta não pode custar mais na R5 do que na R4**, senão o custo dela vira "custo da saga". Por isso, **por amostra**:
+só **contagens servidas pelo índice parcial** `idx_idempotency_key_saga_pendente`, num segundo `-c` do **mesmo** `psql` da amostra (nenhum `docker exec` a mais) e **um** `rpk` a mais (multi-group, em paralelo
+com as outras coletas lentas). Todo `JOIN` entre schemas e todo percentil rodam **uma vez, no fim da coleta** (ou no `verificar-rpm`), nunca por amostra, e depois de capturado o `pg_stat_statements` (as
+consultas do resumo não entram nele).
+
+### Colunas novas de `coleta-host-<rótulo>-<data>.csv`
+
+DEPOIS de `duracao_amostra_ms`; as 31 colunas da R4 seguem idênticas (nome e posição, travado no selftest). `-1` = sem leitura. Total: 36 colunas.
+
+| Coluna | Fonte |
+|---|---|
+| `lag_stock`, `lag_stock_catalog` | `TOTAL-LAG` dos groups `stock` (devolução da vaga, tópico `reservation.wallet`) e `stock-catalog` (`catalog.event`), num único `rpk group describe stock stock-catalog`. Group ausente (ou `Dead`) = `-1`. O group antigo `reservation-catalog` não existe mais: a coluna `lag_reservation_catalog` da R4 fica (o `rpk` devolve `STATE Dead` com `TOTAL-LAG 0` e a leitura antiga não olha o `STATE`), então vale `0`, não `-1` (conferido no dry-run) |
+| `saga_reservando` | `idempotency_key` em `saga_status = 'reserving'` |
+| `saga_orfas` | `reserving` com `updated_at` mais velho que `ORPHAN_MS` (as que o reaper vai tomar) |
+| `saga_compensando` | `idempotency_key` em `compensating` |
+
+Falha só da consulta da saga (stack sem a saga) deixa `saga_*` em `-1` e **não estraga** as colunas da R4.
+
+### Arquivos novos (gravados ao encerrar a coleta com Ctrl+C ou `COLETA_S`)
+
+- **`saga-<rótulo>-<data>.csv`**: compensações por minuto (`minuto,compensadas_inline,compensadas_reaper`, por `date_trunc('minute', resolved_at)` e `resolved_by`, janela ≥ início da coleta, lido do `now()` do banco: o mesmo relógio dos `created_at`/`resolved_at`/`occurred_at` e do `docker logs --since`).
+  **Subcontagem conhecida:** o `reabrir` (retry de uma chave `compensated`) apaga o `resolved_at`; o k6 da escada não reusa `Idempotency-Key`, então essa subcontagem é ~0 na rodada.
+- **`resumo-saga-<rótulo>-<data>.txt`** (também impresso): p50/p95/máx do **tempo até resolver** (`resolved_at − created_at` das `compensated`, separado por `resolved_by`; o do `reaper` é o "tempo até a órfã se
+  resolver"), do **lag de devolução** (`hold.updated_at − occurred_at` do `ReservationCancelled`/`ReservationExpired` com o mesmo `holdId`, hold `released`), o **estado no fim do bloco** (devolução pendente,
+  órfã inversa, sagas ainda `reserving`/`compensating`) e a **latência dos passos**.
+- **Latência dos passos** (`tx1_ms`, `stock_ms`, `tx2_ms`, `total_ms`): o `reservation` loga uma linha por reserva **aceita** no logger `saga.timing` (DEBUG, desligado por padrão, como o `events.lag`). Ligue
+  **só no bloco que mede a latência dos passos**, descomentando `LOGGING_LEVEL_SAGA_TIMING: "DEBUG"` no `reservation` de `carga/docker-compose.carga.yml` (um log por reserva infla a latência: esse bloco não vale
+  como medida de X). A coleta lê `docker logs --since <início da coleta>` de **todas** as réplicas do `reservation` do project (o braço C tem várias). Sem nenhuma linha, o resumo diz que o logger está desligado e
+  que a latência dos passos ficou fora.
+- Falha de qualquer parte do resumo (consulta que quebra) vira uma linha "falhou" no `.txt` e **não impede** o `pg_stat_statements` nem o resumo antigo do CSV.
+- O `registro-<rótulo>-<data>.txt` ganha o `ORPHAN_MS` usado, `RESERVATION_SAGA_ORPHAN_MS`/`RESERVATION_SAGA_REAPER_SCAN_MS` do `reservation` e o `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` do `stock`.
+
+### Parâmetros
+
+| Parâmetro | Onde | Padrão / significado |
+|---|---|---|
+| `RESERVATION_SAGA_ORPHAN_MS`, `RESERVATION_SAGA_REAPER_SCAN_MS` | **env do container `reservation`** (override do compose; não são definidas no compose, valem os defaults do `application.properties`: 30000 / 5000) | o limiar e a varredura do **reaper**. É AQUI que se reduz o limiar do dry-run: a coleta e o `verificar-rpm` leem estes valores do container sozinhos |
+| `ORPHAN_MS` | env do `coleta-host.sh` | limiar de `saga_orfas`. Lido **uma vez** do `RESERVATION_SAGA_ORPHAN_MS` do container `reservation` do project (achado por label); 30000 se não achar. **Só escape:** exportar força outro valor no harness, mas **não muda o reaper**; precisa bater com o do container, senão `saga_orfas` conta órfãs que o reaper ainda não considera órfãs |
+| `ORFA_LIMITE_S` | `make verificar-rpm` (`-OrfaLimiteS` no `subir-host-rpm.ps1`) | tempo máximo para uma órfã se resolver antes do código 4. Padrão = `ORPHAN_MS + 3 × SCAN_MS` (spec, "Parada da R5") lidos do container (`RESERVATION_SAGA_REAPER_SCAN_MS`, padrão 5000): **45 s** com os defaults. **Só escape:** passado à mão, também precisa bater com o container (reaper mais lento que o limite = código 4 falso); o `verificar-rpm` imprime a origem do limite (parâmetro ou container) |
+| `LOGGING_LEVEL_SAGA_TIMING` | env do `reservation` (linha comentada no override de carga) | `DEBUG` liga a latência dos passos; ligar só no bloco que mede |
+| Hikari do `stock` | compose (literal) | **pré-condição:** `min(250, 1500 − soma da R4)`, conferido antes do 1º bloco (usar os Hikari finais da R4: identity/catalog acima de 51 por réplica estouram o Supavisor com o `stock`); registrar o valor no README da etapa 08 |
+
+### Parada por bloco: `make verificar-rpm PREFIXO=Deg-<id>` (host, ao fim de cada bloco)
+
+Ordem: espera da fila `admission.requests` → **overselling** → lag do group `stock` a 0 (teto de 30 s) → **sagas do prefixo** (polling a cada 2 s até `ORFA_LIMITE_S`).
+
+| Código | Significado |
+|---|---|
+| 0 | ok |
+| 1 | erro (não consegui ler o banco / a consulta quebrou) |
+| 2 | matriz incompleta (`rodar-matriz.ps1`) |
+| 3 | **overselling no braço CAS** (continua sendo SÓ overselling e tem precedência sobre o 4) |
+| 4 | **invariante da saga que não convergiu em `ORFA_LIMITE_S`** ("reserva órfã que não se resolve") |
+| 99 | parada de latência do k6 (escada) |
+
+O código 4 sai com a mensagem das contagens, e o resultado vai ao `results\verificacoes.log` como o do overselling. As invariantes (decisão pura em `Get-DecisaoSaga`, `lib-servicos.ps1`, coberta no selftest):
+saga `reserving`/`compensating` do prefixo que **sobrou** depois do limite (o bloco já acabou, então ela tem idade ≥ o limite); hold `held` cuja saga está `compensated`; hold `held` com `ReservationCancelled`/`ReservationExpired` no
+`event_store` (pelo `holdId`, sem JOIN com o `walletevent`: o UPSERT que revive a reserva troca o `hold_id`) **há mais de `ORFA_LIMITE_S`** (devolução pendente; só conta o cancelamento/expiração mais velho que o limite, porque as reservas `pending` não acompanhadas expiram ~120 s depois do bloco, em cima da verificação, e o consumer do `stock` ainda as drena); órfã inversa (`walletevent` `pending`/`confirmed` sem hold `held` de mesmo `hold_id`); e `quant ≠ capacity − (holds held decrementados)` em
+evento limitado. A consulta junta schemas (`reservation`, `stock`, `catalog`) como operador, com `psql` como admin: não é leitura de um serviço em tabela de outro.
+
+### Ordem por bloco (importa)
+
+1. `make coleta-host ROTULO=<bloco>` (+ `make telemetria-host`), antes do `k6 run` no gerador;
+2. ao fim do k6, **a coleta continua rodando** até `saga_reservando` e `saga_compensando` (últimas linhas do CSV ao vivo) chegarem a 0, **ou** até passar `ORFA_LIMITE_S` (45 s com os padrões). **Só então Ctrl+C** (gera
+   `saga-*.csv` e `resumo-saga-*.txt`). Cortar logo ao fim do k6 perde a cauda do "tempo até a órfã se resolver": as sagas que ficam `reserving`/`compensating` nos últimos ~`ORPHAN_MS + SCAN_MS` só são
+   resolvidas pelo reaper depois, o p95/máx do `resolver_reaper` sai viesado para baixo (justo no último degrau, o mais propenso a timeout do `stock`) e não dá para recuperar, porque o passo 4 trunca as linhas;
+3. `make verificar-rpm PREFIXO=Deg-<id>` (código 3 ou 4: pare), **depois** do Ctrl+C: as consultas cross-schema dele não entram no `pg_stat_statements` da coleta (o protocolo da R4 não muda);
+4. `make limpar-banco` (também limpa o schema `stock` e o group `stock`, desde a #47).
+
+O **lag de devolução** do resumo é uma **amostra**, não o total: as `pending` não confirmadas expiram ~120 s depois de criadas, então as devoluções dos últimos ~120 s do bloco ficam fora (a expiração delas é
+depois da coleta, e o `limpar-banco` as apaga). Os **p95 também têm duas definições**: o `percentile_cont` do banco (tempo até resolver, lag de devolução; interpolado) e o rank do `awk` (latência dos passos,
+`saga.timing`); não compare um com o outro valor a valor.
+
+**A coleta vem antes do `limpar-banco`**: o resumo lê `idempotency_key`, `walletevent`, `event_store` e `stock.hold`, que a limpeza trunca. A retenção de 24 h das chaves de idempotência não interfere (o bloco é mais curto).
+
+### O que continua igual à R4
+
+Fila, Redis, réplicas, `pg_stat_statements`, lag dos groups antigos, pooler e a limpeza entre blocos seguem como na seção da R4; o `limpar-banco.sh` não mudou. O que muda entre os caminhos da R4 e da R5
+(saltos e transações por caminho) está na tabela do README da etapa 08. O **dry-run curto** contra a stack local, em project isolado, é uma fase à parte (`CARGA_PROJETO`, `CARGA_DB`, `CARGA_REDPANDA`,
+`PROJETO`, `CONTAINER_DB` e `CONTAINER_RPK` apontam o kit para o project; o limiar reduzido vai no **container `reservation`** do project, por override de `RESERVATION_SAGA_ORPHAN_MS` /
+`RESERVATION_SAGA_REAPER_SCAN_MS`: a coleta e o `verificar-rpm` leem de lá. `ORPHAN_MS` / `ORFA_LIMITE_S` exportados ficam só como escape e precisam bater com o container).
 
 ## Matriz do experimento (runner oficial)
 
