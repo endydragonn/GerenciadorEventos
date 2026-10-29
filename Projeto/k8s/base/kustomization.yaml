@@ -1,0 +1,18 @@
+# Base da stack inteira no cluster (issue #197). Sem namespace próprio aqui: o cluster.sh cria `gerenciador` e os Secrets (um por componente, do
+# `docker compose config`) e os ConfigMaps (dos arquivos do repo) ANTES do apply. Overlays em ../overlays/ (e2e agora; trilhas e carga nas etapas seguintes).
+namespace: gerenciador
+resources:
+  - db.yaml
+  - supabase-pooler.yaml
+  - redpanda.yaml
+  - redis.yaml
+  - rabbitmq.yaml
+  - particoes.yaml
+  - identity.yaml
+  - catalog.yaml
+  - reservation.yaml
+  - stock.yaml
+  - admission.yaml
+  - backend.yaml
+  - notification.yaml
+  - frontend.yaml

@@ -1,0 +1,79 @@
+# Redpanda (broker Kafka-compatível, um nó, modo dev-container), equivalente ao `redpanda` do compose: mesmos argumentos; só o listener interno
+# redpanda:9092. O Service é headless (publishNotReadyAddresses): o `--advertise-kafka-addr=internal://redpanda:9092` resolve direto para o IP do
+# pod, sem passar pelo ClusterIP. Dados descartáveis (PVC some no `cluster.sh down`).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redpanda
+  labels: {app: redpanda}
+spec:
+  serviceName: redpanda
+  replicas: 1
+  selector:
+    matchLabels: {app: redpanda}
+  template:
+    metadata:
+      labels: {app: redpanda}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: redpanda
+          image: docker.redpanda.com/redpandadata/redpanda:v26.2.4
+          imagePullPolicy: IfNotPresent
+          args:
+            - redpanda
+            - start
+            - --mode=dev-container
+            - --smp=1
+            - --memory=512M
+            - --reserve-memory=0M
+            - --kafka-addr=internal://0.0.0.0:9092
+            - --advertise-kafka-addr=internal://redpanda:9092
+          ports:
+            - {name: kafka, containerPort: 9092}
+          startupProbe:
+            exec:
+              command: ["/bin/bash", "-c", "rpk cluster health | grep -q 'Healthy:.*true'"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            exec:
+              command: ["/bin/bash", "-c", "rpk cluster health | grep -q 'Healthy:.*true'"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["/bin/bash", "-c", "rpk cluster health | grep -q 'Healthy:.*true'"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests: {cpu: 250m, memory: 1Gi}
+            limits: {cpu: "2", memory: 2Gi}
+          volumeMounts:
+            - {name: dados, mountPath: /var/lib/redpanda/data}
+  volumeClaimTemplates:
+    - metadata:
+        name: dados
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: standard
+        resources:
+          requests: {storage: 5Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  labels: {app: redpanda}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app: redpanda}
+  ports:
+    - {name: kafka, port: 9092, targetPort: kafka}

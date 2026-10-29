@@ -154,6 +154,12 @@ commitar ou registrar em log.
   nome fixo, HAProxy `lb` na 8081) e o scaler no host, `Projeto/autoescala/scaler.sh` (`--seco` só loga, `--uma-vez` roda um ciclo). **Irreversível na stack
   real:** o one-shot `particoes` leva `identity.notification` e `reservation.wallet` a 3 partições para sempre. Operação, volta ao compose base e dry-run em
   project isolado em `Projeto/autoescala/README.md`.
+- **Cluster Kubernetes (kind, #197, etapa 2; opcional):** `Projeto/k8s/cluster.sh up --trilha nenhuma` cria o cluster `gerenciador` (um nó) com a stack inteira (7 serviços, frontend, Postgres +
+  Supavisor, Redpanda, Redis, RabbitMQ), a partir das `*.slim` (e da imagem do frontend: `docker compose -f Projeto/docker-compose.yml build frontend`); `down` o apaga. **Dados descartáveis**
+  (somem no `down`), réplicas fixas em 1 (trilhas B1/C e a autoescala KEDA/HPA são das etapas 3 e 4). Publica 8081 e 8088: com ele no ar o compose completo não sobe, e **derrube-o antes de qualquer medição no
+  host** (disputa CPU e RAM). Todo `kubectl` leva `--context kind-<nome>` (nunca o `current-context`); quem roda `up`/`down` segue o lock Docker. Precisa de `kind` e `kubectl` no `PATH` (o kind em
+  `E:\TCC\claude-tooling\bin`). **Até a R5 terminar, SEMPRE `SLIM_TAG=k8s`** (gerar as slim e subir o cluster; as `*.slim:latest` da R5 não têm o actuator e só são regeradas depois; o `cluster.sh` aborta com `latest`, salvo `K8S_PERMITIR_LATEST=1`). e2e contra o cluster: `SLIM_TAG=k8s E2E_K8S=1 E2E_K8S_TRILHA=nenhuma Projeto/e2e/run-e2e.sh` (cluster próprio `gerenciador-e2e`, sem porta no host). Uso, recursos,
+  probes (porta de management 8090) e a conta do pool em `Projeto/k8s/README.md` e no `Projeto/Backend/CLAUDE.md`, "Cluster Kubernetes". `run-tests.sh` e o e2e em compose não mudam.
 - **Kit de carga:** `Projeto/carga/README.md` (seções "Rodada 4" e "Rodada 5"); a limpeza entre blocos é o `Projeto/carga/limpar-banco.sh`
   (`make limpar-banco`, ciente das réplicas).
 - **Primeiro `up` e o group `notification`:** o serviço one-shot `notification-seek` move o group `notification` para o fim de `identity.notification`

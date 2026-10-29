@@ -1,0 +1,81 @@
+# Supavisor (pooler de conexões do Supabase, transaction mode), equivalente ao `supabase-pooler` do compose: mesmo `command` (migrate -> upsert do
+# tenant -> server), POOLER_MAX_CLIENT_CONN=1500 e pool real 45 (os literais não secretos vêm do compose, via env-supabase-pooler). 1 réplica fixa.
+# `$$(...)` é o escape do Kubernetes para `$(...)` (sem ele o `$(cat ...)` seria lido como referência a variável de ambiente).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supabase-pooler
+  labels: {app: supabase-pooler}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: supabase-pooler}
+  template:
+    metadata:
+      labels: {app: supabase-pooler}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: espera
+          image: busybox:1.37.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - until nc -w 2 db 5432 </dev/null; do echo "aguardando db:5432"; sleep 2; done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+      containers:
+        - name: supabase-pooler
+          image: supabase/supavisor:2.9.13
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef: {name: env-supabase-pooler}
+          # `args` (o `command` do compose é o CMD): o ENTRYPOINT da imagem é o tini
+          args:
+            - /bin/sh
+            - -c
+            - |
+              export DATABASE_URL="ecto://supabase_admin:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/_supabase"
+              export API_JWT_SECRET="$JWT_SECRET" METRICS_JWT_SECRET="$JWT_SECRET"
+              /app/bin/migrate && /app/bin/supavisor eval "$$(cat /etc/pooler/pooler.exs)" && /app/bin/server
+          ports:
+            - {name: proxy, containerPort: 6543}
+            - {name: api, containerPort: 4000}
+          startupProbe:
+            httpGet: {path: /api/health, port: api}
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet: {path: /api/health, port: api}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet: {path: /api/health, port: api}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          volumeMounts:
+            - {name: pooler-exs, mountPath: /etc/pooler/pooler.exs, subPath: pooler-upsert.exs, readOnly: true}
+      volumes:
+        - name: pooler-exs
+          configMap: {name: pooler-exs}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-pooler
+  labels: {app: supabase-pooler}
+spec:
+  selector: {app: supabase-pooler}
+  ports:
+    - {name: proxy, port: 6543, targetPort: proxy}

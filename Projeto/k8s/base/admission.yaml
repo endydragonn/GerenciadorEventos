@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admission
+  labels: {app: admission}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: admission}
+  template:
+    metadata:
+      labels: {app: admission}
+    spec:
+      # automountServiceAccountToken fica false aqui também: o ServiceAccount/RBAC da leitura das réplicas pela API do Kubernetes (D4) chega na etapa 4
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: espera
+          image: busybox:1.37.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              for alvo in redis:6379 rabbitmq:5672 reservation:8082; do
+                host="${alvo%%:*}"; porta="${alvo##*:}"
+                until nc -w 2 "$host" "$porta" </dev/null; do echo "aguardando $alvo"; sleep 2; done
+              done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+      containers:
+        - name: admission
+          image: gerenciador-eventos-admission.slim:latest
+          imagePullPolicy: Never
+          envFrom:
+            - secretRef: {name: env-admission}
+          env:
+            - {name: MANAGEMENT_SERVER_PORT, value: "8090"}
+            - {name: MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED, value: "true"}
+            - {name: MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE, value: "readinessState"}
+          ports:
+            - {name: http, containerPort: 8085}
+            - {name: mgmt, containerPort: 8090}
+          startupProbe:
+            httpGet: {path: /actuator/health/readiness, port: mgmt}
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 45
+          readinessProbe:
+            httpGet: {path: /actuator/health/readiness, port: mgmt}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: {path: /actuator/health/liveness, port: mgmt}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          lifecycle:
+            preStop:
+              sleep: {seconds: 20}
+          securityContext:
+            seccompProfile: {type: Localhost, localhostProfile: profiles/admission-seccomp.json}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admission
+  labels: {app: admission}
+spec:
+  selector: {app: admission}
+  ports:
+    - {name: http, port: 8085, targetPort: http}

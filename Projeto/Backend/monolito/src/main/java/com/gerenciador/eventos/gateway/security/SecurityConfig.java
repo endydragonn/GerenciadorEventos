@@ -53,6 +53,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/bff/events", "/bff/events/**").permitAll()
                 .requestMatchers(HttpMethod.POST, "/bff/seed").permitAll()
                 .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
+                // probes do Kubernetes (issue #197): só o ciclo de vida, sem detalhes (show-details=never); o cluster as serve numa porta de management própria
+                .requestMatchers(HttpMethod.GET, "/actuator/health/liveness", "/actuator/health/readiness").permitAll()
                 .requestMatchers("/bff/**").authenticated()
                 .anyRequest().authenticated()
             )

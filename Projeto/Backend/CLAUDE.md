@@ -1767,6 +1767,29 @@ ID da imagem `*.slim:$SLIM_TAG` (`E2E_COMPLETA=1`: as completas construídas no 
 Tabela antes/depois, includes (com motivo) e perfis Seccomp/AppArmor (opcionais, não aplicados por padrão) em `Projeto/slim/README.md`. Desde a #47 inclui o `stock` (probe de `/internal/holds`,
 `/internal/eventcaps/**` e do `StockReleaseConsumer`, com um `ReservationCancelled` produzido antes do start).
 
+### Cluster Kubernetes (kind) — issue #197, etapa 2
+
+A stack inteira também roda num cluster kind de um nó (`Projeto/k8s/`, ver o README de lá): `cluster.sh up --trilha nenhuma` (só a base; as trilhas de balanceamento B1/C são da
+etapa 3 e a autoescala KEDA/HPA da etapa 4), com as réplicas fixas em 1 e dados descartáveis. O compose, o `run-tests.sh` e o e2e em compose **não mudam**. O que o cluster exige dos serviços:
+- **Actuator só para as probes (#207).** O `identity`, `catalog`, `reservation`, `stock` e `admission` ganharam `spring-boot-starter-actuator` com o HTTP de management **desligado por padrão**
+  (`management.server.port=-1`, só `health` exposto, `show-details=never`): sem env nova nada muda no compose. O manifest liga `MANAGEMENT_SERVER_PORT=8090` (outro conector e outro pool de
+  threads que a API, então a probe não espera atrás das 300 threads), `management.endpoint.health.probes.enabled=true` e o grupo `readiness` só com `readinessState` (banco, Redis, broker e
+  downstream NÃO entram: um Postgres lento sob carga não esvazia o Service). O gateway (`backend`) já tinha o actuator (`/actuator/health` público na 8081 pelo healthcheck do compose) e usa as
+  mesmas envs; o `SecurityConfig` ganhou `GET /actuator/health/liveness` e `/readiness` liberados (a porta de management herda a cadeia de segurança e devolvia 401 às probes; `ActuatorProbesTest`, classe própria porque ligar as probes faz a raiz `/actuator/health` listar `groups`, o que o `HttpContractTest` não espera). A 8090 não entra no Service; o filtro do `X-Internal-Token` é do contexto da API e não vale nela. O `notification` (sem HTTP) repete o healthcheck do compose (TCP ao broker).
+  `management.observations.enable.http.server.requests=false` nos 5: sem a observação o actuator não põe o timer `http.server.requests` (uma observação por requisição) no caminho quente.
+  **As `*.slim:latest` da R5 não têm o actuator:** até a R5 terminar use SEMPRE `SLIM_TAG=k8s` (gerar: `SLIM_TAG=k8s Projeto/slim/gerar-imagens-slim.sh`; subir: `SLIM_TAG=k8s Projeto/k8s/cluster.sh up --trilha nenhuma`);
+  as `:latest` só são regeradas depois da R5 (o `cluster.sh` aborta com `SLIM_TAG=latest`, a menos que `K8S_PERMITIR_LATEST=1`, para depois disso).
+- **Pool por réplica no cluster** (env no manifest; o compose mantém 1000 e 250): Hikari **200** no `reservation`, **60** no `stock`, 50 no `identity` e no `catalog`, 10 no `backend`, 3 no `notification`.
+  Conta do Supavisor (teto `POOLER_MAX_CLIENT_CONN` 1500, pool real 45 inalterado) com **até 3 réplicas por serviço e +1 pod em término** (a descida deixa o pool aberto; o rollout não soma, por `maxSurge: 0`):
+  4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 4×60 = **1492 ≤ 1500** (com 3 réplicas e nenhuma em término, 1119). Máximo acima de 3 em qualquer serviço exige refazer a conta. Os Hikari 200 e 60 ficam abaixo do
+  Tomcat 300: as threads esperam no Hikari (`connection-timeout` 5 s); muda só onde a fila espera.
+- **Partições:** o Job `particoes` leva `reservation.wallet` e `identity.notification` a 3 partições e os `initContainers` de seek do `notification` e do `stock` (e a espera do `reservation`) só andam
+  com 3, para nenhum consumer assinar o tópico com 1 e ficar até 300 s sem ver as outras.
+- **Seccomp:** o perfil do Slim cru não deixa nem o container iniciar (faltam as syscalls do runc) nem o relay Kafka do catalog funcionar (`writev`/`shutdown`); o `cluster.sh` soma `k8s/seccomp-extras.txt` ao perfil de cada serviço
+  antes de copiá-lo para o nó (detalhes e o risco no `Projeto/k8s/README.md`). AppArmor não se aplica ao kernel do Docker Desktop.
+- **Término sem 5xx:** `preStop.sleep` 20 s + `terminationGracePeriodSeconds` 60; `maxSurge: 0, maxUnavailable: 1` nos serviços com banco.
+- e2e: `SLIM_TAG=k8s E2E_K8S=1 E2E_K8S_TRILHA=nenhuma Projeto/e2e/run-e2e.sh` (cluster próprio `gerenciador-e2e`, sem porta no host; pod `e2e-cli` com a imagem Maven).
+
 ## Cadastro em duas fases + e-mail
 
 1. `POST /bff/users/request-verification` (gateway -> identity) grava em `identity.pending_verifications` (hash da senha +

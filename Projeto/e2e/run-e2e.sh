@@ -39,6 +39,12 @@
 #  ao proprio compose (`config --images`) qual tag ele usa, mostra no log e confere essa.
 #  E2E_COMPLETA=1 roda com as imagens COMPLETAS (docker-compose.completa.yml: `up --build` constroi os 7 pelo Dockerfile) e depois do `up` confere que
 #  cada container roda o ID da imagem gorda construida no project (`<project>-<servico>:latest`).
+#  E2E_K8S=1 (#197, D2): em vez do project compose, cria um cluster kind PROPRIO (`gerenciador-e2e`, sem porta no host: k8s/kind-e2e.yaml) e roda os MESMOS
+#  passos contra a stack inteira nele (overlay k8s/overlays/e2e: Mailpit, Secrets do override e2e com credenciais efemeras; nada do SMTP real). Exige
+#  E2E_K8S_TRILHA=nenhuma (as trilhas b1 e c chegam na etapa 3), kind e kubectl no PATH e as *.slim:$SLIM_TAG. Todo kubectl leva --context kind-<cluster>.
+#  Os helpers que fazem `docker exec`/`docker compose exec` passam por `sexec`; stock fora = `kubectl scale`, pausa do stock = SIGSTOP/SIGCONT no PID a partir do
+#  no (crictl), queda do reservation = SIGKILL no PID pelo no (como o `docker stop -t 0`; o `kubectl delete pod --force` desmonta a rede do pod e nao deixa orfas). O isolamento (Secrets e NodePort) e conferido por `cluster.sh guarda`
+#  ANTES de qualquer apply. No fim `kind delete cluster` (MANTER=1 mantem).
 #  Compatibilidade: Linux/macOS e Git Bash do Windows (Docker Desktop).
 # =============================================================================
 
@@ -82,9 +88,24 @@ dexec() {
 # (SLIM_TAG nao e definida aqui: o compose a resolve e o passo 0 a le dele)
 COMPLETA_ARGS=(); [ "${E2E_COMPLETA:-0}" = "1" ] && COMPLETA_ARGS=(-f docker-compose.completa.yml)
 dc() { dexec compose -p "$PROJETO" -f docker-compose.yml -f e2e/docker-compose.e2e.yml ${COMPLETA_ARGS[@]+"${COMPLETA_ARGS[@]}"} "$@"; }
-cli() { dexec exec -i "$CLI" "$@"; }
+# --- E2E_K8S=1 (#197): o mesmo roteiro contra um cluster kind proprio; `sexec`/`cli` abstraem docker (compose) e kubectl -----------------------------
+K8S="${E2E_K8S:-0}"
+CTX="kind-$PROJETO"
+K8S_NS=gerenciador
+kc() { # kubectl do cluster do e2e: o contexto e SEMPRE explicito (o `kind create` troca o current-context)
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' kubectl --context "$CTX" -n "$K8S_NS" "$@" ;;
+        *) kubectl --context "$CTX" -n "$K8S_NS" "$@" ;;
+    esac
+}
+cluster() { K8S_NOME="$PROJETO" K8S_OVERLAY=e2e bash "$SCRIPT_DIR/../k8s/cluster.sh" "$@"; }
+alvo_k8s() { case "$1" in db|redpanda) echo "sts/$1" ;; *) echo "deploy/$1" ;; esac; }
+sexec() { # servico comando...: dentro do container (compose) ou do pod (cluster) do servico; stdin repassado
+    if [ "$K8S" = "1" ]; then local alvo; alvo="$(alvo_k8s "$1")"; shift; kc exec -i "$alvo" -- "$@"; else dc exec -T "$@"; fi
+}
+cli() { if [ "$K8S" = "1" ]; then kc exec -i "$CLI" -- "$@"; else dexec exec -i "$CLI" "$@"; fi; }
 psql_db() { # a role do app e a do container; -h localhost evita o peer auth do socket
-    dc exec -T db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$POSTGRES_DB" -At' <<<"$1" | tr -d '\r'
+    sexec db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$POSTGRES_DB" -At' <<<"$1" | tr -d '\r'
 }
 
 ok()   { echo "   [ok]    $1"; }
@@ -112,14 +133,20 @@ export RABBITMQ_USER RABBITMQ_PASSWORD
 
 ISOLADO=0 # so vira 1 depois que o `config` passou na validacao de isolamento (passo 0)
 derrubar() { # down -v SO do project temporario e SO com o isolamento validado (config rejeitado => nao derruba nada)
-    case "$PROJETO" in gerenciador-e2e*) [ "$ISOLADO" = "1" ] && dc down -v --remove-orphans >/dev/null 2>&1 ;; esac
+    case "$PROJETO" in
+        gerenciador-e2e*)
+            if [ "$ISOLADO" = "1" ]; then
+                if [ "$K8S" = "1" ]; then cluster down >/dev/null 2>&1; else dc down -v --remove-orphans >/dev/null 2>&1; fi
+            fi ;;
+    esac
 }
 limpar() {
     dexec rm -f "$CLI" >/dev/null 2>&1
     if [ "$MANTER" = "1" ]; then
-        echo "==> MANTER=1: project '$PROJETO' mantido. Para apagar: docker compose -p $PROJETO -f docker-compose.yml -f e2e/docker-compose.e2e.yml down -v"
+        if [ "$K8S" = "1" ]; then echo "==> MANTER=1: cluster '$PROJETO' mantido. Para apagar: kind delete cluster --name $PROJETO"
+        else echo "==> MANTER=1: project '$PROJETO' mantido. Para apagar: docker compose -p $PROJETO -f docker-compose.yml -f e2e/docker-compose.e2e.yml down -v"; fi
     else
-        echo "==> (saida) down -v do project temporario '$PROJETO'"
+        if [ "$K8S" = "1" ]; then echo "==> (saida) kind delete cluster do cluster temporario '$PROJETO'"; else echo "==> (saida) down -v do project temporario '$PROJETO'"; fi
         derrubar
         [ "$ISOLADO" = "1" ] || echo "   (isolamento nao validado: nada foi derrubado)"
     fi
@@ -210,6 +237,14 @@ echo "   E2E #37: stack inteira em project temporario"
 echo "   PROJETO=$PROJETO  REDE=$REDE  SUFIXO=$SUFIXO"
 echo "=================================================="
 
+if [ "$K8S" = "1" ]; then
+    echo "==> 0. isolamento (Secrets e NodePort) ANTES de criar o cluster"
+    [ "${E2E_K8S_TRILHA:-}" = "nenhuma" ] || abortar "E2E_K8S=1 exige E2E_K8S_TRILHA=nenhuma (as trilhas b1 e c chegam na etapa 3 da issue #197)."
+    [ "${E2E_COMPLETA:-0}" = "1" ] && abortar "E2E_K8S=1 roda so as *.slim (E2E_COMPLETA=1 vale so para o compose)."
+    for f in kind kubectl; do command -v "$f" >/dev/null 2>&1 || abortar "preciso de '$f' no PATH (kind em E:\\TCC\\claude-tooling\\bin)."; done
+    cluster guarda || abortar "o isolamento NAO pode ser verificado/garantido: nada foi criado."
+    ok "Secrets do overlay e2e conferidos (mailpit, credenciais efemeras, X baixo) e manifests sem NodePort"
+else
 echo "==> 0. isolamento (config) ANTES do up"
 VIOLACOES="$(dc config --format json 2>/dev/null | "$PY" -c "$VALIDADOR" "$PROJETO" 2>&1)"
 if [ $? -ne 0 ] || [ -n "$VIOLACOES" ]; then
@@ -217,6 +252,7 @@ if [ $? -ne 0 ] || [ -n "$VIOLACOES" ]; then
     abortar "o isolamento NAO pode ser verificado/garantido: nada foi subido."
 fi
 ok "sem container_name, sem porta no host, rede e volumes com o prefixo do project, notification -> mailpit:1025, redis, rabbitmq, admission, stock e stock-seek isolados"
+fi
 ISOLADO=1
 SERVICOS_JAVA="backend identity catalog reservation stock notification admission"
 if [ "${E2E_COMPLETA:-0}" = "1" ]; then
@@ -236,7 +272,12 @@ derrubar
 # O down -v deixa o topico vazio, entao "0 e-mails depois do 1o up" passaria igual SEM o seek. Para provar o seek: com o group
 # notification ainda inexistente, o topico ja tem um VerificationCodeRequested valido (de um endereco @example.com, com validade
 # longa para o consumer nao descarta-lo por vencido): sem o seek o group novo (earliest) o leria e mandaria o e-mail ao captador.
+if [ "$K8S" = "1" ]; then
+    # 1a no cluster: cria o cluster, carrega as imagens, gera Secrets/ConfigMaps e aplica SO o redpanda (app=redpanda); o resto vem no 1c
+    K8S_ESPERA="$ESPERA_UP" cluster up --trilha nenhuma --so redpanda || abortar "o redpanda do cluster nao ficou pronto"
+else
 dc up -d --wait --wait-timeout "$ESPERA_UP" redpanda || abortar "o redpanda do project nao ficou healthy"
+fi
 PENDENTE_EMAIL="pendente-$SUFIXO@example.com"
 ENVELOPE="$("$PY" -c '
 import datetime, json, sys, uuid
@@ -247,9 +288,23 @@ print(json.dumps({"eventId": str(uuid.uuid4()), "streamType": "identity.notifica
     "payload": {"email": sys.argv[1], "userName": "Pendente", "code": "654321", "expirationMinutes": 240,
                 "expiresAt": fmt(agora + datetime.timedelta(hours=4))}, "metadata": {}}, separators=(",", ":")))
 ' "$PENDENTE_EMAIL")"
-dc exec -T redpanda rpk topic create identity.notification -p 1 -r 1 >/dev/null 2>&1 # produce em topico inexistente falha (UNKNOWN_TOPIC_OR_PARTITION)
-PRODUZIDO="$(dc exec -T redpanda rpk topic produce identity.notification -k pendente <<<"$ENVELOPE" 2>&1 | tr -d '\r')"
+sexec redpanda rpk topic create identity.notification -p 1 -r 1 >/dev/null 2>&1 # produce em topico inexistente falha (UNKNOWN_TOPIC_OR_PARTITION)
+PRODUZIDO="$(sexec redpanda rpk topic produce identity.notification -k pendente <<<"$ENVELOPE" 2>&1 | tr -d '\r')"
 confere "pedido de e-mail pendente produzido em identity.notification (offset 0)" sim "$(grep -q 'offset 0' <<<"$PRODUZIDO" && echo sim || echo nao)"
+if [ "$K8S" = "1" ]; then
+    # 1c no cluster: aplica o resto (o `up` espera Deployments, StatefulSets e o Job `particoes`); depois confere cada workload e o Job
+    K8S_ESPERA="$ESPERA_UP" cluster up --trilha nenhuma || { kc get pods; abortar "o cluster nao ficou todo pronto. Logs: kubectl --context $CTX -n $K8S_NS logs <pod> [-c <init>]"; }
+    for alvo in sts/db sts/redpanda deploy/supabase-pooler deploy/redis deploy/rabbitmq deploy/mailpit deploy/frontend $(for s in backend identity catalog reservation stock notification admission; do echo deploy/$s; done); do
+        confere "$alvo pronto (prontas/desejadas)" "1/1" "$(kc get "$alvo" -o jsonpath='{.status.readyReplicas}/{.spec.replicas}')"
+    done
+    confere "Job particoes concluido (identity.notification e reservation.wallet com 3 particoes)" 1 "$(kc get job particoes -o jsonpath='{.status.succeeded}')"
+    for sec in db supabase-pooler; do # o supabase/.env inteiro chega a esses dois no compose; no cluster os segredos de Studio/Kong/meta nao entram (so nomes de chaves, nunca valores)
+        confere "secret env-$sec sem chaves de Studio/Kong/meta (DASHBOARD_*, SERVICE_ROLE_KEY, ANON_KEY, SUPABASE_*_KEY, PG_META_CRYPTO_KEY)" "" \
+            "$(kc get secret "env-$sec" -o json | "$PY" -c 'import json, sys; p = {"DASHBOARD_USERNAME", "DASHBOARD_PASSWORD", "SERVICE_ROLE_KEY", "ANON_KEY", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY", "PG_META_CRYPTO_KEY", "STUDIO_DEFAULT_ORGANIZATION", "STUDIO_DEFAULT_PROJECT"}; print(",".join(sorted(k for k in json.load(sys.stdin)["data"] if k in p)))' | tr -d '[:space:]')"
+    done
+    confere "nenhum container reiniciou por probe/falha (restartCount total)" 0 \
+        "$(kc get pods -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.restartCount}{"\n"}{end}{end}' | awk '{s += $1} END {print s + 0}')"
+else
 dc up -d --build --wait --wait-timeout "$ESPERA_UP" || { dc ps -a; abortar "up --wait falhou (algum servico nao ficou healthy). Logs: docker compose -p $PROJETO ... logs <servico>"; }
 SAUDE="$(dc ps -a --format '{{.Service}} {{.State}} {{or .Health "-"}} {{.ExitCode}}' | tr -d '\r')"
 while read -r servico estado saude codigo; do
@@ -259,20 +314,42 @@ while read -r servico estado saude codigo; do
         *) confere "$servico running/healthy" "running healthy" "$estado $saude" ;;
     esac
 done <<<"$SAUDE"
+fi
 [ "$FALHAS" -eq 0 ] || abortar "stack nao esta toda healthy."
 # a imagem tem que ser a esperada: a *.slim:$SLIM_TAG (padrao) ou, com E2E_COMPLETA=1, a gorda construida neste project (nao uma gorda com nome slim)
 imagem_esperada() { if [ "${E2E_COMPLETA:-0}" = "1" ]; then echo "$PROJETO-$1:latest"; else echo "gerenciador-eventos-$1.slim:$SLIM_TAG"; fi; }
 for svc in $SERVICOS_JAVA; do
+    if [ "$K8S" = "1" ]; then
+        # O ID do Docker (store containerd) nao e o do no: o `kind load` reexporta a imagem. Prova em dois passos: (1) a camada de cima da imagem da tag no no
+        # == a da imagem local; (2) o digest do imageID do pod esta nos repoDigests dessa imagem do no (o pod roda ESSA imagem).
+        IMG_ESP="$(imagem_esperada "$svc")"; NO_IMG="$PROJETO-control-plane"
+        CAMADA_LOCAL="$(dexec image inspect -f '{{range .RootFS.Layers}}{{.}}{{"\n"}}{{end}}' "$IMG_ESP" | tr -d '\r' | grep . | tail -1)"
+        CAMADA_NO="$(dexec exec "$NO_IMG" crictl inspecti --output go-template --template '{{range .info.imageSpec.rootfs.diff_ids}}{{.}}{{"\n"}}{{end}}' "$IMG_ESP" | tr -d '\r' | grep . | tail -1)"
+        confere "$svc: camada superior de $IMG_ESP no no == a da imagem local (nao vazia)" sim \
+            "$([ -n "$CAMADA_LOCAL" ] && [ "$CAMADA_LOCAL" = "$CAMADA_NO" ] && echo sim || echo nao)"
+        POD_DIGEST="$(kc get pod -l "app=$svc" -o jsonpath="{.items[0].status.containerStatuses[?(@.name==\"$svc\")].imageID}" | sed 's/.*@//')"
+        confere "$svc: o pod roda a imagem $IMG_ESP do no (digest do imageID nos repoDigests, nao vazio)" sim \
+            "$([ -n "$POD_DIGEST" ] && dexec exec "$NO_IMG" crictl inspecti --output go-template --template '{{range .status.repoDigests}}{{.}}{{"\n"}}{{end}}' "$IMG_ESP" | tr -d '\r' | grep -qF "$POD_DIGEST" && echo sim || echo nao)"
+    else
     confere "$svc roda a imagem $(imagem_esperada "$svc")" "$(dexec image inspect -f '{{.Id}}' "$(imagem_esperada "$svc")")" \
         "$(dexec inspect -f '{{.Image}}' "$(dc ps -q "$svc" | head -1)")"
+    fi
 done
 [ "$FALHAS" -eq 0 ] || abortar "algum servico NAO esta rodando a imagem esperada."
 
 echo "==> 2. guarda de e-mail: o notification so fala com o captador"
-confere "MAIL_HOST efetivo do container notification" mailpit "$(dc exec -T notification printenv MAIL_HOST | tr -d '[:space:]')"
+confere "MAIL_HOST efetivo do container notification" mailpit "$(sexec notification printenv MAIL_HOST | tr -d '[:space:]')"
 [ "$FALHAS" -eq 0 ] || abortar "o notification NAO esta apontado para o captador: nenhum e-mail pode sair."
+if [ "$K8S" = "1" ]; then
+    # pod auxiliar de curl no namespace (sem sidecar), com a imagem Maven (curl, bash, xargs, mvn do replay) carregada no no
+    cluster imagem "$IMAGEM_MVN" || abortar "carregar a imagem auxiliar no no falhou"
+    kc delete pod "$CLI" --ignore-not-found --now >/dev/null 2>&1
+    kc run "$CLI" --image="$IMAGEM_MVN" --image-pull-policy=IfNotPresent --restart=Never --overrides='{"spec":{"automountServiceAccountToken":false}}' --command -- sleep infinity >/dev/null || abortar "nao consegui subir o pod auxiliar de curl"
+    kc wait --for=condition=ready "pod/$CLI" --timeout=180s >/dev/null || abortar "o pod auxiliar de curl nao ficou pronto"
+else
 dexec rm -f "$CLI" >/dev/null 2>&1
 dexec run -d --rm --name "$CLI" --network "$REDE" --entrypoint sleep "$IMAGEM_MVN" infinity >/dev/null || abortar "nao consegui subir o container auxiliar de curl"
+fi
 extrair_token() { grep -o '"token":"[^"]*"' <<<"$1" | head -1 | cut -d'"' -f4; }
 extrair_num() { grep -oE "\"$1\" ?: ?[0-9]+" <<<"$2" | head -1 | grep -oE '[0-9]+$'; }
 http() { # metodo url [corpo-json] [token] [header-extra] -> HTTP_CODE, HTTP_BODY
@@ -290,15 +367,35 @@ mails_para() { # quantidade de e-mails para $1 no captador
     cli curl -s -G "$MAILPIT/api/v1/search" --data-urlencode "query=to:$1" | grep -oE '"messages_count": ?[0-9]+' | grep -oE '[0-9]+$'
 }
 echo "   group notification depois do 1o up:"
-dc exec -T redpanda rpk group describe notification 2>&1 | tr -d '\r' | sed 's/^/     /'
+sexec redpanda rpk group describe notification 2>&1 | tr -d '\r' | sed 's/^/     /'
 # group novo: o seek o pos DEPOIS do pedido pendente (offset 1, log-end 1, lag 0) e o consumer nao o releu
-confere "group notification depois do 1o up: CURRENT-OFFSET LOG-END-OFFSET LAG" "1 1 0" \
-    "$(dc exec -T redpanda rpk group describe notification 2>/dev/null | tr -d '\r' | awk '$1 == "identity.notification" {print $3, $5, $6}')"
+GRUPO_NOTIF="$(sexec redpanda rpk group describe notification 2>/dev/null | tr -d '\r' | awk '$1 == "identity.notification" {print $3, $5, $6}')"
+if [ "$K8S" = "1" ]; then
+    # no cluster o topico tem 3 particoes (Job `particoes`): o pedido pendente esta na 0 (offset 1, log-end 1, lag 0) e as 3 tem lag 0
+    confere "group notification depois do 1o up, particao 0: CURRENT-OFFSET LOG-END-OFFSET LAG" "1 1 0" "$(head -1 <<<"$GRUPO_NOTIF")"
+    confere "group notification depois do 1o up: 3 particoes, lag total 0" "3 0" "$(awk '{n++; l += $3} END {print n + 0, l + 0}' <<<"$GRUPO_NOTIF")"
+else
+confere "group notification depois do 1o up: CURRENT-OFFSET LOG-END-OFFSET LAG" "1 1 0" "$GRUPO_NOTIF"
+fi
 sleep 5 # folga para um (hipotetico) envio do pedido pendente chegar ao captador
 confere "e-mails no captador depois do 1o up (o pedido pendente NAO virou e-mail: o seek moveu o group)" 0 \
     "$(cli curl -s "$MAILPIT/api/v1/messages" | grep -oE '"total": ?[0-9]+' | head -1 | grep -oE '[0-9]+$')"
 confere "e-mails para o endereco do pedido pendente" 0 "$(mails_para "$PENDENTE_EMAIL")"
 [ "$FALHAS" -eq 0 ] || abortar "o 1o up mandou e-mail ou o captador nao responde."
+if [ "$K8S" = "1" ]; then
+    # probes (#207): porta de management 8090 (outro conector e outro pool) so com `health`, sem detalhes e sem token. A porta 8090 nao entra no Service: o e2e fala direto
+    # com o IP do pod. (Que a porta da API dos 5 internos nao serve o actuator e de construcao, `management.server.port` separada; nao ha checagem: o InternalTokenFilter
+    # responde 401 a tudo sem o token real do .env, que o e2e nao le, entao ela seria vacuosa.)
+    for par in backend identity catalog reservation stock admission; do
+        ip="$(kc get pod -l "app=$par" -o jsonpath='{.items[0].status.podIP}')"
+        rd="$(cli curl -s -m 10 -w '\n%{http_code}' "http://$ip:8090/actuator/health/readiness" | tr -d '\r')"
+        confere "$par: GET :8090/actuator/health/readiness sem token (codigo, status UP)" "200 sim" "${rd##*$'\n'} $(grep -q '"status":"UP"' <<<"$rd" && echo sim || echo nao)"
+        confere "$par: GET :8090/actuator/health/liveness" 200 "$(cli curl -s -m 10 -o /dev/null -w '%{http_code}' "http://$ip:8090/actuator/health/liveness")"
+        info="$(cli curl -s -m 10 -o /dev/null -w '%{http_code}' "http://$ip:8090/actuator/info")" # 404 (nao exposto) ou 401 (o gateway barra tudo que nao e health)
+        confere "$par: GET :8090/actuator/info nao expoe dados (404 ou 401)" sim "$([ "$info" = 404 ] || [ "$info" = 401 ] && echo sim || echo nao)"
+    done
+    [ "$FALHAS" -eq 0 ] || abortar "as probes/management do cluster nao estao como a spec pede."
+fi
 
 echo "==> 3. cadastro em duas fases (o codigo vem do e-mail no captador)"
 http POST "$GW/bff/users/request-verification" \
@@ -343,7 +440,7 @@ confere "reserva em reservation.walletevent depois do confirm" confirmed \
 confere "e-mails para o usuario no captador (so o de verificacao existe)" 1 "$(mails_para "$EMAIL")"
 # admission (#41): o gateway contou a reserva no Redis (o script Lua do contador rodou). Prova o caminho gateway -> admission -> Redis na
 # stack real; as chaves do contador vivem 250 ms, entao a prova e o contador de comandos do Redis do project (fresco: so o admission o usa).
-EVALS="$(dc exec -T redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli INFO commandstats' | tr -d '\r' \
+EVALS="$(sexec redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli INFO commandstats' | tr -d '\r' \
     | awk -F'[=,]' '/^cmdstat_eval(sha)?:/ {s += $2} END {print s + 0}')"
 confere "scripts Lua do contador executados no Redis (o admission contou a reserva)" sim "$([ "${EVALS:-0}" -ge 1 ] && echo sim || echo nao)"
 [ "$FALHAS" -eq 0 ] || abortar "o fluxo falhou antes do rajada/replay"
@@ -374,7 +471,7 @@ confere "usuarios da rajada criados por SQL" "$RAJADA_USUARIOS" \
     "$(psql_db "SELECT count(*) FROM identity.users WHERE email LIKE 'rajada-$SUFIXO-%@example.com'")"
 [ "$FALHAS" -eq 0 ] || abortar "sem os usuarios da rajada"
 # o script roda em segundo plano; a profundidade da fila admission.requests e amostrada (rabbitmqctl) enquanto ele corre, e depois
-amostra_fila() { dc exec -T rabbitmq rabbitmqctl list_queues -q name messages 2>/dev/null | tr -d '\r' | awk '$1 == "admission.requests" {print $2}'; }
+amostra_fila() { sexec rabbitmq rabbitmqctl list_queues -q name messages 2>/dev/null | tr -d '\r' | awk '$1 == "admission.requests" {print $2}'; }
 PARALELO=$(( RAJADA_USUARIOS < 400 ? RAJADA_USUARIOS : 400 ))
 cli env GW="$GW" EVENT_ID="$RAJADA_EVENT_ID" SUFIXO="$SUFIXO" N="$RAJADA_USUARIOS" PARALELO="$PARALELO" bash -s \
     <"$SCRIPT_DIR/rajada-container.sh" >"$TMP/rajada.out" 2>&1 &
@@ -466,6 +563,93 @@ esperar_saudavel() { # container_id [timeout_s]
     done
     return 1
 }
+# --- faltas dos passos 4c/4d: compose (docker stop/pause/start) ou cluster (scale, SIGSTOP/SIGCONT a partir do no, SIGKILL no PID pelo no) ------------------
+NO_K8S="$PROJETO-control-plane"
+esperar_pod_novo() { # app pod_antigo timeout_s (cluster): ate existir um pod Ready de nome diferente do antigo
+    local fim=$((SECONDS + $3)) novo
+    while [ "$SECONDS" -lt "$fim" ]; do
+        novo="$(kc get pods -l "app=$1" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.containerStatuses[0].ready}{"\n"}{end}' 2>/dev/null | awk -v a="$2" '$1 != a && $2 == "true" {print $1}')"
+        [ -n "$novo" ] && return 0
+        sleep 2
+    done
+    return 1
+}
+esperar_reinicio() { # app pod restartCount_antes timeout_s (cluster): ate o container do pod reiniciar e ficar Ready
+    local fim=$((SECONDS + $4)) r
+    while [ "$SECONDS" -lt "$fim" ]; do
+        r="$(kc get pod "$2" -o jsonpath='{.status.containerStatuses[0].restartCount} {.status.containerStatuses[0].ready}' 2>/dev/null)"
+        [ "${r%% *}" -gt "$3" ] 2>/dev/null && [ "${r##* }" = "true" ] && return 0
+        sleep 2
+    done
+    return 1
+}
+pid_no() { # app: PID do processo do container NO NO (de dentro o PID 1 ignora SIGSTOP/SIGKILL de fora do namespace)
+    dexec exec "$NO_K8S" sh -c "crictl inspect --output go-template --template '{{.info.pid}}' \$(crictl ps --name '^$1\$' --state running -q | head -1)" | tr -d '\r'
+}
+stock_fora() {
+    if [ "$K8S" = "1" ]; then
+        kc scale deploy/stock --replicas=0 >/dev/null || abortar "kubectl scale do stock para 0 falhou"
+        for i in $(seq 1 60); do [ -z "$(kc get pods -l app=stock -o name)" ] && break; sleep 2; done
+    else
+        STOCK_CID="$(dc ps -q stock | head -1)"
+        [ -n "$STOCK_CID" ] || abortar "sem container do stock"
+        dexec stop "$STOCK_CID" >/dev/null || abortar "docker stop do stock falhou"
+    fi
+}
+stock_volta() {
+    if [ "$K8S" = "1" ]; then
+        kc scale deploy/stock --replicas=1 >/dev/null || abortar "kubectl scale do stock para 1 falhou"
+        kc rollout status deploy/stock --timeout=180s >/dev/null || abortar "o stock nao voltou a ficar pronto"
+    else
+        dexec start "$STOCK_CID" >/dev/null || abortar "docker start do stock falhou"
+        esperar_saudavel "$STOCK_CID" 120 || abortar "o stock nao voltou a ficar healthy"
+    fi
+}
+stock_pausar() {
+    if [ "$K8S" = "1" ]; then
+        STOCK_PID="$(pid_no stock)"
+        [ -n "$STOCK_PID" ] || abortar "sem PID do stock no no (crictl)"
+        dexec exec "$NO_K8S" kill -STOP "$STOCK_PID" || abortar "SIGSTOP do stock falhou"
+    else
+        STOCK_CID="$(dc ps -q stock | head -1)"
+        [ -n "$STOCK_CID" ] || abortar "sem container do stock"
+        dexec pause "$STOCK_CID" >/dev/null || abortar "docker pause do stock falhou"
+    fi
+}
+stock_retomar() { # $1 = 1 no caminho de erro (so retoma, sem esperar nem abortar)
+    if [ "$K8S" = "1" ]; then
+        dexec exec "$NO_K8S" kill -CONT "$STOCK_PID" >/dev/null 2>&1 || { [ "${1:-0}" = "1" ] || abortar "SIGCONT do stock falhou"; }
+        [ "${1:-0}" = "1" ] || kc rollout status deploy/stock --timeout=120s >/dev/null || abortar "o stock nao voltou a ficar pronto depois do SIGCONT"
+    else
+        dexec unpause "$STOCK_CID" >/dev/null 2>&1 || { [ "${1:-0}" = "1" ] || abortar "docker unpause do stock falhou"; }
+        [ "${1:-0}" = "1" ] || esperar_saudavel "$STOCK_CID" 60 || abortar "o stock nao voltou a ficar healthy depois do unpause"
+    fi
+}
+reservation_queda() {
+    if [ "$K8S" = "1" ]; then
+        RES_POD="$(kc get pods -l app=reservation -o jsonpath='{.items[0].metadata.name}')"
+        [ -n "$RES_POD" ] || abortar "sem pod do reservation"
+        RES_RESTARTS="$(kc get pod "$RES_POD" -o jsonpath='{.status.containerStatuses[0].restartCount}')"
+        # SIGKILL no PID do processo, a partir do no (como o `docker stop -t 0`): o kubelet reinicia o container no MESMO pod/rede, e o kernel fecha os sockets
+        # do processo morto com os pedidos ja enviados ao stock pausado. (`kubectl delete pod --force` desmonta tambem a rede do pod: os pedidos pendentes no
+        # stock pausado eram descartados e a queda nao deixava nenhuma saga orfa para compensar.)
+        RES_PID="$(pid_no reservation)"
+        [ -n "$RES_PID" ] || { stock_retomar 1; abortar "sem PID do reservation no no (crictl)"; }
+        dexec exec "$NO_K8S" kill -9 "$RES_PID" || { stock_retomar 1; abortar "SIGKILL do reservation falhou"; }
+    else
+        RES_CID="$(dc ps -q reservation | head -1)"
+        [ -n "$RES_CID" ] || abortar "sem container do reservation"
+        dexec stop -t 0 "$RES_CID" >/dev/null || { stock_retomar 1; abortar "docker stop -t 0 do reservation falhou"; }
+    fi
+}
+reservation_volta() {
+    if [ "$K8S" = "1" ]; then
+        esperar_reinicio reservation "$RES_POD" "$RES_RESTARTS" 300 || abortar "o reservation nao voltou a ficar pronto"
+    else
+        dexec start "$RES_CID" >/dev/null || abortar "docker start do reservation falhou"
+        esperar_saudavel "$RES_CID" 180 || abortar "o reservation nao voltou a ficar healthy"
+    fi
+}
 
 echo "==> 4c. saga (a): stock FORA -> 500 generico, saga compensating, quant intacto; o stock volta, o reaper compensa (janela ${SAGA_JANELA_S}s), a mesma chave reserva"
 http POST "$GW/bff/events" \
@@ -475,9 +659,7 @@ SAGA_A_EVENT="$(extrair_num event_id "$HTTP_BODY")"
 [ -n "$SAGA_A_EVENT" ] || abortar "sem event_id do evento da saga (a)"
 psql_db "UPDATE stock.eventcap SET max_time_in_line = 3600 WHERE event_id = $SAGA_A_EVENT" >/dev/null
 CHAVE_A="saga-a-$SUFIXO"
-STOCK_CID="$(dc ps -q stock | head -1)"
-[ -n "$STOCK_CID" ] || abortar "sem container do stock"
-dexec stop "$STOCK_CID" >/dev/null || abortar "docker stop do stock falhou"
+stock_fora
 http POST "$GW/bff/event-wallets" "{\"userId\":$USER_ID,\"eventId\":$SAGA_A_EVENT}" "$TOKEN" "Idempotency-Key: $CHAVE_A"
 confere "reserva com o stock fora (500 generico no /bff, como com o reservation fora)" 500 "$HTTP_CODE"
 confere "saga da chave fica compensating (o release tambem falhou)" compensating \
@@ -485,8 +667,7 @@ confere "saga da chave fica compensating (o release tambem falhou)" compensating
 confere "quant intacto com o stock fora" 5 "$(psql_db "SELECT quant FROM stock.eventcap WHERE event_id = $SAGA_A_EVENT")"
 confere "nenhum walletevent do evento" 0 "$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = $SAGA_A_EVENT")"
 confere "invariantes (parcial) com o stock fora" "" "$(viol_invariantes parcial "$SAGA_A_EVENT")"
-dexec start "$STOCK_CID" >/dev/null || abortar "docker start do stock falhou"
-esperar_saudavel "$STOCK_CID" 120 || abortar "o stock nao voltou a ficar healthy"
+stock_volta
 INICIO_A=$SECONDS
 SAGA_A_ST=""
 while [ $((SECONDS - INICIO_A)) -le $((SAGA_JANELA_S + 20)) ]; do
@@ -537,14 +718,10 @@ psql_db "INSERT INTO identity.users (user_name, email, fone, password, birthdate
     FROM generate_series(1, $SB_USUARIOS) AS g" >/dev/null
 confere "usuarios da rajada (b) criados por SQL" "$SB_USUARIOS" "$(psql_db "SELECT count(*) FROM identity.users WHERE email LIKE 'rajada-$SB_SUFIXO-%@example.com'")"
 [ "$FALHAS" -eq 0 ] || abortar "sem os usuarios da rajada (b)"
-RES_CID="$(dc ps -q reservation | head -1)"
-[ -n "$RES_CID" ] || abortar "sem container do reservation"
 # A rajada de 20 acaba em ~100 ms, menos que o `docker stop`: sem ajuda a queda pegaria so o fim. Por isso o stock fica PAUSADO (docker pause) ate o
 # reservation cair: as sagas ja gravaram a tx1 (reserving) e esperam o hold, sem resposta. Quando o stock volta, ele processa os pedidos de hold que
 # ficaram na fila do socket, com o chamador morto: holds `held` sem tx2 (as orfas que o reaper tem de liberar). A queda e o `docker stop -t 0` pedido.
-STOCK_CID="$(dc ps -q stock | head -1)"
-[ -n "$STOCK_CID" ] || abortar "sem container do stock"
-dexec pause "$STOCK_CID" >/dev/null || abortar "docker pause do stock falhou"
+stock_pausar
 cli env GW="$GW" EVENT_ID="$SAGA_B_EVENT" SUFIXO="$SB_SUFIXO" N="$SB_USUARIOS" PARALELO="$SB_USUARIOS" bash -s \
     <"$SCRIPT_DIR/rajada-container.sh" >"$TMP/rajada-b.out" 2>&1 &
 RAJADA_B_PID=$!
@@ -555,14 +732,12 @@ done
 grep -q DISPARANDO "$TMP/rajada-b.out" || abortar "a rajada (b) nao chegou a disparar"
 sleep 1.5 # as chamadas ao stock pausado ja estao penduradas
 echo "   sagas em voo (reserving) antes da queda: $(psql_db "SELECT count(*) FROM reservation.idempotency_key WHERE event_id = $SAGA_B_EVENT AND saga_status = 'reserving'")"
-dexec stop -t 0 "$RES_CID" >/dev/null || { dexec unpause "$STOCK_CID" >/dev/null 2>&1; abortar "docker stop -t 0 do reservation falhou"; }
+reservation_queda
 echo "   reservation derrubado no meio da rajada (SIGKILL)"
-dexec unpause "$STOCK_CID" >/dev/null || abortar "docker unpause do stock falhou"
-esperar_saudavel "$STOCK_CID" 60 || abortar "o stock nao voltou a ficar healthy depois do unpause"
+stock_retomar
 sleep 2 # o stock processa os holds pendentes com o chamador morto
 echo "   holds held sem tx2 depois da queda (orfas): $(psql_db "SELECT count(*) FROM stock.hold h WHERE h.event_id = $SAGA_B_EVENT AND h.status = 'held' AND NOT EXISTS (SELECT 1 FROM reservation.walletevent w WHERE w.hold_id = h.hold_id)")"
-dexec start "$RES_CID" >/dev/null || abortar "docker start do reservation falhou"
-esperar_saudavel "$RES_CID" 180 || abortar "o reservation nao voltou a ficar healthy"
+reservation_volta
 echo "   reservation de volta; aguardando o fim da rajada e a janela do reaper (ORPHAN_MS=$SAGA_ORPHAN_MS, SCAN_MS=$SAGA_SCAN_MS)"
 wait "$RAJADA_B_PID"
 grep -E "CODIGO|ESTADO|SEM_ESTADO_FINAL|RAJADA_MS" "$TMP/rajada-b.out" | sed 's/^/     /'
@@ -587,7 +762,7 @@ for i in $(seq 1 45); do
     sleep 2
 done
 confere "linhas pendentes nos 3 outbox (ate 90 s)" 0 "$PENDENTES"
-lag() { dc exec -T redpanda rpk group describe "$1" 2>/dev/null | tr -d '\r' | awk '$1 == "TOTAL-LAG" {print $2}'; }
+lag() { sexec redpanda rpk group describe "$1" 2>/dev/null | tr -d '\r' | awk '$1 == "TOTAL-LAG" {print $2}'; }
 for grupo in reservation stock stock-catalog notification; do
     LAG=""
     for i in $(seq 1 45); do
@@ -600,12 +775,65 @@ done
 [ "$FALHAS" -eq 0 ] || abortar "o backbone nao escoou: o replay compararia com projecao defasada"
 
 echo "==> 5b. 2o up: o group notification JA existe, entao o one-shot notification-seek NAO move offset"
+if [ "$K8S" = "1" ]; then
+    # no cluster o seek e um initContainer do proprio pod do notification: reiniciar o pod e o "2o up"; o log do initContainer diz que o group ja existia
+    NOTIF_POD="$(kc get pods -l app=notification -o jsonpath='{.items[0].metadata.name}')"
+    kc delete pod "$NOTIF_POD" --wait=true >/dev/null 2>&1 || abortar "kubectl delete do pod do notification falhou"
+    esperar_pod_novo notification "$NOTIF_POD" 300 || abortar "o notification nao voltou a ficar pronto"
+    SEEK2="$(kc logs -l app=notification -c seek 2>&1 | tr -d '\r')"
+else
 SEEK2="$(dc run --rm --no-deps notification-seek 2>&1 | tr -d '\r')"
+fi
 confere "notification-seek com o group existente" sim "$(grep -q 'offsets mantidos' <<<"$SEEK2" && echo sim || echo nao)"
 
 echo "==> 6. replay (event sourcing): catalog.event e reservation.wallet reconstruidos do log == projecoes vivas"
 # Container Maven efemero na rede DO PROJECT (db = o db temporario), SEM relay/consumer/expiracao e sem truncar nada: as classes
 # *ReplayE2eTest so leem o log e criam/derrubam o schema-sombra; ficam puladas no run-tests.sh (precisam de E2E_REPLAY=1).
+if [ "$K8S" = "1" ]; then
+    # No cluster o db so existe na rede do cluster: o Maven roda num POD efemero (mesma imagem auxiliar), com o codigo copiado por tar e o usuario/senha
+    # do app lidos do Secret env-db (APP_DB_USER/APP_DB_PASSWORD). As dependencias do Maven vem do repositorio central a cada rodada (sem cache entre rodadas).
+    REPLAY_POD="$CLI-replay"
+    kc delete pod "$REPLAY_POD" --ignore-not-found >/dev/null 2>&1
+    kc apply -f - >/dev/null <<EOF || abortar "nao consegui criar o pod do replay"
+apiVersion: v1
+kind: Pod
+metadata: {name: $REPLAY_POD, labels: {app: e2e-replay}}
+spec:
+  restartPolicy: Never
+  enableServiceLinks: false
+  automountServiceAccountToken: false
+  containers:
+    - name: mvn
+      image: $IMAGEM_MVN
+      imagePullPolicy: IfNotPresent
+      command: [sleep, infinity]
+      env:
+        - {name: SPRING_DATASOURCE_URL, value: "jdbc:postgresql://db:5432/meu_banco"}
+        - {name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE, value: "10"}
+        - {name: SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE, value: "1"}
+        - name: SPRING_DATASOURCE_USERNAME
+          valueFrom: {secretKeyRef: {name: env-db, key: APP_DB_USER}}
+        - name: SPRING_DATASOURCE_PASSWORD
+          valueFrom: {secretKeyRef: {name: env-db, key: APP_DB_PASSWORD}}
+        - {name: SPRING_KAFKA_BOOTSTRAP_SERVERS, value: "redpanda:9092"}
+        - {name: INTERNAL_API_TOKEN, value: "token-de-teste-nao-e-segredo"}
+        - {name: EVENTS_RELAY_ENABLED, value: "false"}
+        - {name: EVENTS_CONSUMER_ENABLED, value: "false"}
+        - {name: STOCK_CATALOG_RECONCILIATION_ENABLED, value: "false"}
+        - {name: STOCK_RELEASE_CONSUMER_ENABLED, value: "false"}
+        - {name: RESERVATION_SAGA_REAPER_ENABLED, value: "false"}
+        - {name: RESERVATION_EXPIRY_SCAN_MS, value: "3600000"}
+        - {name: E2E_REPLAY, value: "1"}
+EOF
+    kc wait --for=condition=ready "pod/$REPLAY_POD" --timeout=180s >/dev/null || abortar "o pod do replay nao ficou pronto"
+    tar -C "$PROJETO_DIR/Backend" --exclude=target -cf - . | kc exec -i "$REPLAY_POD" -- sh -c 'mkdir -p /build && tar -xf - -C /build' || abortar "nao consegui copiar o codigo para o pod do replay"
+    kc exec "$REPLAY_POD" -- bash -c '
+        cd /build
+        mvn -B -pl catalog,reservation -am test             -Dtest="CatalogReplayE2eTest,ReservationReplayE2eTest" -Dsurefire.failIfNoSpecifiedTests=false
+    ' 2>&1 | tr -d '\015' >"$TMP/replay.log"
+    REPLAY_CODE="${PIPESTATUS[0]}"
+    kc delete pod "$REPLAY_POD" --now >/dev/null 2>&1
+else
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         HOST_SRC="$(cd "$PROJETO_DIR/Backend" && pwd -W)"
@@ -638,6 +866,7 @@ dexec run --rm --network "$REDE" --env-file "$HOST_ENV_FILE" "${PLATFORM_ARGS[@]
             -Dtest="CatalogReplayE2eTest,ReservationReplayE2eTest" -Dsurefire.failIfNoSpecifiedTests=false
     ' 2>&1 | tr -d '\r' >"$TMP/replay.log"
 REPLAY_CODE="${PIPESTATUS[0]}"
+fi
 grep -E "Tests run:.*(CatalogReplayE2eTest|ReservationReplayE2eTest)|BUILD|ERROR\]" "$TMP/replay.log" | head -20 | sed 's/^/     /'
 confere "mvn test das classes de replay (codigo de saida)" 0 "$REPLAY_CODE"
 for classe in CatalogReplayE2eTest ReservationReplayE2eTest; do

@@ -1,0 +1,70 @@
+# Syscalls somadas aos perfis Seccomp do Slim (slim/perfis/<svc>-seccomp.json) quando o cluster.sh os copia para o nó (issue #197).
+# MOTIVO: o perfil do Slim é a lista do que o processo usou durante o probe (ptrace depois do exec): ~90 syscalls, sem as que o runc usa entre
+# aplicar o filtro e o exec (fstatfs, close_range...) e sem as que o JVM só usa em caminhos que o probe não exercitou. Aplicado cru, o container nem
+# inicia ("error closing exec fds: ... fstatfs ...: operation not permitted"). Uma syscall por linha; `#` comenta. Só ACRESCENTA ao allow do perfil.
+# Achado a validar numa rodada de carga: uma syscall que nem o Slim nem esta lista cobrem vira EPERM no caminho raro (ver o README do Slim).
+fstatfs
+close_range
+openat2
+pipe
+pipe2
+sigaltstack
+mremap
+tgkill
+readv
+preadv
+pwrite64
+pwritev
+rename
+renameat
+renameat2
+getdents
+fsync
+fdatasync
+fallocate
+sched_setaffinity
+sched_getparam
+sched_getscheduler
+sched_setattr
+sched_getattr
+getcpu
+sendto
+recvmsg
+getpeername
+epoll_pwait2
+membarrier
+mincore
+msync
+umask
+chmod
+fchmod
+fchmodat
+link
+symlink
+readlinkat
+unlinkat
+mkdirat
+faccessat
+faccessat2
+utimensat
+clone
+getrlimit
+setrlimit
+nanosleep
+gettimeofday
+time
+ppoll
+select
+pselect6
+sendfile
+getpgrp
+getresuid
+getresgid
+# achados no e2e do cluster: o cliente Kafka (NetworkClient) escreve com writev e fecha com shutdown; o probe do Slim do catalog não os viu (o do identity viu) e o
+# relay do catalog ficava em "Bootstrap broker disconnected" (EPERM). accept4/recvmmsg/dup2/epoll_create: variantes que o JDK/glibc escolhem conforme o kernel.
+writev
+shutdown
+accept4
+recvmmsg
+dup2
+epoll_create

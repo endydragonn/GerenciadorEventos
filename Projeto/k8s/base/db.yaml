@@ -1,0 +1,101 @@
+# Postgres do Supabase (equivalente ao `db` do compose, sem porta no host: acesso por `cluster.sh psql`). Os arquivos de init vêm de ConfigMaps
+# que o cluster.sh cria dos MESMOS arquivos do repo e são montados, um a um (subPath), nos caminhos do compose: a imagem já traz arquivos nesses
+# diretórios (init-scripts/, migrations/), então montar o diretório inteiro os esconderia. O banco nasce dos init scripts a cada cluster (dados
+# descartáveis: o PVC some no `cluster.sh down`); nenhuma migração é aplicada.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db
+  labels: {app: db}
+spec:
+  serviceName: db
+  replicas: 1
+  selector:
+    matchLabels: {app: db}
+  template:
+    metadata:
+      labels: {app: db}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        # `db-config` é um volume nomeado no compose, e o Docker o preenche com o conteúdo da imagem em /etc/postgresql-custom (conf.d, supautils.conf,
+        # read-replica.conf, wal-g.conf, extension-custom-scripts) na 1ª vez; o postgresql.conf da imagem faz include desses arquivos. Um emptyDir nasce vazio:
+        # sem esta cópia o Postgres sai com "configuration file ... contains errors".
+        - name: copiar-config
+          image: supabase/postgres:17.6.1.136
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "cp -a /etc/postgresql-custom/. /destino/"]
+          volumeMounts:
+            - {name: db-config, mountPath: /destino}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 200m, memory: 64Mi}
+      containers:
+        - name: db
+          image: supabase/postgres:17.6.1.136
+          imagePullPolicy: IfNotPresent
+          # `args` (o `command` do compose é o CMD): o ENTRYPOINT da imagem faz o init e troca para o usuário postgres
+          args: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "log_min_messages=fatal"]
+          envFrom:
+            - secretRef: {name: env-db}
+          ports:
+            - {name: pg, containerPort: 5432}
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-h", "localhost"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-h", "localhost"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-h", "localhost"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "4", memory: 3Gi}
+          volumeMounts:
+            - {name: dados, mountPath: /var/lib/postgresql/data}
+            - {name: db-config, mountPath: /etc/postgresql-custom}
+            - {name: db-sql, mountPath: /docker-entrypoint-initdb.d/init-scripts/98-functions-role.sql, subPath: functions-role.sql, readOnly: true}
+            - {name: db-sql, mountPath: /docker-entrypoint-initdb.d/migrations/97-_supabase.sql, subPath: _supabase.sql, readOnly: true}
+            - {name: db-sql, mountPath: /docker-entrypoint-initdb.d/migrations/99-pooler.sql, subPath: pooler.sql, readOnly: true}
+            - {name: db-sql, mountPath: /docker-entrypoint-initdb.d/init-scripts/99-roles.sql, subPath: roles.sql, readOnly: true}
+            - {name: db-sql, mountPath: /docker-entrypoint-initdb.d/migrations/99-app.sql, subPath: supabase-app-init.sql, readOnly: true}
+            - {name: db-app-init, mountPath: /app-init, readOnly: true}
+      volumes:
+        - name: db-config
+          emptyDir: {}
+        - name: db-sql
+          configMap: {name: db-sql}
+        - name: db-app-init
+          configMap: {name: db-app-init}
+  volumeClaimTemplates:
+    - metadata:
+        name: dados
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: standard
+        resources:
+          requests: {storage: 10Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db
+  labels: {app: db}
+spec:
+  selector: {app: db}
+  ports:
+    - {name: pg, port: 5432, targetPort: pg}

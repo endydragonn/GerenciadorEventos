@@ -1,0 +1,15 @@
+# Overlay do e2e (issue #197): a base + Mailpit no lugar do SMTP real, e os Services do gateway e do frontend SEM NodePort (nenhuma porta no host).
+# Os Secrets deste overlay vêm do `docker compose config` COM o override e2e (e-mail para o mailpit, credenciais efêmeras, X baixo) e o cluster.sh
+# os confere (guarda de isolamento) antes de qualquer apply. Pontos de extensão das próximas etapas: novos overlays nesta pasta (trilhas, carga).
+resources:
+  - ../../base
+  - mailpit.yaml
+patches:
+  - target: {kind: Service, name: backend}
+    patch: |-
+      - {op: replace, path: /spec/type, value: ClusterIP}
+      - {op: remove, path: /spec/ports/0/nodePort}
+  - target: {kind: Service, name: frontend}
+    patch: |-
+      - {op: replace, path: /spec/type, value: ClusterIP}
+      - {op: remove, path: /spec/ports/0/nodePort}

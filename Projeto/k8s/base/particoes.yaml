@@ -1,0 +1,45 @@
+# Job `particoes` (o one-shot do override de autoescala, agora no cluster): leva `reservation.wallet` e `identity.notification` a 3 partições, para
+# que o `notification` e o `stock` possam ter até 3 réplicas. O broker do cluster nasce a cada cluster, então a mudança NÃO é irreversível como no
+# compose real. `reservation.wallet` é criado aqui se ainda não existe (com 3 partições); `identity.notification` só é ESPERADO (quem o cria é o
+# `identity`). O seek do `notification`, do `stock` e a espera do `reservation` só andam com 3 partições, então nenhum consumer assina o tópico com 1.
+# Idempotente: tópico que já tem 3 não é tocado.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: particoes
+  labels: {app: particoes}
+spec:
+  backoffLimit: 10
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels: {app: particoes}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: particoes
+          image: docker.redpanda.com/redpandadata/redpanda:v26.2.4
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -eo pipefail
+              export RPK_BROKERS=redpanda:9092
+              until rpk topic list >/dev/null 2>&1; do echo "aguardando o redpanda (API Kafka)"; sleep 2; done
+              partes() { rpk topic list | awk -v t="$1" '$1 == t {print $2}'; }
+              soma() { # tópico: leva a 3 partições (cria com 3 se não existe)
+                local atual; atual="$(partes "$1")"
+                if [ -z "$atual" ]; then rpk topic create "$1" -p 3 -r 1
+                elif [ "$atual" -lt 3 ]; then rpk topic add-partitions "$1" --num $((3 - atual))
+                else echo "$1 já tem $atual partições"; fi
+              }
+              soma reservation.wallet
+              until [ -n "$(partes identity.notification)" ]; do echo "aguardando o identity criar identity.notification"; sleep 2; done
+              soma identity.notification
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}

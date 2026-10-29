@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reservation
+  labels: {app: reservation}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: reservation}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
+  template:
+    metadata:
+      labels: {app: reservation}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: espera
+          image: busybox:1.37.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              for alvo in supabase-pooler:6543 redpanda:9092 stock:8086; do
+                host="${alvo%%:*}"; porta="${alvo##*:}"
+                until nc -w 2 "$host" "$porta" </dev/null; do echo "aguardando $alvo"; sleep 2; done
+              done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+        - name: espera-particoes
+          image: docker.redpanda.com/redpandadata/redpanda:v26.2.4
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              export RPK_BROKERS=redpanda:9092
+              until [ "$(rpk topic list | awk -v t=reservation.wallet '$1 == t {print $2}')" = "3" ]; do echo "aguardando reservation.wallet com 3 partições"; sleep 2; done
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+      containers:
+        - name: reservation
+          image: gerenciador-eventos-reservation.slim:latest
+          imagePullPolicy: Never
+          envFrom:
+            - secretRef: {name: env-reservation}
+          env:
+            - {name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE, value: "200"}
+            - {name: MANAGEMENT_SERVER_PORT, value: "8090"}
+            - {name: MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED, value: "true"}
+            - {name: MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE, value: "readinessState"}
+          ports:
+            - {name: http, containerPort: 8082}
+            - {name: mgmt, containerPort: 8090}
+          startupProbe:
+            httpGet: {path: /actuator/health/readiness, port: mgmt}
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 45
+          readinessProbe:
+            httpGet: {path: /actuator/health/readiness, port: mgmt}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: {path: /actuator/health/liveness, port: mgmt}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          lifecycle:
+            preStop:
+              sleep: {seconds: 20}
+          securityContext:
+            seccompProfile: {type: Localhost, localhostProfile: profiles/reservation-seccomp.json}
+          resources:
+            requests: {cpu: 500m, memory: 768Mi}
+            limits: {cpu: "2", memory: 1536Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reservation
+  labels: {app: reservation}
+spec:
+  selector: {app: reservation}
+  ports:
+    - {name: http, port: 8082, targetPort: http}

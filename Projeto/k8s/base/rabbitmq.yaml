@@ -1,0 +1,63 @@
+# RabbitMQ do `admission` (fila de admissão), equivalente ao `rabbitmq` do compose: imagem alpine sem management, credenciais obrigatórias (Secret),
+# SEM volume persistente: `/var/lib/rabbitmq` num emptyDir em memória (o tmpfs do compose) faz o usuário do 1º boot nascer a cada start.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  labels: {app: rabbitmq}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: rabbitmq}
+  template:
+    metadata:
+      labels: {app: rabbitmq}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:4.1.8-alpine
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef: {name: env-rabbitmq}
+          ports:
+            - {name: amqp, containerPort: 5672}
+          startupProbe:
+            exec:
+              command: &ping ["rabbitmq-diagnostics", "-q", "ping"]
+            periodSeconds: 5
+            timeoutSeconds: 10
+            failureThreshold: 24
+          readinessProbe:
+            exec:
+              command: *ping
+            periodSeconds: 5
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: *ping
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 12
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 1Gi}
+          volumeMounts:
+            - {name: dados, mountPath: /var/lib/rabbitmq}
+      volumes:
+        - name: dados
+          emptyDir: {medium: Memory}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  labels: {app: rabbitmq}
+spec:
+  selector: {app: rabbitmq}
+  ports:
+    - {name: amqp, port: 5672, targetPort: amqp}

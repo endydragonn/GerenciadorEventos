@@ -1,0 +1,63 @@
+# Redis do `admission` (contador de RPM, resultado e espera da fila de admissão), equivalente ao `redis` do compose: senha obrigatória (Secret),
+# sem persistência, maxmemory 512mb volatile-ttl. O `sh -c` passa pelo docker-entrypoint.sh da imagem (que troca para o usuário redis).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels: {app: redis}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: redis}
+  template:
+    metadata:
+      labels: {app: redis}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: redis
+          image: redis:7.4.12-alpine
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef: {name: env-redis}
+          command:
+            - sh
+            - -c
+            - exec docker-entrypoint.sh redis-server --requirepass "$REDIS_PASSWORD" --save "" --appendonly no --maxmemory 512mb --maxmemory-policy volatile-ttl
+          ports:
+            - {name: redis, containerPort: 6379}
+          # autenticado: a senha vai pelo ambiente (REDISCLI_AUTH), nunca na linha de comando
+          startupProbe:
+            exec:
+              command: &ping ["sh", "-c", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: *ping
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: *ping
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 640Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels: {app: redis}
+spec:
+  selector: {app: redis}
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
