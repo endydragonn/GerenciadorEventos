@@ -6,7 +6,7 @@ tags: [architecture, decision, queue, rabbitmq, rate-limiting]
 created: 2026-08-26
 ---
 
-> **Vendorizado de:** `D:\Claude\Brain\01-Projects\Event-Management-System\Architecture-Decision-Async-Checkout-Queue.md`
+> **Vendorizado de:** documentação externa do projeto, `Architecture-Decision-Async-Checkout-Queue.md`
 > **Sincronizado em:** 2026-10-28 · sincronização manual (ver `README.md`)
 
 # Decisão de Arquitetura — Fila Assíncrona de Checkout e Reserva com Expiração em Alta Carga

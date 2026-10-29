@@ -159,11 +159,11 @@ commitar ou registrar em log.
   parametrizável (`MAIL_HOST`/`MAIL_PORT`/`MAIL_SMTP_AUTH`/`MAIL_STARTTLS`; defaults = Gmail).
 - Relate o resultado real dos testes; se algo falhou ou foi pulado, diga.
 
-## Documentação de arquitetura (vault Obsidian)
+## Documentação de arquitetura
 
-`D:\Claude\Brain\01-Projects\Event-Management-System\` guarda as decisões de arquitetura do
-TCC (ADRs). O roadmap de execução está em `BACKLOG.md` (raiz) e, navegável, na nota
-`Roadmap-e-Issues.md` do vault. Issues #2–#47 no GitHub.
+As decisões de arquitetura do TCC (ADRs) ficam numa documentação externa, fora do git, com
+cópia versionada em `docs/adr/`. O roadmap de execução está em `BACKLOG.md` (raiz). Issues
+#2–#47 no GitHub.
 
 **Escrito no código (2026-09-01, ainda não compilado/testado — issue #5):** isolamento de
 `eventcap` como agregado próprio, reserva por `UPDATE` condicional atômico (CAS),

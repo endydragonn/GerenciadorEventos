@@ -6,7 +6,7 @@ tags: [references, architecture, marketplace]
 created: 2026-08-24
 ---
 
-> **Vendorizado de:** `D:\Claude\Brain\01-Projects\Event-Management-System\References.md`
+> **Vendorizado de:** documentação externa do projeto, `References.md`
 > **Sincronizado em:** 2026-09-03 · sincronização manual (ver `README.md`)
 
 # Referências — Estoque Isolado / Marketplace
