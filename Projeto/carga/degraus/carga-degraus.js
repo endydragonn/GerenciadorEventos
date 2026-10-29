@@ -51,6 +51,7 @@
 //
 // Variaveis (passadas pelo rodar-degraus.ps1):
 //   BASE_URL, RPMS (lista crescente "12000,16000,..."), DURACAO_S (por degrau), USERS_FILE, EVENTS_FILE,
+//   (ou, SEM arquivos, como no gerador da madrugada: USUARIOS + SUFIXO e EVENT_IDS "101-350,360"; ver README, "Rodada 4 no gerador"),
 //   SUMMARY_FILE, MAX_VUS (opcional, padrao 2000), PCT_CONFIRMA (0-100, padrao 100),
 //   MAPEAMENTO (opcional: sequencial, padrao | intercalado; outro valor aborta o setup)
 //   Issue #178 (todas opcionais): PCT_ACOMPANHA (0-100, padrao 100), CONSULTA_MS (padrao 1000, o Retry-After), TETO_CONSULTA_S (padrao 35, > TTL da
@@ -63,7 +64,7 @@ import { Counter, Trend } from 'k6/metrics';
 import { erroMapeamento, parDe } from './lib-mapeamento.js';
 import {
   acompanhar, avaliarParada, classificarReserva, erroParametros, esperaDoSetup, gracefulS, indiceJanela, limiaresParada,
-  situacaoDoDegrau, textoParada,
+  idsDeEventos, situacaoDoDegrau, textoParada, usuariosDoSufixo,
 } from './lib-admissao.js';
 
 const BASE = __ENV.BASE_URL;
@@ -88,8 +89,9 @@ const LIM_FORA_PCT = 1;          // % das reservas do degrau fora das janelas a 
 const NJ = Math.floor(DURACAO_S / 30);   // janelas inteiras por degrau (o runner exige D >= 60 e multiplo de 30)
 // PowerShell 5.1 grava UTF8 com BOM; JSON.parse nao aceita BOM.
 const lerJson = (f) => JSON.parse(open(f).replace(/^\uFEFF/, ''));
-const USERS = lerJson(__ENV.USERS_FILE);
-const EVENTS = lerJson(__ENV.EVENTS_FILE);
+// Sem USERS_FILE/EVENTS_FILE (o gerador da madrugada so roda `k6 run`): usuarios por USUARIOS + SUFIXO e eventos por EVENT_IDS (preparar-degraus.ps1 no host).
+const USERS = __ENV.USERS_FILE ? lerJson(__ENV.USERS_FILE) : usuariosDoSufixo(parseInt(__ENV.USUARIOS, 10), __ENV.SUFIXO);
+const EVENTS = __ENV.EVENTS_FILE ? lerJson(__ENV.EVENTS_FILE) : idsDeEventos(__ENV.EVENT_IDS);
 const MAX_PARES = USERS.length * EVENTS.length;
 
 let base = 0;

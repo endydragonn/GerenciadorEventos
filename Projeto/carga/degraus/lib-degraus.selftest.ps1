@@ -125,6 +125,65 @@ Confere 'resumo sem campos do modo fila (degrau sincrono puro): zeros, sem divid
 Confere 'params vazio = ultima coluna vazia' $semFila[-1] ''
 
 Write-Host ''
+Write-Host '==> Escada no gerador so com k6 run (#178, c3): resumo -> CSV no host, linha do k6, faixas de eventos'
+Confere 'Compress-Ids: faixas e isolados (101-103,110), sem duplicata, fora de ordem' (Compress-Ids @(110, 103, 101, 102, 102)) '101-103,110'
+Confere 'Compress-Ids: um id so' (Compress-Ids @(7)) '7'
+$env6 = [ordered]@{ BASE_URL = 'http://192.168.0.64:8081'; RPMS = '28000,42000'; PARAMS = 'A=1;B=2'; EVENT_IDS = '1-5,9' }
+$lk = Get-LinhaK6 -Envs $env6 -Script 'Projeto/carga/degraus/carga-degraus.js'
+Confere 'linha do k6: so `k6 run`, cada env em aspas SIMPLES (virgula e ponto-e-virgula nao quebram no PowerShell 5.1), script relativo no fim' $lk `
+    "k6 run --quiet -e 'BASE_URL=http://192.168.0.64:8081' -e 'RPMS=28000,42000' -e 'PARAMS=A=1;B=2' -e 'EVENT_IDS=1-5,9' Projeto/carga/degraus/carga-degraus.js"
+Confere 'a linha do k6 nao tem aspas duplas nem a senha' (($lk -notmatch '"') -and ($lk -notmatch 'CargaTeste')) $true
+Lanca 'valor com aspa simples nao cabe na linha digitada' { Get-LinhaK6 -Envs ([ordered]@{ X = "a'b" }) -Script s.js } 'aspas'
+
+function ResumoFixture([hashtable]$extra = @{}) {
+    $d1 = @{ nome = 'degrau_1000'; situacao = 'completo'; duracao_efetiva_s = 60; rpm_alvo = 1000; reservas = 1000; erros_5xx = 0; confirma_5xx = 0; outros = 0; descartadas = 0
+        p50_ms = 5; p95_ms = 9; p99_ms = 12; p95_max_janela_ms = 10; reservas_202 = 0 }
+    $d2 = @{ nome = 'degrau_2000'; situacao = 'parcial'; duracao_efetiva_s = 30; rpm_alvo = 2000; reservas = 900; erros_5xx = 9; confirma_5xx = 1; outros = 0; descartadas = 0
+        p50_ms = 50; p95_ms = 900; p99_ms = 1200; p95_max_janela_ms = 950; reservas_202 = 400; acompanhadas = 40; admitidas = 30; rejected = 6; timed_out = 3; sem_estado = 1
+        consultas_estado = 90; admitir_p50_ms = 1000; admitir_p95_ms = 2000; admitir_p99_ms = 2500; fim_a_fim_p50_ms = 1100; fim_a_fim_p95_ms = 2200; fim_a_fim_p99_ms = 2600 }
+    $d3 = @{ nome = 'degrau_3000'; situacao = 'omitido'; duracao_efetiva_s = 0; rpm_alvo = 3000; reservas = 0 }
+    $r = @{ duracao_degrau_s = 60; duracao_s = 200; graceful_s = 45; usuarios = 100; eventos = 40; parada = @{ degrau = 'degrau_2000'; indice = 1; pw = 0; p95_ms = 9000; limite_ms = 5000; janela_s = 30 }
+        parada_texto = 'p95_acima_de_5000ms_em_janela_de_30s_no_degrau_2000'; degraus = @($d1, $d2, $d3); faltando = @(); inconsistencias = @() }
+    foreach ($d in $d1, $d2, $d3) { foreach ($c in 'sem_login', 'alem_dos_pares', 'fora_das_janelas', 'recusadas_429', 'conflitos_422') { $d[$c] = 0 } }
+    foreach ($k in $extra.Keys) { $r[$k] = $extra[$k] }
+    return ($r | ConvertTo-Json -Depth 6 | ConvertFrom-Json)
+}
+$rs = ResumoFixture
+$linhasFx = Get-LinhasCsvDegraus -Resumo $rs -Escada Deg-9 -DuracaoS 60 -Braco cas -MaxConnections 300 -PoolHikari 1000 -Commit abc1234 -Mapeamento sequencial -Arranjo autoescala -PctAcompanha 10 -ConsultaMs 1000 -ParamsAutoescala 'AUTOESCALA_X_RPM=56000'
+Confere 'resumo com parada: omitido nao vira linha (2 linhas); o parcial usa a duracao efetiva (30 s)' "$(@($linhasFx).Count)|$((($linhasFx[1]) -split ',')[3])" '2|30'
+$esperada1 = (Format-LinhaDegrau -Escada Deg-9 -Degrau $rs.degraus[0] -DuracaoS 60 -Braco cas -MaxConnections 300 -PoolHikari 1000 -Commit abc1234 -Mapeamento sequencial) + ',' +
+    (Format-ColunasAdmissao -Degrau $rs.degraus[0] -Arranjo autoescala -PctAcompanha 10 -ConsultaMs 1000 -Parada 'p95_acima_de_5000ms_em_janela_de_30s_no_degrau_2000' -ParamsAutoescala 'AUTOESCALA_X_RPM=56000')
+Confere 'a linha do degrau completo e a mesma do caminho antigo (Format-LinhaDegrau + Format-ColunasAdmissao)' $linhasFx[0] $esperada1
+Confere 'a coluna parada leva o motivo do resumo em todas as linhas' ((($linhasFx | ForEach-Object { ($_ -split ',')[-2] }) | Select-Object -Unique) -join '|') 'p95_acima_de_5000ms_em_janela_de_30s_no_degrau_2000'
+Confere 'linha tem tantos campos quanto o cabecalho completo' (($linhasFx[0] -split ',').Count) (($DegrausCabecalho -split ',').Count)
+Confere 'Get-FalhaResumo: resumo consistente com parada = sem falha' ([string](Get-FalhaResumo -Resumo $rs)) ''
+Confere 'Get-FalhaResumo: inconsistencia do k6 recusa' ([bool](Get-FalhaResumo -Resumo (ResumoFixture @{ inconsistencias = @('reservas_5xx: global 3 != soma dos degraus 2') }))) $true
+Confere 'Get-FalhaResumo: sem parada e teste que durou o previsto (3 x 60 + 2 x 46 = 272 s) = sem falha' ([string](Get-FalhaResumo -Resumo (ResumoFixture @{ parada = $null; duracao_s = 280 }))) ''
+Confere 'Get-FalhaResumo: sem parada e teste curto demais = k6 interrompido (o codigo de saida nao chega ao host)' ((Get-FalhaResumo -Resumo (ResumoFixture @{ parada = $null; duracao_s = 120 })) -match 'interrompido') $true
+
+# o script de verdade (csv-do-resumo.ps1), num diretorio temporario: plano + resumo -> CSV identico ao Get-LinhasCsvDegraus
+$tmpC = Join-Path ([System.IO.Path]::GetTempPath()) ("csvres-{0}" -f [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $tmpC | Out-Null
+try {
+    $plano = [ordered]@{ escada = 'Deg-9'; run_id = 9; commit = 'abc1234'; duracao_s = 60; mapeamento = 'sequencial'; braco = 'cas'; max_connections = 300; pool_hikari = 1000
+        arranjo = 'autoescala'; pct_acompanha = 10; consulta_ms = 1000; teto_consulta_s = 35; params_autoescala = 'AUTOESCALA_X_RPM=56000'; usuarios = 100; eventos = 40 }
+    $pa = Join-Path $tmpC 'plano.json'; $ra = Join-Path $tmpC 'resumo.json'; $ca = Join-Path $tmpC 'saida.csv'
+    ($plano | ConvertTo-Json) | Set-Content $pa -Encoding UTF8
+    ($rs | ConvertTo-Json -Depth 6) | Set-Content $ra -Encoding UTF8   # com BOM, como o PowerShell 5.1 grava
+    $saida = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'csv-do-resumo.ps1') -Plano $pa -Resumo $ra -Csv $ca 2>&1 | Out-String
+    $rc1 = $LASTEXITCODE
+    Confere 'csv-do-resumo.ps1: sai com 0 e grava o CSV (cabecalho + 2 linhas, LF, sem BOM) igual ao das funcoes' `
+        "$rc1|$([System.IO.File]::ReadAllText($ca) -ceq ($DegrausCabecalho + "`n" + ($linhasFx -join "`n") + "`n"))" '0|True'
+    Confere 'csv-do-resumo.ps1: avisa da parada' ($saida -match 'PARADA antecipada') $true
+    # resumo de outra escada (usuarios diferentes) e recusado, sem gravar CSV
+    $rb = Join-Path $tmpC 'outra.json'; (ResumoFixture @{ usuarios = 7 } | ConvertTo-Json -Depth 6) | Set-Content $rb -Encoding UTF8
+    $cb = Join-Path $tmpC 'b.csv'
+    $null = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'csv-do-resumo.ps1') -Plano $pa -Resumo $rb -Csv $cb 2>&1 | Out-String
+    $rc2 = $LASTEXITCODE
+    Confere 'csv-do-resumo.ps1: resumo de outra escada = codigo 1 e nenhum CSV' "$rc2|$(Test-Path $cb)" '1|False'
+} finally { Remove-Item $tmpC -Recurse -Force -ErrorAction SilentlyContinue }
+
+Write-Host ''
 Write-Host '=================================================='
 if ($script:falhas -eq 0) { Write-Host '   RESULTADO: OK -- lib-degraus.ps1 passou em todas as assercoes.' }
 else { Write-Host "   RESULTADO: $($script:falhas) ASSERCAO(OES) FALHARAM." }

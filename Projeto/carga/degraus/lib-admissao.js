@@ -142,3 +142,24 @@ export function textoParada(parada) {
   if (!parada) return 'nenhuma';
   return `p95_acima_de_${parada.limite_ms}ms_em_janela_de_${parada.janela_s}s_no_${parada.degrau}`;
 }
+
+// Usuarios do seed (docs/carga/harness/setup.sh): e-mail carga-att<i>-<sufixo>@example.com, i = 1..n, e a MESMA senha CargaTeste#<sufixo>. O k6 os monta
+// na memoria (USUARIOS + SUFIXO) quando nao ha USERS_FILE: o gerador da madrugada nao recebe arquivo com credenciais nem as grava em disco.
+export function usuariosDoSufixo(n, sufixo) {
+  if (!(Number.isInteger(n) && n >= 1)) throw new Error(`USUARIOS invalido: ${n} (inteiro >= 1; sem USERS_FILE o k6 monta os usuarios por USUARIOS + SUFIXO).`);
+  if (!/^[A-Za-z0-9._-]+$/.test(String(sufixo || ''))) throw new Error(`SUFIXO invalido: '${sufixo}' (o do seed: letras, digitos, . _ -).`);
+  return Array.from({ length: n }, (_, i) => ({ email: `carga-att${i + 1}-${sufixo}@example.com`, password: `CargaTeste#${sufixo}` }));
+}
+
+// IDs dos eventos semeados sem arquivo: "101-350,360" -> [101..350, 360] (EVENT_IDS; o preparar-degraus.ps1 comprime em faixas).
+export function idsDeEventos(txt) {
+  const ids = [];
+  for (const parte of String(txt || '').split(',')) {
+    const m = /^(\d+)(?:-(\d+))?$/.exec(parte.trim());
+    if (!m) throw new Error(`EVENT_IDS invalido: '${txt}' (lista de ids e faixas: 101-350,360).`);
+    const a = parseInt(m[1], 10); const b = m[2] === undefined ? a : parseInt(m[2], 10);
+    if (b < a) throw new Error(`EVENT_IDS invalido: faixa ${parte} ao contrario.`);
+    for (let id = a; id <= b; id++) ids.push(id);
+  }
+  return ids;
+}

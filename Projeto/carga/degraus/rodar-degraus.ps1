@@ -195,62 +195,22 @@ try {
     }
     # a UNICA trava: o global de cada metrica tem de fechar com a soma dos degraus, e mais de 1% das reservas de um degrau
     # nao pode ficar fora das janelas de 30 s (senao 5xx/descartadas ou o p95 por janela podem estar errados)
-    if (@($s.inconsistencias).Count -gt 0) {
-        Fail ("Resumo do k6 inconsistente ($(@($s.inconsistencias) -join '; ')): as submetricas por degrau nao fecham com o total ou as janelas de 30 s nao representam o degrau, entao 5xx/descartadas ou o p95 por janela podem estar errados e o CSV nao foi gerado. Resumo em $sf.")
-    }
+    $falha = Get-FalhaResumo -Resumo $s
+    if ($falha) { Fail "$falha O CSV nao foi gerado. Resumo em $sf." }
     # submetrica sem amostras (ex.: nenhuma confirma com -PctConfirma 0, ou degrau em que toda reserva deu 5xx) vale 0: so informa
     if (@($s.faltando).Count -gt 0) { Info "Submetricas sem amostras (tratadas como 0): $(@($s.faltando) -join ', ')" }
 
-    $linhas = New-Object System.Collections.Generic.List[string]
-    $paradaTxt = if ($null -ne $s.parada_texto) { [string]$s.parada_texto } else { 'nenhuma' }
-    foreach ($d in $s.degraus) {
-        if ($d.situacao -eq 'omitido') { continue }   # depois da parada: nunca rodou, nao vira linha (o report leria como gerador saturado)
-        # degrau parcial: a duracao e a EFETIVA (ate o fim da janela da parada), senao o rpm_efetivo cairia e o report diria "saturou"
-        $dur = if ($d.situacao -eq 'parcial') { [int]$d.duracao_efetiva_s } else { $Duracao }
-        $l = Format-LinhaDegrau -Escada $escada -Degrau $d -DuracaoS $dur -Braco $Rotulo `
-            -MaxConnections $MaxConnections -PoolHikari $PoolHikari -Commit $commit -Mapeamento $Mapeamento
-        $l += ',' + (Format-ColunasAdmissao -Degrau $d -Arranjo $Arranjo -PctAcompanha $PctAcompanha -ConsultaMs $ConsultaMs -Parada $paradaTxt -ParamsAutoescala $ParamsAutoescala)
-        $linhas.Add($l)
-    }
-    # UTF-8 sem BOM e LF: o report em bash le sem saneamento
-    [System.IO.File]::WriteAllText($Csv, ($DegrausCabecalho + "`n" + ($linhas -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    # omitidos (depois da parada) nao viram linha; o parcial usa a duracao efetiva (lib-degraus.ps1)
+    $linhas = Get-LinhasCsvDegraus -Resumo $s -Escada $escada -DuracaoS $Duracao -Braco $Rotulo -MaxConnections $MaxConnections -PoolHikari $PoolHikari `
+        -Commit $commit -Mapeamento $Mapeamento -Arranjo $Arranjo -PctAcompanha $PctAcompanha -ConsultaMs $ConsultaMs -ParamsAutoescala $ParamsAutoescala
+    Write-CsvDegraus -Csv $Csv -Linhas $linhas
 } finally {
     Stop-Telemetria $tel
     # credenciais de teste: apagadas mesmo se o k6 falhar ou o script for interrompido (Ctrl+C)
     Remove-Item $uf, $ef -ErrorAction SilentlyContinue
 }
 
-Write-Host ''
-Write-Host ('  {0,8} {1,8} {2,9} {3,9} {4,9} {5,9} {6,11} {7,7}' -f 'RPM alvo', 'efetivo', '5xx res %', 'p50 ms', 'p95 ms', 'p99 ms', 'p95 jan. ms', 'descart.')
-foreach ($l in $linhas) {
-    $c = $l -split ','   # posicoes = $DegrausCabecalho (lib-degraus.selftest.ps1 confere)
-    Write-Host ('  {0,8} {1,8} {2,9:N2} {3,9} {4,9} {5,9} {6,11} {7,7}' -f $c[1], $c[2], ([double]::Parse($c[6], [System.Globalization.CultureInfo]::InvariantCulture) * 100), $c[9], $c[10], $c[11], $c[12], $c[14])
-}
-Write-Host ''
-$s2 = @($s.degraus | Where-Object { $_.situacao -ne 'omitido' })
-$f202 = ($s2 | Measure-Object -Property reservas_202 -Sum).Sum
-if ($f202 -gt 0) {
-    $acs = ($s2 | Measure-Object -Property acompanhadas -Sum).Sum; $rj = ($s2 | Measure-Object -Property rejected -Sum).Sum
-    $tos = ($s2 | Measure-Object -Property timed_out -Sum).Sum; $ses = ($s2 | Measure-Object -Property sem_estado -Sum).Sum
-    $r429 = ($s2 | Measure-Object -Property recusadas_429 -Sum).Sum; $r422 = ($s2 | Measure-Object -Property conflitos_422 -Sum).Sum
-    Info "Modo fila: $f202 respostas 202; acompanhadas $acs (rejected $rj, timed_out $tos, sem estado no teto $ses); 429: $r429; 422: $r422."
-    if ($r429 -gt 0) { Warn "$r429 respostas 429 (limite por usuario na fila ou fila cheia): contadas a parte, NAO em 'outros'. Se vierem do limite por usuario, aumente -Usuarios." }
-    if ($r422 -gt 0) { Warn "$r422 respostas 422 (chave de idempotencia de outro evento): nao deveria ocorrer com chave unica por iteracao." }
-    if ($ses -gt 0) { Warn "$ses reservas enfileiradas sem estado final dentro do teto da consulta ($TetoConsultaS s)." }
-}
-$sl = ($s.degraus | Measure-Object -Property sem_login -Sum).Sum
-$ap = ($s.degraus | Measure-Object -Property alem_dos_pares -Sum).Sum
-$ou = ($s.degraus | Measure-Object -Property outros -Sum).Sum
-$ds = ($s.degraus | Measure-Object -Property descartadas -Sum).Sum
-$c5 = ($s.degraus | Measure-Object -Property confirma_5xx -Sum).Sum
-$fj = 0
-foreach ($d in $s.degraus) { $fj += [int]$d.fora_das_janelas }
-if ($fj -gt 0) { Warn "$fj reservas ($(@($s.degraus | Where-Object { $_.fora_das_janelas -gt 0 } | ForEach-Object { "$($_.nome): $($_.fora_das_janelas)" }) -join ', ')) ficaram fora das janelas de 30 s (<= 1% do degrau: atraso de agendamento com o gerador saturado?): contam no p50/p95/p99 do degrau, mas nao no p95 por janela." }
-if ($sl -gt 0) { Warn "$sl iteracoes sem login (usuarios cujo login falhou): reduzem o RPM efetivo e podem aparecer como saturacao do gerador." }
-if ($ap -gt 0) { Warn "$ap iteracoes alem da cota de pares nao foram enviadas (RPM efetivo abaixo do alvo)." }
-if ($ou -gt 0) { Warn "$ou respostas inesperadas ou falhas de conexao (outros): nao entram no criterio de X, mas confira." }
-if ($c5 -gt 0) { Warn "$c5 respostas 5xx na confirmacao (erros_5xx_confirma): nao entram no criterio de X (so os 5xx da reserva), mas confira." }
-if ($ds -gt 0) { Warn 'k6 descartou iteracoes: o alvo nao foi atingido em algum degrau (gerador ou host saturado); o report trata como saturacao do gerador.' }
+Show-ResumoDegraus -Linhas $linhas -Resumo $s -TetoConsultaS $TetoConsultaS
 Info ('Gerador durante a escada: ' + (Get-ResumoTelemetria $TelCsv))
 Info "  telemetria bruta: $TelCsv   (host: make telemetria-host, ligado ANTES da escada)"
 Write-Host "CSV da escada: $Csv"

@@ -151,3 +151,123 @@ function Format-ColunasAdmissao {
         [double](N $Degrau.fim_a_fim_p50_ms), [double](N $Degrau.fim_a_fim_p95_ms), [double](N $Degrau.fim_a_fim_p99_ms),
         (& $limpa $Parada), (& $limpa $ParamsAutoescala))
 }
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------
+# Resumo do k6 -> CSV (compartilhado por rodar-degraus.ps1, que roda tudo no gerador, e por csv-do-resumo.ps1, que roda no HOST sobre o resumo
+# que o gerador da madrugada produziu so com `k6 run`; ver README, "Rodada 4 no gerador").
+
+# Motivo de recusar o resumo (texto) ou $null. 1) a trava de consistencia do k6 (global = soma dos degraus; janelas de 30 s); 2) sem `parada`
+# registrada, a duracao do teste tem de cobrir os degraus (senao o k6 foi interrompido: o codigo de saida nao chega ao HOST, entao a
+# conferencia sai do resumo, que vale com ou sem o codigo).
+function Get-FalhaResumo {
+    param([Parameter(Mandatory)]$Resumo)
+    if (@($Resumo.inconsistencias).Count -gt 0) {
+        return "Resumo do k6 inconsistente ($(@($Resumo.inconsistencias) -join '; ')): as submetricas por degrau nao fecham com o total ou as janelas de 30 s nao representam o degrau, entao 5xx/descartadas ou o p95 por janela podem estar errados."
+    }
+    if ($null -eq $Resumo.parada) {
+        $n = @($Resumo.degraus).Count
+        $esperado = $n * [double]$Resumo.duracao_degrau_s + ($n - 1) * ([double]$Resumo.graceful_s + 1)
+        if ([double]$Resumo.duracao_s -lt 0.95 * $esperado) {
+            return ("k6 interrompido: o teste durou {0:N0} s e os {1} degraus pedem >= {2:N0} s (sem parada registrada)." -f [double]$Resumo.duracao_s, $n, $esperado)
+        }
+    }
+    return $null
+}
+
+# Linhas do CSV (uma por degrau; os `omitido` pela parada nunca rodaram e nao viram linha). O parcial usa a duracao EFETIVA (senao o rpm_efetivo
+# cairia e o report diria "saturou").
+function Get-LinhasCsvDegraus {
+    param(
+        [Parameter(Mandatory)]$Resumo, [Parameter(Mandatory)][string]$Escada, [Parameter(Mandatory)][int]$DuracaoS,
+        [Parameter(Mandatory)][string]$Braco, [Parameter(Mandatory)][int]$MaxConnections, [Parameter(Mandatory)][int]$PoolHikari,
+        [Parameter(Mandatory)][string]$Commit, [Parameter(Mandatory)][string]$Mapeamento, [Parameter(Mandatory)][string]$Arranjo,
+        [Parameter(Mandatory)][double]$PctAcompanha, [Parameter(Mandatory)][int]$ConsultaMs, [string]$ParamsAutoescala = ''
+    )
+    $paradaTxt = if ($null -ne $Resumo.parada_texto) { [string]$Resumo.parada_texto } else { 'nenhuma' }
+    $linhas = New-Object System.Collections.Generic.List[string]
+    foreach ($d in $Resumo.degraus) {
+        if ($d.situacao -eq 'omitido') { continue }
+        $dur = if ($d.situacao -eq 'parcial') { [int]$d.duracao_efetiva_s } else { $DuracaoS }
+        $l = Format-LinhaDegrau -Escada $Escada -Degrau $d -DuracaoS $dur -Braco $Braco `
+            -MaxConnections $MaxConnections -PoolHikari $PoolHikari -Commit $Commit -Mapeamento $Mapeamento
+        $l += ',' + (Format-ColunasAdmissao -Degrau $d -Arranjo $Arranjo -PctAcompanha $PctAcompanha -ConsultaMs $ConsultaMs -Parada $paradaTxt -ParamsAutoescala $ParamsAutoescala)
+        $linhas.Add($l)
+    }
+    return , $linhas.ToArray()
+}
+
+# UTF-8 sem BOM e LF: o report em bash le sem saneamento
+function Write-CsvDegraus {
+    param([Parameter(Mandatory)][string]$Csv, [Parameter(Mandatory)][string[]]$Linhas)
+    [System.IO.File]::WriteAllText($Csv, ($DegrausCabecalho + "`n" + ($Linhas -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Tabela por degrau e os avisos do resumo (o que o rodar-degraus.ps1 imprimia depois do CSV)
+function Show-ResumoDegraus {
+    param([Parameter(Mandatory)][string[]]$Linhas, [Parameter(Mandatory)]$Resumo, [Parameter(Mandatory)][int]$TetoConsultaS)
+    $s = $Resumo
+    function Aviso($m) { Write-Host "[aviso] $m" -ForegroundColor Yellow }
+    Write-Host ''
+    Write-Host ('  {0,8} {1,8} {2,9} {3,9} {4,9} {5,9} {6,11} {7,7}' -f 'RPM alvo', 'efetivo', '5xx res %', 'p50 ms', 'p95 ms', 'p99 ms', 'p95 jan. ms', 'descart.')
+    foreach ($l in $Linhas) {
+        $c = $l -split ','   # posicoes = $DegrausCabecalho (lib-degraus.selftest.ps1 confere)
+        Write-Host ('  {0,8} {1,8} {2,9:N2} {3,9} {4,9} {5,9} {6,11} {7,7}' -f $c[1], $c[2], ([double]::Parse($c[6], [System.Globalization.CultureInfo]::InvariantCulture) * 100), $c[9], $c[10], $c[11], $c[12], $c[14])
+    }
+    Write-Host ''
+    $s2 = @($s.degraus | Where-Object { $_.situacao -ne 'omitido' })
+    $f202 = ($s2 | Measure-Object -Property reservas_202 -Sum).Sum
+    if ($f202 -gt 0) {
+        $acs = ($s2 | Measure-Object -Property acompanhadas -Sum).Sum; $rj = ($s2 | Measure-Object -Property rejected -Sum).Sum
+        $tos = ($s2 | Measure-Object -Property timed_out -Sum).Sum; $ses = ($s2 | Measure-Object -Property sem_estado -Sum).Sum
+        $r429 = ($s2 | Measure-Object -Property recusadas_429 -Sum).Sum; $r422 = ($s2 | Measure-Object -Property conflitos_422 -Sum).Sum
+        Write-Host "[degraus] Modo fila: $f202 respostas 202; acompanhadas $acs (rejected $rj, timed_out $tos, sem estado no teto $ses); 429: $r429; 422: $r422." -ForegroundColor Cyan
+        if ($r429 -gt 0) { Aviso "$r429 respostas 429 (limite por usuario na fila ou fila cheia): contadas a parte, NAO em 'outros'. Se vierem do limite por usuario, aumente -Usuarios." }
+        if ($r422 -gt 0) { Aviso "$r422 respostas 422 (chave de idempotencia de outro evento): nao deveria ocorrer com chave unica por iteracao." }
+        if ($ses -gt 0) { Aviso "$ses reservas enfileiradas sem estado final dentro do teto da consulta ($TetoConsultaS s)." }
+    }
+    $sl = ($s.degraus | Measure-Object -Property sem_login -Sum).Sum
+    $ap = ($s.degraus | Measure-Object -Property alem_dos_pares -Sum).Sum
+    $ou = ($s.degraus | Measure-Object -Property outros -Sum).Sum
+    $ds = ($s.degraus | Measure-Object -Property descartadas -Sum).Sum
+    $c5 = ($s.degraus | Measure-Object -Property confirma_5xx -Sum).Sum
+    $fj = 0
+    foreach ($d in $s.degraus) { $fj += [int]$d.fora_das_janelas }
+    if ($fj -gt 0) { Aviso "$fj reservas ($(@($s.degraus | Where-Object { $_.fora_das_janelas -gt 0 } | ForEach-Object { "$($_.nome): $($_.fora_das_janelas)" }) -join ', ')) ficaram fora das janelas de 30 s (<= 1% do degrau: atraso de agendamento com o gerador saturado?): contam no p50/p95/p99 do degrau, mas nao no p95 por janela." }
+    if ($sl -gt 0) { Aviso "$sl iteracoes sem login (usuarios cujo login falhou): reduzem o RPM efetivo e podem aparecer como saturacao do gerador." }
+    if ($ap -gt 0) { Aviso "$ap iteracoes alem da cota de pares nao foram enviadas (RPM efetivo abaixo do alvo)." }
+    if ($ou -gt 0) { Aviso "$ou respostas inesperadas ou falhas de conexao (outros): nao entram no criterio de X, mas confira." }
+    if ($c5 -gt 0) { Aviso "$c5 respostas 5xx na confirmacao (erros_5xx_confirma): nao entram no criterio de X (so os 5xx da reserva), mas confira." }
+    if ($ds -gt 0) { Aviso 'k6 descartou iteracoes: o alvo nao foi atingido em algum degrau (gerador ou host saturado); o report trata como saturacao do gerador.' }
+}
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------
+# Escada no gerador SO com `k6 run` (README, "Rodada 4 no gerador"): o HOST semeia e imprime a linha pronta.
+
+# [101,102,103,110] -> "101-103,110" (o EVENT_IDS do k6; mantem a linha curta com centenas de eventos)
+function Compress-Ids {
+    param([Parameter(Mandatory)][int[]]$Ids)
+    $s = @($Ids | Sort-Object -Unique)
+    $partes = New-Object System.Collections.Generic.List[string]
+    $i = 0
+    while ($i -lt $s.Count) {
+        $j = $i
+        while ($j + 1 -lt $s.Count -and $s[$j + 1] -eq $s[$j] + 1) { $j++ }
+        $partes.Add($(if ($j -gt $i) { "$($s[$i])-$($s[$j])" } else { "$($s[$i])" }))
+        $i = $j + 1
+    }
+    $partes -join ','
+}
+
+# A linha que o gerador digita no Windows PowerShell 5.1: so `k6 run`, um `-e 'CHAVE=valor'` por variavel (aspas SIMPLES: a virgula do RPMS nao vira
+# dois argumentos, o `;` do params nao encerra o comando, e o PS 5.1 nao come aspas). Valor com aspa ou quebra de linha e recusado.
+function Get-LinhaK6 {
+    param([Parameter(Mandatory)][System.Collections.Specialized.OrderedDictionary]$Envs, [Parameter(Mandatory)][string]$Script)
+    $partes = @('k6 run --quiet')
+    foreach ($k in $Envs.Keys) {
+        $v = [string]$Envs[$k]
+        if ($v -match "['`"\r\n]") { throw "Valor de $k com aspas ou quebra de linha: nao cabe numa linha digitada." }
+        $partes += "-e '$k=$v'"
+    }
+    $partes += $Script
+    $partes -join ' '
+}

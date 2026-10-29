@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import {
   classificarReserva, classificarEstado, acompanhar, gracefulS, erroParametros, esperaDoSetup, indiceJanela, limiaresParada,
-  avaliarParada, situacaoDoDegrau, textoParada, nomeMetricaParada,
+  avaliarParada, situacaoDoDegrau, textoParada, nomeMetricaParada, usuariosDoSufixo, idsDeEventos,
 } from './lib-admissao.js';
 
 let falhas = 0;
@@ -172,6 +172,30 @@ confere('textoParada: sem virgula (e CSV); nenhuma sem parada', () => {
   const t = textoParada({ degrau: 'degrau_2000', limite_ms: 5000, janela_s: 30 });
   assert.equal(t, 'p95_acima_de_5000ms_em_janela_de_30s_no_degrau_2000');
   assert.ok(!t.includes(','));
+});
+
+console.log('==> usuarios e eventos sem arquivo (gerador so com k6 run)');
+confere('usuariosDoSufixo: o padrao do setup.sh (carga-att<i>-<sufixo>@example.com, i de 1, senha CargaTeste#<sufixo>)', () => {
+  const u = usuariosDoSufixo(3, '123-aq');
+  assert.deepEqual(u[0], { email: 'carga-att1-123-aq@example.com', password: 'CargaTeste#123-aq' });
+  assert.equal(u[2].email, 'carga-att3-123-aq@example.com');
+  assert.equal(u.length, 3);
+});
+confere('usuariosDoSufixo recusa n invalido e sufixo vazio/fora do padrao', () => {
+  assert.throws(() => usuariosDoSufixo(NaN, 'x'), /USUARIOS invalido/);
+  assert.throws(() => usuariosDoSufixo(0, 'x'), /USUARIOS invalido/);
+  assert.throws(() => usuariosDoSufixo(5, undefined), /SUFIXO invalido/);
+  assert.throws(() => usuariosDoSufixo(5, 'a b'), /SUFIXO invalido/);
+});
+confere('idsDeEventos: lista e faixas ("101-103,110" -> 101,102,103,110); um id so', () => {
+  assert.deepEqual(idsDeEventos('101-103,110'), [101, 102, 103, 110]);
+  assert.deepEqual(idsDeEventos('7'), [7]);
+});
+confere('idsDeEventos recusa vazio, lixo e faixa ao contrario', () => {
+  assert.throws(() => idsDeEventos(''), /EVENT_IDS invalido/);
+  assert.throws(() => idsDeEventos(undefined), /EVENT_IDS invalido/);
+  assert.throws(() => idsDeEventos('1,a'), /EVENT_IDS invalido/);
+  assert.throws(() => idsDeEventos('9-3'), /ao contrario/);
 });
 
 console.log(falhas === 0 ? '\nselftest lib-admissao: OK' : `\nselftest lib-admissao: ${falhas} falha(s)`);

@@ -206,5 +206,21 @@ await confere('IDEMPOTENCY_KEY=1: chave propria por iteracao no POST e usada no 
   assert.ok(chamadas.some((c) => c.url.includes('idempotencyKey=k6-teste-11')));
 });
 
+// sem USERS_FILE/EVENTS_FILE (o gerador da madrugada so roda k6 run): usuarios por USUARIOS + SUFIXO e eventos por EVENT_IDS; nenhum open()
+globalThis.__ENV = { ...env, USERS_FILE: undefined, EVENTS_FILE: undefined, USUARIOS: '100', SUFIXO: '777-r4', EVENT_IDS: '201-239,250' };
+globalThis.open = () => { throw new Error('open() nao deveria ser chamado sem USERS_FILE/EVENTS_FILE'); };
+const semArquivos = await import(pathToFileURL(new URL('./carga-degraus.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')).href + '?semarquivos');
+await confere('sem arquivos: logins pelo padrao do seed (e-mail e senha do sufixo), eventos de EVENT_IDS, resumo conta usuarios/eventos', () => {
+  zera();
+  const s = semArquivos.setup();
+  assert.equal(s.length, 100);
+  const login = chamadas.filter((c) => c.url.endsWith('/login'));
+  assert.equal(login.length, 100);
+  assert.deepEqual(JSON.parse(login[0].corpo), { email: 'carga-att1-777-r4@example.com', password: 'CargaTeste#777-r4' });
+  const j = JSON.parse(semArquivos.handleSummary(dados({ comParada: false }))['s.json']);
+  assert.equal(j.usuarios, 100);
+  assert.equal(j.eventos, 40);
+});
+
 console.log(falhas === 0 ? '\nselftest carga-degraus: OK' : `\nselftest carga-degraus: ${falhas} falha(s)`);
 process.exit(falhas === 0 ? 0 : 1);
