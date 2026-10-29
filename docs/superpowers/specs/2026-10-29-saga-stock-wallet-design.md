@@ -45,8 +45,10 @@ Decidido nesta spec, sem pendência (solução única ou trade-off desprezível)
     como diferença.
 - **`catalog`** troca só o alvo da capacidade: `STOCK_SERVICE_URL` (`http://stock:8086`) no lugar de `RESERVATION_SERVICE_URL`, com o
   `StockClient`. O contrato HTTP de `/internal/eventcaps/**` não muda.
-- `EventCap` e `EventCapacityApi` saem da lib `reservation-client` para a `stock-client`, e o `ReservationClient` deixa de implementar
-  `EventCapacityApi`.
+- `EventCap`, `EventCapacityApi` e a `ReservationConflictException` (o 409 de apagar evento com reserva, que o
+  `catalog/EventService` captura) saem da lib `reservation-client` para a `stock-client`, como `StockConflictException`. O `catalog` passa a
+  capturar essa; senão, apagar evento com reserva viraria 500. O `ReservationClient` deixa de implementar `EventCapacityApi`. Nenhuma lib
+  de contrato depende de outra.
 - Nenhum serviço lê tabela de outro. Sem FK entre `stock` e `reservation`. O `ModuleBoundaryArchTest` ganha `stockclient` entre as libs de
   contrato.
 
@@ -73,11 +75,22 @@ stock.hold(hold_id uuid PK, event_id integer NOT NULL, user_id integer NOT NULL,
      micros).
   - Efeito colateral a medir na R5: o lock da linha quente agora dura **só o CAS e o commit**. Hoje dura o CAS, o `reservePending`, o
     append e o commit.
-- **Liberar** (`POST /internal/holds/{holdId}/release`, corpo `{eventId}`): uma transação, `UPDATE hold SET status = 'released' WHERE
-  hold_id = ? AND status = 'held' RETURNING event_id, decremented`.
-  - 1 linha e `decremented` → `UPDATE eventcap SET quant = LEAST(quant + 1, capacity) WHERE event_id = ? AND capacity <> -1`.
-  - 0 linhas → `INSERT hold (..., decremented = false, status = 'released') ON CONFLICT DO NOTHING`. É a **lápide**: um "reservar"
-    atrasado que chegue depois da compensação recebe 409 e não debita.
+- **Liberar** (`POST /internal/holds/{holdId}/release`, corpo `{eventId, userId}`): uma transação com **um statement só** no hold:
+  ```
+  INSERT INTO stock.hold (hold_id, event_id, user_id, decremented, status) VALUES (?, ?, ?, false, 'released')
+  ON CONFLICT (hold_id) DO UPDATE SET status = 'released', updated_at = now() WHERE stock.hold.status = 'held'
+  RETURNING decremented
+  ```
+  - Linha com `decremented = true` (era `held` e tinha débito) → `UPDATE eventcap SET quant = LEAST(quant + 1, capacity) WHERE event_id = ?
+    AND capacity <> -1`.
+  - O INSERT que não conflita grava a **lápide** (`released`, sem débito). Um "reservar" atrasado que chegue depois recebe 409 e não
+    debita.
+  - Sem linha devolvida: o hold já estava `released`. No-op.
+  - Por que um statement só: em READ COMMITTED, um `UPDATE ... WHERE status = 'held'` não vê o `INSERT` ainda sem commit de um "reservar"
+    em voo (o cliente desistiu, mas o handler do `stock` segue, por exemplo, parado no CAS da linha quente). Devolveria 0 linhas, a lápide
+    `ON CONFLICT DO NOTHING` esperaria e não faria nada, e o hold comitaria `held` com a saga já `compensated`: a vaga ficaria presa para
+    sempre. Com o upsert, o statement **espera** a transação do "reservar". Se ela comitar, libera e devolve a vaga; se fizer rollback
+    ("lotado"), grava a lápide.
   - Sempre **200**. **Idempotente por chave**: liberar duas vezes devolve uma vaga, no máximo.
   - O `LEAST` é rede de segurança: com o ledger, ele nunca deveria cortar nada. Se cortar, sai um log WARN. No consumer, um CHECK
     violado travaria a partição.
@@ -86,6 +99,11 @@ stock.hold(hold_id uuid PK, event_id integer NOT NULL, user_id integer NOT NULL,
   - a conversão ilimitado → limitado da #56 conta `ativas` = holds `held` do evento, no próprio schema;
   - `deleteIfNoReservations` vira `NOT EXISTS (hold do evento, qualquer status)`, o antigo `RESTRICT`.
   - Os dois subselects que hoje leem `reservation.walletevent` passam a ler `stock.hold`. Ler de outro schema seria proibido.
+  - **A conversão ilimitado → limitado marca o débito.** Na mesma transação, antes do `UPDATE eventcap` (mesma ordem de lock do
+    reservar: hold e depois `eventcap`), roda `UPDATE hold SET decremented = true WHERE event_id = ? AND status = 'held'`. Sem isso, os
+    holds de antes da conversão têm `decremented = false`, e o cancelamento deles nunca devolveria a vaga contada no `quant = capacidade −
+    ativas`: perda permanente. Limitado → ilimitado não mexe nos holds: o `release` de evento ilimitado não toca o `eventcap`
+    (`capacity <> -1`).
 - Um hold `held` cujo cancelamento ainda não foi consumido conta como ativo. Na conversão e no delete isso erra para o lado seguro: menos
   vagas, e o delete é recusado.
 
@@ -94,7 +112,8 @@ stock.hold(hold_id uuid PK, event_id integer NOT NULL, user_id integer NOT NULL,
 Estado da saga = a linha de `reservation.idempotency_key` (a reivindicação da chave **é** o início da saga). Colunas novas:
 - `hold_id uuid`;
 - `saga_status text NOT NULL CHECK (saga_status IN ('reserving','reserved','compensating','compensated'))`;
-- `updated_at timestamptz`, `resolved_at timestamptz`;
+- `updated_at timestamptz NOT NULL DEFAULT now()` (a tx1 e a reabertura gravam `now()`; com nulo, `updated_at < ...` nunca seria
+  verdadeiro e a órfã escaparia do reaper), `resolved_at timestamptz`;
 - `resolved_by text CHECK (resolved_by IN ('inline','reaper'))`;
 - `expires_at` passa a aceitar nulo: é gravado no passo 3;
 - índice parcial `(updated_at) WHERE saga_status IN ('reserving','compensating')`, para o reaper.
@@ -125,12 +144,16 @@ Passos e respostas:
    commit. Se a chave já existe:
    - outro evento → 422;
    - `reserved` → resultado salvo (201, sem passo nenhum);
-   - `compensated` → reabre: `UPDATE ... SET saga_status = 'reserving', hold_id = <novo>, updated_at = now() WHERE saga_status =
-     'compensated'`, porque falha não consome a chave;
-   - `reserving`/`compensating` → **espera** relendo a linha a cada 50 ms, sem conexão presa entre as leituras, até
-     `RESERVATION_SAGA_WAIT_MS` (default **15000** = pool + resposta do cliente do `stock`). É o equivalente de hoje, em que o `INSERT`
-     bloqueava até a outra transação terminar. Saindo do `reserving`, segue a regra da linha nova. Vencida a espera → **503** "Reserva em
-     andamento, tente novamente".
+   - `compensated` → reabre: `UPDATE ... SET saga_status = 'reserving', hold_id = <novo>, updated_at = now() WHERE <PK> AND hold_id =
+     <lido> AND saga_status = 'compensated'`, porque falha não consome a chave. Com **0 linhas** (outro pedido reabriu antes, ou a retenção
+     apagou), volta a reler a linha. **O dono só chama o `stock` se a tx1 (o `INSERT` ou a reabertura) afetou 1 linha com o seu
+     `hold_id`;**
+   - `reserving` → **espera** relendo a linha a cada 50 ms, sem conexão presa entre as leituras, até `RESERVATION_SAGA_WAIT_MS` (default
+     **8000**). A espera fica **abaixo** do timeout de resposta dos dois chamadores (gateway e worker do `admission`, 10 s): senão a thread
+     do Tomcat seguiria presa depois que o chamador desistiu, e o 503 nunca chegaria a ninguém. É o equivalente de hoje, em que o `INSERT`
+     bloqueava até a outra transação terminar. Saindo do `reserving`, segue a regra da linha nova; **se a linha sumiu** (o dono recebeu
+     400 e a apagou), volta ao `INSERT` do passo 2. Vencida a espera → **503** "Reserva em andamento, tente novamente";
+   - `compensating` → **503 na hora**, sem esperar: o fim depende do reaper e pode demorar o tempo de o `stock` voltar.
 3. **Chamada ao `stock`** (`StockClient`, abaixo):
    - 201/200 → passo 4;
    - 400 → `DELETE idempotency_key WHERE ... AND hold_id = ? AND saga_status = 'reserving'` e devolve o 400 com o texto do `stock`.
@@ -139,15 +162,20 @@ Passos e respostas:
 4. **tx2**: `UPDATE idempotency_key SET saga_status = 'reserved', expires_at = ?, updated_at = now() WHERE ... AND hold_id = ? AND
    saga_status = 'reserving'` (o CAS da saga). Na mesma transação: `reservePending(..., hold_id)` e `SlotReserved` com `holdId`, e
    commit.
-   - CAS com 0 linhas: o reaper assumiu a saga e já está liberando o hold. Rollback e **503** "Reserva não concluída, tente novamente".
-     Nada mais a fazer.
+   - CAS com 0 linhas: o reaper assumiu a saga, ou a linha já não é deste `hold_id`. Rollback, **`release(meuHoldId)`** (idempotente:
+     se o reaper já liberou, é no-op; se a linha foi reaberta com outro `hold_id`, ninguém mais liberaria este) e **503** "Reserva não
+     concluída, tente novamente".
    - `reservePending` = 0 (corrida de "vínculo"), ou o append falhou: rollback da tx2, compensação inline e 400 "Vínculo já existente".
      Erro de banco dá 500.
 
+**Regra das transições:** toda transição da linha da saga é um `UPDATE` condicional por **(PK, `hold_id`, status esperado)**, nunca só
+pela PK. Assim o fim atrasado de uma tentativa antiga nunca fecha a saga de uma tentativa nova da mesma chave.
+
 **Compensação inline** (o pedido ainda está no ar):
-1. `UPDATE saga reserving → compensating WHERE hold_id = ?` e commit. Com 0 linhas, o reaper já cuida da saga.
+1. `UPDATE saga reserving → compensating WHERE <PK> AND hold_id = ? AND saga_status = 'reserving'` e commit. Com 0 linhas, só
+   `release(holdId)` (idempotente) e fim: a linha é de outro dono ou do reaper.
 2. `release(holdId)` no `stock`.
-3. Com 200: `compensating → compensated`, `resolved_at = now()`, `resolved_by = 'inline'`.
+3. Com 200: `compensating → compensated` (por PK + `hold_id`), `resolved_at = now()`, `resolved_by = 'inline'`.
 4. Se o `release` falha, a linha fica `compensating` para o reaper.
 5. A resposta ao cliente é 503 (ou o 400 de vínculo).
 
@@ -200,7 +228,12 @@ comparação do replay, como hoje ficam as linhas `version = 0`.
     decremented`;
   - depois, **um** `UPDATE eventcap SET quant = LEAST(quant + n, capacity)` por evento, como últimos comandos. Assim o lote não segura a
     linha quente enquanto atualiza os holds;
-  - ignora os outros tipos de evento;
+  - ignora os outros tipos de evento, e também `Cancelled`/`Expired` sem `holdId` (v1, anteriores à migração), com log DEBUG. Um NPE ali
+    seria tratado como transitório, com retry sem limite, e travaria a partição;
+  - **offset inicial:** `auto.offset.reset=earliest`. Com `latest`, um cancelamento publicado antes da 1ª atribuição do group seria
+    pulado e a vaga ficaria presa. Para não reler o histórico inteiro de um broker antigo no 1º `up`, entra um one-shot **`stock-seek`**
+    no compose, igual ao `notification-seek`: move o group `stock` para o fim de `reservation.wallet` **só se o group ainda não existe**,
+    e o `stock` espera ele terminar;
   - a ordem não importa: o hold existe antes do `SlotReserved` comitar;
   - com 3 partições (override de autoescala) e 1 réplica do `stock`, ela consome as três.
 - Com o `stock` fora, cancelar e expirar continuam respondendo (só o `wallet`). As devoluções esperam no tópico e saem quando ele volta.
@@ -213,9 +246,9 @@ comparação do replay, como hoje ficam as linhas `version = 0`.
 1. Uma transação seleciona `saga_status = 'reserving' AND updated_at < now() - RESERVATION_SAGA_ORPHAN_MS` (default **30000**, acima de pool
    5 s + resposta 10 s do cliente do `stock` + margem) **ou** `saga_status = 'compensating'`, com `ORDER BY updated_at LIMIT n FOR UPDATE
    SKIP LOCKED`. Vale para N réplicas, como a expiração.
-2. Passa as `reserving` para `compensating` (CAS por `hold_id`) e comita. É isso que faz a tx2 atrasada do dono perder.
-3. Para cada linha, `release(holdId)` no `stock` fora da transação. Com 200, a linha vai a `compensated` (`resolved_at`, `resolved_by =
-   'reaper'`). Com falha, fica `compensating` e entra no próximo tick.
+2. Passa as `reserving` para `compensating` (CAS por PK + `hold_id`) e comita. É isso que faz a tx2 atrasada do dono perder.
+3. Para cada linha, `release(holdId)` no `stock` fora da transação, com o `eventId` e o `userId` da linha. Com 200, a linha vai a
+   `compensated` (por PK + `hold_id`; `resolved_at`, `resolved_by = 'reaper'`). Com falha, fica `compensating` e entra no próximo tick.
 4. Uma linha de log INFO por tick com o que resolveu e a maior idade; WARN se sobrar `compensating`.
 
 Regra de ouro: **o reaper nunca libera um hold cuja saga chegou a `reserved`**, porque o CAS impede. Ele também não decide nada pelo lado
@@ -232,7 +265,7 @@ A retenção de `idempotency_key` (#130) passa a apagar só as linhas em estado 
 
 | Falha | O que acontece | Quem resolve | Teste |
 |---|---|---|---|
-| `stock` fora (conexão recusada) | o `POST` da reserva responde 503; a saga fica `compensating` (o release também falha) | o reaper, quando o `stock` volta | W2, e2e |
+| `stock` fora (conexão recusada) | o `POST` interno responde 503 (500 genérico no `/bff`); a saga fica `compensating` (o release também falha) | o reaper, quando o `stock` volta | W2, e2e |
 | `stock` comitou e a resposta se perdeu (timeout) | compensação inline: `release(holdId)` devolve a vaga e responde 503; repetir com a mesma chave reabre com hold novo | inline (o reaper, se o release falhar) | W3 |
 | "Reservar" atrasado chega depois da compensação | lápide → 409, sem débito | — | S3, W3 |
 | `reservation` cai entre o hold e a tx2 | saga `reserving` órfã | o reaper de outra réplica, ou do mesmo serviço ao voltar, depois de `ORPHAN_MS` | W4, e2e |
@@ -248,7 +281,9 @@ A retenção de `idempotency_key` (#130) passa a apagar só as linhas em estado 
 - A projeção `event_availability` e o `EventAvailabilityConsumer` **ficam no `reservation`**. O preenchimento de buraco do
   `IdempotentConsumer` lê o `event_store` do próprio schema, e mover a projeção quebraria isso.
 - A disponibilidade passa a ser `capacity` (lida do `stock` por `GET /internal/eventcaps/{id}`) − `ativos` (local). A regra do `CASE` não
-  muda; só a origem da capacidade.
+  muda; só a origem da capacidade. **404 do `stock`** (sem `eventcap`) → 404, como hoje. **Falha do `stock`** (fora, timeout, 5xx) →
+  **503**, nunca 404: o gateway traduziria 404 em "Capacidade do evento não configurada" para um evento que tem capacidade. No `/bff` vira
+  500.
 - O gateway continua com **2 chamadas** no naive (disponibilidade e reserva) e com o mesmo cliente. Dentro do `reservation`, cada uma ganha
   um salto ao `stock`: a leitura da capacidade e a saga com `mode = naive` (hold sem débito). A janela check-then-act do braço de controle
   fica um pouco maior. Ele já fica no teto; é registrado na comparação.
@@ -274,8 +309,14 @@ A retenção de `idempotency_key` (#130) passa a apagar só as linhas em estado 
   - `X-Internal-Token` em toda chamada, URLs com `URIBuilder`;
   - o `catalog` usa o mesmo cliente com pool 100.
 - **Serviço `stock`:** Tomcat 300, `max-keep-alive-requests=-1`, keep-alive 60 s, virtual threads off, `InternalTokenFilter` em toda
-  requisição, healthcheck TCP. Sem `INTERNAL_API_TOKEN`, falha no boot. No compose depende do pooler/db e do `redpanda`. O `reservation` e o
-  `catalog` dependem do `stock` (`service_healthy`).
+  requisição, healthcheck TCP. Sem `INTERNAL_API_TOKEN`, falha no boot. No compose depende do pooler/db, do `redpanda` e do `stock-seek`.
+  - **Só o `reservation` depende do `stock`** (`service_healthy`).
+  - O `catalog` **não** depende dele no boot, como hoje não depende do `reservation`: com o `stock` fora, a criação de evento segue, e o
+    `eventcap` vem pela reconciliação (group `stock-catalog`). Se dependesse, `stock` unhealthy → `catalog` não sobe → `backend` não sobe
+    → `/bff` inteiro fora.
+- **Erros no `/bff`:** os 503 novos são da **API interna**. O `ReservationClient` traduz status desconhecido em `RuntimeException`, e o
+  `BffEventWalletController` responde **500 genérico**, como hoje com o `reservation` fora. O contrato `/bff` não muda. O worker do
+  `admission` trata a mesma `RuntimeException` como falha transitória (backoff e requeue), que é o que se quer.
 - Com 3 réplicas do `reservation` mandando até 900 pedidos simultâneos, o `stock` (300 threads, Hikari 250) pode virar o gargalo antes da
   linha quente. É achado esperado da R5, e o caso para reabrir a D3.
 
@@ -290,13 +331,24 @@ A retenção de `idempotency_key` (#130) passa a apagar só as linhas em estado 
   de qualquer jeito.
 - O `reservation` agora segura conexão por menos tempo por pedido (duas transações curtas em vez de uma maior), sem mudar o tamanho do
   pool.
+- **A folga fica pequena:** 37 no base e **11 no override**. A ADR da autoescala e o override ainda dizem que identity e catalog cabem
+  com "90 por réplica (1479)". Se a R4 calibrar `AUTOESCALA_IDENTITY_HIKARI`/`AUTOESCALA_CATALOG_HIKARI` acima de 51, a R5 passa de
+  1500 com o `stock` (com 60: 1549).
+  - **Pré-condição da R5:** usar os Hikari finais da R4. O Hikari do `stock` = `min(250, 1500 − soma da R4)`, conferido antes do 1º
+    bloco e registrado no README da etapa 08.
+  - A fórmula da ADR (`N_res × H_res + ... ≤ 1500`) e o comentário do override ganham o termo do `stock`.
+- No compose, o Hikari do `stock` é um **literal** (`"250"`), nunca `${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-...}`. Essa variável é
+  a do `reservation`, e o kit de carga a exporta (`make host-rpm MAX_CONN`): o `stock` herdaria o 1000.
 - Mudar o Hikari do `stock` ou torná-lo escalável (D3 b) exige refazer a conta. Com 3 réplicas, o teto seria ~85 cada.
 
 ## Schema, migração e rollback
 
 - **Banco novo:** `init-scripts/16-stock.sql` cria o schema `stock`, o `eventcap` (sai do `13-reservation.sql`, mesmos CHECKs) e o
-  `hold`, com `OWNER admin`. O `13-reservation.sql` ganha as colunas novas de `idempotency_key` e `walletevent.hold_id`. `99-tests.sql`
-  acompanha. O `stock` não tem event store: não publica eventos, só consome.
+  `hold`, com `OWNER admin`.
+  - Entra na lista explícita do `db/supabase-app-init.sql` (`\i /app-init/16-stock.sql`). Sem isso, banco novo e e2e nascem sem o
+    schema.
+  - O `13-reservation.sql` ganha as colunas novas de `idempotency_key` e `walletevent.hold_id`. `99-tests.sql` acompanha.
+  - O `stock` não tem event store: não publica eventos, só consome.
 - **Banco existente:** `migrations/20261029-stock-schema.sql`, com `verify-20261029-migration.{sh,sql}` no padrão dos vizinhos.
   - **Antes:** backend, reservation, catalog e stock **parados**; backup `pg_dump -h localhost -U admin --clean --if-exists -n reservation
     meu_banco`.
@@ -308,11 +360,14 @@ A retenção de `idempotency_key` (#130) passa a apagar só as linhas em estado 
     4. `CREATE TABLE stock.hold`;
     5. colunas novas em `walletevent` e `idempotency_key` (as linhas existentes ficam `reserved`);
     6. `expires_at` passa a aceitar nulo, e entra o índice parcial;
-    7. **backfill:** para cada `walletevent` `pending`/`confirmed` sem `hold_id`, `hold_id = gen_random_uuid()` e um `stock.hold` `held`
-       com `decremented = (capacity <> -1)`.
-  - Limitação documentada do backfill: reservas antigas do braço naive não se distinguem das do `cas` e entram como `decremented`.
-    Liberá-las devolveria uma vaga nunca tirada, e o `LEAST(…, capacity)` impede passar da capacidade. A R5 roda com o banco limpo por
-    bloco e não é afetada.
+    7. **backfill:** para cada `walletevent` `pending`/`confirmed` sem `hold_id`, `hold_id = gen_random_uuid()` e um `stock.hold` `held`.
+       Por evento limitado, **exatamente `capacity − quant`** desses holds (os mais antigos por `created_at`) ficam com `decremented =
+       true`, e o resto com `false`. Ilimitado: todos `false`.
+  - Por que essa conta: reservas antigas do braço naive não se distinguem das do `cas`. Marcar todas como `decremented` devolveria vagas
+    nunca tiradas ao cancelá-las, e o `LEAST(…, capacity)` limita o `quant`, não as ativas. Exemplo: capacidade 10, 7 `cas` + 3 `naive`
+    → até 13 ativas. Com `capacity − quant` holds debitados, vale a invariante `quant = capacity − held decrementados` logo depois da
+    migração. Se `capacity − quant` for maior que as ativas (dado já inconsistente), a migração **aborta** com a lista dos eventos. A R5
+    roda com o banco limpo por bloco e não é afetada.
   - Eventos que só tinham reservas inativas antigas passam a poder ser apagados (o `RESTRICT` agora olha `hold`).
 - **Rollback (no cabeçalho do arquivo):** com tudo parado, `ALTER TABLE stock.eventcap SET SCHEMA reservation`, `DROP TABLE stock.hold`,
   `DROP` das colunas novas e `DROP SCHEMA stock`. O `quant` não precisa de ajuste: a migração não o altera, e as devoluções feitas depois
@@ -326,7 +381,8 @@ A retenção de `idempotency_key` (#130) passa a apagar só as linhas em estado 
 - **Dockerfiles:** todos copiam os poms de `stock` e `stock-client`.
 - **Slim (#177):** imagem `stock.slim` com probe de `/internal/holds`, `/internal/eventcaps/**` e do consumer. Entra no
   `docker-compose.slim.yml`.
-- **e2e:** o `stock` entra como `*isolado`.
+- **e2e:** o `stock` (e o `stock-seek`) entra como `*isolado`. As consultas do `run-e2e.sh` e do kit de carga que leem
+  `reservation.eventcap` (passo 4b, overselling) passam a ler `stock.eventcap`.
 
 ## API interna do `stock`
 
@@ -348,8 +404,16 @@ A retenção de `idempotency_key` (#130) passa a apagar só as linhas em estado 
   - lote com duplicatas, reentrega e tipos misturados → cada hold liberado uma vez;
   - `quant` agregado por evento;
   - rebalance com 2 instâncias (padrão do `ReservationRebalanceTest`).
-- **S6** a conversão ilimitado → limitado conta os holds `held`; o delete é barrado por hold de qualquer status; os testes do
-  `EventCapController` e do `CatalogReconciliationTest` vêm junto.
+- **S5b** lote com `Cancelled` v1 sem `holdId`: não trava a partição e não libera nada. Group novo com `earliest`: um cancelamento
+  publicado antes do 1º poll é liberado.
+- **S6** a conversão ilimitado → limitado conta os holds `held` e os marca `decremented`: ilimitado com 1 reserva → capacidade 10 →
+  `quant` 9 → cancela → consumer → `quant` 10. O delete é barrado por hold de qualquer status. Os testes do `EventCapController` e do
+  `CatalogReconciliationTest` vêm junto.
+- **S7** release × reservar em voo: uma 3ª conexão trava o `eventcap` (`SELECT ... FOR UPDATE`), dispara o reservar H e, em paralelo,
+  `release(H)`, depois solta o lock → H `released`, `quant` intacto. Repetir com o reservar terminando em "lotado" → lápide gravada.
+- **S8** `release` de `holdId` inexistente → 200, com a lápide gravada (`event_id` e `user_id` do corpo).
+- **S9** a migração sobre um banco com reservas `cas` e `naive` antigas (capacidade 10, 7 + 3) → `capacity − quant` holds debitados e a
+  invariante verde logo depois.
 
 **Módulo `reservation`.** O `stock` **real** sobe no próprio teste, como dependência de teste do módulo, numa porta aleatória, atrás de um
 proxy HTTP de teste (JDK `HttpServer`) que sabe ficar **fora**, **atrasar** e **comitar e perder a resposta**.
@@ -379,11 +443,23 @@ proxy HTTP de teste (JDK `HttpServer`) que sabe ficar **fora**, **atrasar** e **
   - reviver a reserva não libera o hold antigo.
 - **W9** 4 reapers simultâneos (`CyclicBarrier`) sobre 30 órfãs → cada uma liberada uma vez.
 - **W10** o replay reconstrói `walletevent.hold_id`; o `ReservationReplayTest` fica verde.
+- **W11** duas reaberturas paralelas da mesma chave `compensated` → um só hold `held` e uma reserva. Variante: o fim atrasado do hold
+  antigo não fecha a saga do novo.
+- **W12** espera: com o `stock` atrasado e o dono recebendo 400 "lotado", o pedido concorrente da mesma chave recebe o próprio 400 em
+  menos de 1 s. Com a saga `compensating` (`stock` fora), repetir a chave dá 503 em menos de 1 s.
+- **W13** `updated_at` com o default: INSERT da tx1 sem `updated_at` explícito, mais o failpoint `after-hold` → o reaper resolve em ≤
+  `ORPHAN_MS + SCAN_MS`.
 
 **Invariante checada em todos os W.** Um helper de teste é o único código que lê os dois schemas:
 - `quant = capacity − count(hold held AND decremented)` por evento limitado;
 - nenhum `walletevent` ativo sem hold `held` com o mesmo `hold_id`;
+- **no sentido inverso**, todo hold `held` tem `walletevent` ativo com o mesmo `hold_id`, ou uma saga `reserving`/`compensating` com ele,
+  ou um `Cancelled`/`Expired` com ele ainda não consumido. Sem essa checagem, uma vaga presa para sempre passaria com tudo verde;
 - ao fim, nenhuma saga `reserving` ou `compensating`.
+
+**Isolamento dos testes:** o módulo `reservation` passa a truncar também o schema `stock` (`test.db.schemas=reservation,stock`). Hoje o
+default é `reservation`, e `eventcap`/`hold` sobrariam entre as classes: o `PUT eventcap` responderia "já existia" com a capacidade
+antiga, e a invariante falharia de forma intermitente.
 
 Os testes que já existem (`IdempotencyKeyTest`, expiração, naive, `ReservationApiE2ETest` agora com o `stock` real) se adaptam: devolução
 pelo consumer e mensagem na ordem nova.
@@ -391,8 +467,9 @@ pelo consumer e mensagem na ordem nova.
 **Monólito:** `HttpContractTest` sem mudança de expectativa. `FakeReservationServer` intacto.
 
 **e2e (`run-e2e.sh`)**, com o fluxo atual intacto e mais dois passos:
-- **(a) `stock` fora:** `docker stop` do `stock` do project e2e → a reserva dá 503 → `start` → depois de `ORPHAN_MS + SCAN_MS` (curtos no
-  e2e), a invariante vale e a mesma chave reserva;
+- **(a) `stock` fora:** `docker stop` do `stock` do project e2e → a reserva pelo `/bff` dá **500** genérico (o contrato de hoje com o
+  `reservation` fora), e no banco a saga fica `compensating` com o `quant` intacto → `start` → depois de `ORPHAN_MS + SCAN_MS` (curtos no
+  e2e), a saga fica `compensated`, a invariante vale e a mesma chave reserva (201);
 - **(b) queda do `reservation` no meio de uma rajada** (20 usuários, `docker stop -t 0` do container do e2e, não do Docker): depois do
   `start` e da janela do reaper, a invariante e o overselling 0 valem. A contagem de 201 não é exigida.
 
@@ -434,12 +511,39 @@ goal). A coleta roda **antes** do `limpar-banco.sh` de cada bloco. A retenção 
   - `reservation-client`: sai o `EventCapacityApi`;
   - compose base, autoescala, slim e e2e;
   - `run-tests.sh`, `limpar-banco.sh`, kit de carga e harness;
-  - os Dockerfiles, o `ModuleBoundaryArchTest`;
+  - os Dockerfiles, o `ModuleBoundaryArchTest`, o `db/supabase-app-init.sql`, a ADR da autoescala (fórmula do pool) e o comentário do override;
   - a migração com o verify, os init scripts e as docs (`Projeto/Backend/CLAUDE.md`, `fase7-servicos.md`, `CLAUDE.md` raiz).
 - Do tamanho da #33, ou maior. **Duas passadas no mesmo PR** (como a #112):
   - **(a)** `stock` e o ledger, `stock-client`, migração e init, `catalog` apontando para o `stock`, saga com a compensação inline, devolução
-    pelo consumer, compose base e `run-tests.sh`, com S1–S6, W1, W3, W5, W6, W8, W10;
-  - **(b)** reaper e failpoint, W2, W4, W7, W9, os passos e2e, slim, override de autoescala, `limpar-banco.sh`, kit e docs.
+    pelo consumer, compose base e `run-tests.sh`, com S1–S9, W1, W3, W5, W6, W8, W10, W11, W12;
+  - **(b)** reaper e failpoint, W2, W4, W7, W9, W13, o `stock-seek`, os passos e2e, slim, override de autoescala, `limpar-banco.sh`, kit e docs.
+
+## Revisão adversarial (2026-10-29, modo rápido, achados não reverificados)
+
+Dois revisores: corretude distribuída, e consistência com o código, as specs vizinhas e a operação. As somas do Supavisor conferem.
+
+**Absorvido nesta versão:**
+- **(crítico)** `release` concorrente com um "reservar" em voo deixava o hold `held` para sempre (o `UPDATE` não via o `INSERT` sem
+  commit). Virou um upsert de um statement só, mais a invariante inversa no helper e o teste S7;
+- lápide sem `user_id` (o release agora leva `{eventId, userId}`);
+- conversão ilimitado → limitado com vaga presa para sempre (agora marca `decremented`);
+- transições da saga só pela PK (agora PK + `hold_id` + status; o dono que perde o CAS libera o próprio hold);
+- `updated_at` nulo escondendo a órfã do reaper;
+- linha apagada durante a espera;
+- espera maior que o timeout dos chamadores, e espera inútil em `compensating`;
+- backfill que podia oversellar (agora debita exatamente `capacity − quant`);
+- offset inicial do group `stock` e eventos v1 sem `holdId`;
+- 503 interno virando 500 no `/bff` (o e2e espera 500; contrato inalterado);
+- `catalog` dependendo do `stock` no boot;
+- schemas truncados nos testes;
+- `ReservationConflictException` na lib nova;
+- `16-stock.sql` no `supabase-app-init.sql`, e o e2e e o kit lendo `stock.eventcap`;
+- erro de disponibilidade com o `stock` fora (503, nunca 404);
+- folga do Supavisor com Hikari da R4 calibrado (pré-condição da R5, Hikari do `stock` literal).
+
+**Sem achado:** exclusão entre a tx2 e o reaper (`SKIP LOCKED` + CAS), devolução dupla entre o consumer e a compensação, UPSERT de
+revivência com `hold_id` novo, duas chaves do mesmo usuário, mesma chave concorrente, e deadlock no lote do consumer (partição por
+`event_id`).
 
 ## Fora de escopo
 
