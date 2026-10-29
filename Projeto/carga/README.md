@@ -186,7 +186,8 @@ estende a escada (`degraus/`), a coleta do host e a limpeza entre blocos; **nada
   `make host-rpm`/`setup-host` imprime a linha pronta: `AUTOESCALA_COMPOSE_ARQUIVOS='...' Projeto/autoescala/scaler.sh`.
 - **Parâmetros provisórios da autoescala**, todos por variável de ambiente do scaler (defaults e significado em `autoescala/README.md`): `AUTOESCALA_GATEWAY_RPS` (500),
   `AUTOESCALA_IDENTITY_RPS` (100), `AUTOESCALA_CATALOG_RPS` (500), `AUTOESCALA_ADMISSION_RPS` (1000), `AUTOESCALA_NOTIFICATION_LAG` (100), `AUTOESCALA_X_RPM` (= `ADMISSION_X_RPM`).
-  **Nada disso foi medido**; a R4 calibra. Ficam gravados na rodada de dois jeitos: no `registro-<rótulo>-<data>.txt` do `coleta-host.sh` (lê o `AUTOESCALA_*`/`ADMISSION_*` do shell
+  São os do bloco 2 da R4; o bloco 3 calibrou `AUTOESCALA_GATEWAY_RPS` 1600, `AUTOESCALA_ADMISSION_RPS` 1600, `AUTOESCALA_IDENTITY_RPS` 200 e `AUTOESCALA_DESCE_SEG` 120
+  (só no shell do scaler; os defaults não mudaram; resultado em `results/07-rodada4-admission`). Ficam gravados na rodada de dois jeitos: no `registro-<rótulo>-<data>.txt` do `coleta-host.sh` (lê o `AUTOESCALA_*`/`ADMISSION_*` do shell
   onde ele roda: exporte lá os mesmos do scaler) e na coluna `params_autoescala` do CSV da escada (`-ParamsAutoescala 'AUTOESCALA_GATEWAY_RPS=500;AUTOESCALA_X_RPM=56000'` /
   `PARAMS_AUTOESCALA=` no make), porque o gerador não enxerga o host.
 - **Réplicas = containers `<project>-<serviço>-<n>`**, sem `gerenciador-*`. O kit (`setup-host.ps1`, `rpm/subir-host-rpm.ps1`, `coleta-host.sh`, `limpar-banco.sh`) as acha por **label**
