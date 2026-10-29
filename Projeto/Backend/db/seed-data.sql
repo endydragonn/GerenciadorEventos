@@ -79,7 +79,7 @@ INSERT INTO :"evs".event (creator_id, event_name, ead, address, event_date, desc
 ON CONFLICT (event_name) DO NOTHING;
 
 -- Capacidade/vagas isoladas em eventcap (quant = vagas ainda disponíveis)
-INSERT INTO reservation.eventcap (event_id, capacity, quant, buy_time_limit)
+INSERT INTO stock.eventcap (event_id, capacity, quant, buy_time_limit)
 SELECT e.event_id, v.capacity, v.quant, v.buy_time_limit
 FROM (VALUES
     ('Workshop de Java',      100, 98,  TIMESTAMP '2026-12-14 23:59:59'),
@@ -179,7 +179,7 @@ SELECT e.event_id, e.event_name,
        c.capacity as capacidade,
        c.quant as vagas_disponiveis
 FROM :"evs".event e
-LEFT JOIN reservation.eventcap c ON c.event_id = e.event_id
+LEFT JOIN stock.eventcap c ON c.event_id = e.event_id
 ORDER BY e.event_date;
 
 \echo ''

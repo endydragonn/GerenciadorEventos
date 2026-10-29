@@ -73,7 +73,7 @@ public class ReservationExpiryConcurrentTest extends ReservationTestSupport {
     }
 
     private int quant(long eventId) {
-        return eventCapRepository.findByEventId(eventId).getQuant();
+        return capacidade(eventId).getQuant();
     }
 
     private long contar(String sql, long eventId) throws Exception {

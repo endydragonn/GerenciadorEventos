@@ -51,7 +51,7 @@ psql_db() {
         sh "$1"
 }
 
-CAPACITY="$(psql_db "SELECT capacity FROM reservation.eventcap WHERE event_id = ${EVENT_ID};" | tr -d '[:space:]')"
+CAPACITY="$(psql_db "SELECT capacity FROM stock.eventcap WHERE event_id = ${EVENT_ID};" | tr -d '[:space:]')"
 CONFIRMADAS="$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = ${EVENT_ID} AND status = 'confirmed';" | tr -d '[:space:]')"
 PENDENTES="$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = ${EVENT_ID} AND status = 'pending';" | tr -d '[:space:]')"
 

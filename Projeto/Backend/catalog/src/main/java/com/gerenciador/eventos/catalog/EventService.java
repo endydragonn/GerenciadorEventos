@@ -14,9 +14,9 @@ import com.gerenciador.eventos.catalogclient.api.EventoNaoEncontradoException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.gerenciador.eventos.reservationclient.api.EventCap;
-import com.gerenciador.eventos.reservationclient.api.EventCapacityApi;
-import com.gerenciador.eventos.reservationclient.api.ReservationConflictException;
+import com.gerenciador.eventos.stockclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCapacityApi;
+import com.gerenciador.eventos.stockclient.api.StockConflictException;
 
 /**
  * Service - regras de negócio e validações para Event. No serviço {@code catalog} (issue #35) implementa o contrato
@@ -107,7 +107,7 @@ public class EventService implements EventApi {
                 eventCapacityApi.create(new EventCap(e.getEvent_id(), e.getLot_quantity(), e.getLot_quantity(),
                         e.getBuy_time_limit()));
             }
-        } catch (ReservationConflictException ex) {
+        } catch (StockConflictException ex) {
             throw new EventoEmConflitoException(ex.getMessage());
         }
         return hydrate(eventRepository.update(e)); // EventUpdated + apresentadores, uma transação
@@ -159,7 +159,7 @@ public class EventService implements EventApi {
     public void delete(Long id) {
         try {
             eventCapacityApi.delete(id);
-        } catch (ReservationConflictException ex) {
+        } catch (StockConflictException ex) {
             throw new EventoEmConflitoException(ex.getMessage());
         }
         eventRepository.delete(id); // EventCancelled + remoção (eventpresenter cai por CASCADE)

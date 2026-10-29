@@ -164,13 +164,16 @@ Todos por variável de ambiente no override, com default (nenhum é segredo; nen
 
 ## Pool (Supavisor ≤ 1500) com réplicas
 
-Restrição: `N_res × H_res + N_gw × 10 + 3 + 100 + 100 ≤ 1500`, contando a stand-by (ela abre o `minimum-idle`).
+Restrição: `N_res × H_res + N_gw × 10 + 3 + 100 + 100 + H_stock ≤ 1500`, contando a stand-by (ela abre o `minimum-idle`); `H_stock` = 250, uma réplica fixa (#47).
 
 - No override, o Hikari do `reservation` cai de 1000 para **300 por réplica** (= threads do Tomcat, 300: nenhuma thread espera
   conexão no Hikari; a fila real continua no Supavisor, com o pool real de 45).
 - Com o máximo (3 + 3): `3 × 300 + 3 × 10 + 3 + 100 + 100 = 1133 ≤ 1500` (#111, com 1 réplica de `identity`/`catalog`/`notification`). A #112 refez a conta com 3 de cada (ver "Extensão aos demais serviços"): `1239 ≤ 1500`. Sobravam 367 para a #112 (réplicas de `identity` e
   `catalog`, 100 cada, que vão precisar baixar para caber).
 - O compose base mantém 1000 no `reservation` (braço sem autoescala comparável com a Rodada R).
+- **Com o `stock` (#47, saga stock + wallet):** serviço novo de uma réplica fixa, fora do scaler e do lb (as réplicas do `reservation` o chamam por `stock:8086`), Hikari 250
+  literal. Máximo: `3 × 300 + 3 × 10 + 3 × 3 + 3 × 50 + 3 × 50 + 250 = 1489 ≤ 1500` (folga de 11); no base, `1000 + 250 + 10 + 3 + 100 + 100 = 1463`. Pré-condição da R5: Hikari de
+  `identity`/`catalog` da R4 ≤ 51 por réplica; senão `H_stock = 1500 − soma da R4`, conferido antes do 1º bloco.
 
 ## O que não depende da escolha (adiantado enquanto a decisão não chega)
 
@@ -249,7 +252,7 @@ Arquivos: `Projeto/docker-compose.autoescala.yml` (estendido), `Projeto/autoesca
   O `notification-seek`, o `reservation` e (indiretamente) o `notification` esperam o one-shot (`service_completed_successfully`). **Irreversível:** quem sobe o override na stack real aumenta as partições do broker real para sempre; por isso o README avisa e a Rodada 4 roda o braço SEM autoescala antes do braço C. Conferido no dry-run: `identity.notification` 3 partições com
   `retention.ms=930000` (a do bean, intacta) e `reservation.wallet` 3. Os beans `NewTopic` ficam em `.partitions(1)` (o `KafkaAdmin` só aumenta). O one-shot termina com `restart: "no"` e, por isso, a guarda do `run-tests.sh` (`docker ps`, só containers rodando) não precisa vê-lo.
   **Não mude a partição padrão do broker** (`default_topic_partitions`): `ReservationRelayConcurrentTest`, `OutboxRelayTest` e outros afirmam a ordem global num tópico auto-criado, que só vale com 1 partição.
-- **Pool.** Inalterado em relação à passada (a): `3 × 300 + 3 × 10 + 3 × 3 + 3 × 50 + 3 × 50 = 1239 ≤ 1500`; o Hikari 50 de `identity`/`catalog` fica abaixo do Tomcat 300 deles (threads esperam no Hikari; `connection-timeout` de 5 s); 90 por réplica ainda caberia (1479). A medir na Rodada 4.
+- **Pool.** Inalterado em relação à passada (a): `3 × 300 + 3 × 10 + 3 × 3 + 3 × 50 + 3 × 50 = 1239 ≤ 1500`; o Hikari 50 de `identity`/`catalog` fica abaixo do Tomcat 300 deles (threads esperam no Hikari; `connection-timeout` de 5 s); 90 por réplica caberia (1479) sem o `stock`, mas não cabe com ele (#47: 1729). A medir na Rodada 4.
 - **Ritmo do laço.** O período NOMINAL é 2 s (`AUTOESCALA_PERIODO`), mas cada laço faz chamadas ao docker (`ps`, `inspect`, `exec` no lb, no redis e no redpanda) que custam ~0,2 s cada no Windows: com 6 serviços o laço levou ~5 s na 1ª versão (um `docker ps` por serviço) e ~4 s depois de trocar os 6 `docker ps` por um só. Como os critérios são por tempo sustentado (60 s) e cooldown, isso só atrasa a detecção em alguns segundos; a Rodada 4 diz se importa.
 - **Pendências nomeadas.** Rotação da chave com N réplicas do identity (parar TODAS, apagar o arquivo, subir, reiniciar o backend) e o `limpar-banco.sh` do kit de carga (versionado na #178, ciente de réplicas por label; o scaler tem de estar parado): README e #178. A 1ª busca do JWKS pelo lb pode cair antes de o slot do identity ficar UP; o gateway só tenta de novo a cada 30 s (o dry-run espera os slots e faz um login antes da carga).
 

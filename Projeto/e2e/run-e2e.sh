@@ -4,10 +4,12 @@
 #  run-e2e.sh  -  issue #37 (Fase 7): suite de integracao da stack inteira
 # =============================================================================
 #
-#  Sobe a stack COMPLETA (gateway/backend, identity, catalog, reservation, admission, redis, rabbitmq, notification, frontend, supabase-*, redpanda) num
+#  Sobe a stack COMPLETA (gateway/backend, identity, catalog, reservation, stock, admission, redis, rabbitmq, notification, frontend, supabase-*, redpanda) num
 #  project docker compose TEMPORARIO e isolado da stack real (gerenciador-eventos), com um captador de e-mail (Mailpit) no
 #  lugar do Gmail, e prova o fluxo ponta a ponta pelo gateway:
 #    cadastro em duas fases (o codigo vem do E-MAIL no captador) -> criar evento -> reservar -> confirmar -> e-mail
+#    + saga stock + wallet (#47): (a) stock fora (500 generico, saga compensating, o reaper compensa quando ele volta, a mesma chave reserva) e
+#    (b) queda do reservation no meio de uma rajada (invariante e overselling 0 depois da janela do reaper; ORPHAN_MS/SCAN_MS curtos no project)
 #    + replay (event sourcing) de catalog.event e reservation.wallet contra o banco do project: sombra == projecao viva.
 #  Sem porta no host: as chamadas HTTP saem de um container auxiliar na rede do project. No fim (verde ou nao) faz
 #  `down -v` SO do project temporario, salvo MANTER=1.
@@ -25,12 +27,12 @@
 #  container/porta/rede/volume. O Projeto/.env e o supabase/.env precisam existir (nada deles e impresso).
 #
 #  Pre-requisitos: docker (compose v2), python (so para filtrar o JSON do `config`), Projeto/.env e Projeto/supabase/.env.
-#  A stack real pode estar no ar (portas e nomes nao colidem), mas o project sobe ~15 containers: pare a real se faltar RAM
+#  A stack real pode estar no ar (portas e nomes nao colidem), mas o project sobe ~17 containers: pare a real se faltar RAM
 #  (`docker compose -p gerenciador-eventos stop`, nunca `down`).
 #
 #  Uso:  Projeto/e2e/run-e2e.sh
 #  Variaveis (opcionais): E2E_PROJECT (gerenciador-e2e), MANTER (1 = nao derruba o project), ESPERA_UP (900, segundos do --wait).
-#  E2E_SLIM=1 roda os 6 servicos (com o admission, #178) com as imagens enxutas do Slim (docker-compose.slim.yml; gerar antes com Projeto/slim/gerar-imagens-slim.sh).
+#  E2E_SLIM=1 roda os 7 servicos (com o admission, #178) com as imagens enxutas do Slim (docker-compose.slim.yml; gerar antes com Projeto/slim/gerar-imagens-slim.sh).
 #  Compatibilidade: Linux/macOS e Git Bash do Windows (Docker Desktop).
 # =============================================================================
 
@@ -52,6 +54,11 @@ RAJADA_USUARIOS="${E2E_RAJADA_USUARIOS:-20}"
 RAJADA_CAPACIDADE="${E2E_RAJADA_CAPACIDADE:-$(( RAJADA_USUARIOS / 4 > 0 ? RAJADA_USUARIOS / 4 : 1 ))}"
 ADMISSION_X_RPM="${E2E_ADMISSION_X_RPM:-600}"
 export ADMISSION_X_RPM
+# Janela do reaper da saga (#47) no project: orfa depois de ORPHAN_MS, varredura a cada SCAN_MS (o override e2e le estas duas variaveis).
+SAGA_ORPHAN_MS="${E2E_SAGA_ORPHAN_MS:-5000}"
+SAGA_SCAN_MS="${E2E_SAGA_SCAN_MS:-1000}"
+export SAGA_ORPHAN_MS SAGA_SCAN_MS
+SAGA_JANELA_S=$(( (SAGA_ORPHAN_MS + SAGA_SCAN_MS) / 1000 + 1 ))
 EMAIL="e2e-$SUFIXO@example.com"
 FONE="11$(printf '%09d' $(( (RANDOM * 32768 + RANDOM) % 1000000000 )))"
 IMAGEM_MVN="maven:3.9.7-eclipse-temurin-21-jammy"
@@ -151,7 +158,7 @@ env = (c["services"].get("notification") or {}).get("environment") or {}
 if env.get("MAIL_HOST") != "mailpit" or env.get("MAIL_PORT") != "1025" or env.get("MAIL_SMTP_AUTH") != "false" \
         or env.get("MAIL_STARTTLS") != "false" or env.get("MAIL_PASSWORD")         or not str(env.get("MAIL_USERNAME") or "").endswith("@example.com"):
     erros.append("notification: SMTP nao aponta para o captador mailpit:1025 sem auth/starttls/senha (remetente @example.com)")
-for obrigatorio in ("mailpit", "redis", "rabbitmq", "admission"):
+for obrigatorio in ("mailpit", "redis", "rabbitmq", "admission", "stock", "stock-seek"):
     if obrigatorio not in c["services"]:
         erros.append("falta o servico " + obrigatorio)
 adm_env = (c["services"].get("admission") or {}).get("environment") or {}
@@ -167,6 +174,17 @@ if rabbit_env.get("RABBITMQ_DEFAULT_USER") != adm_env.get("RABBITMQ_USER") or ra
 bk_env = (c["services"].get("backend") or {}).get("environment", {})
 if bk_env.get("RABBITMQ_USER") or bk_env.get("RABBITMQ_PASSWORD"):
     erros.append("backend: recebeu as credenciais do RabbitMQ (a fila e so do admission)")
+res_env = (c["services"].get("reservation") or {}).get("environment") or {}
+if res_env.get("STOCK_SERVICE_URL") != "http://stock:8086":
+    erros.append("reservation: STOCK_SERVICE_URL nao aponta para o stock do project")
+try:
+    orfa = float(res_env.get("RESERVATION_SAGA_ORPHAN_MS") or 0)
+except ValueError:
+    orfa = 0
+if not 1000 <= orfa <= 10000:
+    erros.append("reservation: RESERVATION_SAGA_ORPHAN_MS=%s fora de 1000..10000 (os passos da saga esperam a janela do reaper)" % res_env.get("RESERVATION_SAGA_ORPHAN_MS"))
+if (c["services"].get("stock") or {}).get("environment", {}).get("SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE") != "250":
+    erros.append("stock: Hikari nao e o literal 250")
 try:
     x = float(adm_env.get("ADMISSION_X_RPM") or 0)
 except ValueError:
@@ -191,14 +209,14 @@ if [ $? -ne 0 ] || [ -n "$VIOLACOES" ]; then
     echo "$VIOLACOES"
     abortar "o isolamento NAO pode ser verificado/garantido: nada foi subido."
 fi
-ok "sem container_name, sem porta no host, rede e volumes com o prefixo do project, notification -> mailpit:1025, redis, rabbitmq e admission isolados"
+ok "sem container_name, sem porta no host, rede e volumes com o prefixo do project, notification -> mailpit:1025, redis, rabbitmq, admission, stock e stock-seek isolados"
 ISOLADO=1
-SERVICOS_SLIM="backend identity catalog reservation notification admission"
+SERVICOS_SLIM="backend identity catalog reservation stock notification admission"
 if [ "${E2E_SLIM:-0}" = "1" ]; then
     for svc in $SERVICOS_SLIM; do
         dexec image inspect "gerenciador-eventos-$svc.slim:latest" >/dev/null 2>&1 || abortar "E2E_SLIM=1 mas falta a imagem gerenciador-eventos-$svc.slim (rode Projeto/slim/gerar-imagens-slim.sh)."
     done
-    ok "E2E_SLIM=1: imagens *.slim presentes; os 6 servicos vao rodar com elas"
+    ok "E2E_SLIM=1: imagens *.slim presentes; os 7 servicos vao rodar com elas"
 fi
 
 echo "==> 1. project limpo; 1a) so o redpanda; 1b) um pedido de e-mail PENDENTE no topico; 1c) up -d --build --wait (pode levar varios minutos no 1o build)"
@@ -225,7 +243,7 @@ SAUDE="$(dc ps -a --format '{{.Service}} {{.State}} {{or .Health "-"}} {{.ExitCo
 while read -r servico estado saude codigo; do
     [ -n "$servico" ] || continue
     case "$servico" in
-        notification-seek) confere "$servico (one-shot) terminou com 0" "exited 0" "$estado $codigo" ;;
+        notification-seek|stock-seek) confere "$servico (one-shot) terminou com 0" "exited 0" "$estado $codigo" ;;
         *) confere "$servico running/healthy" "running healthy" "$estado $saude" ;;
     esac
 done <<<"$SAUDE"
@@ -245,10 +263,11 @@ dexec rm -f "$CLI" >/dev/null 2>&1
 dexec run -d --rm --name "$CLI" --network "$REDE" --entrypoint sleep "$IMAGEM_MVN" infinity >/dev/null || abortar "nao consegui subir o container auxiliar de curl"
 extrair_token() { grep -o '"token":"[^"]*"' <<<"$1" | head -1 | cut -d'"' -f4; }
 extrair_num() { grep -oE "\"$1\" ?: ?[0-9]+" <<<"$2" | head -1 | grep -oE '[0-9]+$'; }
-http() { # metodo url [corpo-json] [token] -> HTTP_CODE, HTTP_BODY
+http() { # metodo url [corpo-json] [token] [header-extra] -> HTTP_CODE, HTTP_BODY
     local args=(-s -m 30 -X "$1" -w '\n%{http_code}' "$2") out
     [ -n "${3:-}" ] && args+=(-H 'Content-Type: application/json' -d "$3")
     [ -n "${4:-}" ] && args+=(-H "Authorization: Bearer $4")
+    [ -n "${5:-}" ] && args+=(-H "$5")
     out="$(cli curl "${args[@]}" | tr -d '\r')"
     HTTP_CODE="${out##*$'\n'}"
     HTTP_BODY="${out%$'\n'*}"
@@ -334,8 +353,8 @@ RAJADA_EVENT_ID="$(extrair_num event_id "$HTTP_BODY")"
 [ -n "$RAJADA_EVENT_ID" ] || abortar "sem event_id do evento da rajada"
 # A janela de confirmacao (eventcap.max_time_in_line, 120 s por padrao) nao pode vencer durante uma rajada grande (E2E_RAJADA_USUARIOS alto):
 # o job de expiracao devolveria vagas e "reservas ativas = capacidade" falharia sem haver overselling. Neste project descartavel, 1 h.
-confere "eventcap da rajada com max_time_in_line = 3600" 1 \
-    "$(psql_db "WITH u AS (UPDATE reservation.eventcap SET max_time_in_line = 3600 WHERE event_id = $RAJADA_EVENT_ID RETURNING 1) SELECT count(*) FROM u")"
+confere "stock.eventcap da rajada com max_time_in_line = 3600" 1 \
+    "$(psql_db "WITH u AS (UPDATE stock.eventcap SET max_time_in_line = 3600 WHERE event_id = $RAJADA_EVENT_ID RETURNING 1) SELECT count(*) FROM u")"
 psql_db "INSERT INTO identity.users (user_name, email, fone, password, birthdate)
     SELECT 'Rajada $SUFIXO ' || g, 'rajada-$SUFIXO-' || g || '@example.com', 'rj-$SUFIXO-' || g, (SELECT password FROM identity.users WHERE email = '$EMAIL'), DATE '1990-01-15'
     FROM generate_series(1, $RAJADA_USUARIOS) AS g" >/dev/null
@@ -379,12 +398,12 @@ for i in $(seq 1 30); do
     sleep 2
 done
 confere "fila admission.requests drenada (profundidade 0)" 0 "$PROFUNDIDADE"
-# overselling 0 contra o reservation REAL: reservas ativas <= capacidade e eventcap.quant = capacidade - ativas
+# overselling 0 contra o reservation e o stock REAIS: reservas ativas <= capacidade e eventcap.quant = capacidade - ativas
 ATIVAS="$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = $RAJADA_EVENT_ID AND status IN ('pending', 'confirmed')")"
-QUANT="$(psql_db "SELECT quant FROM reservation.eventcap WHERE event_id = $RAJADA_EVENT_ID")"
-echo "   reservation: capacidade=$RAJADA_CAPACIDADE reservas ativas=$ATIVAS eventcap.quant=$QUANT"
+QUANT="$(psql_db "SELECT quant FROM stock.eventcap WHERE event_id = $RAJADA_EVENT_ID")"
+echo "   reservation/stock: capacidade=$RAJADA_CAPACIDADE reservas ativas=$ATIVAS stock.eventcap.quant=$QUANT"
 confere "overselling 0: reservas ativas <= capacidade" sim "$([ "$ATIVAS" -le "$RAJADA_CAPACIDADE" ] && echo sim || echo nao)"
-confere "eventcap.quant coerente (capacidade - reservas ativas)" "$((RAJADA_CAPACIDADE - ATIVAS))" "$QUANT"
+confere "stock.eventcap.quant coerente (capacidade - reservas ativas)" "$((RAJADA_CAPACIDADE - ATIVAS))" "$QUANT"
 confere "todas as vagas foram dadas (N > capacidade): reservas ativas = capacidade" "$RAJADA_CAPACIDADE" "$ATIVAS"
 confere "estados pending = reservas ativas no reservation" "$ATIVAS" "$(n_estado pending)"
 # consulta de estado: so o dono (404 igual para o de outro usuario), 400 sem a chave, 401 sem token
@@ -396,6 +415,158 @@ http GET "$GW/bff/event-wallets/admission?idempotencyKey=rajada-$SUFIXO-1"
 confere "GET /bff/event-wallets/admission sem token" 401 "$HTTP_CODE"
 [ "$FALHAS" -eq 0 ] || abortar "a rajada do modo fila falhou antes do replay"
 
+# ---- saga stock + wallet (#47): invariante em SQL (o unico trecho do e2e que le os dois schemas, como o helper dos testes) -------------
+viol_invariantes() { # modo (parcial|final) event_id... -> imprime as violacoes (vazio = ok)
+    local modo="$1" ids; shift
+    ids="$(IFS=,; echo "$*")"
+    local saga=""
+    [ "$modo" = "final" ] && saga="UNION ALL SELECT 'saga sobrando ' || idempotency_key || ' ' || saga_status FROM reservation.idempotency_key WHERE event_id IN ($ids) AND saga_status IN ('reserving', 'compensating')"
+    psql_db "
+SELECT 'quant ' || ec.event_id || ': quant=' || ec.quant || ' capacity=' || ec.capacity FROM stock.eventcap ec
+  WHERE ec.event_id IN ($ids) AND ec.capacity <> -1 AND ec.quant <> ec.capacity - (SELECT count(*) FROM stock.hold h WHERE h.event_id = ec.event_id AND h.status = 'held' AND h.decremented)
+UNION ALL SELECT 'overselling ' || ec.event_id FROM stock.eventcap ec
+  WHERE ec.event_id IN ($ids) AND ec.capacity <> -1 AND (SELECT count(*) FROM reservation.walletevent w WHERE w.event_id = ec.event_id AND w.status IN ('pending', 'confirmed')) > ec.capacity
+UNION ALL SELECT 'wallet ativo sem hold held ' || w.user_id || ':' || w.event_id FROM reservation.walletevent w
+  WHERE w.event_id IN ($ids) AND w.status IN ('pending', 'confirmed') AND NOT EXISTS (SELECT 1 FROM stock.hold h WHERE h.hold_id = w.hold_id AND h.status = 'held')
+UNION ALL SELECT 'hold held preso ' || h.hold_id FROM stock.hold h
+  WHERE h.event_id IN ($ids) AND h.status = 'held'
+    AND NOT EXISTS (SELECT 1 FROM reservation.walletevent w WHERE w.hold_id = h.hold_id AND w.status IN ('pending', 'confirmed'))
+    AND NOT EXISTS (SELECT 1 FROM reservation.idempotency_key k WHERE k.hold_id = h.hold_id AND k.saga_status IN ('reserving', 'compensating'))
+    AND NOT EXISTS (SELECT 1 FROM reservation.event_store e WHERE e.stream_type = 'reservation.wallet'
+        AND e.event_type IN ('ReservationCancelled', 'ReservationExpired') AND e.payload ->> 'holdId' = h.hold_id::text)
+$saga" | tr '\n' ';'
+}
+esperar_invariantes() { # modo timeout_s event_id... -> VIOL (vazio = ok) e INV_S (segundos ate valer)
+    local modo="$1" limite="$2" inicio=$SECONDS; shift 2
+    while :; do
+        VIOL="$(viol_invariantes "$modo" "$@")"
+        [ -z "$VIOL" ] && break
+        [ $((SECONDS - inicio)) -ge "$limite" ] && break
+        sleep 1
+    done
+    INV_S=$((SECONDS - inicio))
+}
+esperar_saudavel() { # container_id [timeout_s]
+    local fim=$((SECONDS + ${2:-120}))
+    while [ "$SECONDS" -lt "$fim" ]; do
+        [ "$(dexec inspect -f '{{.State.Health.Status}}' "$1" 2>/dev/null | tr -d '\r')" = "healthy" ] && return 0
+        sleep 2
+    done
+    return 1
+}
+
+echo "==> 4c. saga (a): stock FORA -> 500 generico, saga compensating, quant intacto; o stock volta, o reaper compensa (janela ${SAGA_JANELA_S}s), a mesma chave reserva"
+http POST "$GW/bff/events" \
+    "{\"event_name\":\"E2E saga a $SUFIXO\",\"is_EAD\":true,\"event_date\":\"2035-12-01T14:00:00\",\"description\":\"e2e #47a\",\"lot_quantity\":5,\"presenters\":[]}" "$TOKEN"
+confere "POST /bff/events (evento da saga a, capacidade 5)" 201 "$HTTP_CODE"
+SAGA_A_EVENT="$(extrair_num event_id "$HTTP_BODY")"
+[ -n "$SAGA_A_EVENT" ] || abortar "sem event_id do evento da saga (a)"
+psql_db "UPDATE stock.eventcap SET max_time_in_line = 3600 WHERE event_id = $SAGA_A_EVENT" >/dev/null
+CHAVE_A="saga-a-$SUFIXO"
+STOCK_CID="$(dc ps -q stock | head -1)"
+[ -n "$STOCK_CID" ] || abortar "sem container do stock"
+dexec stop "$STOCK_CID" >/dev/null || abortar "docker stop do stock falhou"
+http POST "$GW/bff/event-wallets" "{\"userId\":$USER_ID,\"eventId\":$SAGA_A_EVENT}" "$TOKEN" "Idempotency-Key: $CHAVE_A"
+confere "reserva com o stock fora (500 generico no /bff, como com o reservation fora)" 500 "$HTTP_CODE"
+confere "saga da chave fica compensating (o release tambem falhou)" compensating \
+    "$(psql_db "SELECT saga_status FROM reservation.idempotency_key WHERE user_id = $USER_ID AND idempotency_key = '$CHAVE_A'")"
+confere "quant intacto com o stock fora" 5 "$(psql_db "SELECT quant FROM stock.eventcap WHERE event_id = $SAGA_A_EVENT")"
+confere "nenhum walletevent do evento" 0 "$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = $SAGA_A_EVENT")"
+confere "invariantes (parcial) com o stock fora" "" "$(viol_invariantes parcial "$SAGA_A_EVENT")"
+dexec start "$STOCK_CID" >/dev/null || abortar "docker start do stock falhou"
+esperar_saudavel "$STOCK_CID" 120 || abortar "o stock nao voltou a ficar healthy"
+INICIO_A=$SECONDS
+SAGA_A_ST=""
+while [ $((SECONDS - INICIO_A)) -le $((SAGA_JANELA_S + 20)) ]; do
+    SAGA_A_ST="$(psql_db "SELECT saga_status FROM reservation.idempotency_key WHERE user_id = $USER_ID AND idempotency_key = '$CHAVE_A'")"
+    [ "$SAGA_A_ST" = "compensated" ] && break
+    sleep 1
+done
+echo "   saga (a): $SAGA_A_ST ${SAGA_A_ST:+apos $((SECONDS - INICIO_A)) s com o stock de volta} (janela do reaper: ORPHAN_MS=$SAGA_ORPHAN_MS + SCAN_MS=$SAGA_SCAN_MS)"
+confere "o reaper deixou a saga compensated depois de ORPHAN_MS + SCAN_MS" compensated "$SAGA_A_ST"
+confere "resolvida pelo reaper" reaper "$(psql_db "SELECT resolved_by FROM reservation.idempotency_key WHERE user_id = $USER_ID AND idempotency_key = '$CHAVE_A'")"
+confere "hold da saga liberado (lapide)" released \
+    "$(psql_db "SELECT h.status FROM stock.hold h JOIN reservation.idempotency_key k ON k.hold_id = h.hold_id WHERE k.user_id = $USER_ID AND k.idempotency_key = '$CHAVE_A'")"
+confere "quant intacto depois da compensacao" 5 "$(psql_db "SELECT quant FROM stock.eventcap WHERE event_id = $SAGA_A_EVENT")"
+esperar_invariantes final 20 "$SAGA_A_EVENT"
+confere "invariantes (final) depois da compensacao" "" "$VIOL"
+http POST "$GW/bff/event-wallets" "{\"userId\":$USER_ID,\"eventId\":$SAGA_A_EVENT}" "$TOKEN" "Idempotency-Key: $CHAVE_A"
+confere "a mesma chave reserva depois (falha nao consome a chave)" 201 "$HTTP_CODE"
+confere "quant depois da reserva" 4 "$(psql_db "SELECT quant FROM stock.eventcap WHERE event_id = $SAGA_A_EVENT")"
+esperar_invariantes final 20 "$SAGA_A_EVENT"
+confere "invariantes (final) depois da reserva" "" "$VIOL"
+# devolucao por evento (D4): cancelar a reserva so appenda ReservationCancelled com o holdId; quem devolve a vaga e o consumer do stock
+http DELETE "$GW/bff/event-wallets?userId=$USER_ID&eventId=$SAGA_A_EVENT" "" "$TOKEN"
+confere "DELETE /bff/event-wallets (cancelar)" 200 "$HTTP_CODE"
+QUANT_A=""
+for i in $(seq 1 30); do
+    QUANT_A="$(psql_db "SELECT quant FROM stock.eventcap WHERE event_id = $SAGA_A_EVENT")"
+    [ "$QUANT_A" = "5" ] && break
+    sleep 1
+done
+confere "o consumer do stock devolveu a vaga do cancelamento (quant volta a 5)" 5 "$QUANT_A"
+confere "hold da reserva cancelada liberado" released     "$(psql_db "SELECT h.status FROM stock.hold h JOIN reservation.walletevent w ON w.hold_id = h.hold_id WHERE w.user_id = $USER_ID AND w.event_id = $SAGA_A_EVENT")"
+esperar_invariantes final 20 "$SAGA_A_EVENT"
+confere "invariantes (final) depois do cancelamento" "" "$VIOL"
+[ "$FALHAS" -eq 0 ] || abortar "o passo (a) da saga falhou"
+
+echo "==> 4d. saga (b): queda do reservation (docker stop -t 0) no meio de uma rajada de 20 usuarios; invariante e overselling 0 depois da janela do reaper"
+SB_USUARIOS=20
+SB_CAPACIDADE=8
+SB_SUFIXO="b$SUFIXO"
+http POST "$GW/bff/events" \
+    "{\"event_name\":\"E2E saga b $SUFIXO\",\"is_EAD\":true,\"event_date\":\"2035-12-01T14:00:00\",\"description\":\"e2e #47b\",\"lot_quantity\":$SB_CAPACIDADE,\"presenters\":[]}" "$TOKEN"
+confere "POST /bff/events (evento da saga b, capacidade $SB_CAPACIDADE)" 201 "$HTTP_CODE"
+SAGA_B_EVENT="$(extrair_num event_id "$HTTP_BODY")"
+[ -n "$SAGA_B_EVENT" ] || abortar "sem event_id do evento da saga (b)"
+psql_db "UPDATE stock.eventcap SET max_time_in_line = 3600 WHERE event_id = $SAGA_B_EVENT" >/dev/null
+psql_db "INSERT INTO identity.users (user_name, email, fone, password, birthdate)
+    SELECT 'Rajada $SB_SUFIXO ' || g, 'rajada-$SB_SUFIXO-' || g || '@example.com', 'rj-$SB_SUFIXO-' || g, (SELECT password FROM identity.users WHERE email = '$EMAIL'), DATE '1990-01-15'
+    FROM generate_series(1, $SB_USUARIOS) AS g" >/dev/null
+confere "usuarios da rajada (b) criados por SQL" "$SB_USUARIOS" "$(psql_db "SELECT count(*) FROM identity.users WHERE email LIKE 'rajada-$SB_SUFIXO-%@example.com'")"
+[ "$FALHAS" -eq 0 ] || abortar "sem os usuarios da rajada (b)"
+RES_CID="$(dc ps -q reservation | head -1)"
+[ -n "$RES_CID" ] || abortar "sem container do reservation"
+# A rajada de 20 acaba em ~100 ms, menos que o `docker stop`: sem ajuda a queda pegaria so o fim. Por isso o stock fica PAUSADO (docker pause) ate o
+# reservation cair: as sagas ja gravaram a tx1 (reserving) e esperam o hold, sem resposta. Quando o stock volta, ele processa os pedidos de hold que
+# ficaram na fila do socket, com o chamador morto: holds `held` sem tx2 (as orfas que o reaper tem de liberar). A queda e o `docker stop -t 0` pedido.
+STOCK_CID="$(dc ps -q stock | head -1)"
+[ -n "$STOCK_CID" ] || abortar "sem container do stock"
+dexec pause "$STOCK_CID" >/dev/null || abortar "docker pause do stock falhou"
+cli env GW="$GW" EVENT_ID="$SAGA_B_EVENT" SUFIXO="$SB_SUFIXO" N="$SB_USUARIOS" PARALELO="$SB_USUARIOS" bash -s \
+    <"$SCRIPT_DIR/rajada-container.sh" >"$TMP/rajada-b.out" 2>&1 &
+RAJADA_B_PID=$!
+for i in $(seq 1 120); do
+    grep -q DISPARANDO "$TMP/rajada-b.out" 2>/dev/null && break
+    sleep 0.5
+done
+grep -q DISPARANDO "$TMP/rajada-b.out" || abortar "a rajada (b) nao chegou a disparar"
+sleep 1.5 # as chamadas ao stock pausado ja estao penduradas
+echo "   sagas em voo (reserving) antes da queda: $(psql_db "SELECT count(*) FROM reservation.idempotency_key WHERE event_id = $SAGA_B_EVENT AND saga_status = 'reserving'")"
+dexec stop -t 0 "$RES_CID" >/dev/null || { dexec unpause "$STOCK_CID" >/dev/null 2>&1; abortar "docker stop -t 0 do reservation falhou"; }
+echo "   reservation derrubado no meio da rajada (SIGKILL)"
+dexec unpause "$STOCK_CID" >/dev/null || abortar "docker unpause do stock falhou"
+esperar_saudavel "$STOCK_CID" 60 || abortar "o stock nao voltou a ficar healthy depois do unpause"
+sleep 2 # o stock processa os holds pendentes com o chamador morto
+echo "   holds held sem tx2 depois da queda (orfas): $(psql_db "SELECT count(*) FROM stock.hold h WHERE h.event_id = $SAGA_B_EVENT AND h.status = 'held' AND NOT EXISTS (SELECT 1 FROM reservation.walletevent w WHERE w.hold_id = h.hold_id)")"
+dexec start "$RES_CID" >/dev/null || abortar "docker start do reservation falhou"
+esperar_saudavel "$RES_CID" 180 || abortar "o reservation nao voltou a ficar healthy"
+echo "   reservation de volta; aguardando o fim da rajada e a janela do reaper (ORPHAN_MS=$SAGA_ORPHAN_MS, SCAN_MS=$SAGA_SCAN_MS)"
+wait "$RAJADA_B_PID"
+grep -E "CODIGO|ESTADO|SEM_ESTADO_FINAL|RAJADA_MS" "$TMP/rajada-b.out" | sed 's/^/     /'
+esperar_invariantes final $((SAGA_JANELA_S + 60)) "$SAGA_B_EVENT"
+echo "   invariantes (final) valeram apos ${INV_S} s (limite $((SAGA_JANELA_S + 60)) s)"
+confere "invariantes (final): quant = capacidade - holds debitados, sem wallet sem hold, sem hold preso, sem saga sobrando" "" "$VIOL"
+ATIVAS_B="$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = $SAGA_B_EVENT AND status IN ('pending', 'confirmed')")"
+QUANT_B="$(psql_db "SELECT quant FROM stock.eventcap WHERE event_id = $SAGA_B_EVENT")"
+echo "   saga (b): capacidade=$SB_CAPACIDADE reservas ativas=$ATIVAS_B stock.eventcap.quant=$QUANT_B; sagas: $(psql_db "SELECT coalesce(string_agg(saga_status || '/' || coalesce(resolved_by, '-') || '=' || n, ' '), 'nenhuma') FROM (SELECT saga_status, resolved_by, count(*) AS n FROM reservation.idempotency_key WHERE event_id = $SAGA_B_EVENT GROUP BY 1, 2) t")"
+COMPENSADOS_B="$(psql_db "SELECT count(*) FROM stock.hold WHERE event_id = $SAGA_B_EVENT AND status = 'released'")"
+echo "   holds liberados no evento (compensacoes inline, do reaper e lapides): $COMPENSADOS_B"
+confere "a queda deixou sagas para compensar (pelo menos um hold liberado)" sim "$([ "${COMPENSADOS_B:-0}" -ge 1 ] && echo sim || echo nao)"
+confere "overselling 0: reservas ativas <= capacidade" sim "$([ "$ATIVAS_B" -le "$SB_CAPACIDADE" ] && echo sim || echo nao)"
+confere "stock.eventcap.quant = capacidade - reservas ativas" "$((SB_CAPACIDADE - ATIVAS_B))" "$QUANT_B"
+[ "$FALHAS" -eq 0 ] || abortar "o passo (b) da saga falhou"
+
 echo "==> 5. esperar o backbone escoar (outbox vazio e lag 0 dos consumers) antes do replay"
 PENDENTES=""
 for i in $(seq 1 45); do
@@ -405,7 +576,7 @@ for i in $(seq 1 45); do
 done
 confere "linhas pendentes nos 3 outbox (ate 90 s)" 0 "$PENDENTES"
 lag() { dc exec -T redpanda rpk group describe "$1" 2>/dev/null | tr -d '\r' | awk '$1 == "TOTAL-LAG" {print $2}'; }
-for grupo in reservation reservation-catalog notification; do
+for grupo in reservation stock stock-catalog notification; do
     LAG=""
     for i in $(seq 1 45); do
         LAG="$(lag "$grupo")"
@@ -442,7 +613,8 @@ dexec run --rm --network "$REDE" --env-file "$HOST_ENV_FILE" "${PLATFORM_ARGS[@]
     -e SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092 \
     -e INTERNAL_API_TOKEN=token-de-teste-nao-e-segredo \
     -e EVENTS_RELAY_ENABLED=false -e EVENTS_CONSUMER_ENABLED=false \
-    -e RESERVATION_CATALOG_RECONCILIATION_ENABLED=false -e RESERVATION_EXPIRY_SCAN_MS=3600000 \
+    -e STOCK_CATALOG_RECONCILIATION_ENABLED=false -e STOCK_RELEASE_CONSUMER_ENABLED=false \
+    -e RESERVATION_SAGA_REAPER_ENABLED=false -e RESERVATION_EXPIRY_SCAN_MS=3600000 \
     -e E2E_REPLAY=1 -e "MVN_REPO=$CONTAINER_HOME/.m2/repository" \
     -v "$HOST_SRC":/workspace-src:ro \
     "$IMAGEM_MVN" \

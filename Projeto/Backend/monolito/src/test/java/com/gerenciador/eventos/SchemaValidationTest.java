@@ -117,12 +117,14 @@ public class SchemaValidationTest {
     void reservationTablesLeftPublicAndNothingReferencesThem() throws Exception {
         for (String t : List.of("eventcap", "walletevent", "event_availability", "idempotency_key")) {
             assertTrue(!tableExists("public." + t), "public." + t + " deveria ter ido para o schema reservation");
-            assertTrue(tableExists("reservation." + t), "reservation." + t + " não existe");
+            // desde a #47 o eventcap (capacidade) é do schema stock, as demais seguem em reservation
+            String schema = "eventcap".equals(t) ? "stock" : "reservation";
+            assertTrue(tableExists(schema + "." + t), schema + "." + t + " não existe");
         }
         String sql = "select count(*) from pg_constraint c join pg_class t on t.oid = c.conrelid "
             + "join pg_namespace n on n.oid = t.relnamespace join pg_class r on r.oid = c.confrelid "
             + "join pg_namespace rn on rn.oid = r.relnamespace "
-            + "where c.contype = 'f' and n.nspname <> rn.nspname and 'reservation' in (n.nspname, rn.nspname)";
+            + "where c.contype = 'f' and n.nspname <> rn.nspname and (n.nspname in ('reservation', 'stock') or rn.nspname in ('reservation', 'stock'))";
         try (Connection c = databaseConnection.getConnection();
              PreparedStatement ps = c.prepareStatement(sql);
              ResultSet rs = ps.executeQuery()) {
@@ -176,7 +178,7 @@ public class SchemaValidationTest {
 
     /**
      * Asserção NEGATIVA (issue #59): capacidade, vagas e janela de compra saíram de {@code event} (#5) e de {@code public}
-     * (#33/#35) e hoje são do {@code reservation.eventcap}. {@code assertColumns} é "contém" e não pega coluna que volta;
+     * (#33/#35) e hoje são do {@code stock.eventcap} (desde a #47; antes, {@code reservation.eventcap}). {@code assertColumns} é "contém" e não pega coluna que volta;
      * nenhuma tabela de {@code public} pode tê-las.
      */
     @Test

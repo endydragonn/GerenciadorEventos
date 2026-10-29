@@ -8,18 +8,23 @@
     </parent>
     <artifactId>reservation</artifactId>
     <name>reservation</name>
-    <description>Serviço reservation (issue 33): eventcap (CAS) + walletevent (event sourcing), API interna HTTP chamada pelo gateway</description>
+    <description>Serviço reservation (issue 33): lado wallet da saga stock + wallet (issue 47) — walletevent (event sourcing) + orquestração da reserva, API interna HTTP chamada pelo gateway</description>
     <dependencies>
         <!-- Lib comum: DatabaseConnection e a infra de event sourcing (event store, relay, consumer idempotente, replay) -->
         <dependency>
             <groupId>com.example.demo</groupId>
             <artifactId>shared</artifactId>
         </dependency>
-        <!-- Contrato HTTP: os DTOs (EventWallet, EventCap) e a exceção são o corpo da API interna. Os testes ponta a ponta
+        <!-- Contrato HTTP: o DTO EventWallet e a exceção são o corpo da API interna. Os testes ponta a ponta
              usam também o ReservationClient real contra este serviço. -->
         <dependency>
             <groupId>com.example.demo</groupId>
             <artifactId>reservation-client</artifactId>
+        </dependency>
+        <!-- Contrato HTTP do serviço stock (#47): StockClient (o salto reservation -> stock da saga e a leitura da capacidade), HoldRequest/HoldResponse. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>stock-client</artifactId>
         </dependency>
         <!-- API interna HTTP (sem Spring Security: o serviço só é alcançável na rede gerenciador-net, sem porta no host) -->
         <dependency>
@@ -44,6 +49,15 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- SÓ nos testes (#47): o serviço stock REAL sobe dentro do teste (porta aleatória, atrás de um proxy de falhas) para provar a
+             compensação contra ele, não contra um fake. No reactor ("mvn test") o módulo resolve para target/classes; o jar repackaged
+             do Spring Boot (BOOT-INF/classes) só existe depois do "package" e NÃO serve como dependência. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>stock</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
     <build>
         <plugins>
@@ -52,6 +66,18 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
                     <mainClass>com.gerenciador.eventos.reservation.ReservationApplication</mainClass>
+                </configuration>
+            </plugin>
+            <!-- O reaper de sagas (#47) vem ligado; nos testes fica DESLIGADO por padrão (propriedade de sistema, que o @TestPropertySource dos
+                 testes do reaper sobrepõe): um reaper vivo em outro contexto Spring em cache resolveria as sagas que os demais testes deixam
+                 de propósito em reserving/compensating. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <reservation.saga.reaper.enabled>false</reservation.saga.reaper.enabled>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
         </plugins>

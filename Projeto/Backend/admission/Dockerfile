@@ -18,6 +18,8 @@ COPY notification/pom.xml ./notification/pom.xml
 COPY reservation/pom.xml ./reservation/pom.xml
 COPY catalog/pom.xml ./catalog/pom.xml
 COPY identity/pom.xml ./identity/pom.xml
+COPY stock/pom.xml ./stock/pom.xml
+COPY stock-client/pom.xml ./stock-client/pom.xml
 RUN mvn -B -DskipTests -pl admission -am clean package
 
 # Estágio runtime: imagem pequena apenas para executar o jar (Java 25)

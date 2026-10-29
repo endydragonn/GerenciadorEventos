@@ -116,7 +116,7 @@ public class ReservationSchemaConstraintsTest {
         try (Connection conn = databaseConnection.getConnection()) {
             for (int valida : new int[] { -1, 1 }) {
                 try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT INTO reservation.eventcap (event_id, capacity, quant) VALUES (?, ?, ?)")) {
+                        "INSERT INTO stock.eventcap (event_id, capacity, quant) VALUES (?, ?, ?)")) {
                     ps.setLong(1, evento + valida);
                     ps.setInt(2, valida);
                     ps.setInt(3, valida);
@@ -126,7 +126,7 @@ public class ReservationSchemaConstraintsTest {
             for (int invalida : new int[] { 0, -2 }) {
                 SQLException erro = assertThrows(SQLException.class, () -> {
                     try (PreparedStatement ps = conn.prepareStatement(
-                            "INSERT INTO reservation.eventcap (event_id, capacity, quant) VALUES (?, ?, 0)")) {
+                            "INSERT INTO stock.eventcap (event_id, capacity, quant) VALUES (?, ?, 0)")) {
                         ps.setLong(1, evento + 10 + invalida);
                         ps.setInt(2, invalida);
                         ps.executeUpdate();

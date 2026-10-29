@@ -325,10 +325,58 @@ segue válido até `exp`, 10 h por padrão); um `uid` que não existe mais não 
 com `TRUNCATE ... RESTART IDENTITY` recicla o `user_id`: por isso a limpeza entre blocos da carga e o `run-tests.sh` apagam a chave, e o
 `backend` (cache de JWKS de até 24 h) tem de ser reiniciado depois do identity.
 
+## Saga `stock` + `wallet`: o salto `reservation → stock` (#47)
+
+O `reservation` foi dividido em `stock` (o `eventcap`/CAS, o ledger `stock.hold` e `/internal/eventcaps/**`; uma réplica fixa, `:8086`) e o próprio `reservation` (lado *wallet*, `walletevent` em ES, e o **orquestrador** da reserva).
+O gateway, o worker do `admission` e o `lb:8082` continuam falando só com o `reservation`.
+
+```mermaid
+flowchart LR
+  GW["gateway / worker do admission"] -->|"POST /internal/reservations<br/>(Idempotency-Key)"| RES
+  subgraph RES["reservation :8082 (wallet + orquestrador)"]
+    direction TB
+    SAGA["ReservationSaga<br/>tx1 · chamada · tx2"]
+    REAP["SagaReaperService<br/>(órfãs reserving/compensating)"]
+    WAL["walletevent (ES)<br/>idempotency_key = log da saga<br/>event_availability"]
+  end
+  subgraph STK["stock :8086 (1 réplica, Hikari 250)"]
+    direction TB
+    HOLD["POST /internal/holds<br/>POST /internal/holds/{id}/release"]
+    CAP["/internal/eventcaps/**<br/>eventcap (CAS) + stock.hold"]
+    REL["StockReleaseConsumer<br/>(group stock)"]
+    REC["CatalogReconciliationConsumer<br/>(group stock-catalog)"]
+  end
+  SAGA -->|"1 hold (sem conexão aberta)"| HOLD
+  SAGA -->|"compensação: release(holdId)"| HOLD
+  REAP -->|"release(holdId)"| HOLD
+  CAT["catalog"] -->|"eventcap (PUT/PATCH/DELETE/batch)"| CAP
+  RES -. "reservation.wallet<br/>(Cancelled/Expired com holdId)" .-> REL
+  CAT -. "catalog.event (EventCreated)" .-> REC
+```
+
+Sequência da reserva (o `wallet` nunca segura conexão nem transação durante a chamada ao `stock`; o Supavisor está em transaction mode):
+
+```mermaid
+sequenceDiagram
+  participant C as gateway / worker
+  participant W as reservation
+  participant S as stock
+  C->>W: POST /internal/reservations?path=cas
+  W->>W: tx1: INSERT idempotency_key (hold_id, reserving) COMMIT
+  W->>S: POST /internal/holds {holdId, mode}
+  S->>S: tx: INSERT hold, CAS (último comando) COMMIT
+  S-->>W: 201 | 400 lotado/janela/sem capacidade | 409 lápide
+  W->>W: tx2: reserving -> reserved (CAS por hold_id), reservePending, SlotReserved{holdId} COMMIT
+  W-->>C: 201 pending (400 apaga a linha; 409/5xx/timeout -> compensação inline)
+```
+
+Cancelar e expirar não chamam o `stock`: o `wallet` appenda `ReservationCancelled`/`ReservationExpired` com o `holdId` (no outbox) e o `StockReleaseConsumer` libera o hold e devolve a vaga (idempotente por `holdId`).
+Uma saga órfã (processo morto entre o hold e a tx2, ou `release` que não chegou ao `stock`) é resolvida pelo reaper em até `ORPHAN_MS + SCAN_MS` (~35 s com os defaults).
+
 ## Janelas de falha (sem atomicidade distribuída)
 
 - **Evento criado, `eventcap` não**: a chamada síncrona falhou. A criação responde normalmente; o `EventCreated` do tópico faz o
-  `reservation` criar o que faltou quando voltar (reservar nesse intervalo: "Capacidade do evento não configurada").
+  `stock` (desde a #47; antes o `reservation`) criar o que faltou quando voltar (reservar nesse intervalo: "Capacidade do evento não configurada").
 - **Capacidade removida, evento mantido**: o `reservation` apagou o `eventcap` (cancelamento) e o commit do catalog falhou depois. Raro; o
   evento fica sem `eventcap`.
 - **RabbitMQ fora** (#42): a publicação falha (conexão recusada em 2 s) e o caminho de enfileirar desfaz a entrada e devolve "não publicada" (desde a #43 o `admission` responde `sync` e o gateway segue síncrono); o worker reconecta sozinho. **Reservation fora**:
@@ -356,3 +404,13 @@ com `TRUNCATE ... RESTART IDENTITY` recicla o `user_id`: por isso a limpeza entr
 - **Apagar evento**: o catalog chama `DELETE /internal/eventcaps/{id}` ANTES da transação (sem segurar conexão nem lock durante o salto de
   rede; o 409 de evento com reserva acontece antes de qualquer escrita). Se o reservation apagou a capacidade e a transação do catalog falha em
   seguida, o evento fica sem `eventcap`.
+
+Janelas da saga `stock` + `wallet` (#47; detalhes e testes na spec `docs/superpowers/specs/2026-10-29-saga-stock-wallet-design.md`):
+
+- **`stock` fora** (conexão recusada): o `POST` interno responde 503 (500 genérico no `/bff`; o worker do `admission` faz backoff e requeue), a saga fica `compensating` (o `release` também falhou) e o `quant` fica intacto. O reaper a fecha no primeiro tick depois da volta
+  (tempo ilimitado com o `stock` fora, mas seguro: vaga presa, sem overselling). Cancelar e expirar seguem respondendo; as devoluções esperam no tópico.
+- **`stock` comitou e a resposta se perdeu (timeout)**: compensação inline (`release(holdId)` devolve a vaga e responde 503); repetir a chave reabre com hold novo. Um "reservar" atrasado do mesmo `holdId` chega depois e dá 409 (lápide), sem débito.
+- **`reservation` cai entre o hold e a tx2**: saga `reserving` órfã; o reaper (outra réplica, ou a mesma ao voltar) compensa depois de `ORPHAN_MS`. Dono lento que passa de `ORPHAN_MS` perde o CAS da tx2 e responde 503; o reaper libera.
+- **Desfecho incerto da tx2** (exceção, inclusive no `commit()`): não compensa inline, responde 503 e deixa para o reaper; se a tx2 comitou, a linha está `reserved` e ninguém a toca.
+- **Redpanda fora**: o relay acumula no outbox e as devoluções por evento atrasam (venda a menos, nunca a mais).
+- **`stock` fora na criação/edição/remoção de evento**: como era com o `reservation` fora, agora com o `stock` (reconciliação pelo `EventCreated`, group `stock-catalog`). O `catalog` não depende do `stock` no boot.

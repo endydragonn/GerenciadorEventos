@@ -1,4 +1,4 @@
-package com.gerenciador.eventos.reservation;
+package com.gerenciador.eventos.stock;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -23,13 +23,13 @@ import org.springframework.test.annotation.DirtiesContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.shared.events.EventEnvelope;
 import com.gerenciador.eventos.shared.events.InvalidEventMessageException;
 
 /**
- * Reconciliação do {@code eventcap} pelo {@code EventCreated} do tópico {@code catalog.event} (issue #33, decisão 3): o
- * catalog cria a capacidade por chamada síncrona depois de comitar o evento; se ela não chegar, o reservation a cria sozinho
+ * Reconciliação do {@code eventcap} pelo {@code EventCreated} do tópico {@code catalog.event} (issue #33, decisão 3; no stock desde a #47): o
+ * catalog cria a capacidade por chamada síncrona depois de comitar o evento; se ela não chegar, o stock a cria sozinho
  * a partir do evento. A criação é idempotente por {@code event_id}: quem chega primeiro vence e o resto é no-op.
  *
  * <p>Liga a reconciliação SÓ aqui (nos outros contextos ela fica desligada: um {@code EventCreated} de outro teste não
@@ -38,12 +38,12 @@ import com.gerenciador.eventos.shared.events.InvalidEventMessageException;
  * idempotência) até o {@code eventcap} aparecer, em vez de adivinhar quando a atribuição de partição termina.</p>
  */
 @SpringBootTest(properties = {
-        "events.consumer.enabled=true", "reservation.catalog-reconciliation.enabled=true",
-        "reservation.catalog-reconciliation.group=reservation-catalog-test-${random.uuid}"})
+        "events.consumer.enabled=true", "stock.catalog-reconciliation.enabled=true",
+        "stock.catalog-reconciliation.group=stock-catalog-test-${random.uuid}"})
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Import(GlobalDbTruncator.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-public class CatalogReconciliationTest extends ReservationTestSupport {
+public class CatalogReconciliationTest extends StockTestSupport {
 
     private static final Duration ESPERA = Duration.ofSeconds(60);
     private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
@@ -54,7 +54,7 @@ public class CatalogReconciliationTest extends ReservationTestSupport {
 
     @Test
     public void eventCreatedSemEventcapCriaOEventcapEARepeticaoNaoAltera() throws Exception {
-        long id = 2_100_000_001L;
+        long id = 2_047_000_001L;
         String msg = eventCreated(id, 6, "2030-01-01T10:00:00");
 
         reenviarAte(msg, () -> eventCapRepository.findByEventId(id) != null);
@@ -73,7 +73,7 @@ public class CatalogReconciliationTest extends ReservationTestSupport {
 
     @Test
     public void eventcapCriadoPelaChamadaSincronaNaoEhSobrescritoPeloEventCreated() throws Exception {
-        long id = 2_100_000_002L;
+        long id = 2_047_000_002L;
         eventCapRepository.create(new EventCap(id, 4, 4, null)); // a chamada síncrona chegou primeiro
 
         assertFalse(consumer.reconciliar(eventCreated(id, 50, "2030-01-01T10:00:00")), "já existia: não criou");
@@ -82,7 +82,7 @@ public class CatalogReconciliationTest extends ReservationTestSupport {
 
     @Test
     public void tiposQueNaoSaoEventCreatedSaoIgnoradosEPayloadInvalidoEhRejeitado() throws Exception {
-        long id = 2_100_000_003L;
+        long id = 2_047_000_003L;
         ObjectNode atualizado = envelope("EventUpdated", JSON.createObjectNode().put("eventId", id));
         assertFalse(consumer.reconciliar(atualizado.toString()));
         assertNull(eventCapRepository.findByEventId(id));
@@ -95,7 +95,7 @@ public class CatalogReconciliationTest extends ReservationTestSupport {
 
     @Test
     public void eventoIlimitadoEhReconciliadoComoIlimitado() throws Exception {
-        long id = 2_100_000_004L;
+        long id = 2_047_000_004L;
         assertTrue(consumer.reconciliar(eventCreated(id, -1, null)));
         EventCap cap = eventCapRepository.findByEventId(id);
         assertTrue(cap.isUnlimited());
@@ -106,7 +106,7 @@ public class CatalogReconciliationTest extends ReservationTestSupport {
     /** Issue #58: capacity 0 (ou < -1) viola o CHECK; sem tratar, seria SQLException retentada sem limite e travaria a partição. */
     @Test
     public void capacityInvalidaEhPayloadInvalidoENaoCriaEventcap() throws Exception {
-        long id = 2_100_000_005L;
+        long id = 2_047_000_005L;
         assertThrows(InvalidEventMessageException.class, () -> consumer.reconciliar(eventCreated(id, 0, null)));
         assertThrows(InvalidEventMessageException.class, () -> consumer.reconciliar(eventCreated(id, -2, null)));
         assertNull(eventCapRepository.findByEventId(id));
@@ -120,7 +120,7 @@ public class CatalogReconciliationTest extends ReservationTestSupport {
      */
     @Test
     public void mesmaMensagemEmQuatroReplicasAoMesmoTempoCriaOEventcapUmaSoVez() throws Exception {
-        long id = 2_100_000_006L;
+        long id = 2_047_000_006L;
         String msg = eventCreated(id, 8, "2030-01-01T10:00:00");
 
         java.util.List<Boolean> criou = Concorrencia.emParalelo(4, () -> consumer.reconciliar(msg));

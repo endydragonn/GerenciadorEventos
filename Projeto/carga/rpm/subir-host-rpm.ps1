@@ -48,7 +48,7 @@ if ($Verificar) {
     $sql = @"
 -- O prefixo e atributo do CATALOG (catalog.event, #35); capacidade e reservas sao do servico (schema reservation). Consulta de
 -- verificacao do OPERADOR (psql como admin), nao leitura de um servico em tabela de outro.
-WITH ev AS (SELECT e.event_id, c.capacity FROM catalog.event e JOIN reservation.eventcap c USING (event_id)
+WITH ev AS (SELECT e.event_id, c.capacity FROM catalog.event e JOIN stock.eventcap c USING (event_id)
             WHERE e.event_name LIKE '$Prefixo-%'),
 ativas AS (SELECT ev.event_id, ev.capacity,
                   count(w.*) FILTER (WHERE w.status IN ('pending','confirmed')) AS n
@@ -70,7 +70,7 @@ SELECT status, count(*) FROM reservation.walletevent
     if ($rc -ne 0) { exit $rc }
     # Overselling > 0 no CAS e o criterio de parada do bloco (issue #178): codigo 3. No braco naive o overselling e esperado (e o que a Rodada mede): so informa.
     $qOver = @"
-WITH ev AS (SELECT e.event_id, c.capacity FROM catalog.event e JOIN reservation.eventcap c USING (event_id) WHERE e.event_name LIKE '$Prefixo-%'),
+WITH ev AS (SELECT e.event_id, c.capacity FROM catalog.event e JOIN stock.eventcap c USING (event_id) WHERE e.event_name LIKE '$Prefixo-%'),
 ativas AS (SELECT ev.capacity, count(w.*) FILTER (WHERE w.status IN ('pending','confirmed')) AS n FROM ev LEFT JOIN reservation.walletevent w ON w.event_id = ev.event_id GROUP BY ev.event_id, ev.capacity)
 SELECT coalesce(sum(n - capacity) FILTER (WHERE n > capacity), 0) FROM ativas;
 "@

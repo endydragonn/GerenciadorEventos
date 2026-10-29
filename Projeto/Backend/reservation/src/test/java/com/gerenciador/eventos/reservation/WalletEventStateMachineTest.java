@@ -16,7 +16,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
-import com.gerenciador.eventos.reservation.EventCapRepository;
 import com.gerenciador.eventos.reservation.EventWalletRepository;
 import com.gerenciador.eventos.reservation.EventWalletService;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
@@ -43,7 +42,6 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 @Import(GlobalDbTruncator.class)
 public class WalletEventStateMachineTest extends ReservationTestSupport {
     @Autowired private EventWalletService eventWalletService;
-    @Autowired private EventCapRepository eventCapRepository;
     @Autowired private EventWalletRepository eventWalletRepository;
     @Autowired private DatabaseConnection databaseConnection;
 
@@ -58,7 +56,7 @@ public class WalletEventStateMachineTest extends ReservationTestSupport {
         eventWalletService.confirm(u.getId(), e.getEvent_id());
         eventWalletService.removeLink(u.getId(), e.getEvent_id()); // -> cancelled, vaga devolvida
         assertEquals("cancelled", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
-        assertEquals(5, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(5, capacidade(e.getEvent_id()).getQuant(),
                 "cancelamento devolve a vaga antes da re-reserva");
 
         EventWallet revivida = eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
@@ -66,7 +64,7 @@ public class WalletEventStateMachineTest extends ReservationTestSupport {
         assertEquals("pending", revivida.getStatus(), "re-reserva revive a linha para pending");
         assertNotNull(revivida.getExpiresAt(), "reserva revivida tem expires_at");
         assertEquals("pending", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant(),
                 "no total a vaga foi debitada exatamente uma vez (não duas)");
         assertExpiresAtNoFuturo(u.getId(), e.getEvent_id());
     }
@@ -77,7 +75,7 @@ public class WalletEventStateMachineTest extends ReservationTestSupport {
         Evento e = novoEvento(u.getId(), "Evento SM7 Expired Revive", 5);
 
         eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant());
 
         // força expired por UPDATE direto (sem ReservationExpiryService — isso é da issue #8)
         // e devolve a vaga manualmente pra deixar o estado consistente, como faria o job.
@@ -90,20 +88,20 @@ public class WalletEventStateMachineTest extends ReservationTestSupport {
                 ps.executeUpdate();
             }
             try (PreparedStatement ps = conn.prepareStatement(
-                    "UPDATE reservation.eventcap SET quant = quant + 1 "
+                    "UPDATE stock.eventcap SET quant = quant + 1 "
                   + "WHERE event_id = ? AND capacity <> -1 AND quant < capacity")) {
                 ps.setLong(1, e.getEvent_id());
                 ps.executeUpdate();
             }
         }
-        assertEquals(5, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(5, capacidade(e.getEvent_id()).getQuant());
 
         EventWallet revivida = eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
 
         assertEquals("pending", revivida.getStatus());
         assertNotNull(revivida.getExpiresAt());
         assertEquals("pending", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant(),
                 "re-reserva sobre expired debita a vaga de novo");
         assertExpiresAtNoFuturo(u.getId(), e.getEvent_id());
     }
@@ -115,23 +113,23 @@ public class WalletEventStateMachineTest extends ReservationTestSupport {
 
         eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
         eventWalletService.confirm(u.getId(), e.getEvent_id());
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant());
 
         // caminho do serviço: barra em existsActive antes do CAS
         assertThrows(IllegalArgumentException.class,
                 () -> eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id())));
         assertEquals("confirmed", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant());
 
         // guard do próprio UPSERT (WHERE status IN ('expired','cancelled')): chamada direta
         // ao repository sobre uma linha confirmed não pode revivê-la.
         try (Connection conn = databaseConnection.getConnection()) {
             int versao = eventWalletRepository.reservePending(
-                    conn, u.getId(), e.getEvent_id(), LocalDateTime.now().plusSeconds(120));
+                    conn, u.getId(), e.getEvent_id(), LocalDateTime.now().plusSeconds(120), java.util.UUID.randomUUID());
             assertEquals(0, versao, "reservePending não pode reviver uma reserva confirmed");
         }
         assertEquals("confirmed", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant(),
                 "guard do UPSERT preserva a vaga");
     }
 
@@ -156,11 +154,11 @@ public class WalletEventStateMachineTest extends ReservationTestSupport {
         Evento e = novoEvento(u.getId(), "Evento SM7 P2X", 3);
 
         eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id())); // pending
-        assertEquals(2, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(2, capacidade(e.getEvent_id()).getQuant());
 
         eventWalletService.removeLink(u.getId(), e.getEvent_id()); // pending -> cancelled
         assertEquals("cancelled", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
-        assertEquals(3, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(3, capacidade(e.getEvent_id()).getQuant(),
                 "cancelar uma reserva pending devolve a vaga");
     }
 
@@ -171,11 +169,11 @@ public class WalletEventStateMachineTest extends ReservationTestSupport {
 
         eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
         eventWalletService.confirm(u.getId(), e.getEvent_id());
-        assertEquals(2, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(2, capacidade(e.getEvent_id()).getQuant());
 
         eventWalletService.removeLink(u.getId(), e.getEvent_id()); // confirmed -> cancelled
         assertEquals("cancelled", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
-        assertEquals(3, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(3, capacidade(e.getEvent_id()).getQuant(),
                 "cancelar uma inscrição confirmed devolve a vaga");
     }
 

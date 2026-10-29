@@ -39,6 +39,8 @@ SET ROLE :"app_user";
 -- identity (#36): users/mywallet/pending_verifications + event store do serviço, no schema identity (substituiu o 01-functions,
 -- 02-users, 06-mywallet e 08-pending-verifications: nenhum usuário mora mais em public)
 \i /app-init/15-identity.sql
+-- stock (#47): eventcap + ledger de holds da saga stock + wallet, no schema stock (o eventcap saiu do reservation na #47)
+\i /app-init/16-stock.sql
 \i /app-init/99-tests.sql
 
 RESET ROLE;

@@ -25,7 +25,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.catalogclient.api.EventoNaoEncontradoException;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 

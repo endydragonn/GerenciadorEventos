@@ -91,8 +91,8 @@ Variáveis de ambiente (todas opcionais):
   `event.event_name` são `UNIQUE` e o backend rejeita duplicados — sem o sufixo a
   segunda execução falharia em "já existente".
 - O script tem **rotina de limpeza** no `trap EXIT`: remove `reservation.walletevent` e
-  `reservation.eventcap` (do serviço `reservation`, sem FK desde a #33) → `catalog.event` → `identity.users`
-  (o `mywallet` cai por `CASCADE`). As queries do roteiro leem `reservation.eventcap` e `reservation.walletevent`.
+  `stock.eventcap` (do serviço `reservation`, sem FK desde a #33) → `catalog.event` → `identity.users`
+  (o `mywallet` cai por `CASCADE`). As queries do roteiro leem `stock.eventcap` e `reservation.walletevent`.
 - Roda **duas vezes seguidas** sem falhar (verificado).
 - Limpeza manual alternativa:
   ```bash
@@ -133,7 +133,7 @@ Das duas requisições concorrentes:
 "simultâneos" ainda saem com milissegundos de diferença, e um par serializado
 produziria o mesmo par 201/400):
 
-- `SELECT quant FROM reservation.eventcap WHERE event_id = <id>` → **`0`** (nunca negativo).
+- `SELECT quant FROM stock.eventcap WHERE event_id = <id>` → **`0`** (nunca negativo).
 - Exatamente **1** linha em `reservation.walletevent` com `status = 'pending'` para o evento.
 
 > **Qual asserção realmente discrimina:** com um fixture de `capacity = 2` (rode

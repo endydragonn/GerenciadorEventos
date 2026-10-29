@@ -1,11 +1,11 @@
-package com.gerenciador.eventos.reservationclient.api;
+package com.gerenciador.eventos.stockclient.api;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.Map;
 
 /**
- * Capacidade do evento ({@code eventcap}, do serviço reservation), do ponto de vista de quem CHAMA o serviço (o
+ * Capacidade do evento ({@code eventcap}, do serviço stock), do ponto de vista de quem CHAMA o serviço (o
  * {@code catalog} do monólito). Cada método é uma chamada HTTP síncrona à API interna: o {@code eventcap} nasce por
  * aqui na criação do evento (read-your-writes) e a criação é idempotente por {@code eventId}.
  */

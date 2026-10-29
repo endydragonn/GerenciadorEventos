@@ -1,4 +1,4 @@
-package com.gerenciador.eventos.reservation;
+package com.gerenciador.eventos.stock;
 
 import java.time.DateTimeException;
 import java.time.LocalDateTime;
@@ -13,12 +13,12 @@ import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.shared.events.EventEnvelope;
 import com.gerenciador.eventos.shared.events.InvalidEventMessageException;
 
 /**
- * Reconciliação do {@code eventcap} pelo tópico {@code catalog.event} (issue #33, decisão 3): o catalog cria a
+ * Reconciliação do {@code eventcap} pelo tópico {@code catalog.event} (issue #33, decisão 3; movida do reservation para o stock na #47): o catalog cria a
  * capacidade por chamada síncrona DEPOIS de comitar o evento; se essa chamada falhar (serviço fora, rede), o evento já existe
  * sem {@code eventcap} e este consumer o cria a partir do {@code EventCreated} (que leva {@code capacity} e
  * {@code buyTimeLimit}). A criação é idempotente por {@code event_id} ({@code ON CONFLICT DO NOTHING}), então quem chega
@@ -30,14 +30,14 @@ import com.gerenciador.eventos.shared.events.InvalidEventMessageException;
  * <p><b>Group próprio e {@code auto.offset.reset=latest}</b>: um group novo NÃO relê o histórico do tópico (ids de evento
  * são reaproveitados depois de {@code TRUNCATE ... RESTART IDENTITY}, e um {@code EventCreated} antigo criaria uma capacidade
  * errada para o evento novo de mesmo id). Só vale se ambas as flags estiverem ligadas: {@code events.consumer.enabled}
- * (política de erro/DLT da {@code shared}) e {@code reservation.catalog-reconciliation.enabled}. Janela de falha
- * documentada: evento criado com o reservation fora e o group nunca criado só é reconciliado a partir do primeiro start.</p>
+ * (política de erro/DLT da {@code shared}) e {@code stock.catalog-reconciliation.enabled}. Janela de falha
+ * documentada: evento criado com o stock fora e o group nunca criado só é reconciliado a partir do primeiro start.</p>
  */
 @Component
-@ConditionalOnProperty(name = {"events.consumer.enabled", "reservation.catalog-reconciliation.enabled"}, havingValue = "true")
+@ConditionalOnProperty(name = {"events.consumer.enabled", "stock.catalog-reconciliation.enabled"}, havingValue = "true")
 public class CatalogReconciliationConsumer {
 
-    public static final String LISTENER_ID = "reservation-catalog-reconciliation";
+    public static final String LISTENER_ID = "stock-catalog-reconciliation";
     public static final String TOPICO = "catalog.event";
     static final String EVENT_CREATED = "EventCreated";
 
@@ -52,7 +52,7 @@ public class CatalogReconciliationConsumer {
     }
 
     @KafkaListener(id = LISTENER_ID, idIsGroup = false, topics = TOPICO,
-            groupId = "${reservation.catalog-reconciliation.group:reservation-catalog}",
+            groupId = "${stock.catalog-reconciliation.group:stock-catalog}",
             properties = "auto.offset.reset=latest")
     void ouvir(String value, Acknowledgment ack) {
         reconciliar(value);

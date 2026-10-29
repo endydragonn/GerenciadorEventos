@@ -10,12 +10,12 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * interna HTTP ({@code /internal/events/**}) que o gateway do monólito chama pelo {@code CatalogClient}.
  *
  * <p>O component scan cobre este pacote, a lib {@code shared} (conexão, event store, relay, replay; o {@code EventStore}
- * aponta para o schema {@code catalog} por {@code events.schema}) e o {@code reservationclient} (o bean do
- * {@code ReservationClient}: o {@code eventcap} nasce/muda/sai por HTTP no serviço reservation). O {@code catalogclient} fica
+ * aponta para o schema {@code catalog} por {@code events.schema}) e o {@code stockclient} (o bean do
+ * {@code StockClient}: o {@code eventcap} nasce/muda/sai por HTTP no serviço stock). O {@code catalogclient} fica
  * FORA do scan de propósito: o serviço não monta um cliente de si mesmo. {@code @EnableScheduling} liga o relay do outbox.</p>
  */
 @SpringBootApplication(scanBasePackages = {"com.gerenciador.eventos.catalog", "com.gerenciador.eventos.shared",
-        "com.gerenciador.eventos.reservationclient"})
+        "com.gerenciador.eventos.stockclient"})
 @EnableScheduling
 public class CatalogApplication {
 

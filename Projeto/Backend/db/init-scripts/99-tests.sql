@@ -9,7 +9,7 @@
 -- - Projecao assincrona event_availability (so ativos; disponibilidade calculada na leitura) e walletevent.version da guarda
 -- - event_store/event_outbox/event_snapshot/projection_checkpoint (concorrência otimista, outbox, checkpoint atômico)
 -- - TRUNCATE e revalidação pós-TRUNCATE
--- Desde a #35 event/eventpresenter estão no schema catalog (14-catalog.sql), sem FK para users; as de reserva, em reservation (#33);
+-- Desde a #35 event/eventpresenter estão no schema catalog (14-catalog.sql), sem FK para users; as de reserva, em reservation (#33), e a capacidade (eventcap) em stock (#47);
 -- desde a #36 users/mywallet/pending_verifications estão no schema identity (15-identity.sql).
 
 \echo Iniciando testes minimos do banco...
@@ -33,7 +33,7 @@ BEGIN
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                    identity.mywallet, identity.users, identity.pending_verifications,
                    identity.event_store, identity.event_outbox, identity.event_snapshot, identity.projection_checkpoint,
-                   reservation.eventcap, reservation.event_availability, reservation.walletevent,
+                   stock.eventcap, stock.hold, reservation.event_availability, reservation.walletevent,
                    reservation.idempotency_key
       RESTART IDENTITY CASCADE;
 
@@ -60,9 +60,9 @@ BEGIN
     VALUES (v_user1, 'Evento Teste 2', now() + interval '60 days', 'desc2')
     RETURNING event_id INTO v_event2;
 
-    INSERT INTO reservation.eventcap (event_id, capacity, quant, buy_time_limit)
+    INSERT INTO stock.eventcap (event_id, capacity, quant, buy_time_limit)
     VALUES (v_event1, 2, 2, now() + interval '20 days');
-    INSERT INTO reservation.eventcap (event_id, capacity, quant, buy_time_limit)
+    INSERT INTO stock.eventcap (event_id, capacity, quant, buy_time_limit)
     VALUES (v_event2, 1, 1, now() + interval '50 days');
 
     -- 3) eventpresenter: lista de apresentadores, PK composta
@@ -82,12 +82,12 @@ BEGIN
       INSERT INTO catalog.event (creator_id, event_name, event_date, description)
       VALUES (v_user1, 'Evento Invalido', now() + interval '10 days', 'x')
       RETURNING event_id INTO v_count;
-      INSERT INTO reservation.eventcap (event_id, capacity, quant) VALUES (v_count, 5, 6);
+      INSERT INTO stock.eventcap (event_id, capacity, quant) VALUES (v_count, 5, 6);
       RAISE EXCEPTION 'Falha: CHECK permitiu quant > capacity';
     EXCEPTION WHEN check_violation THEN NULL; END;
 
     -- 5) Reserva via UPDATE condicional atomico (CAS) no evento 2 (capacity=1)
-    UPDATE reservation.eventcap SET quant = quant - 1 WHERE event_id = v_event2 AND quant >= 1;
+    UPDATE stock.eventcap SET quant = quant - 1 WHERE event_id = v_event2 AND quant >= 1;
     GET DIAGNOSTICS v_rows = ROW_COUNT;
     IF v_rows <> 1 THEN RAISE EXCEPTION 'Falha: primeira reserva CAS nao afetou 1 linha (obtido %)', v_rows; END IF;
 
@@ -95,27 +95,27 @@ BEGIN
     VALUES (v_user1, v_event2, 'pending', now() + interval '120 seconds');
 
     -- Segunda reserva no mesmo evento: sem vaga -> 0 linhas
-    UPDATE reservation.eventcap SET quant = quant - 1 WHERE event_id = v_event2 AND quant >= 1;
+    UPDATE stock.eventcap SET quant = quant - 1 WHERE event_id = v_event2 AND quant >= 1;
     GET DIAGNOSTICS v_rows = ROW_COUNT;
     IF v_rows <> 0 THEN RAISE EXCEPTION 'Falha: CAS permitiu overselling (afetou % linhas)', v_rows; END IF;
 
-    SELECT quant INTO v_count FROM reservation.eventcap WHERE event_id = v_event2;
+    SELECT quant INTO v_count FROM stock.eventcap WHERE event_id = v_event2;
     IF v_count <> 0 THEN RAISE EXCEPTION 'Falha: quant do evento 2 deveria ser 0, e %', v_count; END IF;
 
     -- 5b) Evento ILIMITADO (capacity = -1): CAS nao afeta linha; CHECK nao exige quant<=capacity
     INSERT INTO catalog.event (creator_id, event_name, event_date, description)
     VALUES (v_user1, 'Evento Ilimitado', now() + interval '90 days', 'sem limite')
     RETURNING event_id INTO v_event_ilim;
-    INSERT INTO reservation.eventcap (event_id, capacity, quant) VALUES (v_event_ilim, -1, -1);
+    INSERT INTO stock.eventcap (event_id, capacity, quant) VALUES (v_event_ilim, -1, -1);
 
-    UPDATE reservation.eventcap SET quant = quant - 1
+    UPDATE stock.eventcap SET quant = quant - 1
       WHERE event_id = v_event_ilim AND capacity <> -1 AND quant >= 1;
     GET DIAGNOSTICS v_rows = ROW_COUNT;
     IF v_rows <> 0 THEN RAISE EXCEPTION 'Falha: CAS afetou evento ilimitado (%)', v_rows; END IF;
 
     INSERT INTO reservation.walletevent (user_id, event_id) VALUES (v_user1, v_event_ilim);
     INSERT INTO reservation.walletevent (user_id, event_id) VALUES (v_user2, v_event_ilim);
-    SELECT quant INTO v_count FROM reservation.eventcap WHERE event_id = v_event_ilim;
+    SELECT quant INTO v_count FROM stock.eventcap WHERE event_id = v_event_ilim;
     IF v_count <> -1 THEN RAISE EXCEPTION 'Falha: quant do ilimitado mudou (%)', v_count; END IF;
 
     -- 6) Confirmacao e liberacao de vaga
@@ -127,8 +127,8 @@ BEGIN
     -- Cancelamento devolve a vaga
     UPDATE reservation.walletevent SET status = 'cancelled'
       WHERE user_id = v_user1 AND event_id = v_event2;
-    UPDATE reservation.eventcap SET quant = quant + 1 WHERE event_id = v_event2 AND quant < capacity;
-    SELECT quant INTO v_count FROM reservation.eventcap WHERE event_id = v_event2;
+    UPDATE stock.eventcap SET quant = quant + 1 WHERE event_id = v_event2 AND quant < capacity;
+    SELECT quant INTO v_count FROM stock.eventcap WHERE event_id = v_event2;
     IF v_count <> 1 THEN RAISE EXCEPTION 'Falha: cancelamento nao devolveu a vaga (quant=%)', v_count; END IF;
 
     -- 6b) Projecao assincrona event_availability (issue #29): so guarda "ativos"; a disponibilidade e calculada na
@@ -136,12 +136,12 @@ BEGIN
     INSERT INTO catalog.event (creator_id, event_name, event_date, description)
     VALUES (v_user1, 'Evento Read Model', now() + interval '40 days', 'rm')
     RETURNING event_id INTO v_event_rm;
-    INSERT INTO reservation.eventcap (event_id, capacity, quant) VALUES (v_event_rm, 4, 4);
+    INSERT INTO stock.eventcap (event_id, capacity, quant) VALUES (v_event_rm, 4, 4);
 
     -- evento sem nenhuma linha na projecao ja tem disponibilidade = capacity
     SELECT CASE WHEN ec.capacity = -1 THEN -1 ELSE GREATEST(ec.capacity - GREATEST(COALESCE(ea.ativos, 0), 0), 0) END
       INTO v_count
-      FROM reservation.eventcap ec LEFT JOIN reservation.event_availability ea ON ea.event_id = ec.event_id
+      FROM stock.eventcap ec LEFT JOIN reservation.event_availability ea ON ea.event_id = ec.event_id
      WHERE ec.event_id = v_event_rm;
     IF v_count <> 4 THEN RAISE EXCEPTION 'Falha: evento sem linha na projecao deveria ter disponibilidade 4, e %', v_count; END IF;
 
@@ -153,7 +153,7 @@ BEGIN
           last_occurred_at = GREATEST(event_availability.last_occurred_at, EXCLUDED.last_occurred_at),
           applied_at = clock_timestamp();
     SELECT GREATEST(ec.capacity - GREATEST(COALESCE(ea.ativos, 0), 0), 0) INTO v_count
-      FROM reservation.eventcap ec LEFT JOIN reservation.event_availability ea ON ea.event_id = ec.event_id
+      FROM stock.eventcap ec LEFT JOIN reservation.event_availability ea ON ea.event_id = ec.event_id
      WHERE ec.event_id = v_event_rm;
     IF v_count <> 3 THEN
       RAISE EXCEPTION 'Falha: disponibilidade deveria ser 3 (capacity 4 - 1 ativo), e %', v_count;
@@ -167,7 +167,7 @@ BEGIN
     IF v_count <> -1 THEN RAISE EXCEPTION 'Falha: ativos deveria aceitar saldo negativo (sem CHECK), e %', v_count; END IF;
     -- com ativos = -1 a disponibilidade calculada NAO passa da capacidade (ativos negativo conta como 0)
     SELECT GREATEST(ec.capacity - GREATEST(COALESCE(ea.ativos, 0), 0), 0) INTO v_count
-      FROM reservation.eventcap ec LEFT JOIN reservation.event_availability ea ON ea.event_id = ec.event_id
+      FROM stock.eventcap ec LEFT JOIN reservation.event_availability ea ON ea.event_id = ec.event_id
      WHERE ec.event_id = v_event_rm;
     IF v_count <> 4 THEN
       RAISE EXCEPTION 'Falha: com ativos = -1 a disponibilidade deveria ser a capacidade (4), e %', v_count;
@@ -228,19 +228,19 @@ BEGIN
 
     -- 8b) idempotency_key: a PK (user_id, idempotency_key) serializa a mesma chave DO MESMO usuario
     --     (ON CONFLICT DO NOTHING = 0 linhas na 2a vez); outro usuario pode usar a mesma chave
-    INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at)
-    VALUES ('chave-teste', v_user1, v_event1, now());
-    INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at)
-    VALUES ('chave-teste', v_user1, v_event1, now()) ON CONFLICT (user_id, idempotency_key) DO NOTHING;
+    INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at, saga_status)
+    VALUES ('chave-teste', v_user1, v_event1, now(), 'reserved');
+    INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at, saga_status)
+    VALUES ('chave-teste', v_user1, v_event1, now(), 'reserved') ON CONFLICT (user_id, idempotency_key) DO NOTHING;
     SELECT count(*) INTO v_count FROM reservation.idempotency_key WHERE idempotency_key = 'chave-teste';
     IF v_count <> 1 THEN RAISE EXCEPTION 'Falha: idempotency_key aceitou chave duplicada do mesmo usuario'; END IF;
     BEGIN
-      INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at)
-      VALUES ('chave-teste', v_user1, v_event1, now());
+      INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at, saga_status)
+      VALUES ('chave-teste', v_user1, v_event1, now(), 'reserved');
       RAISE EXCEPTION 'Falha: insercao duplicada em idempotency_key nao falhou';
     EXCEPTION WHEN unique_violation THEN NULL; END;
-    INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at)
-    VALUES ('chave-teste', v_user2, v_event1, now());
+    INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at, saga_status)
+    VALUES ('chave-teste', v_user2, v_event1, now(), 'reserved');
     SELECT count(*) INTO v_count FROM reservation.idempotency_key WHERE idempotency_key = 'chave-teste';
     IF v_count <> 2 THEN RAISE EXCEPTION 'Falha: idempotency_key nao escopou a chave por usuario'; END IF;
     DELETE FROM reservation.idempotency_key WHERE idempotency_key = 'chave-teste';
@@ -312,7 +312,7 @@ BEGIN
     --    FK e cascata; desde a #33 sao do schema reservation, SEM FK: apagar o evento NAO mexe nelas (quem remove o eventcap e o
     --    servico catalog, chamando o reservation).
     DELETE FROM catalog.event WHERE event_id = v_event1;
-    SELECT count(*) INTO v_count FROM reservation.eventcap WHERE event_id = v_event1;
+    SELECT count(*) INTO v_count FROM stock.eventcap WHERE event_id = v_event1;
     IF v_count <> 1 THEN RAISE EXCEPTION 'Falha: eventcap nao deveria cair com o evento (sem FK cross-schema; %)', v_count; END IF;
     SELECT count(*) INTO v_count FROM catalog.eventpresenter WHERE event_id = v_event1;
     IF v_count <> 0 THEN RAISE EXCEPTION 'Falha: eventpresenter nao foi removido em cascata'; END IF;
@@ -322,12 +322,12 @@ BEGIN
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                    identity.mywallet, identity.users, identity.pending_verifications,
                    identity.event_store, identity.event_outbox, identity.event_snapshot, identity.projection_checkpoint,
-                   reservation.eventcap, reservation.event_availability, reservation.walletevent,
+                   stock.eventcap, stock.hold, reservation.event_availability, reservation.walletevent,
                    reservation.idempotency_key
       RESTART IDENTITY CASCADE;
 
     SELECT count(*) INTO v_count FROM identity.users;      IF v_count <> 0 THEN RAISE EXCEPTION 'users nao ficou vazio'; END IF;
-    SELECT count(*) INTO v_count FROM reservation.eventcap;   IF v_count <> 0 THEN RAISE EXCEPTION 'eventcap nao ficou vazio'; END IF;
+    SELECT count(*) INTO v_count FROM stock.eventcap;   IF v_count <> 0 THEN RAISE EXCEPTION 'eventcap nao ficou vazio'; END IF;
 
     INSERT INTO identity.users (user_name, email, fone, password, birthdate)
     VALUES ('teste_pos_truncate', 'postruncate@test.com', '7700000000', 'pw', '1995-05-05')
@@ -339,7 +339,7 @@ BEGIN
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                    identity.mywallet, identity.users, identity.pending_verifications,
                    identity.event_store, identity.event_outbox, identity.event_snapshot, identity.projection_checkpoint,
-                   reservation.eventcap, reservation.event_availability, reservation.walletevent,
+                   stock.eventcap, stock.hold, reservation.event_availability, reservation.walletevent,
                    reservation.idempotency_key
       RESTART IDENTITY CASCADE;
   EXCEPTION WHEN OTHERS THEN
@@ -351,7 +351,7 @@ BEGIN
                    public.event_store, public.event_outbox, public.event_snapshot, public.projection_checkpoint,
                    identity.mywallet, identity.users, identity.pending_verifications,
                    identity.event_store, identity.event_outbox, identity.event_snapshot, identity.projection_checkpoint,
-                   reservation.eventcap, reservation.event_availability, reservation.walletevent,
+                   stock.eventcap, stock.hold, reservation.event_availability, reservation.walletevent,
                    reservation.idempotency_key
     RESTART IDENTITY CASCADE;
 

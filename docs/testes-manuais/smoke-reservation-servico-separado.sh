@@ -60,7 +60,8 @@ confere() { # descricao esperado obtido
 limpar() {
     if [ "$MANTER_DADOS" != "1" ]; then
         psql_db "DELETE FROM reservation.walletevent WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name = 'Smoke33 $SUFIXO');
-                 DELETE FROM reservation.eventcap WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name = 'Smoke33 $SUFIXO');
+                 DELETE FROM stock.hold WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name = 'Smoke33 $SUFIXO');
+                 DELETE FROM stock.eventcap WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name = 'Smoke33 $SUFIXO');
                  DELETE FROM catalog.event WHERE event_name = 'Smoke33 $SUFIXO';
                  DELETE FROM identity.users WHERE email LIKE 'smoke33-$SUFIXO-%@example.com';" >/dev/null 2>&1 || true
     fi
@@ -100,8 +101,8 @@ curl -s -X POST "$BASE_URL/bff/seed" -H 'Content-Type: application/json' \
     -d "{\"events\":[{\"creator_id\":${UID_[1]},\"event_name\":\"Smoke33 $SUFIXO\",\"is_EAD\":true,\"event_date\":\"2035-12-01T14:00:00\",\"lot_quantity\":$CAPACIDADE,\"description\":\"smoke\"}]}" >/dev/null
 EVENT_ID="$(psql_db "SELECT event_id FROM catalog.event WHERE event_name = 'Smoke33 $SUFIXO'" | tr -d '[:space:]')"
 confere "evento criado no catalog" "sim" "$([ -n "$EVENT_ID" ] && echo sim || echo nao)"
-confere "reservation.eventcap.capacity do evento (criado pelo servico)" "$CAPACIDADE" \
-    "$(psql_db "SELECT capacity FROM reservation.eventcap WHERE event_id = ${EVENT_ID:-0}" | tr -d '[:space:]')"
+confere "stock.eventcap.capacity do evento (criado pelo servico stock, #47)" "$CAPACIDADE" \
+    "$(psql_db "SELECT capacity FROM stock.eventcap WHERE event_id = ${EVENT_ID:-0}" | tr -d '[:space:]')"
 
 echo "==> 2. login de cada usuario"
 for i in $(seq 1 "$USUARIOS"); do
@@ -131,15 +132,24 @@ else
     confere "201 + 'Evento lotado' = usuarios" "$USUARIOS" "$((aceitas + lotadas))"
 fi
 
-echo "==> 4. o banco (schema reservation) concorda (braco $BRACO)"
+echo "==> 4. o banco (schemas reservation e stock) concorda (braco $BRACO)"
 ativas="$(psql_db "SELECT count(*) FROM reservation.walletevent WHERE event_id = $EVENT_ID AND status IN ('pending','confirmed')" | tr -d '[:space:]')"
 confere "reservas ativas em reservation.walletevent (= respostas 201)" "$aceitas" "$ativas"
 oversell=$(( ${ativas:-0} > CAPACIDADE ? ${ativas:-0} - CAPACIDADE : 0 ))
 echo "   OVERSELLING (ativas - capacidade) = $oversell"
 [ "$BRACO" = naive ] || confere "overselling" 0 "$oversell"
 # naive nao toca o eventcap (a disponibilidade vem da projecao): quant fica na capacidade
-confere "reservation.eventcap.quant" "$([ "$BRACO" = naive ] && echo "$CAPACIDADE" || echo 0)" \
-    "$(psql_db "SELECT quant FROM reservation.eventcap WHERE event_id = $EVENT_ID" | tr -d '[:space:]')"
+confere "stock.eventcap.quant" "$([ "$BRACO" = naive ] && echo "$CAPACIDADE" || echo 0)" \
+    "$(psql_db "SELECT quant FROM stock.eventcap WHERE event_id = $EVENT_ID" | tr -d '[:space:]')"
+# invariantes da saga stock + wallet (#47): o smoke e o e2e sao os unicos scripts que leem os dois schemas
+confere "quant = capacidade - holds debitados (stock.hold held AND decremented)" 0 \
+    "$(psql_db "SELECT count(*) FROM stock.eventcap ec WHERE ec.event_id = $EVENT_ID AND ec.capacity <> -1 AND ec.quant <> ec.capacity - (SELECT count(*) FROM stock.hold h WHERE h.event_id = ec.event_id AND h.status = 'held' AND h.decremented)" | tr -d '[:space:]')"
+confere "nenhum walletevent ativo sem hold held com o mesmo hold_id" 0 \
+    "$(psql_db "SELECT count(*) FROM reservation.walletevent w WHERE w.event_id = $EVENT_ID AND w.status IN ('pending','confirmed') AND NOT EXISTS (SELECT 1 FROM stock.hold h WHERE h.hold_id = w.hold_id AND h.status = 'held')" | tr -d '[:space:]')"
+confere "nenhum hold held sem walletevent ativo nem saga em curso (vaga presa)" 0 \
+    "$(psql_db "SELECT count(*) FROM stock.hold h WHERE h.event_id = $EVENT_ID AND h.status = 'held' AND NOT EXISTS (SELECT 1 FROM reservation.walletevent w WHERE w.hold_id = h.hold_id AND w.status IN ('pending','confirmed')) AND NOT EXISTS (SELECT 1 FROM reservation.idempotency_key k WHERE k.hold_id = h.hold_id AND k.saga_status IN ('reserving','compensating'))" | tr -d '[:space:]')"
+confere "nenhuma saga reserving/compensating sobrando" 0 \
+    "$(psql_db "SELECT count(*) FROM reservation.idempotency_key WHERE event_id = $EVENT_ID AND saga_status IN ('reserving','compensating')" | tr -d '[:space:]')"
 confere "SlotReserved em reservation.event_store (event store DO SERVICO)" "$aceitas" \
     "$(psql_db "SELECT count(*) FROM reservation.event_store WHERE stream_type = 'reservation.wallet' AND event_type = 'SlotReserved' AND partition_key = '$EVENT_ID'" | tr -d '[:space:]')"
 confere "o event store do monolito (public) NAO recebeu o stream reservation.wallet" 0 \

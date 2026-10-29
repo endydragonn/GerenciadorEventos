@@ -1,5 +1,7 @@
 # reservation
 
+> **Desde a #47** o `eventcap` (capacidade, **CAS**) e a API `/internal/eventcaps/**` são do serviço `stock` (`Backend/stock/`). O `reservation` é o lado *wallet* e o **orquestrador da saga** (`POST /internal/holds` no `stock`; reaper de órfãs); cancelar e expirar só appendam o evento com o `holdId` e o `stock` devolve a vaga. O texto abaixo é o da #33; leia "`eventcap`/CAS" como "no `stock`".
+
 Serviço de reservas do Gerenciador de Eventos (issue #33, Fase 7: segunda extração do monólito). É dono de `eventcap` (capacidade,
 **CAS**: `UPDATE` condicional atômico), `walletevent` (inscrição, **event sourcing**, stream `reservation.wallet`), `idempotency_key` e da
 projeção `event_availability`, no schema `reservation`. Expõe uma **API interna HTTP** (`/internal/**`, porta 8082) chamada pelo `gateway` do
@@ -16,8 +18,7 @@ monólito. Processo, imagem e container (`gerenciador-reservation`) próprios; *
 - **Event sourcing:** a reserva appenda `SlotReserved`/`ReservationConfirmed`/`ReservationExpired`/`ReservationCancelled` no
   `reservation.event_store` **do serviço** (event store próprio, relay e consumer próprios) na mesma transação do CAS/guarda; a projeção de
   disponibilidade (`event_availability`) é assíncrona (group `reservation`).
-- **Reconciliação:** o `EventCreated` do tópico `catalog.event` cria o `eventcap` que a chamada síncrona do catalog não criou
-  (`CatalogReconciliationConsumer`, group `reservation-catalog`).
+- **Reconciliação:** desde a #47 é do `stock` (`CatalogReconciliationConsumer`, group `stock-catalog`): o `EventCreated` do tópico `catalog.event` cria o `eventcap` que a chamada síncrona do catalog não criou.
 - **Jobs:** expiração das reservas `pending` vencidas e retenção das chaves de idempotência (24 h).
 - **Independência:** só depende das libs `shared` e `reservation-client`, do Postgres e do Redpanda; não lê tabela do monólito.
 - **Configuração do caminho quente** (comparabilidade com o ponto 2): Tomcat 300, Hikari 1000, virtual threads desligadas. A conta do pool do

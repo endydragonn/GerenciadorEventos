@@ -1,15 +1,15 @@
-package com.gerenciador.eventos.reservationclient.api;
+package com.gerenciador.eventos.stockclient.api;
 
 import java.time.LocalDateTime;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
 /**
- * Agregado isolado de capacidade/vagas de um evento (tabela {@code reservation.eventcap}, do serviço reservation).
+ * Agregado isolado de capacidade/vagas de um evento (tabela {@code stock.eventcap}, do serviço stock).
  *
  * <p>Fronteira de consistência forte, separada dos metadados do evento (que são do catalog). A invariante
  * {@code 0 <= quant <= capacity} é protegida pelo CHECK no banco e pela reserva via UPDATE
- * condicional atômico feita no serviço reservation. Também é o corpo JSON da API interna de capacidade.</p>
+ * condicional atômico feita no serviço stock. Também é o corpo JSON da API interna de capacidade.</p>
  */
 public class EventCap {
 

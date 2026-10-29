@@ -39,6 +39,13 @@
             <groupId>com.example.demo</groupId>
             <artifactId>admission-client</artifactId>
         </dependency>
+        <!-- SÓ nos testes (#47): o DTO EventCap (agora da stock-client) que os servidores falsos FakeReservationServer/FakeCatalogServer
+             servem em /internal/eventcaps/**. O gateway não fala com o stock; o código do serviço NÃO está no classpath. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>stock-client</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>

@@ -43,7 +43,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
 import com.gerenciador.eventos.reservationclient.ReservationClient;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictException;
 import com.gerenciador.eventos.shared.DatabaseConnection;
@@ -54,7 +54,7 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
  * interna honesto dos dois lados (DTOs, status HTTP, mapeamento de erro, header {@code Idempotency-Key}); o monólito testa o
  * seu lado contra um servidor falso.
  *
- * <p>Relay e consumer desligados: a projeção de disponibilidade nunca anda sozinha, que é o "consumer parado" da prova de
+ * <p>O stock é o REAL (embutido, atrás do proxy de testes; a capacidade nasce nele). Relay e consumer desligados: a projeção de disponibilidade nunca anda sozinha, que é o "consumer parado" da prova de
  * overselling do braço naive. O caminho com a projeção real é o de {@code EventAvailabilityProjectionTest}.</p>
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -104,7 +104,8 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
         assertEquals(5, ok.get(), "exatamente a capacidade foi reservada");
         assertEquals(tentativas - 5, lotado.get());
         assertEquals(5, contarAtivas(e.getEvent_id()), "overselling = 0");
-        assertEquals(0, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(0, estoque.findByEventId(e.getEvent_id()).getQuant());
+        InvariantesDaSaga.verificar(databaseConnection, e.getEvent_id());
     }
 
     @Test
@@ -152,7 +153,7 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
 
         assertEquals(tentativas, ok.get(), "todos passaram a checagem defasada");
         assertEquals(tentativas, contarAtivas(e.getEvent_id()), "overselling: " + tentativas + " reservas para 1 vaga");
-        assertEquals(1, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "o naive nunca toca o CAS");
+        assertEquals(1, estoque.findByEventId(e.getEvent_id()).getQuant(), "o naive nunca toca o CAS");
     }
 
     /** Disponibilidade 0 na projeção => "Evento lotado" já na 1ª chamada, SEM a 2ª (a rejeição do naive é barata). */
@@ -169,7 +170,7 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
         verify(reservationController, times(1)).disponibilidade(e.getEvent_id());
         verify(reservationController, never()).reservar(org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(), anyString());
-        verify(idempotencyKeyRepository, never()).find(anyString(), anyLong()); // chave gerada: nem consulta
+        verify(idempotencyKeyRepository, never()).lerReservada(anyString(), anyLong()); // chave gerada: nem consulta
     }
 
     /** Com chave do CLIENTE a repetição de uma reserva que já vale devolve o resultado salvo, não "lotado". */
@@ -186,7 +187,7 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
         assertEquals("pending", repetida.getStatus());
         assertEquals(primeira.getExpiresAt(), repetida.getExpiresAt());
         assertEquals(1, contarAtivas(e.getEvent_id()));
-        verify(idempotencyKeyRepository, times(1)).find(anyString(), anyLong());
+        verify(idempotencyKeyRepository, times(1)).lerReservada(anyString(), anyLong());
 
         // outro usuário, mesma chave, lotado: não é repetição de ninguém => lotado
         assertThrows(IllegalArgumentException.class, () ->
@@ -204,7 +205,7 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
     // ===================== reserva, confirmação, cancelamento =====================
 
     @Test
-    public void cicloReservaConfirmaListaCancelaPeloHttp() {
+    public void cicloReservaConfirmaListaCancelaPeloHttp() throws Exception {
         Evento e = novoEvento(null, "E2E ciclo", 2);
         Usuario u = novoUsuario("u");
 
@@ -226,7 +227,10 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
 
         cliente.removeLink(u.getId(), e.getEvent_id());
         assertFalse(cliente.existsActive(u.getId(), e.getEvent_id()));
-        assertEquals(2, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "cancelar devolve a vaga");
+        assertEquals(1, estoque.findByEventId(e.getEvent_id()).getQuant(), "a vaga volta pelo consumer do stock, não na hora");
+        drenarDevolucoes();
+        assertEquals(2, estoque.findByEventId(e.getEvent_id()).getQuant(), "cancelar devolve a vaga (pelo consumer do stock)");
+        InvariantesDaSaga.verificar(databaseConnection, e.getEvent_id());
         cliente.removeLink(u.getId(), e.getEvent_id()); // idempotente
 
         IllegalArgumentException semPendente = assertThrows(IllegalArgumentException.class,
@@ -244,11 +248,11 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
         assertEquals("e2e-chave", primeira.getIdempotencyKey());
         EventWallet repetida = cliente.addLink(new EventWallet(u.getId(), e1.getEvent_id()), "e2e-chave", false);
         assertEquals(primeira.getExpiresAt(), repetida.getExpiresAt());
-        assertEquals(4, eventCapRepository.findByEventId(e1.getEvent_id()).getQuant(), "a repetição não debita de novo");
+        assertEquals(4, estoque.findByEventId(e1.getEvent_id()).getQuant(), "a repetição não debita de novo");
 
         assertThrows(IdempotencyConflictException.class, () ->
                 cliente.addLink(new EventWallet(u.getId(), e2.getEvent_id()), "e2e-chave", false));
-        assertEquals(5, eventCapRepository.findByEventId(e2.getEvent_id()).getQuant());
+        assertEquals(5, estoque.findByEventId(e2.getEvent_id()).getQuant());
 
         // chave longa demais: regra de negócio (400)
         IllegalArgumentException longa = assertThrows(IllegalArgumentException.class, () ->
@@ -269,71 +273,6 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
         assertTrue(cliente.listByUser(b.getId()).isEmpty());
     }
 
-    // ===================== API de capacidade (eventcap) =====================
-
-    @Test
-    public void criacaoDoEventcapEhIdempotentePorEventId() {
-        long id = novoEvento(null, "E2E cap idem", 3).getEvent_id();
-        // já existe (novoEvento criou com 3): criar de novo com outra capacidade NÃO altera nada
-        cliente.create(new EventCap(id, 99, 99, null));
-        assertEquals(3, cliente.findByEventId(id).getCapacity());
-
-        long novo = 2_000_000_000L + id;
-        EventCap criada = new EventCap(novo, 7, 7, LocalDateTime.now().plusDays(3).withNano(0));
-        cliente.create(criada);
-        cliente.create(new EventCap(novo, 1, 1, null)); // repetição
-        EventCap lida = cliente.findByEventId(novo);
-        assertEquals(7, lida.getCapacity());
-        assertEquals(7, lida.getQuant());
-        assertEquals(criada.getBuyTimeLimit(), lida.getBuyTimeLimit());
-        assertEquals(120, lida.getMaxTimeInLine());
-        assertFalse(lida.isUnlimited());
-
-        // capacidade inválida: 400
-        assertThrows(IllegalArgumentException.class, () -> cliente.create(new EventCap(novo + 1, 0, 0, null)));
-    }
-
-    @Test
-    public void busca_unitaria_em_lote_e_inexistente() {
-        long a = novoEvento(null, "E2E busca a", 4).getEvent_id();
-        long b = novoEvento(null, "E2E busca b", -1).getEvent_id();
-
-        Map<Long, EventCap> mapa = cliente.findByEventIds(List.of(a, b, 777_777_777L));
-        assertEquals(2, mapa.size(), "evento sem eventcap fica fora");
-        assertEquals(4, mapa.get(a).getCapacity());
-        assertTrue(mapa.get(b).isUnlimited());
-        assertTrue(cliente.findByEventIds(List.of()).isEmpty());
-        assertNull(cliente.findByEventId(777_777_777L));
-    }
-
-    /**
-     * A busca de eventos hidrata a LISTA inteira. Com os ids na query string (GET) 5 mil ids (~45 KB) estourariam o limite de
-     * header do Tomcat (8 KB) e a busca do /bff falharia; no corpo do POST passam, e o serviço devolve só quem tem eventcap.
-     */
-    @Test
-    public void buscaEmLoteComCincoMilIdsNaoEstouraOLimiteDeHeader() {
-        long base = 1_500_000_000L;
-        List<Long> ids = new ArrayList<>();
-        for (long i = 0; i < 5000; i++) {
-            ids.add(base + i);
-        }
-        cliente.create(new EventCap(ids.get(0), 4, 4, null));
-        cliente.create(new EventCap(ids.get(4999), -1, -1, null));
-
-        Map<Long, EventCap> mapa = cliente.findByEventIds(ids);
-
-        assertEquals(2, mapa.size());
-        assertEquals(4, mapa.get(ids.get(0)).getCapacity());
-        assertTrue(mapa.get(ids.get(4999)).isUnlimited());
-    }
-
-    /** Evento sem eventcap: o PATCH não atualiza nada e DIZ (404 => false), em vez de calar e deixar a reconciliação recriar o antigo. */
-    @Test
-    public void atualizarPoliticaDeEventoSemEventcapDevolveFalse() {
-        assertFalse(cliente.updatePolicy(987_000_001L, 5, null));
-        assertNull(cliente.findByEventId(987_000_001L), "nada foi criado");
-    }
-
     // ===================== token de serviço (autenticação das chamadas internas) =====================
 
     /** Sem o header, ou com o valor errado, todo {@code /internal/**} responde 401 e nada chega ao controller. */
@@ -341,7 +280,7 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
     public void semTokenOuComTokenErradoTodaRotaInternaDa401() {
         RestClient cru = RestClient.builder().baseUrl("http://localhost:" + porta).build();
         String[] rotas = {"/internal/reservations/active?userId=1&eventId=1", "/internal/events/1/availability",
-                "/internal/eventcaps/1", "/internal/reservations/user/1"};
+                "/internal/reservations/user/1"};
         for (String rota : rotas) {
             int semToken = cru.get().uri(rota).exchange((req, resp) -> resp.getStatusCode().value());
             int errado = cru.get().uri(rota).header(ReservationClient.HEADER_TOKEN_INTERNO, tokenInterno + "x")
@@ -353,11 +292,9 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
             assertEquals(401, vazio, rota);
         }
         // escrita sem token: 401 e NADA gravado
-        long id = 2_050_000_001L;
-        int put = cru.put().uri("/internal/eventcaps/{id}", id).contentType(MediaType.APPLICATION_JSON)
-                .body("{\"capacity\":5}").exchange((req, resp) -> resp.getStatusCode().value());
-        assertEquals(401, put);
-        assertNull(cliente.findByEventId(id), "o PUT sem token não criou o eventcap");
+        int post = cru.post().uri("/internal/reservations/confirm").contentType(MediaType.APPLICATION_JSON)
+                .body("{\"userId\":1,\"eventId\":1}").exchange((req, resp) -> resp.getStatusCode().value());
+        assertEquals(401, post);
     }
 
     /**
@@ -369,7 +306,7 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
     public void caminhosDisfarcadosEForaDeInternalTambemDao401SemToken() {
         RestClient cru = RestClient.builder().baseUrl("http://localhost:" + porta).build();
         java.net.URI base = java.net.URI.create("http://localhost:" + porta);
-        int get = cru.get().uri(base.resolve("/internal;x=1/eventcaps/1")).exchange((req, resp) -> resp.getStatusCode().value());
+        int get = cru.get().uri(base.resolve("/internal;x=1/reservations/user/1")).exchange((req, resp) -> resp.getStatusCode().value());
         int post = cru.post().uri(base.resolve("/%69nternal/reservations?path=cas")).contentType(MediaType.APPLICATION_JSON)
                 .body("{\"userId\":1,\"eventId\":1}").exchange((req, resp) -> resp.getStatusCode().value());
         int delete = cru.delete().uri(base.resolve("/internal;a/reservations?userId=1&eventId=1"))
@@ -430,65 +367,6 @@ public class ReservationApiE2ETest extends ReservationTestSupport {
         assertEquals(400, jsonRuim);
         assertEquals(400, semParametro);
         assertEquals(400, tipoErrado);
-    }
-
-    @Test
-    public void atualizarPoliticaAcompanhaAsVagasERecusaAbaixoDoReservado() {
-        Evento e = novoEvento(null, "E2E politica", 3);
-        cliente.addLink(new EventWallet(novoUsuario("u1").getId(), e.getEvent_id()), null, false);
-        cliente.addLink(new EventWallet(novoUsuario("u2").getId(), e.getEvent_id()), null, false);
-
-        cliente.updatePolicy(e.getEvent_id(), 5, null);
-        EventCap cap = cliente.findByEventId(e.getEvent_id());
-        assertEquals(5, cap.getCapacity());
-        assertEquals(3, cap.getQuant(), "5 de capacidade - 2 reservas");
-
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                () -> cliente.updatePolicy(e.getEvent_id(), 1, null));
-        assertTrue(ex.getMessage().contains("menor"), ex.getMessage());
-        assertEquals(5, cliente.findByEventId(e.getEvent_id()).getCapacity(), "recusado: nada mudou");
-    }
-
-    /** Issue #56: ilimitado -> limitado desconta as reservas ativas; abaixo delas é 400 pela API interna e nada muda. */
-    @Test
-    public void atualizarPoliticaDeIlimitadoParaLimitadoDescontaAsAtivasERecusaAbaixoDelas() {
-        Evento e = novoEvento(null, "E2E politica ilimitado", EventCap.UNLIMITED);
-        cliente.addLink(new EventWallet(novoUsuario("u1").getId(), e.getEvent_id()), null, false);
-        cliente.addLink(new EventWallet(novoUsuario("u2").getId(), e.getEvent_id()), null, false);
-
-        RestClient cru = RestClient.builder().baseUrl("http://localhost:" + porta)
-                .defaultHeader(ReservationClient.HEADER_TOKEN_INTERNO, tokenInterno).build();
-        int status = cru.patch().uri("/internal/eventcaps/{id}/policy", e.getEvent_id())
-                .contentType(MediaType.APPLICATION_JSON).body(Map.of("capacity", 1))
-                .exchange((req, resp) -> resp.getStatusCode().value());
-        assertEquals(400, status, "capacidade 1 < 2 reservas ativas");
-        EventCap intacto = cliente.findByEventId(e.getEvent_id());
-        assertEquals(EventCap.UNLIMITED, intacto.getCapacity(), "recusado: nada mudou");
-        assertEquals(EventCap.UNLIMITED, intacto.getQuant());
-
-        cliente.updatePolicy(e.getEvent_id(), 5, null);
-        EventCap cap = cliente.findByEventId(e.getEvent_id());
-        assertEquals(5, cap.getCapacity());
-        assertEquals(3, cap.getQuant(), "5 de capacidade - 2 reservas ativas");
-    }
-
-    /** O antigo {@code ON DELETE RESTRICT}: com reserva (em qualquer status) o evento não perde o {@code eventcap}. */
-    @Test
-    public void apagarEventcapRecusaSeHaReservaESenaoRemove() {
-        Evento comReserva = novoEvento(null, "E2E apagar com reserva", 2);
-        Usuario u = novoUsuario("u");
-        cliente.addLink(new EventWallet(u.getId(), comReserva.getEvent_id()), null, false);
-        cliente.removeLink(u.getId(), comReserva.getEvent_id()); // cancelled: a linha continua existindo
-
-        IllegalStateException ex = assertThrows(IllegalStateException.class,
-                () -> cliente.delete(comReserva.getEvent_id()));
-        assertTrue(ex.getMessage().contains("reservas"), ex.getMessage());
-        assertNotNull(cliente.findByEventId(comReserva.getEvent_id()));
-
-        Evento semReserva = novoEvento(null, "E2E apagar sem reserva", 2);
-        cliente.delete(semReserva.getEvent_id());
-        assertNull(cliente.findByEventId(semReserva.getEvent_id()));
-        cliente.delete(semReserva.getEvent_id()); // sem eventcap: no-op
     }
 
     // ===================== helpers =====================

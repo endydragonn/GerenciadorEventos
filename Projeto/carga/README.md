@@ -13,13 +13,13 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **Relay, consumer, Hikari 1000 e Tomcat 300 do caminho quente estão no `reservation`** (`docker exec gerenciador-reservation printenv
 >   EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`); o backend tem Hikari 350 (10 desde a #36). `POOL_HIKARI` do
 >   `make test-degraus` rotula o do **reservation**. O `LOGGING_LEVEL_EVENTS_LAG=DEBUG` também é do `reservation`.
-> - **Consultas de banco** (psql do gerador e verificações do host) leem `reservation.eventcap`, `reservation.walletevent`,
+> - **Consultas de banco** (psql do gerador e verificações do host) leem `stock.eventcap` (desde a #47; o `eventcap` e do serviço `stock`), `reservation.walletevent`,
 >   `reservation.event_availability`, `reservation.event_outbox`. O consumer group da projeção é `reservation` (`docker exec
 >   gerenciador-redpanda rpk group describe reservation`), não mais `gerenciador-eventos`.
 > - **Limpeza do banco entre blocos** (`limpar-banco.sh`, versionado em `Projeto/carga/` desde a #178; `make limpar-banco`): para `backend`, `catalog`, `reservation`
->   (e o `notification`, se no ar), move os groups `reservation`, `reservation-catalog` e `notification` para o fim dos tópicos
->   `reservation.wallet` / `catalog.event` / `identity.notification`, trunca numa única instrução `public`, `reservation` **e `catalog`**
->   (`catalog.event` e `reservation.eventcap` andam juntos; os event stores vão junto) e sobe `reservation` + `catalog` (healthy) antes do
+>   (o `stock`, #47, e o `notification`, se no ar), move os groups `reservation` e `stock` (`reservation.wallet`), `stock-catalog` (`catalog.event`) e
+>   `notification` para o fim dos tópicos, trunca numa única instrução `public`, `reservation`, `stock` **e `catalog`**
+>   (`catalog.event` e `stock.eventcap` andam juntos; os event stores vão junto) e sobe o `stock` (healthy) antes de `reservation` + `catalog`, e estes antes do
 >   `backend`.
 > - **Smoke antes de medir**: `docs/testes-manuais/smoke-reservation-servico-separado.sh` (stack no ar) prova overselling 0 no `cas` com o
 >   serviço separado e confere o banco lendo o schema `reservation`; `docs/testes-manuais/smoke-catalog-servico-separado.sh` prova o

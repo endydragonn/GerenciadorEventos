@@ -52,7 +52,7 @@ public class ReservationReplayTest extends ReservationTestSupport {
 
     private static final String SOMBRA = "replay_t29_wallet";
     static final Map<String, List<String>> COMPARAVEIS = Map.of(
-            "walletevent", List.of("user_id", "event_id", "status", "expires_at", "version"),
+            "walletevent", List.of("user_id", "event_id", "status", "expires_at", "version", "hold_id"),
             "event_availability", List.of("event_id", "ativos", "last_occurred_at"));
 
     /**
@@ -77,9 +77,9 @@ public class ReservationReplayTest extends ReservationTestSupport {
             ativos.apply(conn, e, schema);
             String sql = switch (e.eventType()) {
                 case ReservationEvents.SLOT_RESERVED -> "INSERT INTO " + schema + ".walletevent "
-                        + "(user_id, event_id, status, expires_at, version) VALUES (?, ?, 'pending', ?, ?) "
+                        + "(user_id, event_id, status, expires_at, version, hold_id) VALUES (?, ?, 'pending', ?, ?, ?) "
                         + "ON CONFLICT (user_id, event_id) DO UPDATE SET status = 'pending', "
-                        + "expires_at = EXCLUDED.expires_at, version = EXCLUDED.version";
+                        + "expires_at = EXCLUDED.expires_at, version = EXCLUDED.version, hold_id = EXCLUDED.hold_id";
                 case ReservationEvents.CONFIRMED -> transicao(schema, "confirmed");
                 case ReservationEvents.CANCELLED -> transicao(schema, "cancelled");
                 case ReservationEvents.EXPIRED -> transicao(schema, "expired");
@@ -91,6 +91,7 @@ public class ReservationReplayTest extends ReservationTestSupport {
                     ps.setLong(2, e.payload().get("eventId").asLong());
                     ps.setTimestamp(3, Timestamp.valueOf(LocalDateTime.parse(e.payload().get("expiresAt").asText())));
                     ps.setInt(4, e.version());
+                    ps.setObject(5, java.util.UUID.fromString(e.payload().get("holdId").asText())); // a #47 reconstrói o hold_id do SlotReserved
                 } else {
                     ps.setInt(1, e.version());
                     ps.setLong(2, e.payload().get("userId").asLong());
@@ -119,7 +120,7 @@ public class ReservationReplayTest extends ReservationTestSupport {
     void limpar() throws Exception {
         EventsTestSupport.limpar(databaseConnection);
         try (Connection c = databaseConnection.getConnection(); Statement st = c.createStatement()) {
-            st.execute("TRUNCATE TABLE reservation.walletevent"); // a comparação é da tabela inteira: só o que sai do log
+            st.execute("TRUNCATE TABLE reservation.walletevent, reservation.idempotency_key, stock.hold, stock.eventcap"); // a comparação é da tabela inteira: só o que sai do log (e o stock junto, para as invariantes da saga valerem)
         }
     }
 
@@ -154,6 +155,7 @@ public class ReservationReplayTest extends ReservationTestSupport {
             } catch (IllegalArgumentException ignorada) {
                 // lotado / já existe / nada a confirmar: a jogada simplesmente não vira transição
             }
+            drenarDevolucoes(); // a vaga volta pelo consumer do stock (assíncrono): sem isto o roteiro bateria em "lotado" por vaga presa
         }
 
         List<EventEnvelope> log = lerLog();
@@ -176,6 +178,7 @@ public class ReservationReplayTest extends ReservationTestSupport {
         // (CURRENT_TIMESTAMP), que não são determinísticos
         assertEquals(List.of("walletevent", "event_availability"), replay.divergentTables(projecaoDoReplay, SOMBRA),
                 "colunas de timestamp do banco diferem entre a viva e a sombra");
+        InvariantesDaSaga.verificar(databaseConnection, eventos.stream().map(Evento::getEvent_id).toArray(Long[]::new));
     }
 
     @Test
