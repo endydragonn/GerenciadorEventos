@@ -10,6 +10,8 @@ falhas=0
 confere() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FALHA $1: esperado '$3', veio '$2'"; falhas=$((falhas+1)); fi; }
 
 # --- puras
+# MSYS_NO_PATHCONV=1 herdado (Git Bash) quebra o curl.exe da sonda: ele grava o corpo noutro lugar e o mktemp fica vazio ("login sem token" com HTTP 200)
+confere "carregar o script desliga MSYS_NO_PATHCONV herdado" "$(MSYS_NO_PATHCONV=1 LIMPAR_LIB=1 bash -c '. ./limpar-banco.sh; echo "${MSYS_NO_PATHCONV-desligado}"')" "desligado"
 csv_lb='# pxname,svname,qcur,qmax,scur,smax,slim,stot,bin,bout,dreq,dresp,ereq,econ,eresp,wretr,wredis,status,weight
 identity,FRONTEND,0,0,0,0,1,0,0,0,0,0,0,,,,,OPEN,
 identity,id1,0,0,0,0,,0,0,0,,0,,0,0,0,0,UP,100

@@ -35,6 +35,7 @@
 #  Nao mexe no schema notification nem no topico identity.notification (evitar e-mail real): o seek do group notification so pula o que ja estava no topico.
 # =============================================================================
 set -uo pipefail
+unset MSYS_NO_PATHCONV   # herdado (Git Bash) quebra o curl.exe da sonda: o corpo vai para outro caminho e o mktemp fica vazio ("login sem token" com HTTP 200); o docker tem a conversao desligada no `dk`
 
 PROJETO="${PROJETO:-gerenciador-eventos}"
 BASE_URL="${BASE_URL:-http://localhost:8081}"
