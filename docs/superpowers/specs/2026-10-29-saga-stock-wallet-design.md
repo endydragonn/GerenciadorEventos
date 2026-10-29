@@ -68,13 +68,15 @@ stock.hold(hold_id uuid PK, event_id integer NOT NULL, user_id integer NOT NULL,
 ```
 
 - **Reservar** (`POST /internal/holds`, corpo `{holdId, userId, eventId, mode: cas|naive}`), uma transação no `stock`:
-  1. `SELECT` do `eventcap`. Sem linha → 400 "Capacidade do evento não configurada"; `buy_time_limit` passado → 400 "Janela de compra
-     encerrada para este evento".
+  1. `SELECT` do `eventcap`. Sem linha → 400 "Capacidade do evento não configurada".
   2. `INSERT hold (..., 'held') ON CONFLICT (hold_id) DO NOTHING`. Se a linha já existe é uma repetição: `held` → **200** com o mesmo
      corpo, sem tocar no `eventcap`; `released` → **409** "Hold liberado" (lápide, abaixo).
-  3. Só com `mode = cas` e `capacity <> -1`: o CAS de hoje (`UPDATE eventcap SET quant = quant - 1 WHERE ... AND quant >= 1`) como
+  3. Só agora a janela: `buy_time_limit` passado → rollback (o INSERT some junto) → 400 "Janela de compra encerrada para este evento".
+     Ela vem **depois** da detecção de repetição. Senão, um hold debitado cuja resposta se perdeu, repetido depois de a janela fechar,
+     receberia 400; o wallet trataria como "não houve débito", e a vaga ficaria presa (revisão da passada a1).
+  4. Só com `mode = cas` e `capacity <> -1`: o CAS de hoje (`UPDATE eventcap SET quant = quant - 1 WHERE ... AND quant >= 1`) como
      **último comando antes do commit**. 0 linhas → rollback (o hold some junto) → 400 "Evento lotado".
-  4. Commit → **201** `{holdId, maxTimeInLine}`. O `wallet` calcula o `expiresAt` como hoje (`now + maxTimeInLine`, truncado em
+  5. Commit → **201** `{holdId, maxTimeInLine}`. O `wallet` calcula o `expiresAt` como hoje (`now + maxTimeInLine`, truncado em
      micros).
   - Efeito colateral a medir na R5: o lock da linha quente agora dura **só o CAS e o commit**. Hoje dura o CAS, o `reservePending`, o
     append e o commit.
@@ -106,7 +108,10 @@ stock.hold(hold_id uuid PK, event_id integer NOT NULL, user_id integer NOT NULL,
     reservar: hold e depois `eventcap`), roda `UPDATE hold SET decremented = true WHERE event_id = ? AND status = 'held'`. Sem isso, os
     holds de antes da conversão têm `decremented = false`, e o cancelamento deles nunca devolveria a vaga contada no `quant = capacidade −
     ativas`: perda permanente. Limitado → ilimitado não mexe nos holds: o `release` de evento ilimitado não toca o `eventcap`
-    (`capacity <> -1`).
+    (`capacity <> -1`). **O `count` das ativas conta só `held AND decremented`** (os holds marcados): um hold que comite entre o
+    `marcar` e o `count` não é marcado nem contado. Ele entra na janela de overselling já documentada da #56 e nunca vira vaga perdida.
+  - Lápide também bloqueia o delete do evento ("qualquer status"). Uma compensação de um "lotado" com a resposta perdida pode deixar um
+    evento sem reserva real indeletável (409). É raro e aceito; quem quiser apagar o evento limpa a lápide à mão.
 - Um hold `held` cujo cancelamento ainda não foi consumido conta como ativo. Na conversão e no delete isso erra para o lado seguro: menos
   vagas, e o delete é recusado.
 

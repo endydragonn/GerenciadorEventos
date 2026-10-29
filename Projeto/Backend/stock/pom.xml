@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.example.demo</groupId>
+        <artifactId>backend</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+    <artifactId>stock</artifactId>
+    <name>stock</name>
+    <description>Serviço stock (issue 47, saga stock + wallet): eventcap (CAS) + ledger de holds, API interna HTTP chamada pelo reservation e pelo catalog</description>
+    <dependencies>
+        <!-- Lib comum: DatabaseConnection e a política de erro dos consumers (EventsKafkaConfig). O stock não tem event store nem relay. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>shared</artifactId>
+        </dependency>
+        <!-- Contrato HTTP do hold (DTOs, exceção da lápide) e, nos testes ponta a ponta, o StockClient real contra este serviço. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>stock-client</artifactId>
+        </dependency>
+        <!-- TEMPORÁRIO (passada a1): o DTO EventCap ainda mora na reservation-client; passa para a stock-client na passada a2. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>reservation-client</artifactId>
+        </dependency>
+        <!-- API interna HTTP (sem Spring Security: o serviço só é alcançável na rede gerenciador-net, sem porta no host) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.gerenciador.eventos.stock.StockApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

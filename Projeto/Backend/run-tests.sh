@@ -9,8 +9,8 @@
 #  - no Git Bash o binário do Docker é nativo do Windows e não entende "/e/...",
 #    então usamos "pwd -W" (-> "E:/...") e desligamos a conversão de path do MSYS.
 #
-# Roda o REACTOR inteiro (issues #32, #33, #35, #36, #41 e #42, Fase 7): shared + reservation-client + catalog-client + identity-client + admission-client +
-# monolito + notification + reservation + catalog + identity + admission, um `mvn clean test` na raiz do Backend/.
+# Roda o REACTOR inteiro (issues #32, #33, #35, #36, #41, #42 e #47, Fase 7): shared + reservation-client + stock-client + catalog-client + identity-client + admission-client +
+# monolito + notification + reservation + stock + catalog + identity + admission, um `mvn clean test` na raiz do Backend/.
 # Os relatórios Surefire de todos os módulos são copiados para Backend/target/surefire-reports (nomes de classe únicos).
 #
 # Pré-requisito: a stack no ar pra existir a rede, o banco, o broker (Redpanda; os testes do backbone de
@@ -32,8 +32,24 @@ echo ""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [ ! -f "$PROJECT_ROOT/.env" ]; then
-    echo "❌ Não encontrei $PROJECT_ROOT/.env (credenciais do banco). Abortando."
+# Banco dos testes (#47): por padrão o meu_banco de sempre. Um banco do mesmo container criado com os init-scripts da árvore atual
+# (ex.: TEST_DB_NAME=meu_banco_s5) deixa o meu_banco intocado, no schema que a stack viva espera. Vale para as conferências de
+# schema por psql abaixo E para o container de teste (SPRING_DATASOURCE_URL do .env com meu_banco trocado por este nome; a URL nunca é
+# impressa). O resto (broker, Redis, volume da chave do identity) é compartilhado.
+TEST_DB_NAME="${TEST_DB_NAME:-meu_banco}"
+if ! [[ "$TEST_DB_NAME" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "❌ TEST_DB_NAME inválido: '$TEST_DB_NAME' (esperado [a-z][a-z0-9_]*)."
+    echo ""
+    exit 1
+fi
+if [ "$TEST_DB_NAME" != "meu_banco" ]; then
+    echo "ℹ️  Testes no banco $TEST_DB_NAME (o meu_banco não é tocado)."
+fi
+
+# ENV_FILE (opcional): caminho de OUTRO .env, para quem roda de uma worktree sem o .env (ele é gitignored). Padrão: Projeto/.env.
+ENV_FILE="${ENV_FILE:-$PROJECT_ROOT/.env}"
+if [ ! -f "$ENV_FILE" ]; then
+    echo "❌ Não encontrei $ENV_FILE (credenciais do banco). Abortando."
     echo ""
     exit 1
 fi
@@ -42,7 +58,7 @@ fi
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         HOST_SRC="$(cd "$SCRIPT_DIR" && pwd -W)"
-        HOST_ENV_FILE="$(cd "$PROJECT_ROOT" && pwd -W)/.env"
+        HOST_ENV_FILE="$(cd "$(dirname "$ENV_FILE")" && pwd -W)/$(basename "$ENV_FILE")"
         export MSYS_NO_PATHCONV=1
         export MSYS2_ARG_CONV_EXCL='*'
         CONTAINER_HOME=/root
@@ -50,7 +66,7 @@ case "$(uname -s)" in
         ;;
     *)
         HOST_SRC="$SCRIPT_DIR"
-        HOST_ENV_FILE="$PROJECT_ROOT/.env"
+        HOST_ENV_FILE="$ENV_FILE"
         CONTAINER_HOME=/tmp/mvnhome
         PLATFORM_ARGS=(
             --user "$(id -u):$(id -g)"
@@ -99,6 +115,16 @@ if [ -n "$(docker ps -q -f name=^gerenciador-reservation$)" ]; then
     exit 1
 fi
 
+# O serviço stock (#47) tem o consumer de devolução (group stock, reservation.wallet) e a reconciliação (stock-catalog, catalog.event) ligados
+# no compose: dividiria o banco e o Redpanda dos testes (devolveria vaga de holds de teste e criaria eventcap para ids de evento de teste).
+# Falha cedo, como nos outros serviços.
+if [ -n "$(docker ps -q -f name=^gerenciador-stock$)" ]; then
+    echo "❌ O container gerenciador-stock está rodando: os consumers dele disputam o banco e o Redpanda dos testes."
+    echo "   Pare-o antes: docker stop gerenciador-stock"
+    echo ""
+    exit 1
+fi
+
 # O serviço catalog (#35) tem o relay do catalog.event_outbox ligado no compose: drenaria o outbox dos testes do módulo catalog
 # (quebrando as provas de outbox/replay) e dividiria o banco deles. Falha cedo, como nos outros serviços.
 if [ -n "$(docker ps -q -f name=^gerenciador-catalog$)" ]; then
@@ -132,7 +158,7 @@ fi
 # próprios e não conta).
 REPLICAS_VIVAS="$(docker ps --filter "label=com.docker.compose.project=gerenciador-eventos" \
     --filter "label=com.docker.compose.service" --format '{{.Names}} {{.Label "com.docker.compose.service"}}' \
-    | awk '$2 ~ /^(backend|notification|reservation|catalog|identity|admission|lb)$/ {print $1}' | tr '\n' ' ')"
+    | awk '$2 ~ /^(backend|notification|reservation|stock|catalog|identity|admission|lb)$/ {print $1}' | tr '\n' ' ')"
 if [ -n "$REPLICAS_VIVAS" ]; then
     echo "❌ Há containers de serviço rodando (réplicas e lb da autoescala, sem o nome fixo gerenciador-*): $REPLICAS_VIVAS"
     echo "   Eles disputam o banco, o Redpanda e o Redis dos testes. Pare o scaler (Projeto/autoescala/scaler.sh, Ctrl+C) e os containers: docker stop $REPLICAS_VIVAS"
@@ -178,7 +204,7 @@ apagar_chave_identity
 # O script NÃO aplica o 14-catalog.sql: num banco não migrado ele criaria catalog.event vazia ao lado de public.event. Só confere o
 # estado e aborta com o caminho da migração. O usuário do app vem do ambiente do próprio container (APP_DB_USER).
 ESTADO_CATALOG="$(echo "SELECT to_regclass('public.event') IS NULL, to_regclass('catalog.event') IS NOT NULL;" \
-    | docker exec -i gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d meu_banco -At' 2>&1)"
+    | docker exec -i -e TEST_DB_NAME="$TEST_DB_NAME" gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$TEST_DB_NAME" -At' 2>&1)"
 if [ "$ESTADO_CATALOG" != "t|t" ]; then
     echo "❌ O banco não está no schema do serviço catalog (public.event ainda existe ou catalog.event não existe; psql: $ESTADO_CATALOG)."
     echo "   Pare o backend e o catalog, faça o backup e aplique a migração (ver o cabeçalho do arquivo):"
@@ -194,13 +220,25 @@ fi
 # public.users (e o serviço identity, que também recusa subir assim, rodaria os testes sobre tabelas que não são as do app). Só confere o
 # estado e aborta com o caminho da migração; a saída do psql entra na mensagem (nada de esconder o erro).
 ESTADO_IDENTITY="$(echo "SELECT to_regclass('public.users') IS NULL, to_regclass('identity.users') IS NOT NULL;" \
-    | docker exec -i gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d meu_banco -At' 2>&1)"
+    | docker exec -i -e TEST_DB_NAME="$TEST_DB_NAME" gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$TEST_DB_NAME" -At' 2>&1)"
 if [ "$ESTADO_IDENTITY" != "t|t" ]; then
     echo "❌ O banco não está no schema do serviço identity (public.users ainda existe ou identity.users não existe; psql: $ESTADO_IDENTITY)."
     echo "   Pare o backend e o identity, faça o backup e aplique a migração (ver o cabeçalho do arquivo):"
     echo "   docker exec gerenciador-db pg_dump -h localhost -U admin --clean --if-exists -n public meu_banco > <fora do repo>/meu_banco-public.sql"
     echo "   docker exec -i gerenciador-db psql -h localhost -U supabase_admin -d meu_banco -v ON_ERROR_STOP=1 \\"
     echo "     < Projeto/Backend/db/migrations/20261028-identity-schema.sql"
+    echo ""
+    exit 1
+fi
+
+# Schema do serviço stock (#47): bancos novos já nascem com ele (supabase-app-init.sql, 16-stock.sql); o banco de teste precisa tê-lo
+# (a migração de um banco existente fica para a issue de entrega da saga). Sem esta conferência os testes do módulo stock caem com
+# "relation stock.eventcap does not exist". Só confere e aborta; não aplica nada.
+ESTADO_STOCK="$(echo "SELECT to_regclass('stock.hold') IS NOT NULL;" \
+    | docker exec -i -e TEST_DB_NAME="$TEST_DB_NAME" gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$TEST_DB_NAME" -At' 2>&1)"
+if [ "$ESTADO_STOCK" != "t" ]; then
+    echo "❌ O banco de teste ($TEST_DB_NAME) não tem o schema do serviço stock (stock.hold não existe; psql: $ESTADO_STOCK)."
+    echo "   Use TEST_DB_NAME=<banco criado com Projeto/Backend/db/init-scripts/16-stock.sql> (ver o cabeçalho do arquivo)."
     echo ""
     exit 1
 fi
@@ -261,6 +299,7 @@ docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
   -e IDEMPOTENCY_RETENTION_SCAN_MS=3600000 \
   -e NOTIFICATION_EVENTS_RETENTION_SCAN_MS=3600000 \
   -e RESERVATION_READPATH=cas \
+  -e "TEST_DB_NAME=$TEST_DB_NAME" \
   -e INTERNAL_API_TOKEN=token-de-teste-nao-e-segredo \
   -e SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092 \
   -e EVENTS_CONSUMER_GROUP=gerenciador-eventos-test \
@@ -273,6 +312,19 @@ docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
     mkdir -p /tmp/build "$MVN_REPO"
     cp -r /workspace-src/* /tmp/build/ 2>/dev/null || true
     cd /tmp/build
+
+    # Banco dos testes (#47): troca /meu_banco por /TEST_DB_NAME na URL do .env (substituição de string, só o segmento do caminho; a
+    # URL nunca é impressa). ABORTA se a troca não pegar ou se a URL ainda apontar para o meu_banco: cada módulo dá TRUNCATE nos
+    # schemas dele, e o meu_banco ficaria exposto. Casamento LITERAL (aspas): sem "?" como glob.
+    if [ "$TEST_DB_NAME" != "meu_banco" ]; then
+        export SPRING_DATASOURCE_URL="${SPRING_DATASOURCE_URL/\/meu_banco//$TEST_DB_NAME}"
+        case "$SPRING_DATASOURCE_URL" in
+            */"meu_banco"|*/"meu_banco?"*)
+                echo "❌ A URL do banco de teste ainda aponta para o meu_banco. Abortando."; exit 99 ;;
+            */"$TEST_DB_NAME"|*/"$TEST_DB_NAME?"*) ;;
+            *) echo "❌ A URL do banco de teste não aponta para $TEST_DB_NAME (SPRING_DATASOURCE_URL ausente ou sem /meu_banco). Abortando."; exit 99 ;;
+        esac
+    fi
 
     # Executar testes (todo download fica no volume de cache do m2)
     mvn -q -fae -Dmaven.repo.local="$MVN_REPO" clean test
@@ -304,14 +356,16 @@ fi
 # descartaria (o eventId não está no event_store depois do TRUNCATE), mas um backlog desses custaria minutos; `reservation-catalog`
 # (reconciliação do eventcap pelo EventCreated) CRIARIA eventcap para ids de evento de teste, que se repetem depois de um
 # TRUNCATE ... RESTART IDENTITY e pegariam a capacidade errada. Move os dois para o FIM dos tópicos (a guarda acima garante que
-# estão sem membros), rodando SEMPRE. --allow-new-topics cobre o group/tópico que ainda não existe.
-for GRUPO_TOPICO in "reservation:reservation.wallet" "reservation-catalog:catalog.event"; do
+# estão sem membros), rodando SEMPRE. --allow-new-topics cobre o group/tópico que ainda não existe. Desde a #47 também os groups do serviço
+# stock: `stock` (devolução de vaga; relida do tópico, liberaria holds que os testes já truncaram, sem efeito mas com backlog) e `stock-catalog`
+# (reconciliação do eventcap do stock, mesma razão do `reservation-catalog`). O `reservation-catalog` segue até a passada que o remove.
+for GRUPO_TOPICO in "reservation:reservation.wallet" "reservation-catalog:catalog.event" "stock:reservation.wallet" "stock-catalog:catalog.event"; do
     GRUPO="${GRUPO_TOPICO%%:*}"
     TOPICO="${GRUPO_TOPICO##*:}"
     if docker exec gerenciador-redpanda rpk group seek "$GRUPO" --to end --topics "$TOPICO" --allow-new-topics >/dev/null 2>&1; then
-        echo "✅ Group $GRUPO movido para o fim de $TOPICO (eventos de teste não chegam ao serviço reservation)."
+        echo "✅ Group $GRUPO movido para o fim de $TOPICO (eventos de teste não chegam ao serviço dono do group)."
     else
-        echo "⚠️  Não consegui mover o group $GRUPO para o fim de $TOPICO. ANTES de subir o reservation, rode:"
+        echo "⚠️  Não consegui mover o group $GRUPO para o fim de $TOPICO. ANTES de subir o serviço dono do group, rode:"
         echo "   docker exec gerenciador-redpanda rpk group seek $GRUPO --to end --topics $TOPICO --allow-new-topics"
     fi
 done
