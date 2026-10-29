@@ -8,7 +8,7 @@
 
 ## Configuração
 
-- Host: Ryzen 7 7700X, 2,5 GbE onboard (192.168.68.64), Docker com os dados em SSD NVMe: `pg_test_fsync` fdatasync **0,395 ms** (03:00) e
+- Host: Ryzen 7 7700X, 2,5 GbE onboard (192.168.68.64), Docker com os dados em SSD NVMe: `pg_test_fsync` fdatasync **0,367 ms** (03:00) e
   **0,389 ms** (08:1x, antes do bloco 1), < 1 ms (`host-telemetria/pg_test_fsync-r4*.txt`).
 - Gerador: EnzoAMD (192.168.68.54), k6 2.2.0, kit em `35955ef` (o mesmo do host), RAM livre 9,3 GB antes da rodada e 10,2 / 10,1 / 10,1 GB ao
   fim dos blocos 1 / 2 / 3; `netsh dynamicport` em 10000/55535 (o usuário reverte).
@@ -139,7 +139,7 @@ Mesma escada sequencial e mesma regra do X (p95 de janela de 30 s acima de 1 s, 
 | p50 / p95 / p99 a 32k (ms) | 5,2 / 36,6 / 76,2 | 217,3 / 1.430,3 / 1.950,7 | 1.302,5 / 5.580,7 / 6.650,9 | 554,7 / 2.731,9 / 3.884,3 |
 | p50 / p95 / p99 a 56k (ms) | 215,3 / 1.141,3 / 1.984,1 | 4,7 / 377,9 / 654,7 | — | — |
 | Taxa de 5xx | 0 em todos os degraus | 0 em todos os degraus | 10,2% no 32k (0 antes) | 24,1% no 38k (0 antes) |
-| Tempo até admitir p50 / p95 | — (sem fila) | 1,0–2,6 / 2,2–3,0 s até 38k; 9,5–22,1 / 15,1–29,2 s de 44k a 98k | 11,5–11,6 / 16,1–18,9 s | 1,0–17,2 / 1,0–20,2 s |
+| Tempo até admitir p50 / p95 | — (sem fila) | 1,0–2,6 / 2,2–3,0 s até 38k; 9,5–22,1 / 15,0–29,2 s de 44k a 98k | 11,5–11,6 / 16,1–18,9 s | 1,0–17,2 / 1,0–20,2 s |
 | Réplicas × tempo | 1 de cada | 1 de cada | reservation 1→2→1 (desce no meio do 32k), backend 1→3, admission e identity com stand-by | reservation e backend 1→2 a partir do 32k |
 | Overselling no CAS | 0 | 0 | 0 | 0 |
 

@@ -841,7 +841,7 @@ Rodada 4, contra a `Batch_2` em `35955ef`: a configuração da Rodada R mais o `
 de 200 ms, fila no RabbitMQ com worker pool, gatilho 80/70 de `X × réplicas` com X = 56k, `202` e consulta de estado), a autoescala (#111/#112,
 opção A: override do compose, HAProxy e scaler no host) e as imagens slim (#177). Fonte: `Projeto/carga/results/07-rodada4-admission/`
 (README da etapa e `degraus-*.csv`). Escada sequencial de 20k a 98k RPM, passo de 6k, 60 s por degrau, 1000 usuários, 5% das respostas `202`
-acompanhadas até o estado final, parada por p95 acima de 5 s numa janela de 60 s, banco limpo antes de cada bloco, `pg_test_fsync` 0,39 ms.
+acompanhadas até o estado final, parada por p95 acima de 5 s numa janela de 60 s, banco limpo antes de cada bloco, `pg_test_fsync` 0,37–0,39 ms.
 
 | Bloco | Braço | Resultado | Overselling (CAS) |
 |---|---|---|---|
@@ -857,7 +857,7 @@ acompanhadas até o estado final, parada por p95 acima de 5 s numa janela de 60 
 | p50 / p95 / p99 a 32k (ms) | 5,2 / 36,6 / 76,2 | 217,3 / 1.430,3 / 1.950,7 | 1.302,5 / 5.580,7 / 6.650,9 | 554,7 / 2.731,9 / 3.884,3 |
 | p50 / p95 / p99 a 56k (ms) | 215,3 / 1.141,3 / 1.984,1 | 4,7 / 377,9 / 654,7 | — | — |
 | Taxa de 5xx | 0 | 0 | 10,2% no 32k | 24,1% no 38k |
-| Tempo até admitir p95 | — | 2,2–3,0 s até 38k; 15,1–29,2 s de 44k a 98k | 16,1–18,9 s | 1,0–20,2 s |
+| Tempo até admitir p95 | — | 2,2–3,0 s até 38k; 15,0–29,2 s de 44k a 98k | 16,1–18,9 s | 1,0–20,2 s |
 | Réplicas | 1 de cada | 1 de cada | reservation 1→2→1, backend 1→3 | reservation e backend 1→2 |
 
 - **Sem autoescala, o modo de alta carga deixa o sistema estável acima do X.** De 50k a 98k o efetivo fica igual ao alvo, sem 5xx e sem
