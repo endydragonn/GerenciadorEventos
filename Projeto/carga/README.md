@@ -16,7 +16,7 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **Consultas de banco** (psql do gerador e verificações do host) leem `reservation.eventcap`, `reservation.walletevent`,
 >   `reservation.event_availability`, `reservation.event_outbox`. O consumer group da projeção é `reservation` (`docker exec
 >   gerenciador-redpanda rpk group describe reservation`), não mais `gerenciador-eventos`.
-> - **Limpeza do banco entre blocos** (`E:\TCC\carga-overrides\limpar-banco.sh`, fora do repo): para `backend`, `catalog`, `reservation`
+> - **Limpeza do banco entre blocos** (`limpar-banco.sh`, versionado em `Projeto/carga/` desde a #178; `make limpar-banco`): para `backend`, `catalog`, `reservation`
 >   (e o `notification`, se no ar), move os groups `reservation`, `reservation-catalog` e `notification` para o fim dos tópicos
 >   `reservation.wallet` / `catalog.event` / `identity.notification`, trunca numa única instrução `public`, `reservation` **e `catalog`**
 >   (`catalog.event` e `reservation.eventcap` andam juntos; os event stores vão junto) e sobe `reservation` + `catalog` (healthy) antes do
@@ -61,7 +61,7 @@ resultados. O harness de `docs/carga/harness/` é só sanity local (stack no pr�
 > - **Salto novo no caminho síncrono**: +1 ida HTTP gateway → admission e +1 ida admission → Redis por reserva (fail-open: com o admission ou o Redis fora a reserva segue, com log). Uma rodada **antes da #41** não paga
 >   esse custo e não é comparável com as de depois sem considerá-lo. Sem `Idempotency-Key` na requisição o gateway gera um UUID e o manda só ao `admission`; o `reservation` recebe a requisição como antes (sem header).
 > - **Limpeza do banco entre blocos zera o Redis**: o `TRUNCATE ... RESTART IDENTITY` recicla ids de evento e de usuário, e uma contagem do bloco anterior seria lida
->   como carga do seguinte. O `limpar-banco.sh` (fora do repo, em `E:\TCC\carga-overrides`) para o `admission` junto com os outros serviços, dá `FLUSHDB` no `gerenciador-redis`
+>   como carga do seguinte. O `limpar-banco.sh` (`Projeto/carga/limpar-banco.sh`) para o `admission` junto com os outros serviços, dá `FLUSHDB` no `gerenciador-redis`
 >   (e, a partir da #42, purge das filas `admission.*` do `gerenciador-rabbitmq`) e sobe o `admission` (healthy) **antes** do `backend`.
 > - **`REDIS_PASSWORD`** precisa estar no `Projeto/.env` do HOST (o compose recusa subir sem ela; repassada ao `redis` e ao `admission`, e sobreposta por vazio no `backend`). O gerador não precisa dela.
 > - **Desde a #42, `RABBITMQ_USER` e `RABBITMQ_PASSWORD`** também precisam estar no `Projeto/.env` do HOST (o compose recusa subir sem elas; repassadas ao `rabbitmq` e ao `admission`, sobrepostas por vazio no `backend`).
@@ -133,6 +133,7 @@ O que roda numa rodada contra o sistema distribuído, sempre do **gerador** (k6)
 | Cenário | Comando (gerador) | Mede |
 |---|---|---|
 | Escrita: reserva + confirma | `make test-degraus HOST_IP=<ip> MAPEAMENTO=sequencial\|intercalado` (escada, limiar X) ou `make test-rpm HOST_IP=<ip>` (taxa fixa) | throughput sustentado (`rpm_efetivo`), p50/p95/p99, 5xx |
+| Escrita acima do X (Rodada 4, #178) | `make test-degraus HOST_IP=<ip> PCT_ACOMPANHA=<n> PARADA_P95_MS=<ms> ARRANJO=...` | o mesmo, mais o modo fila (202, `rejected`, `timed_out`, tempo até admitir, ponta a ponta); ver a seção "Rodada 4" |
 | Leitura: catálogo | `make test-rpm HOST_IP=<ip> CENARIO=leitura RPM=<n> DURACAO=<s até 3600>` | o mesmo, para `GET /bff/events/{id}` (gateway → catalog → disponibilidade no reservation), sem login, em rodízio por 50 eventos semeados |
 
 Na escrita cada usuário semeado faz login no `/bff/users/login` antes da carga e reserva com **o próprio token** (o `userId` do corpo é o
@@ -157,7 +158,226 @@ faltar) e grava, a cada `INTERVALO_S` (1 s), `results\coleta-host-<rótulo>-<dat
   `supabase/.env`.
 
 Ao fim grava `results\pgss-<rótulo>-<data>.csv` (top 25 do `pg_stat_statements` por tempo total) e imprime max e p95 de cada coluna.
-Selftest sem Docker: `bash coleta-host.selftest.sh`.
+`TIMEOUT_S` (5) limita cada coleta lenta (`rabbitmqctl`, Redis e `docker ps`): estourou = -1 nas colunas da amostra, o laço não congela. No dry-run local (stack ociosa) a amostra levou ~2,1 s em média (máx. 2,4 s): os 3 `rpk group describe` seguidos e o `psql` dominam, não o `rabbitmqctl` (~0,9 s); o intervalo real é o da amostra. Selftest sem Docker: `bash coleta-host.selftest.sh`.
+
+## Rodada 4: escada acima do X, admission e autoescala (issue #178)
+
+A Rodada 4 (#179) mede o sistema **acima do X** (56k RPM por evento) com o modo de alta carga (#41-#43) e com a autoescala (#111/#112). Este kit
+estende a escada (`degraus/`), a coleta do host e a limpeza entre blocos; **nada em `/bff/**` muda**. Os selftests rodam sem Docker: `make selftests`.
+
+> **Ordem obrigatória dos braços: sem autoescala ANTES do braço C.** O override `docker-compose.autoescala.yml` tem o one-shot `particoes`, que leva
+> `identity.notification` e `reservation.wallet` a **3 partições, para sempre** (irreversível na stack real). Rode o braço sem autoescala (tópicos de 1
+> partição, a linha de base) e só depois suba o braço C; voltar ao compose base não devolve a 1 partição.
+
+### Braços e como subir o host
+
+| Braço | Host (`-f` do `up`) | Notas |
+|---|---|---|
+| Sem autoescala | `make host-rpm` / `make setup-host` (base + `carga/docker-compose.carga.yml` [+ `rpm/docker-compose.rpm.yml`]) | `Hikari` do `reservation` = **1000**. Rótulo: `ARRANJO=sem-autoescala` |
+| Com autoescala (braço C) | `make host-rpm COMPOSE_EXTRAS=docker-compose.autoescala.yml` | `Hikari` do `reservation` = **300 por réplica**. `ARRANJO=autoescala`; scaler no host (abaixo) |
+| Slim | `COMPOSE_EXTRAS=docker-compose.slim.yml` (e `,docker-compose.autoescala.yml` no braço C) | só depois de gerar as imagens (`slim/README.md`); `ARRANJO=sem-autoescala+slim` ou `autoescala+slim` |
+
+- **Ordem dos overrides (importa):** `docker-compose.yml`, `carga/docker-compose.carga.yml`, `rpm/docker-compose.rpm.yml`, depois os extras (`slim` e por último
+  `autoescala`). O override de carga põe o Hikari do `reservation` em 1000 e o da autoescala em 300; **a autoescala vem depois**, então vale 300 (3 × 1000 estoura o
+  Supavisor, 1500). Os scripts montam a lista (`Get-ArquivosCompose` em `lib-servicos.ps1`, coberta por `lib-servicos.selftest.ps1`), conferem o Hikari de **cada** réplica do
+  reservation depois do `up` e avisam se divergir do esperado do braço. Para conferir a lista **antes** de subir, sem imprimir segredo (nunca `docker compose config` sem
+  filtro): `docker compose -f ... config --format json` e leia só `services.reservation.environment.SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`.
+- **O scaler tem de rodar com os MESMOS `-f` e o mesmo ambiente do `up`** (réplica nova nasce com `--no-recreate`; o ambiente inclui `RESERVATION_READPATH` e `AUTOESCALA_*`). O
+  `make host-rpm`/`setup-host` imprime a linha pronta: `AUTOESCALA_COMPOSE_ARQUIVOS='...' Projeto/autoescala/scaler.sh`.
+- **Parâmetros provisórios da autoescala**, todos por variável de ambiente do scaler (defaults e significado em `autoescala/README.md`): `AUTOESCALA_GATEWAY_RPS` (500),
+  `AUTOESCALA_IDENTITY_RPS` (100), `AUTOESCALA_CATALOG_RPS` (500), `AUTOESCALA_ADMISSION_RPS` (1000), `AUTOESCALA_NOTIFICATION_LAG` (100), `AUTOESCALA_X_RPM` (= `ADMISSION_X_RPM`).
+  **Nada disso foi medido**; a R4 calibra. Ficam gravados na rodada de dois jeitos: no `registro-<rótulo>-<data>.txt` do `coleta-host.sh` (lê o `AUTOESCALA_*`/`ADMISSION_*` do shell
+  onde ele roda: exporte lá os mesmos do scaler) e na coluna `params_autoescala` do CSV da escada (`-ParamsAutoescala 'AUTOESCALA_GATEWAY_RPS=500;AUTOESCALA_X_RPM=56000'` /
+  `PARAMS_AUTOESCALA=` no make), porque o gerador não enxerga o host.
+- **Réplicas = containers `<project>-<serviço>-<n>`**, sem `gerenciador-*`. O kit (`setup-host.ps1`, `rpm/subir-host-rpm.ps1`, `coleta-host.sh`, `limpar-banco.sh`) as acha por **label**
+  (`com.docker.compose.project` + `com.docker.compose.service`; `CARGA_PROJETO`/`PROJETO` mudam o project, default `gerenciador-eventos`). `db`, `redpanda`, `redis` e `rabbitmq` seguem com nome fixo.
+- **Dry-run em project isolado (`gerenciador-e2e*`):** nada é publicado no host e o `db` não tem `container_name`. O kit aceita `CARGA_PROJETO` (project das réplicas), `CARGA_DB` (container do Postgres),
+  `CARGA_HOST_URL` (entrada do gateway para o health, default `http://localhost:8081`), `CARGA_RABBITMQ` (fila no `verificar-rpm`) e, para `coleta-host.sh`/`limpar-banco.sh`, `PROJETO` e `CONTAINER_{DB,RPK,REDIS,RABBIT}`.
+  O k6 precisa de um jeito de chegar ao gateway (porta publicada só no `lb` do project real); o procedimento do project isolado está em `autoescala/README.md` ("Dry-run local com Mailpit"). Dry-run da #178: gateway publicado só em `127.0.0.1:<porta>` por um YAML local FORA do repo (`-Porta`), e o k6 como container (`grafana/k6:<versão fixa>`, nunca `latest`) na rede do project, por um shim `k6.cmd` fora do repo.
+- **`ADMISSION_X_RPM` reduzido para o dry-run** (não é medição): exporte antes do `up` (o compose lê da shell) e use a escada com RPMs proporcionais. O `AUTOESCALA_X_RPM` herda o mesmo valor.
+
+### Cenário de escrita acima do X (`make test-degraus`)
+
+O `degraus/carga-degraus.js` ganha o modo fila **sem script novo**: o POST pode responder **201** (síncrono) ou **202** (fila). A lógica pura está em `degraus/lib-admissao.js`
+(`lib-admissao.selftest.mjs` a testa; `carga-degraus.selftest.mjs` roda o script inteiro contra um k6 de mentira).
+
+- **Por padrão o POST NÃO leva `Idempotency-Key`** (o caminho síncrono fica idêntico ao da R, X = 56k, sem escrita da chave no `reservation`); o k6 lê a chave do **202** (header `Idempotency-Key`, ou `idempotencyKey` do corpo) para consultar o estado. `-ComChave` / `COM_CHAVE=1` / `IDEMPOTENCY_KEY=1` manda uma chave própria `k6-<RUN_ID>-<i>` por iteração (opt-in).
+- **202 conta como aceita** (`reservas_202`), nunca em `outros`. Uma fração `PCT_ACOMPANHA` % das 202 consulta `GET /bff/event-wallets/admission?idempotencyKey=` a cada
+  `CONSULTA_MS` até `pending` / `rejected` / `timed_out` ou até `TETO_CONSULTA_S` (`sem_estado`), e **confirma o `pending`** como o síncrono.
+- **429 e 422** (limite por usuário/fila cheia; chave de outro evento) têm contador próprio (`recusadas_429`, `conflitos_422`); não são 5xx nem `outros`.
+- **Orçamento de VUs do gerador (decisão: amostragem por env + fórmula).** Acima do X uma iteração acompanhada dura até o TTL da fila (30 s), não ~10 ms:
+  `VUs ≈ it/s × (PCT_ACOMPANHA/100 × espera média + (1 − PCT_ACOMPANHA/100) × 0,2 s)`. Com `MAX_VUS=2000` e ~1000 it/s só cabe uma espera média de 2 s; com 100% acompanhado e fila cheia isso vira
+  `dropped_iterations` e o report chamaria de "gerador saturado". Por isso o acompanhamento é **amostrado**: as demais 202 só contam o 202 (não consultam nem confirmam). O runner avisa quando o
+  maior degrau pede mais VUs que `MaxVus` na espera de 30 s. Consequências: as 202 não acompanhadas viram `pending` e seguram a vaga até expirar (~120 s), o que desloca `lotado` e `rejected`
+  (documente a fração usada); as consultas somam carga no gateway (`consultas_estado`; ≈ it/s × fração × espera ÷ `CONSULTA_MS` por segundo).
+  O padrão `PCT_ACOMPANHA=100` favorece o dry-run e a escada curta; numa escada da R4 bem acima do X (ex.: 96k RPM × 30 s ≈ 48k VUs) o aviso de VUs aparece com certeza: use uma amostragem menor (ex.: `PCT_ACOMPANHA=10`) e registre-a.
+- **Dimensione `USUARIOS`:** o admission recusa (429) mais que `ADMISSION_MAX_WAITING_PER_USER` (5) mensagens em espera por usuário. Para a escada não virar uma parede de 429:
+  `USUARIOS ≥ it/s × espera média ÷ 5`. O mapeamento e o seed continuam como na seção do limiar X (`USUARIOS × eventos ≥ soma das cotas`).
+- **gracefulStop e espaço entre degraus** passam a `max(30, TETO_CONSULTA_S + 10)` (e `+ 1` de espaço) quando há acompanhamento (a iteração acompanhada vive até o teto); sem acompanhamento
+  (`PCT_ACOMPANHA=0`) ficam 30 s / 31 s como antes. `Get-GracefulS` (`lib-degraus.ps1`) e `gracefulS` (`lib-admissao.js`) têm a mesma conta e a mesma tabela nos dois selftests.
+
+**Parâmetros** (make / `rodar-degraus.ps1` / env do k6):
+
+| Make | `rodar-degraus.ps1` | env do k6 | Padrão | Significado |
+|---|---|---|---|---|
+| `PCT_ACOMPANHA` | `-PctAcompanha` | `PCT_ACOMPANHA` | 100 | % das 202 que acompanham o estado |
+| `CONSULTA_MS` | `-ConsultaMs` | `CONSULTA_MS` | 1000 | intervalo da consulta (= `Retry-After`; resolução do tempo até admitir) |
+| `TETO_CONSULTA_S` | `-TetoConsultaS` | `TETO_CONSULTA_S` | 35 | teto do acompanhamento (> TTL da fila, 30 s) |
+| `PARADA_P95_MS` | `-ParadaP95Ms` | `PARADA_P95_MS` | 0 (desligada) | p95 da reserva, numa janela, acima do qual a escada **para** |
+| `PARADA_JANELA_S` | `-ParadaJanelaS` | `PARADA_JANELA_S` | 60 | janela da parada: múltiplo de 30 e divisor de `DEG_DURACAO` |
+| `SETUP_S` | `-SetupS` | `SETUP_S` | 0 = estimativa (`Get-SetupS`: 0,6 s por lote de 25 usuários, piso 30 s) | só com parada: orçamento do `setup()` (logins) no relógio do k6; ver abaixo. **`k6 run` direto com parada exige `SETUP_S > 0`** (o `setup()` aborta antes do login com 0); o `setupTimeout` do k6 é `max(300, SETUP_S + 60)` s |
+| `ARRANJO` | `-Arranjo` | (só CSV) | `sem-autoescala` | rótulo do braço do host |
+| `PARAMS_AUTOESCALA` | `-ParamsAutoescala` | (só CSV) | vazio | `k=v;k=v` dos parâmetros do host |
+| `COM_CHAVE=1` | `-ComChave` | `IDEMPOTENCY_KEY=1` | sem chave | manda `Idempotency-Key` própria por iteração (opt-in) |
+
+**Condição de parada (latência que não se recupera).** Depois da promoção a réplicas (A = 2) o síncrono volta quando a fila esvazia, e a fila só religa a ~1,6 X (~89,6k); entre ~X e ~1,6 X o tráfego vai direto à
+linha do `eventcap` e a latência pode não voltar. Com `PARADA_P95_MS > 0` o k6 declara, por **janela de `PARADA_JANELA_S` s de cada degrau**, um threshold `p(95) < limite` com `abortOnFail` e
+`delayAbortEval` no fim da janela (a tag `parada` é única por janela, então o p95 cumulativo do threshold vale só para a janela). **O relógio do `delayAbortEval` é o do TESTE e inclui o `setup()`** (medido na #178, k6 2.2.0: com um
+`setup()` de 45 s o abort caiu 1,9 s depois do início do degrau, e não aos 30 s da janela; sem setup, 30,9 s. Com o script real, `SETUP_S=100`, logins em 20,6 s: abort aos 167 s do início dos degraus, esperado 106 + 60 = 166 s). Por isso o `setup()` espera o relógio do teste chegar em `SETUP_S` (o orçamento do setup) e todo `delayAbortEval` soma `SETUP_S`: `SETUP_S + início do degrau + (janela + 1) × J`. Se o `setup()` passar do orçamento, o k6 aborta ANTES da carga dizendo
+quanto levou (rode de novo com `-SetupS` maior; o seed é refeito). O `-SetupS` padrão é uma estimativa por lote de 25 logins; ajuste pelo `setup: ... logins ok` do log. Reprovou, o k6 aborta (código
+99), o `handleSummary` ainda grava o resumo e o runner trata o 99 como **parada esperada** (sem `PARADA_P95_MS` o 99 continua só um aviso). Os degraus **completos** e o **parcial** (o da parada, com `duracao_s` =
+duração efetiva = `min(duração do degrau, (janela da parada + 1) × J, (última janela de 30 s com amostras + 1) × 30)`: o fim da janela que reprovou, e não o instante do abort (as reservas dos ~2 s até o abort caem na janela seguinte e não estendem a duração); os dados só encurtam se o abort veio adiantado. Assim o `rpm_efetivo` não parece "gerador saturado", e superestima no máximo ~2 s de tráfego) viram CSV; os seguintes são **omitidos** (sem linha). A coluna `parada` traz o motivo
+(`p95_acima_de_<limite>ms_em_janela_de_<J>s_no_<degrau>`, ou `nenhuma`). A avaliação do k6 é a cada ~2 s, então a parada cai até ~2 s depois do fim da janela.
+
+**Colunas novas no FIM do CSV** (depois de `mapeamento`; o report lê por nome e CSV antigo, sem elas, segue valendo):
+`arranjo,pct_acompanha,consulta_ms,reservas_202,acompanhadas,admitidas,rejected,timed_out,sem_estado,taxa_rejected,taxa_timed_out,recusadas_429,conflitos_422,consultas_estado,admitir_p50,admitir_p95,admitir_p99,fim_a_fim_p50,fim_a_fim_p95,fim_a_fim_p99,parada,params_autoescala`
+
+| Coluna | Significado |
+|---|---|
+| `reservas_202` | POST que responderam 202 (modo fila) |
+| `acompanhadas` | 202 que acompanharam o estado; `admitidas + rejected + timed_out + sem_estado = acompanhadas` |
+| `admitidas` | acompanhadas que viraram `pending` |
+| `rejected`, `timed_out`, `sem_estado` | destinos das acompanhadas (`sem_estado` = nada final dentro do teto da consulta) |
+| `taxa_rejected`, `taxa_timed_out` | fração sobre as **acompanhadas** |
+| `recusadas_429`, `conflitos_422` | recusas do admission (limite por usuário/fila cheia; chave de outro evento) |
+| `consultas_estado` | GET de estado feitos (carga extra no gateway) |
+| `admitir_p50/p95/p99` | tempo 202 → `pending`, em ms (resolução = `consulta_ms`) |
+| `fim_a_fim_p50/p95/p99` | envio → resultado final em ms (201 + confirma, ou estado final + confirma) |
+| `parada`, `params_autoescala`, `arranjo`, `pct_acompanha`, `consulta_ms` | registro da condição de parada e do que o host/gerador rodavam |
+
+A **trava do resumo** continua fechando com os contadores novos (global = soma dos degraus).
+
+> **Comparabilidade com o X da #40:** o caminho síncrono é idêntico ao da R (padrão **sem** `Idempotency-Key` própria; com ela, `-ComChave`, o `reservation` grava a chave também no síncrono e o X = 56k não a pagava). O que
+> difere é só o espaço entre degraus: `PCT_ACOMPANHA=100` (padrão) alonga de 31 s para 46 s; para reproduzir a escada da #40 use `PCT_ACOMPANHA=0` (31 s). Compare sempre na mesma configuração ("X(2) ≈ X(1)?").
+>
+> **Iterações cortadas:** o acompanhamento só entra em `acompanhadas`/`consultas_estado` quando termina. Uma iteração que o k6 corta no meio (a parada por latência aborta o teste com acompanhamentos de até 30 s em voo;
+> ou o `gracefulStop` vence) some desses contadores e só aparece em `reservas_202`: as taxas de `rejected`/`timed_out` ficam inclinadas para os desfechos mais rápidos nos degraus finais. Documente a parada ao ler as taxas.
+>
+> Limite conhecido: as semânticas do k6 de `abortOnFail`/`delayAbortEval` e do campo `thresholds` no `handleSummary` foram conferidas no dry-run da #178 com o k6 2.2.0 (imagem `grafana/k6:2.2.0`): código 99, `handleSummary` roda e grava o resumo, e `thresholds` chega ao `handleSummary` na forma documentada (`{ "p(95)<500": { "ok": false } }` por expressão; o runner lê o `ok`). Sem o campo `thresholds` (k6 antigo) o runner cai no p95 final da janela.
+
+### Coleta do host (`make coleta-host`)
+
+Além do que a #38 coleta (colunas antigas inalteradas e nas mesmas posições), o `coleta-host.sh` grava **no fim** de `results\coleta-host-<rótulo>-<data>.csv`: `walletevent_ins`, `rabbit_requests`,
+`rabbit_requests_unacked`, `rabbit_consumidores`, `rabbit_timed_out`, `walletevent_ins_delta`, `redis_hot`, `redis_replicas`, `redis_dbsize`, `redis_eventos_em_fila`, `redis_espera_total`,
+`repl_backend`, `repl_reservation`, `repl_identity`, `repl_catalog`, `repl_admission`, `repl_notification` e `duracao_amostra_ms` (31 colunas; `-1` = sem leitura). Detalhes no cabeçalho do script.
+
+- **Fila (RabbitMQ):** UMA chamada `rabbitmqctl list_queues` por amostra (CLI Erlang, lenta: veja `duracao_amostra_ms` no resumo final; as coletas lentas rodam em paralelo com o `psql`/`rpk`, e o intervalo
+  real passa a ser o da amostra se ela levar mais que `INTERVALO_S`). Colunas disponíveis sem o management (confirmado na imagem fixada): `messages_ready`, `messages_unacknowledged`, `consumers`.
+  **Não há taxa de consumo** sem o plugin de management; o substituto honesto é `walletevent_ins_delta` (inserts novos em `reservation.walletevent` desde a amostra anterior, de `pg_stat_user_tables`:
+  o que o worker pool e o síncrono gravaram). `rabbit_timed_out` é a profundidade **instantânea** da dead-letter: o admission a consome (listener da DLX), então ela fica perto de 0; o total de expiradas
+  vem do k6 (`timed_out`).
+- **Redis:** `adm:hot` (RPM do evento mais quente), `adm:replicas` (réplicas ativas que o scaler publica; 0 = scaler parado), `DBSIZE`, e por evento o contador e o **modo** (`adm:mode:*`) e a espera
+  (`adm:wait:*`) com **`SCAN`, nunca `KEYS`**, a cada `EVENTOS_CADA_S` (5 s): o `SCAN` percorre o keyspace inteiro (`adm:res:*` chega a centenas de milhares sob fila), então não vai a cada segundo. O por evento sai
+  em `eventos-<rótulo>-<data>.csv` (formato longo: `epoch_ms,evento,soma_buckets,rpm_aprox,modo,espera`; `rpm_aprox` = soma dos buckets vivos × 60000 ÷ `ADMISSION_WINDOW_MS`, aproximado; o exato do mais quente é
+  `redis_hot`). A senha vem do ambiente **do container** (`REDISCLI_AUTH="$REDIS_PASSWORD"` dentro do `sh -c`): nenhum segredo no host.
+- **Réplicas × tempo:** 1 `docker ps` filtrado por label por amostra (containers em execução por serviço, stand-by inclusive); ativas × stand-by estão no CSV do scaler (`autoescala/saida/replicas-*.csv`).
+- **Registro da rodada:** `registro-<rótulo>-<data>.txt` (data, containers por serviço, `AUTOESCALA_*`/`ADMISSION_*` do shell e variáveis públicas lidas dos containers; allowlist de nomes, nenhum segredo).
+
+### Overselling por bloco e limpeza entre blocos
+
+- **`make verificar-rpm PREFIXO=Deg-<id>`** (host, ao fim de **cada** bloco): espera a fila `admission.requests` esvaziar (mensagens que ainda viram reserva depois do fim do bloco falseariam a conta), soma o
+  overselling do prefixo e **sai com código 3 se houver overselling no braço CAS** (critério de parada do bloco; no braço `naive` o overselling é o que se mede e só informa).
+- **`make limpar-banco`** (`Projeto/carga/limpar-banco.sh`; **pare o scaler antes**, ele detecta pelo `adm:replicas` no Redis e recusa rodar, sem parar nada, se o scaler estiver no ar). Para **todas** as réplicas
+  (achadas por label) de backend, admission, reservation, catalog, identity e o notification; apaga a chave do JWT do volume `<project>_identity-keys` (nome derivado do project; **decide pelo volume**, não pela réplica em execução: com o identity fora do ar a chave é apagada igual; sem volume e com container do identity no project ele recusa); move os consumer groups; trunca
+  `public`, `reservation`, `catalog` e `identity` numa instrução; **`FLUSHDB` no Redis e purge das filas `admission.*`** (sem `OK` do `FLUSHDB` ou purge que falha, aborta e religa o que parou); sobe de volta só o que ele parou (`docker start`: preserva o ambiente da rodada, ao contrário de
+  reaproveitar um container antigo), esperando todas as réplicas `healthy` na ordem identity → reservation/catalog → admission → backend → notification. No braço C espera os slots do identity e do gateway UP no lb e
+  faz um **login de sonda** (usuário criado pelo `POST /bff/seed`, que fica no banco) seguido de chamadas autenticadas seguidas (3 × réplicas do gateway) com `200`/`404`; `401`, `000` (sem conexão) e 5xx zeram a contagem: prova o JWKS em cache (a janela do JWKS no boot, em que o gateway
+  só tenta de novo a cada 30 s). Se não conseguir apagar a chave, **aborta sem religar nada**. Selftest sem Docker: `bash limpar-banco.selftest.sh` (ordem das operações contra um `docker` de mentira).
+  Reinicie o scaler **depois**; ele recalcula do estado atual.
+- Sequência por bloco: `make limpar-banco` → (braço C: subir o scaler) → `make coleta-host` + `make telemetria-host` no host → `make test-degraus` no gerador → `make verificar-rpm` → próximo bloco.
+
+### Rodada 4 no gerador: só `git checkout` e `k6 run` (madrugada, sem ninguém para aprovar)
+
+Na R4 o gerador roda **sem ninguém para aprovar** e só pode executar: `git checkout <commit>`, `k6 run ...` (envs inline com `-e`) e o `psql` pelo caminho completo
+(`C:\Program Files\PostgreSQL\16\bin\psql.exe`). Não depende do gerador: matar processo, mudar configuração/sistema, instalar, `netsh` (o `dynamicport` do gerador já está em
+10000/55535; **o kit não o reverte**, o usuário reverte de manhã). Tudo o mais é do **host**, que pode rodar `.ps1`, `make` e Git Bash.
+
+**Auditoria do lado gerador** (o que o kit antigo fazia no gerador e *não* cabe nessa lista; nenhum `taskkill`/`Stop-Process`/`netsh` no kit):
+
+| O quê | Onde (arquivo:linha) | Na R4 |
+|---|---|---|
+| Seed pelo Git Bash (`setup.sh`, que usa `curl`) | `lib-seed.ps1:22-36`, chamado em `degraus/rodar-degraus.ps1:168` | o **host** semeia (`degraus/preparar-degraus.ps1`) |
+| Arquivo de credenciais `users-*.json`/`events-*.json` gravado e apagado no gerador | `degraus/rodar-degraus.ps1:142-143`, `:210` | o k6 monta os usuários na memória (`USUARIOS` + `SUFIXO`) e os eventos vêm em `EVENT_IDS`; nenhum arquivo de credencial no gerador |
+| Health check, `git rev-parse`, `runId`, `Test-Path` | `degraus/rodar-degraus.ps1:114-146` | o host (commit, `runId` e prefixo saem do `preparar-degraus.ps1`) |
+| Telemetria do gerador (`Start-Job` + `Get-CimInstance`) | `lib-telemetria.ps1:15-22`, `degraus/rodar-degraus.ps1:181` | **não existe** no modo direto: a saturação do gerador sai de `iteracoes_descartadas` e `rpm_efetivo` do CSV (e do `dropped_iterations` do resumo) |
+| Resumo do k6 → CSV e trava do resumo | `degraus/rodar-degraus.ps1:183-206` | o host (`degraus/csv-do-resumo.ps1`, mesmas funções de `lib-degraus.ps1`) |
+| Instalar o k6 (`winget`), plano de energia (`powercfg`), `Test-NetConnection`, baseline | `setup-gerador.ps1:39`, `:63`, `:69`, `:77`, `:130` | **não entra na R4** (o gerador já tem o k6; a versão **exigida é a 2.2.0**: ver "Dependências declaradas", item 6) |
+| Desinstalar o k6 e voltar o plano de energia | `limpar-gerador.ps1:53`, `:60` | **não entra na R4** |
+| `make` (`SHELL := powershell.exe`) e `.ps1` | `Makefile:3`, todos os alvos `test-*` | não existem para o gerador (`make` não está na lista); o equivalente é a linha de `k6 run` abaixo |
+| Gráfico/limiar X (`make report-degraus`, Git Bash + awk) | `Makefile:184-186` | host |
+| **Matriz** (`rodar-matriz.ps1`) | seed em `:245`/`:258`; `Wait-Estavel` e `Invoke-Psql` por repetição em `:131-188`, `:264`, `:281`; `Start-Process` do k6 com o laço de `psql` concorrente (lag da projeção) em `:198-207`; telemetria `:231` | **não cabe** (ver abaixo) |
+| Taxa fixa e aleatório (`rpm/rodar-rpm.ps1:58,74,83`, `aleatorio/rodar-aleatorio.ps1:66,108,118`, `rodar-teste.ps1:48,72,86`) | mesmo padrão do `rodar-degraus` (seed pelo Git Bash, arquivos de credenciais, CSV pelo script) | **não adaptados** (a R4 desta passada é a escada) |
+
+**Escada: o que o gerador digita (sempre os dois comandos, iguais nos dois braços).** O `degraus/preparar-degraus.ps1` (host) semeia, grava o plano em
+`results\plano-degraus-<id>.json` e **imprime a linha pronta**. O gerador, na raiz do clone, em Windows PowerShell:
+
+```powershell
+git checkout <commit impresso pelo preparar>
+k6 run --quiet -e 'BASE_URL=http://<ip do host>:8081' -e 'RPMS=28000,42000,56000,...' -e 'DURACAO_S=60' -e 'USUARIOS=2000' -e 'SUFIXO=<runId>' -e 'EVENT_IDS=1-300' `
+  -e 'SUMMARY_FILE=Projeto/carga/results/summary-degraus-<runId>.json' -e 'PCT_CONFIRMA=100' -e 'MAX_VUS=2000' -e 'MAPEAMENTO=sequencial' -e 'PCT_ACOMPANHA=10' ... Projeto/carga/degraus/carga-degraus.js
+```
+
+(a linha real é uma só; todos os valores entre aspas **simples**: no Windows PowerShell 5.1 a vírgula sem aspas vira dois argumentos, `;` encerra o comando e as aspas duplas são removidas. O
+`preparar-degraus.ps1` recusa valor com aspa. `SUMMARY_FILE` é único por escada, porque o k6 sobrescreve em silêncio, e `Projeto/carga/results/` existe depois do `checkout`.)
+
+Parâmetros por env do k6 (os valores certos já vêm na linha impressa; os de baixo são os que o operador do host escolhe em `preparar-degraus.ps1`):
+
+| env do k6 | Sai de (`preparar-degraus.ps1`) | Significado |
+|---|---|---|
+| `BASE_URL` | `-HostIp`, `-Porta` | gateway como o gerador o enxerga (no braço C é o `lb`, que publica a 8081) |
+| `RPMS`, `DURACAO_S` | `-RpmInicio/-RpmPasso/-RpmMax`, `-Duracao` | a escada (≥ 60 s e múltiplo de 30) |
+| `USUARIOS`, `SUFIXO` | `-Usuarios`, `runId` | usuários `carga-att<i>-<SUFIXO>@example.com`, senha `CargaTeste#<SUFIXO>` (a do `setup.sh`: são usuários de teste do seed, apagados na limpeza; a senha não aparece na linha) |
+| `EVENT_IDS` | seed | ids dos eventos semeados, em faixas (`1-300,305`) |
+| `SUMMARY_FILE` | `runId` | onde o k6 grava o resumo (relativo à raiz do clone) |
+| `PCT_CONFIRMA`, `MAX_VUS`, `MAPEAMENTO` | `-PctConfirma`, `-MaxVus`, `-Mapeamento` | como antes |
+| `PCT_ACOMPANHA`, `CONSULTA_MS`, `TETO_CONSULTA_S` | idem | modo fila (tabela acima) |
+| `PARADA_P95_MS`, `PARADA_JANELA_S`, `SETUP_S` | `-ParadaP95Ms`, `-ParadaJanelaS`, `-SetupS` | condição de parada |
+| `IDEMPOTENCY_KEY`, `RUN_ID` | `-ComChave`, `runId` | chave própria por iteração (opt-in) / prefixo das chaves; o k6 grava `run_id` no resumo e o `csv-do-resumo.ps1` **recusa** resumo cujo `run_id` não bata com o do plano (mesmos parâmetros de outro bloco não bastam) |
+
+**O que muda por braço é só do host** (a linha do gerador é idêntica; `-Arranjo`, `-PoolHikari`, `-ParamsAutoescala` e `-MaxConnections` só rotulam o CSV):
+
+| Passo no host | Braço sem autoescala (base) | Braço C (autoescala) |
+|---|---|---|
+| subir | `make host-rpm` (Hikari do `reservation` = 1000) | `make host-rpm COMPOSE_EXTRAS=docker-compose.autoescala.yml` (300 por réplica) + scaler (`AUTOESCALA_COMPOSE_ARQUIVOS='...' Projeto/autoescala/scaler.sh`, parâmetros `AUTOESCALA_*` exportados antes) |
+| entre blocos | `make limpar-banco` | pare o scaler, `make limpar-banco`, suba o scaler |
+| ligar | `make coleta-host ROTULO=<bloco>` e `make telemetria-host ROTULO=<bloco>` | idem (a coleta registra `AUTOESCALA_*` do shell) |
+| preparar | `degraus/preparar-degraus.ps1 -HostIp <ip> -MaxConnections 300 -PoolHikari 1000 -Arranjo sem-autoescala ...` | `... -PoolHikari 300 -Arranjo autoescala -ParamsAutoescala 'AUTOESCALA_GATEWAY_RPS=500;AUTOESCALA_X_RPM=56000'` |
+| gerador | `git checkout` + `k6 run ...` (linha impressa) | o mesmo |
+| depois | `degraus/csv-do-resumo.ps1 -Plano results\plano-degraus-<id>.json -Resumo <summary-degraus-<id>.json>`; `make report-degraus CSV=results\degraus-<id>.csv`; `make verificar-rpm PREFIXO=Deg-<id>` (código 3 = overselling no CAS: pare) | o mesmo |
+
+`preparar-degraus.ps1` aceita os mesmos parâmetros do `rodar-degraus.ps1` (`-Mapeamento intercalado`, `-PctAcompanha`, `-ParadaP95Ms`, ...) e `-SeedUrl` (como o host enxerga o gateway para o seed; padrão `http://localhost:<porta>`).
+`csv-do-resumo.ps1` não vê o código de saída do k6: a **parada** vem do campo `parada` do resumo (o 99 do k6 é esperado com `PARADA_P95_MS > 0`), e um k6 interrompido sem parada registrada é
+recusado pela duração do teste (`Get-FalhaResumo`). O `csv-do-resumo.ps1` também só aceita o resumo cujo `run_id` (o `RUN_ID` da linha) bata com o `run_id` do plano. Os selftests (`make selftests`) cobrem a linha, as faixas de eventos e o CSV, comparado com o do caminho antigo.
+
+**Dependências declaradas, que o kit não resolve:**
+
+1. **O `<commit>` já tem de estar no clone do gerador** (só há `git checkout`, sem `fetch`); host e gerador no mesmo commit.
+2. **O resumo do gerador tem de chegar ao host** (`Projeto/carga/results/summary-degraus-<id>.json` no gerador): nenhum dos três comandos leva um arquivo de uma máquina a outra; o transporte
+   (cópia pela sessão de interface, compartilhamento) fica fora do kit. O resumo não tem credenciais.
+3. **Sem telemetria do gerador** (acima): afirmar "o gerador não saturou" só pelo `iteracoes_descartadas` e pelo `rpm_efetivo`; a telemetria do host (`make telemetria-host`) segue valendo.
+4. Quem digita a linha precisa de `k6` no PATH do Windows PowerShell 5.1 e do diretório de trabalho na raiz do clone (os caminhos da linha são relativos).
+5. **Teto do seed pelo `lb`:** o `POST /bff/seed` dos usuários é uma chamada só (bcrypt) e, entrando pelo `lb` (braço C: a 8081 é o `lb`), esbarra no `timeout server 75s` do HAProxy: no dry-run local
+   2000 usuários deram **504** e 1000 passaram. Com `-Usuarios` acima de ~1000 no braço C semeie pelo gateway sem o `lb` (`-SeedUrl`) ou use menos usuários (o seed cria mais eventos para fechar os pares).
+6. **Versão do k6 no gerador: exige a 2.2.0.** A semântica de `delayAbortEval` × `setup()` (base do `SETUP_S`) e a forma de `thresholds` no `handleSummary` foram medidas nela (imagem `grafana/k6:2.2.0`, no
+   host); o `setup-gerador.ps1` instala por `winget` **sem versão** e **o kit não confere a versão em tempo de execução** (o k6 não a expõe ao script nem ao resumo). Quem conduz confere `k6 version` no
+   gerador **ANTES** da R4 (fora das três chamadas, pela sessão de interface/usuário); com outra versão o alinhamento das janelas pode mudar sem aviso.
+
+**Matriz: não cabe nas três chamadas.** Cada repetição semeia (host), espera o pipeline ficar quieto com `psql` (`rodar-matriz.ps1:174-188`), dispara o k6 enquanto um laço de `psql` concorrente amostra o lag da
+projeção (`:190-209`, `Start-Process` + polling a cada 250 ms) e lê `confirmed/pending` no banco (`:281`) para gravar uma linha. Isso é um laço que o gerador não pode conduzir
+(`k6 run` e `psql` sozinhos não têm laço nem executam em paralelo), e o k6 da matriz (`carga.js:26`) depende de `USERS_FILE`. Quem conduz a matriz é o host; **não há** versão da matriz só com
+`k6 run` + `psql` nesta passada (e a escada acima do X, que é o cenário da R4, não precisa dela).
+
+**Dry-run local X(1) × X(2) (#178, não é medição):** num project isolado, com o k6 no mesmo host da stack, `ADMISSION_X_RPM` enorme (a fila nunca liga: 0 respostas 202 nas duas escadas), `MAPEAMENTO=sequencial` e a mesma escada (5k a 60k RPM, passo 5k, 60 s, 1000 usuários) pelo caminho direto acima, o `reservation` com 1 réplica ativa deu X(1) = 40k RPM e com 2 réplicas ativas (sem scaler; o `lb` repartiu 224.118 × 224.119 sessões entre elas) deu X(2) = 40k RPM por evento, os dois firmes pelo critério do report (o host degradou antes de o k6 descartar iteração) e com overselling 0; mas a CPU do host já estava em 84-95% desde 30k RPM, com o pooler e o banco acima de 2 núcleos e o `reservation` abaixo de 1, então o teto local é do host compartilhado e **não separa o efeito da segunda réplica** (limite inferior do X do sistema; só compara X(1) com X(2) entre si). X(2) ≈ X(1): a regra segue "× réplicas" (ADR da #111).
 
 ## Matriz do experimento (runner oficial)
 
@@ -267,7 +487,7 @@ O report (`report-matriz.sh`) desenha, por (N, capacity), o overselling × lag e
 tabela dos agregados. Eixo x linear em ms (de 0 ao maior lag). Cada braço tem média, ±1 desvio amostral e mín–máx
 das repetições por lag; o `naive` é uma curva e o `cas`, que não depende do lag, uma linha de referência
 tracejada (média de todas as suas execuções do grupo) com marcadores nos lags em que foi medido.
-Auto-testes (sem rede/stack): `bash ../../docs/carga/harness/report-matriz-selftest.sh` e
+Auto-testes (sem rede/stack; `make selftests` roda os da Rodada 4): `bash ../../docs/carga/harness/report-matriz-selftest.sh` e
 `.\lib-matriz.selftest.ps1`.
 
 ### Códigos de saída do `rodar-matriz.ps1`
@@ -464,7 +684,7 @@ A escada **vai até o máximo**, mesmo depois de o host degradar: ajuste `DEG_MA
 escada; anote o X preliminar (refinado na Fase 8, issue #40) e se o report o marcou como **limite inferior**. O `.html`
 regenera do CSV e fica fora do git.
 
-**Colunas do CSV:** `escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit,mapeamento`
+**Colunas do CSV** (as da Rodada 4 vêm depois, na seção própria): `escada,rpm_alvo,rpm_efetivo,duracao_s,reservas,erros_5xx,taxa_5xx,erros_5xx_confirma,outros,p50,p95,p99,p95_max_janela_30s,throughput,iteracoes_descartadas,braco,max_connections,pool_hikari,commit,mapeamento`
 
 | Coluna | Significado |
 |---|---|
@@ -495,7 +715,7 @@ gere a escada de novo.
 `iterationInTest` a cada cenário, então cada degrau usa uma faixa própria de pares (usuário, evento), de tamanho
 `ceil(RPM × duração / 60) + 1` (o `+ 1` é a iteração extra que o k6 pode emitir). O total (soma das cotas) tem de caber
 em `USUARIOS × eventos`, com `eventos = ceil(total × 1,05 / USUARIOS)`; o k6 aborta no `setup()` se não couber.
-Padrão (12k…40k de 4k em 4k, 60 s, 200 usuários): 8 degraus, 208.008 pares, 1.093 eventos, ~11,6 min de k6 (31 s
+Padrão (12k…40k de 4k em 4k, 60 s, 200 usuários): 8 degraus, 208.008 pares, 1.093 eventos, ~11,6 min de k6 com `PCT_ACOMPANHA=0` (desde a #178 o padrão é 100 e o espaço sobe de 31 s para 46 s: ~13,5 min; 31 s
 ociosos entre degraus: 30 s de `gracefulStop`, para as iterações em voo terminarem antes do próximo, mais 1 s de folga
 para os planos de VUs dos cenários não se tocarem).
 
@@ -546,10 +766,10 @@ agendamento com o gerador saturado no fim do degrau) **não** recusa: a contagem
 `summary-degraus-<id>.json` e o runner avisa; essas reservas contam no p50/p95/p99 do degrau, mas não no p95 por janela
 (sem coluna nova no CSV). Mais de 1% é sistemático (ex.: `exec.scenario.startTime` com outra semântica). Submétrica sem amostras
 (ex.: nenhuma confirma com `PCT_CONFIRMA=0`, ou degrau em que toda reserva deu 5xx) vale 0 e só é informada. Código de
-saída do k6 ≠ 0 também impede o CSV; os thresholds do script são só declarativos (sempre verdadeiros, só materializam
-as submétricas), então nenhum deveria reprovar, e o código 99 (thresholds cruzados) só avisa.
+saída do k6 ≠ 0 também impede o CSV; os thresholds de p95/contagem do script são só declarativos (sempre verdadeiros, só materializam
+as submétricas), então nenhum deveria reprovar, e o código 99 (thresholds cruzados) só avisa, **exceto** com a condição de parada ligada (`PARADA_P95_MS`, Rodada 4): lá o 99 é a parada esperada e o resumo traz `parada`.
 
-Limites: os degraus são contíguos (só os 31 s ociosos; sem resfriamento do host entre eles, então a degradação de um
+Limites: os degraus são contíguos (só os 31 s ociosos, 46 s com o padrão da #178; sem resfriamento do host entre eles, então a degradação de um
 degrau pode contaminar o seguinte); um degrau cujo host trava de vez gera timeouts (`outros`), que não contam como
 5xx. O limite de 110 s do teste 2 não vale aqui: ele protege a conta de overselling contra reservas `pending` que
 expiram, e a escada não mede overselling (e com `PCT_CONFIRMA=100` nada fica `pending`). Auto-testes (sem rede/stack):
@@ -695,7 +915,10 @@ naquela etapa; a raiz de `results/` é a área de trabalho da rodada corrente.**
 | `../../docs/carga/harness/report-matriz.sh` | gerador | `make report-matriz`: `results\matriz.csv` → `results\matriz.html` (SVG, bash+awk) |
 | `lib-seed.ps1` | gerador | `Invoke-Seed`: chama o seed único `docs/carga/harness/setup.sh` via Git Bash |
 | `rpm/*` | ambos | teste 2 |
-| `degraus/*` | gerador | escada de carga (limiar X preliminar): `carga-degraus.js`, `rodar-degraus.ps1`, `lib-degraus.ps1` (plano, p95 em janelas de 30 s, linha do CSV; `lib-degraus.selftest.ps1` testa), `lib-mapeamento.js` (mapeamento iteração → par usuário/evento, `sequencial`/`intercalado`; `lib-mapeamento.selftest.mjs` testa com `node`) |
+| `degraus/*` | gerador | escada de carga (limiar X preliminar): `carga-degraus.js`, `rodar-degraus.ps1`, `lib-degraus.ps1` (plano, p95 em janelas de 30 s, linha do CSV; `lib-degraus.selftest.ps1` testa), `lib-mapeamento.js` (mapeamento iteração → par usuário/evento, `sequencial`/`intercalado`; `lib-mapeamento.selftest.mjs` testa com `node`), `lib-admissao.js` (202, acompanhamento do estado, parada; `lib-admissao.selftest.mjs`) e `carga-degraus.selftest.mjs` (o script inteiro contra um k6 de mentira) |
+| `lib-servicos.ps1` | host | containers por label do compose, lista de `-f` do braço e Hikari esperado (`lib-servicos.selftest.ps1`) |
+| `limpar-banco.sh` | host | limpeza entre blocos, ciente de réplicas (`limpar-banco.selftest.sh`; `make limpar-banco`) |
+| `coleta-host.sh` | host | lags, outbox, pooler, `pg_stat_statements` e, desde a #178, fila, Redis por evento e réplicas × tempo (`coleta-host.selftest.sh`) |
 | `../../docs/carga/harness/report-degraus.sh` | gerador | `make report-degraus`: `results\degraus-<id>.csv` → curva × carga + degrau X (SVG, bash+awk; `report-degraus-selftest.sh` testa) |
 | `aleatorio/*` | gerador | teste 3 |
 | `Makefile` | ambos | atalhos |

@@ -25,3 +25,7 @@ services:
     build: !reset null
     image: gerenciador-eventos-notification.slim:latest
     pull_policy: never
+  admission:
+    build: !reset null
+    image: gerenciador-eventos-admission.slim:latest
+    pull_policy: never

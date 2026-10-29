@@ -1,20 +1,20 @@
 # Imagens enxutas dos serviços com o Slim (issue #177)
 
-Versões mínimas das imagens de `backend`, `identity`, `catalog`, `reservation` e `notification`, geradas com o
+Versões mínimas das imagens de `backend`, `identity`, `catalog`, `reservation`, `notification` e `admission` (esta desde a #178), geradas com o
 [Slim](https://github.com/slimtoolkit/slim) (`slim build --target <imagem>`): ele roda o contêiner, observa (ptrace) quais arquivos o
 processo realmente usa enquanto um probe exercita os endpoints, e monta uma imagem só com eles. **Os Dockerfiles não mudam** e a imagem
-original continua o padrão do compose; as `*.slim` entram por um override opcional. O `admission` (#41) entra aqui quando existir.
+original continua o padrão do compose; as `*.slim` entram por um override opcional.
 
 ## Usar
 
 ```bash
-# 1. gerar as 5 imagens (project isolado gerenciador-e2e-slim; leva ~15-25 min na 1ª vez, o build gordo vem do cache depois)
-Projeto/slim/gerar-imagens-slim.sh                # ou só alguns: Projeto/slim/gerar-imagens-slim.sh identity notification
+# 1. gerar as 6 imagens (project isolado gerenciador-e2e-slim; leva ~15-25 min na 1ª vez, o build gordo vem do cache depois)
+Projeto/slim/gerar-imagens-slim.sh                # ou só alguns: Projeto/slim/gerar-imagens-slim.sh identity notification admission
 
 # 2. subir a stack com elas (precisa das imagens locais; o `build: !reset null` do override impede o rebuild da gorda com o nome slim)
 docker compose -f Projeto/docker-compose.yml -f Projeto/docker-compose.slim.yml up -d --wait
 
-# 3. suíte e2e da stack inteira com as imagens slim (o e2e confere que cada serviço roda o ID da imagem *.slim)
+# 3. suíte e2e da stack inteira com as imagens slim (o e2e confere que cada um dos 6 serviços roda o ID da imagem *.slim)
 E2E_SLIM=1 Projeto/e2e/run-e2e.sh
 ```
 
@@ -33,6 +33,7 @@ Idempotente: cada execução regenera as mesmas tags a partir do código atual e
 | `catalog` | 522 MB | 384 MB | -26% |
 | `reservation` | 522 MB | 384 MB | -26% |
 | `notification` | 509 MB | 371 MB | -27% |
+| `admission` (#178) | 503 MB | 365 MB | -27% |
 
 A redução é moderada de propósito: o fat jar e o JRE (`lib/modules`) são um arquivo cada e ficam inteiros, e `lib/` do JRE foi mantida
 (abaixo). O ganho vem do que sobra da base Ubuntu (apt/dpkg, locales, utilitários, libs não carregadas).
@@ -50,10 +51,11 @@ o resto da stack gordo ao redor. O serviço gordo de mesmo nome é parado antes,
 | `catalog` | `/internal/events/**`: validate, criar, search, por criador, buscar, exists, creator, image, atualizar; sem token (401). O relay publica `catalog.event`; o `reservation` gordo recebe o `eventcap` por HTTP. |
 | `reservation` | `/internal/eventcaps/**` (PUT/GET/batch/PATCH/DELETE), `/internal/reservations` (cas e naive, replay, active, confirm, user, cancelar), disponibilidade; sem token (401). Os consumers (`reservation`, `reservation-catalog`) e o relay sobem junto. |
 | `backend` (gateway) | `/actuator/health`; `/bff/**` com um JWT real (usuário de probe criado e promovido a host no identity gordo): login (200/401), `me`, criar/buscar evento, reservar e confirmar, carteira, cadastro em duas fases; token inválido (401). A validação do token busca o JWKS do identity. |
+| `admission` (#178) | Sobe com `redis` e `rabbitmq` do project isolado e o `reservation` gordo (o worker pool o chama). O alvo roda com `ADMISSION_X_RPM=60` (imposto no arquivo de ambiente do alvo): `POST /internal/admissions` ×60 (as primeiras ficam `sync`; passando de 80% de X o evento entra em **modo fila**: script Lua do contador, `enfileirar.lua`, publicação no RabbitMQ), `GET .../result` das 60 chaves, `GET .../events/{id}/rpm`, repetição da chave, chave de outro evento (422), 404 e chamada sem token (401). O `eventcap` do evento do probe (910001) é criado antes no `reservation` gordo. **Prova de que o listener AMQP e o worker rodaram na imagem-alvo:** depois do Slim, o script exige reservas do evento 910001 em `reservation.walletevent` (só o worker as cria; o `POST /internal/admissions` nunca reserva) |
 | `notification` | Sem HTTP (`--http-probe=false --continue-after 120`): um `VerificationCodeRequested` é produzido em `identity.notification` antes do start; o script exige que o consumer da imagem-alvo o processe (1 e-mail no captador Mailpit). |
 
 Depois de gerar, o script confere que cada imagem slim tem `bash head grep awk` (healthchecks do compose; `printf` é builtin do bash) e que `/var/lib/identity` da `identity.slim` está **vazio** (guarda da chave do JWT, abaixo). O critério final é
-`E2E_SLIM=1 Projeto/e2e/run-e2e.sh` verde: cadastro por e-mail, evento, reserva, confirmação e replay, com as 5 imagens slim.
+`E2E_SLIM=1 Projeto/e2e/run-e2e.sh` verde: cadastro por e-mail, evento, reserva, confirmação, replay e a rajada do modo fila (passo 4b), com as 6 imagens slim.
 
 ## Includes e motivo
 
@@ -93,8 +95,8 @@ negada (EPERM). Se aplicar em produção, repetir a carga e o e2e com o perfil l
   aqui; por isso o JRE `lib/` e `conf/` ficam inteiros. Imagem que quebrar e não tiver correção por `--include-path` fica com a original.
 - Só a variante com `lib/` do JRE inteira foi gerada e medida (os tamanhos acima); manter só o que o probe tocou não foi medido.
 - Limpeza de disco: o script deixa as gordas `gerenciador-e2e-slim-<serviço>:latest` e, a cada regeneração, as `*.slim` anteriores viram `<none>`:
-  `docker image prune` e `docker image rm gerenciador-e2e-slim-{backend,identity,catalog,reservation,notification}`; o volume de cache do sensor,
+  `docker image prune` e `docker image rm gerenciador-e2e-slim-{backend,identity,catalog,reservation,notification,admission}`; o volume de cache do sensor,
   `docker volume rm slim-sensor.1.40.11`.
 - Só os perfis são versionados: `creport.json`, `Dockerfile.reversed` e o arquivo de ambiente do alvo (segredos) ficam num diretório
   temporário que o script apaga.
-- Smoke `cas` na stack real slim e o `admission`: fora deste script (o smoke é do orquestrador; o `admission` não existe na `Batch_2` ainda).
+- Smoke `cas` na stack real slim: fora deste script (o smoke é do orquestrador). Imagem slim gerada antes de uma mudança de código fica velha (o `E2E_SLIM=1` de 2026-10-28 falhou com o `backend.slim` anterior à #41, que não chamava o `admission`): regenere depois de mudar código.

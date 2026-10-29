@@ -127,7 +127,7 @@ subir/rodar se `public.users` ainda existir. `migrations/verify-20261028-migrati
 
 **`uid` reciclado:** `TRUNCATE ... RESTART IDENTITY` em `identity.users` (testes, limpeza entre blocos da carga) devolve o `user_id` a 1, e o JWT é validado sem estado (claim `uid`): um token emitido antes
 passaria a valer como o usuário novo com o mesmo id. Por isso, **sempre que truncar `identity.users` fora de um teste unitário**, apague também a chave de assinatura do volume `identity-keys` (com o identity
-parado) e reinicie o identity e o backend (o gateway guarda o JWKS em cache por até 24 h). O `run-tests.sh` apaga a chave ao fim da rodada; a limpeza entre blocos da carga (`limpar-banco.sh`, fora do repo) faz o roteiro inteiro.
+parado) e reinicie o identity e o backend (o gateway guarda o JWKS em cache por até 24 h). O `run-tests.sh` apaga a chave ao fim da rodada; a limpeza entre blocos da carga (`Projeto/carga/limpar-banco.sh`) faz o roteiro inteiro.
 
 **Os scripts de init só rodam na PRIMEIRA criação do volume `supabase-db-data`** (inclusive o `_supabase`/`_supavisor` do pooler; num volume antigo, recrie-o). Depois disso são
 ignorados. Para reaplicar do zero:

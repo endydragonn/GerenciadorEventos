@@ -4,13 +4,13 @@
 #  gerar-imagens-slim.sh  -  issue #177 (Batch 2, T4): imagens enxutas dos servicos com o Slim
 # =============================================================================
 #
-#  Gera, por `slim build --target <imagem>`, a versao enxuta de backend, identity, catalog, reservation e notification
-#  (o `admission`, #41, entra aqui quando existir). As imagens originais (Dockerfiles intocados) continuam o padrao do
+#  Gera, por `slim build --target <imagem>`, a versao enxuta de backend, identity, catalog, reservation, notification e admission
+#  (o `admission` entrou na #178). As imagens originais (Dockerfiles intocados) continuam o padrao do
 #  compose; as `*.slim` entram so pelo override Projeto/docker-compose.slim.yml (ver slim/README.md).
 #
 #  COMO: sobe, num project docker compose ISOLADO (gerenciador-e2e-slim*, mesmo override de isolamento do run-e2e: sem
 #  container_name, sem porta no host, rede e volumes proprios, e-mail num captador Mailpit), as dependencias reais
-#  (db, redpanda, supabase-pooler, mailpit) e os servicos gordos. Para cada alvo: para o servico gordo de mesmo nome, roda o Slim
+#  (db, redpanda, supabase-pooler, mailpit, redis, rabbitmq) e os servicos gordos. Para cada alvo: para o servico gordo de mesmo nome, roda o Slim
 #  (container dslim/slim, versao fixa) com o container-alvo na rede do project e um probe que exercita os endpoints reais
 #  (--http-probe-cmd-file: /internal/** com X-Internal-Token, /bff/**, actuator, JWKS) e o caminho Kafka (os consumers/relays do
 #  alvo sobem junto; o notification, sem HTTP, processa um VerificationCodeRequested produzido no topico antes do start).
@@ -21,7 +21,7 @@
 #  mascara qualquer valor. Os perfis Seccomp/AppArmor (sem segredo) vao para slim/perfis/; o resto dos artefatos do Slim
 #  (creport, Dockerfile.reversed) NAO e versionado.
 #
-#  Uso:  Projeto/slim/gerar-imagens-slim.sh [servico ...]      (padrao: identity reservation catalog backend notification)
+#  Uso:  Projeto/slim/gerar-imagens-slim.sh [servico ...]      (padrao: identity reservation catalog backend notification admission)
 #  Variaveis (opcionais): SLIM_PROJECT (gerenciador-e2e-slim), MANTER (1 = nao derruba o project no fim), ESPERA_UP (900).
 #  Idempotente: cada execucao regenera as imagens `*.slim` (mesmas tags) a partir do codigo atual e derruba o project.
 #  Pre-requisitos: docker (compose v2), python, Projeto/.env e Projeto/supabase/.env. Nada e instalado no host.
@@ -46,7 +46,7 @@ PERFIS_DIR="$SCRIPT_DIR/perfis"
 TMP="$(mktemp -d)"; chmod 700 "$TMP" # o env-file com segredos do .env passa por aqui
 mkdir -p "$PERFIS_DIR"
 FALHAS=0
-TODOS=(identity reservation catalog backend notification)
+TODOS=(identity reservation catalog backend notification admission)
 SERVICOS=("$@"); [ ${#SERVICOS[@]} -gt 0 ] || SERVICOS=("${TODOS[@]}")
 
 dexec() { # Git Bash: o docker e nativo do Windows e a conversao de path do MSYS reescreveria "/var/..." e "/work"
@@ -117,18 +117,18 @@ ok "sem container_name, sem porta no host, rede/volumes com o prefixo do project
 ISOLADO=1
 
 # --- por servico: porta HTTP (vazio = sem HTTP) e nomes das imagens -----------------------------------------------------------
-porta_de() { case "$1" in backend) echo 8081 ;; identity) echo 8084 ;; catalog) echo 8083 ;; reservation) echo 8082 ;; *) echo "" ;; esac; }
+porta_de() { case "$1" in backend) echo 8081 ;; identity) echo 8084 ;; catalog) echo 8083 ;; reservation) echo 8082 ;; admission) echo 8085 ;; *) echo "" ;; esac; }
 fat_de() { echo "${PROJETO}-$1:latest"; }                  # imagem gorda construida pelo compose neste project
 slim_de() { echo "gerenciador-eventos-$1.slim:latest"; }   # a que o override docker-compose.slim.yml usa
 for s in "${SERVICOS[@]}"; do
-    case "$s" in backend|identity|catalog|reservation|notification) ;; *) abortar "servico desconhecido: $s" ;; esac
+    case "$s" in backend|identity|catalog|reservation|notification|admission) ;; *) abortar "servico desconhecido: $s" ;; esac
 done
 
 echo "==> 1. project limpo; imagens gordas (build deste codigo); dependencias reais + servicos gordos no ar"
 dc down -v --remove-orphans >/dev/null 2>&1
-COMPOSE_PARALLEL_LIMIT=2 dc build identity reservation catalog backend notification >"$TMP/build.log" 2>&1 || { tail -15 "$TMP/build.log"; abortar "build das imagens gordas falhou"; }
-# so o que o probe precisa (com as dependencias do compose: db, supabase-pooler, redpanda, mailpit, notification-seek); sem frontend/studio/kong/meta
-dc up -d --wait --wait-timeout "$ESPERA_UP" identity reservation catalog backend notification || { dc ps -a; abortar "up --wait falhou (algum servico nao ficou healthy)"; }
+COMPOSE_PARALLEL_LIMIT=2 dc build identity reservation catalog backend notification admission >"$TMP/build.log" 2>&1 || { tail -15 "$TMP/build.log"; abortar "build das imagens gordas falhou"; }
+# so o que o probe precisa (com as dependencias do compose: db, supabase-pooler, redpanda, mailpit, notification-seek, redis, rabbitmq); sem frontend/studio/kong/meta
+dc up -d --wait --wait-timeout "$ESPERA_UP" identity reservation catalog backend notification admission || { dc ps -a; abortar "up --wait falhou (algum servico nao ficou healthy)"; }
 dexec rm -f "$CLI" >/dev/null 2>&1
 dexec run -d --rm --name "$CLI" --network "$REDE" --entrypoint sleep "$IMAGEM_CURL" infinity >/dev/null || abortar "container auxiliar de curl"
 
@@ -225,6 +225,21 @@ elif svc == "reservation":
         cmd("DELETE", "/internal/eventcaps/900002"),
         cmd("GET", "/internal/eventcaps/900001", headers=[]),
     ]
+elif svc == "admission":
+    # X baixo (ADMISSION_X_RPM=60, imposto no env-file do alvo): as 1as tentativas ficam sync, as seguintes passam de 80% de X e o evento entra em modo
+    # fila (script Lua do contador + enfileirar.lua + publicacao no RabbitMQ). O worker pool (@RabbitListener) consome e chama o reservation gordo (cas):
+    # o script confere depois que existem reservas do evento 910001 (so o worker as cria: o POST /internal/admissions nunca reserva).
+    ev = 910001
+    pedido = lambda k: {"eventId": ev, "userId": ev + k, "idempotencyKey": "slim-adm-%d" % k, "path": "cas"}
+    cmds = [cmd("POST", "/internal/admissions", pedido(k)) for k in range(1, 61)]
+    cmds += [cmd("GET", "/internal/admissions/events/%d/rpm" % ev)]
+    cmds += [cmd("GET", "/internal/admissions/result?userId=%d&idempotencyKey=slim-adm-%d" % (ev + k, k)) for k in range(1, 61)]
+    cmds += [
+        cmd("POST", "/internal/admissions", pedido(1)),                                   # repeticao da chave: devolve o estado, nao enfileira de novo
+        cmd("POST", "/internal/admissions", dict(pedido(2), eventId=ev + 1)),             # chave de outro evento: 422
+        cmd("GET", "/internal/admissions/result?userId=1&idempotencyKey=inexistente"),    # 404
+        cmd("POST", "/internal/admissions", pedido(3), headers=[]),                       # sem token: 401
+    ]
 elif svc == "backend":
     B = ["Content-Type:application/json"]
     A = B + ["Authorization:Bearer " + jwt]
@@ -262,6 +277,8 @@ preparar_jwt() {
     [ -n "$JWT_PROBE" ]
 }
 
+psql_probe() { dc exec -T db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$POSTGRES_DB" -At' <<<"$1" | tr -d '\r'; }
+
 # notification (sem HTTP): o "probe" e o consumer processar uma mensagem; produz um pedido de e-mail antes do start
 produzir_pedido_email() {
     local envelope
@@ -291,6 +308,11 @@ slimar() { # servico
     img="$(fat_de "$s")"; slim="$(slim_de "$s")"; porta="$(porta_de "$s")"
     echo "==> slim build: $s  ($img -> $slim)"
     env_arquivo "$s" "$TMP/env-$s"
+    if [ "$s" = admission ]; then # X baixo no alvo (o env-file vence o do compose): o probe liga o modo fila com poucas chamadas. O eventcap do evento do probe nasce no reservation gordo.
+        grep -q '^ADMISSION_X_RPM=' "$TMP/env-$s" && sed -i 's/^ADMISSION_X_RPM=.*/ADMISSION_X_RPM=60/' "$TMP/env-$s" || echo 'ADMISSION_X_RPM=60' >> "$TMP/env-$s"
+        http PUT "http://reservation:8082/internal/eventcaps/910001" '{"capacity":500,"buyTimeLimit":"2035-12-01T14:00:00","maxTimeInLine":600}'
+        [ "$HTTP_CODE" = 200 ] || [ "$HTTP_CODE" = 201 ] || erro "admission: nao consegui criar o eventcap do probe no reservation gordo (HTTP $HTTP_CODE)"
+    fi
     dc stop "$s" >/dev/null 2>&1                                  # o consumer group de 1 particao tem que cair no container-alvo
     case "$s" in
         identity) extra+=(--include-path /var/lib/identity --exclude-pattern '/var/lib/identity/*') ;; # o diretorio fica (o compose monta o volume ali); a chave RSA gerada no boot do alvo NAO pode ir na imagem
@@ -310,6 +332,12 @@ slimar() { # servico
     mkdir -p "$TMP/meta-$s"
     dexec "${cmd[@]}" 2>&1 | tr -d '\r' | mascarar "$TMP/env-$s" > "$log"
     grep -E "http.probe.call|results status|results image.name|state=exited|level=(error|fatal)" "$log" | cut -c1-260 | sed 's/^/     /'
+    if [ "$s" = admission ]; then # o worker da imagem-alvo tem que ter consumido a fila e reservado no reservation gordo (so ele cria reservas desse evento)
+        local n_res
+        n_res="$(psql_probe "SELECT count(*) FROM reservation.walletevent WHERE event_id = 910001")"
+        if [ "${n_res:-0}" -ge 1 ] 2>/dev/null; then ok "admission: o worker da imagem-alvo consumiu a fila e criou $n_res reserva(s) (AMQP + Lua exercitados)"
+        else erro "admission: nenhuma reserva do evento 910001: o listener AMQP/worker da imagem-alvo nao rodou (obtido '${n_res:-}')"; fi
+    fi
     if [ -z "$porta" ]; then # notification: o consumer da imagem-alvo tem que ter processado o pedido (e-mail no captador)
         local n
         n="$(cli curl -s -G "http://mailpit:8025/api/v1/search" --data-urlencode "query=to:pedido-$SUFIXO@example.com" | grep -oE '"messages_count": ?[0-9]+' | grep -oE '[0-9]+$')"
