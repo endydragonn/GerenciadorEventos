@@ -398,7 +398,7 @@ DEPOIS de `duracao_amostra_ms`; as 31 colunas da R4 seguem idênticas (nome e po
 
 | Coluna | Fonte |
 |---|---|
-| `lag_stock`, `lag_stock_catalog` | `TOTAL-LAG` dos groups `stock` (devolução da vaga, tópico `reservation.wallet`) e `stock-catalog` (`catalog.event`), num único `rpk group describe stock stock-catalog`. Group ausente (ou `Dead`) = `-1`. O group antigo `reservation-catalog` não existe mais: a coluna `lag_reservation_catalog` da R4 fica, com `-1` |
+| `lag_stock`, `lag_stock_catalog` | `TOTAL-LAG` dos groups `stock` (devolução da vaga, tópico `reservation.wallet`) e `stock-catalog` (`catalog.event`), num único `rpk group describe stock stock-catalog`. Group ausente (ou `Dead`) = `-1`. O group antigo `reservation-catalog` não existe mais: a coluna `lag_reservation_catalog` da R4 fica (o `rpk` devolve `STATE Dead` com `TOTAL-LAG 0` e a leitura antiga não olha o `STATE`), então vale `0`, não `-1` (conferido no dry-run) |
 | `saga_reservando` | `idempotency_key` em `saga_status = 'reserving'` |
 | `saga_orfas` | `reserving` com `updated_at` mais velho que `ORPHAN_MS` (as que o reaper vai tomar) |
 | `saga_compensando` | `idempotency_key` em `compensating` |
