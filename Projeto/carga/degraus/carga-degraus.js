@@ -62,7 +62,7 @@ import exec from 'k6/execution';
 import { Counter, Trend } from 'k6/metrics';
 import { erroMapeamento, parDe } from './lib-mapeamento.js';
 import {
-  acompanhar, avaliarParada, classificarReserva, erroParametros, gracefulS, indiceJanela, limiaresParada,
+  acompanhar, avaliarParada, classificarReserva, erroParametros, esperaDoSetup, gracefulS, indiceJanela, limiaresParada,
   situacaoDoDegrau, textoParada,
 } from './lib-admissao.js';
 
@@ -77,6 +77,7 @@ const CONSULTA_MS = parseInt(__ENV.CONSULTA_MS || '1000', 10);
 const TETO_CONSULTA_S = parseInt(__ENV.TETO_CONSULTA_S || '35', 10);
 const PARADA_P95_MS = parseInt(__ENV.PARADA_P95_MS || '0', 10);
 const PARADA_JANELA_S = parseInt(__ENV.PARADA_JANELA_S || '60', 10);
+const SETUP_S = parseInt(__ENV.SETUP_S || '0', 10);   // orcamento do setup() no relogio do teste (o delayAbortEval conta o setup); ver lib-admissao.js
 const COM_CHAVE = (__ENV.IDEMPOTENCY_KEY || '0') === '1';
 const RUN_ID = __ENV.RUN_ID || `${Date.now()}`;
 const GRACEFUL_S = gracefulS(PCT_ACOMPANHA, TETO_CONSULTA_S);
@@ -153,8 +154,8 @@ for (const p of PLANO) {
 }
 // condicao de parada (issue #178): so com PARADA_P95_MS > 0 e parametros validos (se invalidos o setup() aborta antes de qualquer carga)
 const ERRO_PARAMS = erroParametros({ pctAcompanha: PCT_ACOMPANHA, consultaMs: CONSULTA_MS, tetoConsultaS: TETO_CONSULTA_S,
-  paradaP95Ms: PARADA_P95_MS, paradaJanelaS: PARADA_JANELA_S, duracaoS: DURACAO_S });
-if (!ERRO_PARAMS && PARADA_P95_MS > 0) Object.assign(thresholds, limiaresParada(PLANO, PARADA_JANELA_S, DURACAO_S, PARADA_P95_MS));
+  paradaP95Ms: PARADA_P95_MS, paradaJanelaS: PARADA_JANELA_S, duracaoS: DURACAO_S, setupS: SETUP_S });
+if (!ERRO_PARAMS && PARADA_P95_MS > 0) Object.assign(thresholds, limiaresParada(PLANO, PARADA_JANELA_S, DURACAO_S, PARADA_P95_MS, SETUP_S));
 
 // Janela de 30 s do instante de ENVIO `t` no degrau p. Ate TOL_JANELA_MS de jitter nas pontas vai para a janela da
 // ponta; mais que isso vai para "_fora", que nao tem submetrica: a reserva conta no p50/p95/p99 do degrau mas nao em
@@ -214,7 +215,14 @@ export function setup() {
   }
   const ok = sessoes.filter((s) => s).length;
   if (ok === 0) exec.test.abort('Nenhum login funcionou: confira usuarios semeados e BASE_URL.');
-  console.log(`setup: ${ok}/${USERS.length} logins ok; ${EVENTS.length} eventos; ${MAX_PARES} pares unicos; ${PLANO.length} degraus usam ${TOTAL_PARES}; mapeamento ${MAPEAMENTO}; acompanha ${PCT_ACOMPANHA}% (consulta ${CONSULTA_MS} ms, teto ${TETO_CONSULTA_S} s); graceful ${GRACEFUL_S} s; parada ${PARADA_P95_MS > 0 ? `p95 > ${PARADA_P95_MS} ms em janela de ${PARADA_JANELA_S} s` : 'desligada'}`);
+  let loginsS = -1;
+  if (SETUP_S > 0) {   // o relogio do delayAbortEval inclui o setup(): os degraus so comecam quando o relogio do teste chega em SETUP_S
+    loginsS = Math.round(exec.instance.currentTestRunDuration / 100) / 10;
+    const w = esperaDoSetup(exec.instance.currentTestRunDuration, SETUP_S, PARADA_P95_MS > 0);
+    if (w.erro) exec.test.abort(w.erro);
+    if (w.esperaMs > 0) sleep(w.esperaMs / 1000);
+  }
+  console.log(`setup: ${ok}/${USERS.length} logins ok; ${EVENTS.length} eventos; ${MAX_PARES} pares unicos; ${PLANO.length} degraus usam ${TOTAL_PARES}; mapeamento ${MAPEAMENTO}; acompanha ${PCT_ACOMPANHA}% (consulta ${CONSULTA_MS} ms, teto ${TETO_CONSULTA_S} s); graceful ${GRACEFUL_S} s; parada ${PARADA_P95_MS > 0 ? `p95 > ${PARADA_P95_MS} ms em janela de ${PARADA_JANELA_S} s (SETUP_S ${SETUP_S}${loginsS >= 0 ? `; logins levaram ${loginsS} s` : ''})` : 'desligada'}`);
   return sessoes;
 }
 

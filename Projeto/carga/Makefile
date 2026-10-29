@@ -55,6 +55,7 @@ CONSULTA_MS    ?= 1000
 TETO_CONSULTA_S ?= 35
 PARADA_P95_MS  ?= 0
 PARADA_JANELA_S ?= 60
+SETUP_S        ?= 0
 ARRANJO        ?= sem-autoescala
 PARAMS_AUTOESCALA ?=
 COM_CHAVE      ?=
@@ -92,7 +93,7 @@ help:
 	@Write-Host '  make test-degraus    HOST_IP=<ip> [DEG_INICIO=12000 DEG_PASSO=4000 DEG_MAX=40000 DEG_DURACAO=60 MAX_CONN=300 POOL_HIKARI=1000 USUARIOS=200 MAX_VUS=2000 MAPEAMENTO=sequencial|intercalado]   (no GERADOR: results\degraus-<id>.csv; MAX_CONN/POOL_HIKARI = o que o host roda)'
 	@Write-Host '  make report-degraus  CSV=results\degraus-<id>.csv           (no GERADOR: curva latencia/throughput x carga + degrau X, via Git Bash -> results\degraus-<id>.html)'
 	@Write-Host 'RODADA 4 (#178) - escada ACIMA do X com o admission (202/fila) e a autoescala; a R4 roda o braco SEM autoescala ANTES do braco C (o override sobe topicos para 3 particoes, irreversivel)'
-	@Write-Host '  make test-degraus    ... [PCT_ACOMPANHA=100 CONSULTA_MS=1000 TETO_CONSULTA_S=35 PARADA_P95_MS=0 PARADA_JANELA_S=60 ARRANJO=sem-autoescala PARAMS_AUTOESCALA=k=v;k=v]   (no GERADOR; colunas novas no fim do CSV)'
+	@Write-Host '  make test-degraus    ... [PCT_ACOMPANHA=100 CONSULTA_MS=1000 TETO_CONSULTA_S=35 PARADA_P95_MS=0 PARADA_JANELA_S=60 SETUP_S=0 ARRANJO=sem-autoescala PARAMS_AUTOESCALA=k=v;k=v]   (no GERADOR; colunas novas no fim do CSV)'
 	@Write-Host '  make setup-host | host-rpm  COMPOSE_EXTRAS=docker-compose.autoescala.yml   (no HOST: braco C; slim antes: docker-compose.slim.yml,docker-compose.autoescala.yml; replicas achadas por label)'
 	@Write-Host '  make limpar-banco    (no HOST, entre blocos; scaler PARADO: trunca, FLUSHDB, purge das filas, apaga a chave do JWT de TODAS as replicas do identity, sobe de volta e prova o JWKS)'
 	@Write-Host '  make verificar-rpm   PREFIXO=Deg-<id>   (no HOST, ao fim de CADA bloco: codigo 3 se houver overselling no braco CAS = criterio de parada)'
@@ -156,7 +157,7 @@ report-matriz:
 # ---- escada de carga (issue #14): um CSV por escada em results\degraus-<id>.csv; o limiar X sai do report
 test-degraus:
 	$(need_ip)
-	.\degraus\rodar-degraus.ps1 -HostIp $(HOST_IP) -RpmInicio $(DEG_INICIO) -RpmPasso $(DEG_PASSO) -RpmMax $(DEG_MAX) -Duracao $(DEG_DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -PoolHikari $(POOL_HIKARI) -PctConfirma $(PCT_CONFIRMA) -MaxVus $(MAX_VUS) -Mapeamento $(MAPEAMENTO) -PctAcompanha $(PCT_ACOMPANHA) -ConsultaMs $(CONSULTA_MS) -TetoConsultaS $(TETO_CONSULTA_S) -ParadaP95Ms $(PARADA_P95_MS) -ParadaJanelaS $(PARADA_JANELA_S) -Arranjo $(ARRANJO) $(if $(filter 1,$(COM_CHAVE)),-ComChave) $(if $(PARAMS_AUTOESCALA),-ParamsAutoescala '$(PARAMS_AUTOESCALA)')
+	.\degraus\rodar-degraus.ps1 -HostIp $(HOST_IP) -RpmInicio $(DEG_INICIO) -RpmPasso $(DEG_PASSO) -RpmMax $(DEG_MAX) -Duracao $(DEG_DURACAO) -Usuarios $(USUARIOS) -Rotulo $(READPATH) -MaxConnections $(MAX_CONN) -PoolHikari $(POOL_HIKARI) -PctConfirma $(PCT_CONFIRMA) -MaxVus $(MAX_VUS) -Mapeamento $(MAPEAMENTO) -PctAcompanha $(PCT_ACOMPANHA) -ConsultaMs $(CONSULTA_MS) -TetoConsultaS $(TETO_CONSULTA_S) -ParadaP95Ms $(PARADA_P95_MS) -ParadaJanelaS $(PARADA_JANELA_S) -SetupS $(SETUP_S) -Arranjo $(ARRANJO) $(if $(filter 1,$(COM_CHAVE)),-ComChave) $(if $(PARAMS_AUTOESCALA),-ParamsAutoescala '$(PARAMS_AUTOESCALA)')
 
 # telemetria (CPU/freq/RAM a cada 1 s) do HOST durante a escada/matriz; o gerador grava a dele sozinho. Ctrl+C encerra.
 telemetria-host:

@@ -53,11 +53,12 @@ export function gracefulS(pctAcompanha, tetoConsultaS) {
 }
 
 // Valida os parametros do acompanhamento e da parada. Devolve a mensagem do 1o problema, ou null.
-export function erroParametros({ pctAcompanha, consultaMs, tetoConsultaS, paradaP95Ms, paradaJanelaS, duracaoS }) {
+export function erroParametros({ pctAcompanha, consultaMs, tetoConsultaS, paradaP95Ms, paradaJanelaS, duracaoS, setupS = 0 }) {
   if (!(pctAcompanha >= 0 && pctAcompanha <= 100)) return `PCT_ACOMPANHA invalido: ${pctAcompanha} (0 a 100).`;
   if (!(consultaMs >= 50)) return `CONSULTA_MS invalido: ${consultaMs} (>= 50).`;
   if (!(tetoConsultaS >= 1)) return `TETO_CONSULTA_S invalido: ${tetoConsultaS} (>= 1).`;
   if (!(paradaP95Ms >= 0)) return `PARADA_P95_MS invalido: ${paradaP95Ms} (0 = sem parada).`;
+  if (!(setupS >= 0)) return `SETUP_S invalido: ${setupS} (>= 0).`;
   if (paradaP95Ms > 0) {
     if (!(paradaJanelaS >= 30 && paradaJanelaS % 30 === 0 && duracaoS % paradaJanelaS === 0)) {
       return `PARADA_JANELA_S invalido: ${paradaJanelaS} (multiplo de 30 e divisor de DURACAO_S=${duracaoS}, para a parada cair no fim de uma janela).`;
@@ -78,17 +79,29 @@ export const nomeMetricaParada = (degrau, pw) => `reserva_duration{parada:${degr
 
 // Thresholds de parada (um por janela de cada degrau): o p95 da reserva DENTRO da janela (a tag `parada` e unica por janela, entao o
 // threshold, cumulativo, vale so para as amostras da janela) acima de limiteMs derruba o teste (abortOnFail). delayAbortEval conta do
-// INICIO DO TESTE, nao da janela: cada um e adiado para o fim da propria janela (inicioS do degrau + (pw+1) * janelaS), senao a janela
-// seria julgada com poucas amostras. O k6 avalia thresholds a cada ~2 s, entao a parada cai ate ~2 s depois do fim da janela.
-export function limiaresParada(plano, janelaS, duracaoS, limiteMs) {
+// INICIO DO TESTE E INCLUI O setup() (medido no dry-run da #178, k6 2.2.0: com setup de 45 s o abort caiu 2 s depois do inicio do degrau,
+// nao 30 s): cada um e adiado para o fim da propria janela NO RELOGIO DO TESTE = setupS + inicioS do degrau + (pw+1) * janelaS, senao a
+// janela seria julgada com poucas amostras. setupS e o ORCAMENTO do setup (SETUP_S): o setup() espera o relogio chegar nele (esperaDoSetup),
+// entao os degraus comecam exatamente em setupS. O k6 avalia thresholds a cada ~2 s, entao a parada cai ate ~2 s depois do fim da janela.
+export function limiaresParada(plano, janelaS, duracaoS, limiteMs, setupS = 0) {
   const th = {};
   const n = Math.floor(duracaoS / janelaS);
   for (const p of plano) {
     for (let pw = 0; pw < n; pw++) {
-      th[nomeMetricaParada(p.nome, pw)] = [{ threshold: `p(95)<${limiteMs}`, abortOnFail: true, delayAbortEval: `${p.inicioS + (pw + 1) * janelaS}s` }];
+      th[nomeMetricaParada(p.nome, pw)] = [{ threshold: `p(95)<${limiteMs}`, abortOnFail: true, delayAbortEval: `${setupS + p.inicioS + (pw + 1) * janelaS}s` }];
     }
   }
   return th;
+}
+
+// O que o fim do setup() faz com o relogio do teste (`runMs` = exec.instance.currentTestRunDuration): sem SETUP_S (0) nada; com parada ligada e
+// o setup JA passou do orcamento, a parada seria julgada adiantada (janela incompleta): erro (antes de qualquer carga); senao espera o resto.
+export function esperaDoSetup(runMs, setupS, paradaLigada) {
+  if (!(setupS > 0)) return { esperaMs: 0 };
+  if (runMs > setupS * 1000) {
+    return paradaLigada ? { erro: `o setup() levou ${Math.ceil(runMs / 1000)} s, mais que SETUP_S=${setupS} s: a parada por latencia seria julgada adiantada (janela incompleta). Suba SETUP_S (ex.: ${Math.ceil(runMs / 1000 * 1.5)}).` } : { esperaMs: 0 };
+  }
+  return { esperaMs: setupS * 1000 - runMs };
 }
 
 // Primeira janela (na ordem dos degraus) cujo threshold de parada reprovou. `metrica(nome)` devolve o objeto da metrica no resumo do k6
@@ -112,15 +125,16 @@ export function avaliarParada(plano, janelaS, duracaoS, limiteMs, metrica) {
 
 // Situacao de cada degrau depois de uma parada: 'completo' (antes do degrau da parada, ou sem parada), 'parcial' (o degrau da parada:
 // so o que rodou) e 'omitido' (depois: nunca comecou, nao vira linha de CSV). Sem parada: tudo 'completo'.
-// Duracao efetiva do parcial = (indice da ULTIMA janela de 30 s com amostras + 1) x 30 s, tirada dos proprios dados (`janelas` = [{w, n}]):
-// nao depende de quando o k6 abortou (o abort cai ate ~2 s depois da janela, e o relogio do delayAbortEval pode contar o setup()). Sem janelas
-// cai em (pw + 1) x janela_s. No maximo a duracao do degrau.
+// Duracao efetiva do parcial = min(duracao do degrau, (pw + 1) x janela_s, (indice da ULTIMA janela de 30 s com amostras + 1) x 30 s): o teto
+// (pw + 1) x janela_s e o instante em que a parada deveria cair; os dados (`janelas` = [{w, n}]) so encurtam, se o abort veio ADIANTADO (nao
+// ha trafego depois dele). As amostras das ~2 s entre o fim da janela e o abort (avaliacao do k6 a cada ~2 s) caem na janela seguinte e,
+// por isso, NAO estendem a duracao. Sem janelas, so o teto.
 export function situacaoDoDegrau(parada, indice, duracaoS, janelas = []) {
   if (!parada || indice < parada.indice) return { situacao: 'completo', duracaoEfetivaS: duracaoS };
   if (indice > parada.indice) return { situacao: 'omitido', duracaoEfetivaS: 0 };
   const ultima = janelas.reduce((m, j) => (j.n > 0 && j.w > m ? j.w : m), -1);
-  const efetiva = ultima >= 0 ? (ultima + 1) * 30 : (parada.pw + 1) * parada.janela_s;
-  return { situacao: 'parcial', duracaoEfetivaS: Math.min(duracaoS, efetiva) };
+  const efetiva = Math.min(duracaoS, (parada.pw + 1) * parada.janela_s, ultima >= 0 ? (ultima + 1) * 30 : Infinity);
+  return { situacao: 'parcial', duracaoEfetivaS: efetiva };
 }
 
 // Texto da coluna `parada` do CSV ('nenhuma' sem parada). Sem virgula (e CSV).

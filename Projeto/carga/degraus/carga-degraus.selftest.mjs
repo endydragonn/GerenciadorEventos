@@ -171,12 +171,12 @@ await confere('com parada na janela 0 do degrau 2000: degrau parcial (30 s efeti
   assert.equal(json.parada_texto, 'p95_acima_de_5000ms_em_janela_de_30s_no_degrau_2000');
   assert.match(texto, /PARADA: /);
 });
-await confere('parada na janela 0 mas com amostras ate a janela 1 (parada adiantada): duracao efetiva sai dos dados (60 s)', () => {
+await confere('parada na janela 0 com amostras na janela 1 (o abort cai ~2 s depois do fim da janela): a duracao efetiva continua (pw+1) x 30 = 30 s', () => {
   const dd = dados({ comParada: true });
   dd.metrics['reserva_duration{janela:degrau_2000_1}'] = trend(5, 9500);
   const json = JSON.parse(script.handleSummary(dd)['s.json']);
   assert.equal(json.degraus[1].situacao, 'parcial');
-  assert.equal(json.degraus[1].duracao_efetiva_s, 60);
+  assert.equal(json.degraus[1].duracao_efetiva_s, 30);
 });
 
 console.log('==> chave de idempotencia');

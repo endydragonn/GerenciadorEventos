@@ -113,6 +113,7 @@ Confere 'graceful com acompanhamento: teto + 10 s' (Get-GracefulS -PctAcompanha 
 Confere 'graceful nunca abaixo de 30 s' (Get-GracefulS -PctAcompanha 10 -TetoConsultaS 5) 30
 Confere 'espaco entre degraus = graceful + 1 (46 s com o teto de 35 s)' (Get-EspacoS -PctAcompanha 100 -TetoConsultaS 35) 46
 Confere 'espaco sem acompanhamento = 31 s (como antes da #178)' (Get-EspacoS -PctAcompanha 0 -TetoConsultaS 35) 31
+Confere 'orcamento do setup: piso de 30 s e 0,6 s por lote de 25 usuarios' (@((Get-SetupS -Usuarios 200), (Get-SetupS -Usuarios 2000), (Get-SetupS -Usuarios 5000)) -join ',') '30,48,120'
 $adm = ([pscustomobject]@{ reservas_202 = 900; acompanhadas = 200; admitidas = 150; rejected = 30; timed_out = 15; sem_estado = 5; recusadas_429 = 7; conflitos_422 = 0
     consultas_estado = 1234; admitir_p50_ms = 1000.04; admitir_p95_ms = 2500; admitir_p99_ms = 3000; fim_a_fim_p50_ms = 1100; fim_a_fim_p95_ms = 2700.55; fim_a_fim_p99_ms = 3300 }) | ConvertTo-Json | ConvertFrom-Json
 Confere 'linha do modo fila: taxas sobre as acompanhadas, ponto decimal em pt-BR, parada e params sem virgula' `

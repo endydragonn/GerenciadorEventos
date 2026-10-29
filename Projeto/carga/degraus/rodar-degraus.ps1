@@ -58,6 +58,8 @@
     -ParadaP95Ms   (0 = desligada) PARA a escada quando o p95 da reserva numa janela de -ParadaJanelaS s passa desse valor: latencia que nao se recupera
                    (depois da promocao a fila so religa a ~1,6X; entre X e ~1,6X o trafego vai direto a linha do eventcap). O k6 aborta, os degraus
                    completos + o parcial viram CSV e a coluna `parada` registra o motivo. -ParadaJanelaS: multiplo de 30 e divisor de -Duracao.
+    -SetupS        (so com -ParadaP95Ms) orcamento do setup() (logins) em s: o delayAbortEval do k6 CONTA o setup, entao o setup() espera o relogio chegar nele e a parada soma o mesmo
+                   valor. 0 = estimativa pelos usuarios (Get-SetupS). Se o setup passar do orcamento o k6 aborta antes da carga e diz quanto levou.
     -Usuarios      limite por usuario na fila (ADMISSION_MAX_WAITING_PER_USER, 5): 429 quando passa. Para nao dominar a escada: Usuarios >= it/s x espera media / 5.
     -Arranjo       rotulo do braco do HOST (sem-autoescala | autoescala, +slim se for o caso); -ParamsAutoescala: AUTOESCALA_* e X do host, copiados a mao
                    (par=valor;par=valor): o gerador nao enxerga o host, vao para as colunas arranjo e params_autoescala.
@@ -92,6 +94,7 @@ param(
     [ValidateRange(1, 600)][int]$TetoConsultaS = 35,
     [ValidateRange(0, 600000)][int]$ParadaP95Ms = 0,
     [int]$ParadaJanelaS = 60,
+    [ValidateRange(0, 3600)][int]$SetupS = 0,   # orcamento do setup() no relogio do k6 (so com parada); 0 = Get-SetupS pelos usuarios
     [ValidatePattern('^[A-Za-z0-9._+-]+$')][string]$Arranjo = 'sem-autoescala',
     [string]$ParamsAutoescala = '',
     [switch]$ComChave
@@ -173,6 +176,7 @@ try {
     # modo fila (#178): sempre setados, pelo mesmo motivo
     $env:PCT_ACOMPANHA = "$PctAcompanha"; $env:CONSULTA_MS = "$ConsultaMs"; $env:TETO_CONSULTA_S = "$TetoConsultaS"
     $env:PARADA_P95_MS = "$ParadaP95Ms"; $env:PARADA_JANELA_S = "$ParadaJanelaS"; $env:RUN_ID = "$runId"
+    $env:SETUP_S = $(if ($ParadaP95Ms -le 0) { '0' } elseif ($SetupS -gt 0) { "$SetupS" } else { "$(Get-SetupS -Usuarios $Usuarios)" })
     $env:IDEMPOTENCY_KEY = $(if ($ComChave) { '1' } else { '0' })
     $tel = Start-Telemetria -Saida $TelCsv
     Info 'Disparando k6...'

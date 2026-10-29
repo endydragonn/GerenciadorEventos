@@ -2,7 +2,7 @@
 // parada por latencia. Sem k6, sem rede, sem banco: so node:assert. Uso: node degraus/lib-admissao.selftest.mjs
 import assert from 'node:assert/strict';
 import {
-  classificarReserva, classificarEstado, acompanhar, gracefulS, erroParametros, indiceJanela, limiaresParada,
+  classificarReserva, classificarEstado, acompanhar, gracefulS, erroParametros, esperaDoSetup, indiceJanela, limiaresParada,
   avaliarParada, situacaoDoDegrau, textoParada, nomeMetricaParada,
 } from './lib-admissao.js';
 
@@ -137,13 +137,35 @@ confere('situacaoDoDegrau: sem parada tudo completo; com parada completo / parci
   assert.deepEqual(situacaoDoDegrau({ ...parada, pw: 1 }, 1, 60), { situacao: 'parcial', duracaoEfetivaS: 60 });
   assert.deepEqual(situacaoDoDegrau(parada, 2, 60), { situacao: 'omitido', duracaoEfetivaS: 0 });
 });
-confere('situacaoDoDegrau: duracao do parcial vem da ultima janela com amostras (nao do pw da parada); limitada a duracao', () => {
-  const parada = { indice: 1, pw: 0, janela_s: 30 };   // parada "adiantada" (ex.: setup contado no relogio): pw 0, mas houve amostras ate a janela 1
-  assert.equal(situacaoDoDegrau(parada, 1, 60, [{ w: 0, n: 50 }, { w: 1, n: 3 }]).duracaoEfetivaS, 60);
-  assert.equal(situacaoDoDegrau(parada, 1, 90, [{ w: 0, n: 50 }, { w: 1, n: 2 }]).duracaoEfetivaS, 60);
-  assert.equal(situacaoDoDegrau(parada, 1, 90, [{ w: 0, n: 50 }, { w: 1, n: 0 }, { w: 2, n: 0 }]).duracaoEfetivaS, 30);   // janela sem amostras nao conta
-  assert.equal(situacaoDoDegrau({ ...parada, pw: 1 }, 1, 60, [{ w: 0, n: 5 }]).duracaoEfetivaS, 30);                   // dados mandam sobre o pw
-  assert.equal(situacaoDoDegrau({ ...parada, pw: 1 }, 1, 60, []).duracaoEfetivaS, 60);                                  // sem janelas: cai no pw
+confere('situacaoDoDegrau: parcial = min(duracao, (pw+1) x janela_s, ultima janela com amostras); amostras da janela seguinte NAO estendem', () => {
+  const parada = { indice: 1, pw: 0, janela_s: 30 };
+  // caso normal: o abort cai ~2 s depois do fim da janela 0 e as reservas desses ~2 s caem na janela 1 -> continua 30 s (nao 60)
+  assert.equal(situacaoDoDegrau(parada, 1, 60, [{ w: 0, n: 5000 }, { w: 1, n: 3000 }]).duracaoEfetivaS, 30);
+  assert.equal(situacaoDoDegrau({ ...parada, pw: 1 }, 1, 90, [{ w: 0, n: 50 }, { w: 1, n: 50 }, { w: 2, n: 2 }]).duracaoEfetivaS, 60);
+  // abort ADIANTADO: parada julgada na janela pw=1, mas so ha amostras ate a janela 0 -> os dados encurtam
+  assert.equal(situacaoDoDegrau({ ...parada, pw: 1 }, 1, 90, [{ w: 0, n: 5 }]).duracaoEfetivaS, 30);
+  assert.equal(situacaoDoDegrau({ ...parada, pw: 2 }, 1, 90, [{ w: 0, n: 50 }, { w: 1, n: 0 }, { w: 2, n: 0 }]).duracaoEfetivaS, 30);   // janela sem amostras nao conta
+  assert.equal(situacaoDoDegrau({ ...parada, pw: 1 }, 1, 60, []).duracaoEfetivaS, 60);                                  // sem janelas: so o teto
+  assert.equal(situacaoDoDegrau({ ...parada, pw: 3, janela_s: 60 }, 1, 120, [{ w: 3, n: 9 }]).duracaoEfetivaS, 120);   // teto na duracao do degrau
+});
+confere('limiaresParada: delayAbortEval soma o orcamento do setup (o relogio do k6 conta o setup(); medido no dry-run)', () => {
+  const p2 = [{ nome: 'degrau_1000', inicioS: 0 }, { nome: 'degrau_2000', inicioS: 91 }];
+  assert.equal(limiaresParada(p2, 30, 60, 5000)['reserva_duration{parada:degrau_2000_1}'][0].delayAbortEval, '151s');          // setupS padrao 0
+  assert.equal(limiaresParada(p2, 30, 60, 5000, 45)['reserva_duration{parada:degrau_2000_1}'][0].delayAbortEval, '196s');       // 45 + 91 + 2 x 30
+  assert.equal(limiaresParada(p2, 30, 60, 5000, 45)['reserva_duration{parada:degrau_1000_0}'][0].delayAbortEval, '75s');        // 45 + 0 + 30
+});
+confere('esperaDoSetup: sem SETUP_S nada; espera o resto ate o orcamento; estourou o orcamento com parada ligada = erro (sem parada so segue)', () => {
+  assert.deepEqual(esperaDoSetup(99000, 0, true), { esperaMs: 0 });
+  assert.deepEqual(esperaDoSetup(20000, 60, true), { esperaMs: 40000 });
+  assert.deepEqual(esperaDoSetup(60000, 60, true), { esperaMs: 0 });
+  assert.deepEqual(esperaDoSetup(70000, 60, false), { esperaMs: 0 });
+  const e = esperaDoSetup(70000, 60, true);
+  assert.match(e.erro, /70 s, mais que SETUP_S=60 s.*Suba SETUP_S \(ex\.: 105\)/);
+});
+confere('erroParametros: SETUP_S negativo recusado', () => {
+  const ok = { pctAcompanha: 10, consultaMs: 1000, tetoConsultaS: 35, paradaP95Ms: 0, paradaJanelaS: 60, duracaoS: 60 };
+  assert.equal(erroParametros(ok), null);
+  assert.match(erroParametros({ ...ok, setupS: -1 }), /SETUP_S invalido/);
 });
 confere('textoParada: sem virgula (e CSV); nenhuma sem parada', () => {
   assert.equal(textoParada(null), 'nenhuma');

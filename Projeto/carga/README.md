@@ -158,7 +158,7 @@ faltar) e grava, a cada `INTERVALO_S` (1 s), `results\coleta-host-<rótulo>-<dat
   `supabase/.env`.
 
 Ao fim grava `results\pgss-<rótulo>-<data>.csv` (top 25 do `pg_stat_statements` por tempo total) e imprime max e p95 de cada coluna.
-`TIMEOUT_S` (5) limita cada coleta lenta (`rabbitmqctl`, Redis e `docker ps`): estourou = -1 nas colunas da amostra, o laço não congela. Selftest sem Docker: `bash coleta-host.selftest.sh`.
+`TIMEOUT_S` (5) limita cada coleta lenta (`rabbitmqctl`, Redis e `docker ps`): estourou = -1 nas colunas da amostra, o laço não congela. No dry-run local (stack ociosa) a amostra levou ~2,1 s em média (máx. 2,4 s): os 3 `rpk group describe` seguidos e o `psql` dominam, não o `rabbitmqctl` (~0,9 s); o intervalo real é o da amostra. Selftest sem Docker: `bash coleta-host.selftest.sh`.
 
 ## Rodada 4: escada acima do X, admission e autoescala (issue #178)
 
@@ -193,7 +193,7 @@ estende a escada (`degraus/`), a coleta do host e a limpeza entre blocos; **nada
   (`com.docker.compose.project` + `com.docker.compose.service`; `CARGA_PROJETO`/`PROJETO` mudam o project, default `gerenciador-eventos`). `db`, `redpanda`, `redis` e `rabbitmq` seguem com nome fixo.
 - **Dry-run em project isolado (`gerenciador-e2e*`):** nada é publicado no host e o `db` não tem `container_name`. O kit aceita `CARGA_PROJETO` (project das réplicas), `CARGA_DB` (container do Postgres),
   `CARGA_HOST_URL` (entrada do gateway para o health, default `http://localhost:8081`), `CARGA_RABBITMQ` (fila no `verificar-rpm`) e, para `coleta-host.sh`/`limpar-banco.sh`, `PROJETO` e `CONTAINER_{DB,RPK,REDIS,RABBIT}`.
-  O k6 precisa de um jeito de chegar ao gateway (porta publicada só no `lb` do project real); o procedimento do project isolado está em `autoescala/README.md` ("Dry-run local com Mailpit").
+  O k6 precisa de um jeito de chegar ao gateway (porta publicada só no `lb` do project real); o procedimento do project isolado está em `autoescala/README.md` ("Dry-run local com Mailpit"). Dry-run da #178: gateway publicado só em `127.0.0.1:<porta>` por um YAML local FORA do repo (`-Porta`), e o k6 como container (`grafana/k6:<versão fixa>`, nunca `latest`) na rede do project, por um shim `k6.cmd` fora do repo.
 - **`ADMISSION_X_RPM` reduzido para o dry-run** (não é medição): exporte antes do `up` (o compose lê da shell) e use a escada com RPMs proporcionais. O `AUTOESCALA_X_RPM` herda o mesmo valor.
 
 ### Cenário de escrita acima do X (`make test-degraus`)
@@ -225,15 +225,18 @@ O `degraus/carga-degraus.js` ganha o modo fila **sem script novo**: o POST pode 
 | `TETO_CONSULTA_S` | `-TetoConsultaS` | `TETO_CONSULTA_S` | 35 | teto do acompanhamento (> TTL da fila, 30 s) |
 | `PARADA_P95_MS` | `-ParadaP95Ms` | `PARADA_P95_MS` | 0 (desligada) | p95 da reserva, numa janela, acima do qual a escada **para** |
 | `PARADA_JANELA_S` | `-ParadaJanelaS` | `PARADA_JANELA_S` | 60 | janela da parada: múltiplo de 30 e divisor de `DEG_DURACAO` |
+| `SETUP_S` | `-SetupS` | `SETUP_S` | 0 = estimativa (`Get-SetupS`: 0,6 s por lote de 25 usuários, piso 30 s) | só com parada: orçamento do `setup()` (logins) no relógio do k6; ver abaixo |
 | `ARRANJO` | `-Arranjo` | (só CSV) | `sem-autoescala` | rótulo do braço do host |
 | `PARAMS_AUTOESCALA` | `-ParamsAutoescala` | (só CSV) | vazio | `k=v;k=v` dos parâmetros do host |
 | `COM_CHAVE=1` | `-ComChave` | `IDEMPOTENCY_KEY=1` | sem chave | manda `Idempotency-Key` própria por iteração (opt-in) |
 
 **Condição de parada (latência que não se recupera).** Depois da promoção a réplicas (A = 2) o síncrono volta quando a fila esvazia, e a fila só religa a ~1,6 X (~89,6k); entre ~X e ~1,6 X o tráfego vai direto à
 linha do `eventcap` e a latência pode não voltar. Com `PARADA_P95_MS > 0` o k6 declara, por **janela de `PARADA_JANELA_S` s de cada degrau**, um threshold `p(95) < limite` com `abortOnFail` e
-`delayAbortEval` no fim da janela (a tag `parada` é única por janela, então o p95 cumulativo do threshold vale só para a janela; o atraso conta do início do TESTE, não da janela). Reprovou, o k6 aborta (código
+`delayAbortEval` no fim da janela (a tag `parada` é única por janela, então o p95 cumulativo do threshold vale só para a janela). **O relógio do `delayAbortEval` é o do TESTE e inclui o `setup()`** (medido na #178, k6 2.2.0: com um
+`setup()` de 45 s o abort caiu 1,9 s depois do início do degrau, e não aos 30 s da janela; sem setup, 30,9 s. Com o script real, `SETUP_S=100`, logins em 20,6 s: abort aos 167 s do início dos degraus, esperado 106 + 60 = 166 s). Por isso o `setup()` espera o relógio do teste chegar em `SETUP_S` (o orçamento do setup) e todo `delayAbortEval` soma `SETUP_S`: `SETUP_S + início do degrau + (janela + 1) × J`. Se o `setup()` passar do orçamento, o k6 aborta ANTES da carga dizendo
+quanto levou (rode de novo com `-SetupS` maior; o seed é refeito). O `-SetupS` padrão é uma estimativa por lote de 25 logins; ajuste pelo `setup: ... logins ok` do log. Reprovou, o k6 aborta (código
 99), o `handleSummary` ainda grava o resumo e o runner trata o 99 como **parada esperada** (sem `PARADA_P95_MS` o 99 continua só um aviso). Os degraus **completos** e o **parcial** (o da parada, com `duracao_s` =
-duração efetiva = até o fim da **última janela de 30 s com amostras** nos dados do próprio k6, não o instante do abort nem a conta do `delayAbortEval`; assim o `rpm_efetivo` não parece "gerador saturado") viram CSV; os seguintes são **omitidos** (sem linha). A coluna `parada` traz o motivo
+duração efetiva = `min(duração do degrau, (janela da parada + 1) × J, (última janela de 30 s com amostras + 1) × 30)`: o fim da janela que reprovou, e não o instante do abort (as reservas dos ~2 s até o abort caem na janela seguinte e não estendem a duração); os dados só encurtam se o abort veio adiantado. Assim o `rpm_efetivo` não parece "gerador saturado", e superestima no máximo ~2 s de tráfego) viram CSV; os seguintes são **omitidos** (sem linha). A coluna `parada` traz o motivo
 (`p95_acima_de_<limite>ms_em_janela_de_<J>s_no_<degrau>`, ou `nenhuma`). A avaliação do k6 é a cada ~2 s, então a parada cai até ~2 s depois do fim da janela.
 
 **Colunas novas no FIM do CSV** (depois de `mapeamento`; o report lê por nome e CSV antigo, sem elas, segue valendo):
@@ -260,8 +263,7 @@ A **trava do resumo** continua fechando com os contadores novos (global = soma d
 > **Iterações cortadas:** o acompanhamento só entra em `acompanhadas`/`consultas_estado` quando termina. Uma iteração que o k6 corta no meio (a parada por latência aborta o teste com acompanhamentos de até 30 s em voo;
 > ou o `gracefulStop` vence) some desses contadores e só aparece em `reservas_202`: as taxas de `rejected`/`timed_out` ficam inclinadas para os desfechos mais rápidos nos degraus finais. Documente a parada ao ler as taxas.
 >
-> Limite conhecido: as semânticas do k6 de `abortOnFail`/`delayAbortEval` e do campo `thresholds` no `handleSummary` seguem a documentação do k6 (v1+); o selftest roda o script contra um k6 de mentira,
-> então a **parada de verdade** só é provada no dry-run da #178 (passada c). Sem o campo `thresholds` (k6 antigo) o runner cai no p95 final da janela.
+> Limite conhecido: as semânticas do k6 de `abortOnFail`/`delayAbortEval` e do campo `thresholds` no `handleSummary` foram conferidas no dry-run da #178 com o k6 2.2.0 (imagem `grafana/k6:2.2.0`): código 99, `handleSummary` roda e grava o resumo, e `thresholds` chega ao `handleSummary` na forma documentada (`{ "p(95)<500": { "ok": false } }` por expressão; o runner lê o `ok`). Sem o campo `thresholds` (k6 antigo) o runner cai no p95 final da janela.
 
 ### Coleta do host (`make coleta-host`)
 

@@ -55,7 +55,7 @@
 #        CONTAINER_REDIS (gerenciador-redis), CONTAINER_RABBIT (gerenciador-rabbitmq) -- nomes fixos, nao escalam --,
 #        PROJETO (gerenciador-eventos: o project do compose; as replicas dos servicos se acham por label), EVENTOS_CADA_S (5),
 #        ADMISSION_WINDOW_MS (200, so para o rpm_aprox), TIMEOUT_S (5: teto de cada coleta lenta -- rabbitmqctl e Redis rodam sob `timeout` DENTRO do
-#        container (as imagens alpine tem o `timeout` do busybox), o `docker ps` sob `timeout` no host --; estourou = -1 nas colunas, o laco nao trava)
+#        container (as imagens alpine tem o `timeout` do busybox) E o `docker exec`/`docker ps` sob `timeout` no host (+2 s) --; estourou = -1 nas colunas, o laco nao trava)
 # =============================================================================
 set -uo pipefail
 
@@ -139,6 +139,9 @@ dexec() {
         *) docker "$@" ;;
     esac
 }
+# docker sob `timeout` do HOST (TIMEOUT_S + 2: o `timeout` de dentro do container dispara primeiro quando funciona): o do container mata so o `sh`/`rabbitmqctl`, e um
+# `redis-cli` filho bloqueado pode segurar a saida do `docker exec` e o laco travaria; o do host mata o `docker exec` em qualquer caso
+dexect() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' timeout "$((TIMEOUT_S + 2))" docker "$@"; }
 psql_db() { dexec exec -i "$CONTAINER_DB" psql -h localhost -U "$PG_ADMIN" -d meu_banco -v ON_ERROR_STOP=1 -At -F, -c "$1"; }
 
 RESULTS="$(cd "$(dirname "$0")" && pwd)/results"
@@ -167,7 +170,7 @@ FROM pg_stat_activity WHERE datname = 'meu_banco' AND pid <> pg_backend_pid();"
 # Redis (um docker exec/amostra): H sempre; com $1=1 tambem o SCAN de adm:cnt:* (contadores por evento) e adm:mode:* (modo e espera por evento).
 # A senha vem do ambiente DO CONTAINER (REDISCLI_AUTH dentro do sh -c, aspas simples): nada de segredo no host. SCAN, nunca KEYS.
 amostra_redis() {
-    dexec exec "$CONTAINER_REDIS" timeout "$TIMEOUT_S" sh -c '
+    dexect exec "$CONTAINER_REDIS" timeout "$TIMEOUT_S" sh -c '
         export REDISCLI_AUTH="$REDIS_PASSWORD"
         hot=$(redis-cli GET adm:hot); rep=$(redis-cli GET adm:replicas); db=$(redis-cli DBSIZE)
         printf "H %s %s %s\n" "${hot:-0}" "${rep:-0}" "${db:--1}"
@@ -227,8 +230,8 @@ FIM=$(( $(date +%s) + DURACAO_S ))
 while [ "$DURACAO_S" -eq 0 ] || [ "$(date +%s)" -lt "$FIM" ]; do
     t0=$(date +%s%3N)
     # as coletas lentas (rabbitmqctl, Redis, docker ps) rodam em paralelo com o psql/rpk: a amostra dura o maior, nao a soma
-    # (quem estoura o TIMEOUT_S sai com codigo != 0: saida descartada = -1; o host so cobre o `docker ps`, os outros dois rodam sob `timeout` no container)
-    ( o="$(dexec exec "$CONTAINER_RABBIT" timeout "$TIMEOUT_S" rabbitmqctl -q list_queues name messages_ready messages_unacknowledged consumers 2>/dev/null)" || o=""
+    # (quem estoura o TIMEOUT_S sai com codigo != 0: saida descartada = -1; rabbitmqctl e Redis rodam sob `timeout` no container E o `docker exec` sob `timeout` do host)
+    ( o="$(dexect exec "$CONTAINER_RABBIT" timeout "$TIMEOUT_S" rabbitmqctl -q list_queues name messages_ready messages_unacknowledged consumers 2>/dev/null)" || o=""
       printf '%s\n' "$o" | tr -d '\r' | rabbit_do_list_queues > "$TMPD/rabbit" ) &
     scan=0; [ $(( t0 / 1000 - ULT_SCAN )) -ge "$EVENTOS_CADA_S" ] && { scan=1; ULT_SCAN=$(( t0 / 1000 )); }
     ( o="$(amostra_redis "$scan")" || o=""; printf '%s\n' "$o" | redis_resumo "$ADMISSION_WINDOW_MS" > "$TMPD/redis" ) &

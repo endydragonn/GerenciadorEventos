@@ -46,6 +46,17 @@ function Get-EspacoS {
     (Get-GracefulS -PctAcompanha $PctAcompanha -TetoConsultaS $TetoConsultaS) + 1
 }
 
+# Orcamento do setup() (s) para a parada por latencia: o delayAbortEval do k6 conta o setup (login de todos os usuarios, em lotes de 25), entao o
+# setup() espera o relogio do teste chegar nele (SETUP_S) e a parada soma o mesmo valor. Estimativa por lotes de 25 logins (bcrypt): 0,6 s por lote
+# (medido no dry-run local da #178: 2000 logins em 20,6 s = 0,26 s por lote, ~2,3x de folga), piso 30 s. Orcamento de mais so atrasa o inicio dos degraus;
+# se o setup passar do orcamento o k6 aborta ANTES da carga dizendo quanto levou (rode de novo com -SetupS maior). No host e gerador reais confira o
+# `logins levaram X s` do log do k6 e ajuste -SetupS.
+$SetupPorLoteS = 0.6
+function Get-SetupS {
+    param([Parameter(Mandatory)][int]$Usuarios)
+    [int][math]::Max(30, [math]::Ceiling($Usuarios / 25.0) * $SetupPorLoteS)
+}
+
 # Degraus (RpmInicio, RpmInicio + RpmPasso, ... <= RpmMax), cota de pares (usuario, evento) de cada um e
 # tamanho do seed. O k6 reinicia scenario.iterationInTest em 0 a cada cenario: cada degrau usa a faixa
 # [soma das cotas anteriores, + cota) dos pares, entao a soma das cotas e o total de pares a semear.

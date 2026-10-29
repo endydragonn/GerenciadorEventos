@@ -41,9 +41,10 @@ cat > "$fake/docker" <<'FAKE'
 #!/usr/bin/env bash
 args="$*"
 # FAKE_TRAVA="rabbit redis ps": o servico trava. rabbitmqctl e Redis rodam sob `timeout N` no container (estouro = codigo 124); sem o `timeout` o
-# fake dorme (o laco congelaria: e o que o teste existe para pegar). O `ps` e coberto pelo `timeout` REAL do host.
+# fake dorme (o laco congelaria: e o que o teste existe para pegar). O `ps` e coberto pelo `timeout` REAL do host. FAKE_DURO=1: o `timeout` de DENTRO do
+# container nao resolve (um filho preso segurando a saida do exec): so o `timeout` do host em volta do `docker exec` salva o laco.
 alvo=""; case "$args" in *rabbitmqctl*) alvo=rabbit ;; *redis-cli*) alvo=redis ;; esac
-if [ -n "$alvo" ]; then case " ${FAKE_TRAVA:-} " in *" $alvo "*) case "$args" in *"timeout "*) exit 124 ;; *) sleep 20 ;; esac ;; esac; fi
+if [ -n "$alvo" ]; then case " ${FAKE_TRAVA:-} " in *" $alvo "*) case "$args" in *"timeout "*) [ -n "${FAKE_DURO:-}" ] && exec sleep 20; exit 124 ;; *) sleep 20 ;; esac ;; esac; fi
 case "$args" in
   ps*{{.Status}}*) case " ${FAKE_TRAVA:-} " in *" ps "*) exec sleep 20 ;; esac ;;&
   *psql*"CREATE EXTENSION"*) exit 0 ;;
@@ -76,5 +77,12 @@ confere "travado: toda linha segue com 31 colunas" "$(awk -F, '{print NF}' "$csv
 ' ' ')" "31 "
 confere "travado: rabbit_*, redis_* e repl_* em -1; banco (walletevent_ins) e delta seguem" "$(sed -n 3p "$csv2" | cut -d, -f14-30)" "777,-1,-1,-1,-1,0,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1"
 confere "travado: nenhuma linha de evento (Redis estourou)" "$(tail -n +2 "$(ls "$rod2"/results/eventos-travado-*.csv | head -1)" | wc -l | tr -d ' ')" "0"
-rm -rf "$fake" "$rod" "$rod2"
+rod3="$(mktemp -d)"; cp "$(dirname "$0")/coleta-host.sh" "$rod3/"
+( cd "$rod3" && PATH="$fake:$PATH" FAKE_DURO=1 FAKE_TRAVA="rabbit redis" TIMEOUT_S=1 INTERVALO_S=1 EVENTOS_CADA_S=1 timeout 90 bash ./coleta-host.sh duro 7 >/dev/null 2>&1 )
+csv3="$(ls "$rod3"/results/coleta-host-duro-*.csv 2>/dev/null | head -1)"
+confere "duro: o timeout de dentro do container nao resolve, o do host fecha o docker exec: o laco termina" "$([ -n "$csv3" ] && [ "$(wc -l < "$csv3")" -ge 3 ] && echo sim || echo nao)" "sim"
+confere "duro: rabbit_* e redis_* em -1 (banco e delta seguem)" "$(sed -n 3p "$csv3" | cut -d, -f14-24)" "777,-1,-1,-1,-1,0,-1,-1,-1,-1,-1"
+confere "duro: toda linha com 31 colunas" "$(awk -F, '{print NF}' "$csv3" | sort -u | tr '
+' ' ')" "31 "
+rm -rf "$fake" "$rod" "$rod2" "$rod3"
 [ "$falhas" -eq 0 ] && echo "selftest coleta-host: OK" || { echo "selftest coleta-host: $falhas falha(s)"; exit 1; }

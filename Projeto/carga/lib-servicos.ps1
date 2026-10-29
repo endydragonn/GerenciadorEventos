@@ -15,21 +15,14 @@ function Get-ProjetoCompose {
     'gerenciador-eventos'
 }
 
-# Pura: linhas "<nome> <servico>" do `docker ps --format '{{.Names}} {{.Label "com.docker.compose.service"}}'` -> nomes do servico (ordenados)
-function Select-ContainersDoServico {
-    param([string[]]$Linhas, [Parameter(Mandatory)][string]$Servico)
-    @($Linhas | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | ForEach-Object {
-        $p = $_ -split '\s+'
-        if ($p.Count -ge 2 -and $p[1] -eq $Servico) { $p[0] }
-    } | Sort-Object)
-}
-
-# Nomes dos containers EM EXECUCAO do servico no project (todas as replicas, stand-by inclusive)
+# Nomes dos containers EM EXECUCAO do servico no project (todas as replicas, stand-by inclusive), ordenados. O servico sai do --filter, NAO de um template
+# com aspas (`{{.Label "..."}}`): o Windows PowerShell 5.1 tira as aspas duplas do argumento de um .exe e o docker falha com `function "com" not defined`
+# (achado no dry-run da #178). Mantenha o --format sem aspas duplas.
 function Get-ContainersDoServico {
     param([Parameter(Mandatory)][string]$Servico, [string]$Projeto = (Get-ProjetoCompose))
-    $linhas = & docker ps --filter "label=com.docker.compose.project=$Projeto" --format '{{.Names}} {{.Label "com.docker.compose.service"}}'
+    $linhas = & docker ps --filter "label=com.docker.compose.project=$Projeto" --filter "label=com.docker.compose.service=$Servico" --format '{{.Names}}'
     if ($LASTEXITCODE -ne 0) { return @() }
-    Select-ContainersDoServico -Linhas @($linhas) -Servico $Servico
+    @($linhas | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Sort-Object)
 }
 
 # Primeiro container do servico ($null se nao ha nenhum no ar)

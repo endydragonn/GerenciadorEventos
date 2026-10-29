@@ -13,15 +13,16 @@ function Confere($nome, $obtido, $esperado) {
     else { Write-Host "   [FALHA] $nome`n           esperado: $esperado`n           obtido:   $obtido"; $script:falhas++ }
 }
 
-Write-Host '==> Containers por label (saida simulada do docker ps)'
-$ps = @(
-    'gerenciador-eventos-reservation-2 reservation', 'gerenciador-eventos-reservation-1 reservation', 'gerenciador-eventos-backend-1 backend',
-    'gerenciador-eventos-lb-1 lb', 'gerenciador-reservation reservation', ''
-)
-Confere 'todas as replicas do servico, ordenadas; so o servico pedido' ((Select-ContainersDoServico -Linhas $ps -Servico reservation) -join ',') `
-    'gerenciador-eventos-reservation-1,gerenciador-eventos-reservation-2,gerenciador-reservation'
-Confere 'servico ausente: vazio' (@(Select-ContainersDoServico -Linhas $ps -Servico identity).Count) 0
-Confere 'nao casa por prefixo (backend nao pega o lb)' ((Select-ContainersDoServico -Linhas $ps -Servico backend) -join ',') 'gerenciador-eventos-backend-1'
+Write-Host '==> Containers por label (docker simulado; confere os argumentos que o PowerShell 5.1 entregaria ao .exe)'
+$script:psSaida = @('gerenciador-eventos-reservation-2', '', 'gerenciador-eventos-reservation-1'); $script:psArgs = ''
+function docker { $script:psArgs = ($args -join ' '); $global:LASTEXITCODE = 0; $script:psSaida }
+Confere 'todas as replicas do servico, ordenadas, sem linhas vazias' ((Get-ContainersDoServico -Servico reservation -Projeto p1) -join ',') 'gerenciador-eventos-reservation-1,gerenciador-eventos-reservation-2'
+Confere 'o servico sai de um --filter por label (o --format nao tem aspas duplas: o PowerShell 5.1 as tira de argumento de .exe)' $script:psArgs `
+    'ps --filter label=com.docker.compose.project=p1 --filter label=com.docker.compose.service=reservation --format {{.Names}}'
+Confere 'nenhum argumento do docker ps leva aspas duplas' ([bool]($script:psArgs -match '"')) $false
+$script:psSaida = @()
+Confere 'servico ausente: vazio' (@(Get-ContainersDoServico -Servico identity -Projeto p1).Count) 0
+Remove-Item function:docker
 $env:CARGA_PROJETO = ''
 Confere 'project padrao' (Get-ProjetoCompose) 'gerenciador-eventos'
 $env:CARGA_PROJETO = 'gerenciador-e2e-x'
