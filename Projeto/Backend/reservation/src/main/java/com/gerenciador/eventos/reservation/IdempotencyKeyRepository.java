@@ -6,6 +6,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,8 +46,9 @@ public class IdempotencyKeyRepository {
      * @return {@code true} se este pedido é o dono da saga (inseriu); {@code false} se a chave já existe
      */
     public boolean iniciar(String key, Long userId, Long eventId, UUID holdId) {
-        String sql = "INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, hold_id, saga_status, expires_at, updated_at) "
-                + "VALUES (?, ?, ?, ?, 'reserving', NULL, now()) ON CONFLICT (user_id, idempotency_key) DO NOTHING";
+        // updated_at fica de fora de propósito: vale o DEFAULT now() da coluna (NOT NULL), que é o que o reaper compara (W13)
+        String sql = "INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, hold_id, saga_status, expires_at) "
+                + "VALUES (?, ?, ?, ?, 'reserving', NULL) ON CONFLICT (user_id, idempotency_key) DO NOTHING";
         return atualizar(sql, key, userId, eventId, holdId) == 1;
     }
 
@@ -115,6 +118,43 @@ public class IdempotencyKeyRepository {
     public boolean paraCompensando(String key, Long userId, UUID holdId) {
         return transitar("UPDATE reservation.idempotency_key SET saga_status = 'compensating', updated_at = now() WHERE " + PK
                 + " AND hold_id = ? AND saga_status = 'reserving'", key, userId, holdId);
+    }
+
+    /** A saga que o reaper trata: o que ele lê numa varredura. */
+    public record Orfa(Long userId, String chave, Long eventId, UUID holdId, String status, long idadeMs) { }
+
+    /**
+     * Varredura do reaper, NA transação do chamador: as {@code reserving} paradas há mais de {@code orfaMs} OU qualquer {@code compensating},
+     * as mais antigas primeiro, até {@code limite}, com {@code FOR UPDATE SKIP LOCKED} (N reapers/réplicas não pegam a mesma linha). Nunca
+     * devolve {@code reserved}: o reaper não libera hold de saga concluída.
+     */
+    public List<Orfa> selecionarOrfas(Connection conn, long orfaMs, int limite) throws SQLException {
+        String sql = "SELECT user_id, idempotency_key, event_id, hold_id, saga_status, "
+                + "(extract(epoch FROM (now() - updated_at)) * 1000)::bigint FROM reservation.idempotency_key "
+                + "WHERE (saga_status = 'reserving' AND updated_at < now() - make_interval(secs => ?)) OR saga_status = 'compensating' "
+                + "ORDER BY updated_at LIMIT ? FOR UPDATE SKIP LOCKED";
+        List<Orfa> orfas = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setDouble(1, orfaMs / 1000.0);
+            ps.setInt(2, limite);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    orfas.add(new Orfa(rs.getLong(1), rs.getString(2), rs.getLong(3), (UUID) rs.getObject(4), rs.getString(5), rs.getLong(6)));
+                }
+            }
+        }
+        return orfas;
+    }
+
+    /** {@link #paraCompensando(String, Long, UUID)} na transação do chamador (o reaper, que já segura a linha com {@code FOR UPDATE}). */
+    public boolean paraCompensando(Connection conn, String key, Long userId, UUID holdId) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("UPDATE reservation.idempotency_key SET saga_status = 'compensating', "
+                + "updated_at = now() WHERE " + PK + " AND hold_id = ? AND saga_status = 'reserving'")) {
+            ps.setLong(1, userId);
+            ps.setString(2, key);
+            ps.setObject(3, holdId);
+            return ps.executeUpdate() == 1;
+        }
     }
 
     /** {@code compensating -> compensated} depois do {@code release} com 200. */

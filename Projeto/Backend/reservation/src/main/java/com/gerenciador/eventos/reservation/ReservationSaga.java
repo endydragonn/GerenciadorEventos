@@ -33,8 +33,8 @@ import com.gerenciador.eventos.stockclient.api.HoldResponse;
  *       {@code holdId}, no mesmo commit.</li>
  * </ol>
  * Toda falha depois do hold vira compensação ({@code release}), nunca rollback de um lado só. Detalhes e a tabela de falhas na spec
- * {@code docs/superpowers/specs/2026-10-29-saga-stock-wallet-design.md}. O reaper das órfãs (processo morto entre o hold e a tx2) é da
- * passada b.
+ * {@code docs/superpowers/specs/2026-10-29-saga-stock-wallet-design.md}. O processo morto entre o hold e a tx2 deixa a saga
+ * {@code reserving}: quem a resolve é o {@link SagaReaperService}.
  */
 @Service
 public class ReservationSaga {
@@ -61,6 +61,15 @@ public class ReservationSaga {
     /** Quanto o pedido espera outra saga da MESMA chave em {@code reserving}; abaixo do timeout de resposta dos chamadores (10 s). */
     @Value("${reservation.saga.wait-ms:8000}")
     private long esperaMs;
+
+    static final String FAILPOINT_AFTER_HOLD = "after-hold";
+
+    /**
+     * Failpoint de TESTE, desligado por padrão (vazio) e sem variável de ambiente no compose: {@code after-hold} interrompe o pedido
+     * logo depois do hold, sem compensar e sem tx2.
+     */
+    @Value("${reservation.saga.failpoint:}")
+    private String failpoint;
 
     /** Fim da tx2. */
     private enum Fim { OK, CAS_PERDIDO, VINCULO }
@@ -90,6 +99,10 @@ public class ReservationSaga {
         long t1 = System.nanoTime();
         // 3. stock, sem conexão aberta
         HoldResponse hold = reservarNoStock(ew, chave, holdId, naive);
+        if (FAILPOINT_AFTER_HOLD.equals(failpoint)) {
+            // SÓ de teste (W4/W13): simula o processo morto entre o hold e a tx2 — sem compensar e sem tx2; a saga fica reserving para o reaper
+            throw new IllegalStateException("failpoint after-hold (teste): pedido interrompido depois do hold " + holdId);
+        }
         long t2 = System.nanoTime();
         // micros: o Postgres guarda microssegundos; a repetição devolve o mesmo expiresAt da primeira
         LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(hold.maxTimeInLine()).truncatedTo(ChronoUnit.MICROS);

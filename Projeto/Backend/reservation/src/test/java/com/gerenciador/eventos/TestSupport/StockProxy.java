@@ -22,6 +22,7 @@ import com.sun.net.httpserver.HttpServer;
  * <ul>
  *   <li>{@link #fora()}: o stock "cai" (a porta para de aceitar; {@link #dentro()} a reabre na MESMA porta);</li>
  *   <li>{@link #atrasarHoldEm(long)}: segura o {@code POST /internal/holds} antes de repassá-lo (stock lento);</li>
+ *   <li>{@link #atrasarRespostaDoHoldEm(long)}: repassa o hold (o stock COMITA) e segura a resposta (dono lento DEPOIS do hold);</li>
  *   <li>{@link #comitarEPerderRespostaDoHold(boolean)}: repassa o {@code POST /internal/holds} (o stock COMITA o hold) e descarta a resposta,
  *       fechando a conexão sem responder: para o cliente é uma conexão que caiu depois do commit.</li>
  * </ul>
@@ -42,6 +43,7 @@ public final class StockProxy {
     private HttpServer servidor;
     private int porta;
     private volatile long atrasoDoHoldMs;
+    private volatile long atrasoDaRespostaDoHoldMs;
     private volatile boolean perderRespostaDoHold;
 
     StockProxy(int portaDoStock) {
@@ -84,6 +86,11 @@ public final class StockProxy {
         this.atrasoDoHoldMs = ms;
     }
 
+    /** O stock COMITA o hold na hora e a resposta ao cliente só sai depois de {@code ms} (dono lento depois do hold, W7). */
+    public void atrasarRespostaDoHoldEm(long ms) {
+        this.atrasoDaRespostaDoHoldMs = ms;
+    }
+
     public void comitarEPerderRespostaDoHold(boolean ligado) {
         this.perderRespostaDoHold = ligado;
     }
@@ -92,6 +99,7 @@ public final class StockProxy {
     public void restaurar() {
         dentro();
         atrasoDoHoldMs = 0;
+        atrasoDaRespostaDoHoldMs = 0;
         perderRespostaDoHold = false;
     }
 
@@ -153,6 +161,9 @@ public final class StockProxy {
         if (hold && perderRespostaDoHold) {
             ex.close(); // o stock comitou; o cliente nunca sabe
             return;
+        }
+        if (hold) {
+            dormir(atrasoDaRespostaDoHoldMs);
         }
         resp.headers().firstValue("Content-Type").ifPresent(v -> ex.getResponseHeaders().set("Content-Type", v));
         // sem keep-alive: o pool do cliente nunca guarda conexão que "fora()"/"dentro()" deixaria velha (a queda de verdade é coberta

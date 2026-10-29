@@ -68,6 +68,18 @@
                     <mainClass>com.gerenciador.eventos.reservation.ReservationApplication</mainClass>
                 </configuration>
             </plugin>
+            <!-- O reaper de sagas (#47) vem ligado; nos testes fica DESLIGADO por padrão (propriedade de sistema, que o @TestPropertySource dos
+                 testes do reaper sobrepõe): um reaper vivo em outro contexto Spring em cache resolveria as sagas que os demais testes deixam
+                 de propósito em reserving/compensating. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <reservation.saga.reaper.enabled>false</reservation.saga.reaper.enabled>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

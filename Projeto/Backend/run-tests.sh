@@ -231,14 +231,18 @@ if [ "$ESTADO_IDENTITY" != "t|t" ]; then
     exit 1
 fi
 
-# Schema do serviço stock (#47): bancos novos já nascem com ele (supabase-app-init.sql, 16-stock.sql); o banco de teste precisa tê-lo
-# (a migração de um banco existente fica para a issue de entrega da saga). Sem esta conferência os testes do módulo stock caem com
-# "relation stock.eventcap does not exist". Só confere e aborta; não aplica nada.
-ESTADO_STOCK="$(echo "SELECT to_regclass('stock.hold') IS NOT NULL;" \
-    | docker exec -i -e TEST_DB_NAME="$TEST_DB_NAME" gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$TEST_DB_NAME" -At' 2>&1)"
-if [ "$ESTADO_STOCK" != "t" ]; then
-    echo "❌ O banco de teste ($TEST_DB_NAME) não tem o schema do serviço stock (stock.hold não existe; psql: $ESTADO_STOCK)."
-    echo "   Use TEST_DB_NAME=<banco criado com Projeto/Backend/db/init-scripts/16-stock.sql> (ver o cabeçalho do arquivo)."
+# Schema do serviço stock (#47): bancos novos já nascem com ele (supabase-app-init.sql, 16-stock.sql); um volume existente precisa da migração
+# 20261029 (move reservation.eventcap para stock, cria stock.hold e as colunas da saga em walletevent/idempotency_key, com o backfill dos
+# holds). O script NÃO aplica o 16-stock.sql: num banco não migrado ele criaria stock.eventcap vazia ao lado de reservation.eventcap. Só
+# confere o estado e aborta com o caminho da migração; a saída do psql entra na mensagem (nada de esconder o erro).
+ESTADO_STOCK="$(echo "SELECT to_regclass('reservation.eventcap') IS NULL, to_regclass('stock.eventcap') IS NOT NULL, to_regclass('stock.hold') IS NOT NULL;"     | docker exec -i -e TEST_DB_NAME="$TEST_DB_NAME" gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$TEST_DB_NAME" -At' 2>&1)"
+if [ "$ESTADO_STOCK" != "t|t|t" ]; then
+    echo "❌ O banco de teste ($TEST_DB_NAME) não está no schema do serviço stock (reservation.eventcap ainda existe, ou stock.eventcap/stock.hold não existe; psql: $ESTADO_STOCK)."
+    echo "   Migração 20261029 pendente: pare o backend, o reservation, o catalog e o stock, faça o backup e aplique (ver o cabeçalho do arquivo):"
+    echo "   docker exec gerenciador-db pg_dump -h localhost -U admin --clean --if-exists -n reservation meu_banco > <fora do repo>/meu_banco-reservation.sql"
+    echo "   docker exec -i gerenciador-db psql -h localhost -U supabase_admin -d meu_banco -v ON_ERROR_STOP=1 \\"
+    echo "     < Projeto/Backend/db/migrations/20261029-stock-schema.sql"
+    echo "   (ou use TEST_DB_NAME=<banco criado com os init-scripts atuais, que já têm o schema stock>)"
     echo ""
     exit 1
 fi

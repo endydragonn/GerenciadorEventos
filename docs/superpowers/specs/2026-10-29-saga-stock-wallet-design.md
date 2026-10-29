@@ -257,8 +257,10 @@ comparação do replay, como hoje ficam as linhas `version = 0`.
 `SagaReaperService`, `@Scheduled` a cada `RESERVATION_SAGA_REAPER_SCAN_MS` (default **5000**), em lotes de `RESERVATION_SAGA_REAPER_BATCH`
 (default **100**):
 1. Uma transação seleciona `saga_status = 'reserving' AND updated_at < now() - RESERVATION_SAGA_ORPHAN_MS` (default **30000**, acima de pool
-   5 s + resposta 10 s do cliente do `stock` + margem) **ou** `saga_status = 'compensating'`, com `ORDER BY updated_at LIMIT n FOR UPDATE
-   SKIP LOCKED`. Vale para N réplicas, como a expiração.
+   5 s + resposta 10 s do cliente do `stock` + margem) **ou** `saga_status = 'compensating'` com a mesma idade, com `ORDER BY updated_at LIMIT n FOR UPDATE
+   SKIP LOCKED`. Vale para N réplicas, como a expiração. A idade também nas `compensating` (revisão da passada b1) evita tomar
+   compensações inline ainda em curso, o que distorceria o `resolved_by` e o tempo até resolver medidos na R5. O reaper relê a
+   `compensating` velha a cada tick, e cada tentativa renova o `updated_at`.
 2. Passa as `reserving` para `compensating` (CAS por PK + `hold_id`) e comita. É isso que faz a tx2 atrasada do dono perder.
 3. Para cada linha, `release(holdId)` no `stock` fora da transação, com o `eventId` e o `userId` da linha. Com 200, a linha vai a
    `compensated` (por PK + `hold_id`; `resolved_at`, `resolved_by = 'reaper'`). Com falha, fica `compensating` e entra no próximo tick.

@@ -46,11 +46,11 @@ import com.gerenciador.eventos.stockclient.api.HoldRequest;
 /**
  * Compensação da saga stock + wallet (issue #47) contra o stock REAL ({@link StockEmbutido}) atrás de um proxy de testes que o derruba,
  * atrasa e faz "comitar e perder a resposta" ({@link StockProxy}). Cobre W1, W3, W5, W6, W8, W11 e W12 da spec (W10, o replay, é do
- * {@code ReservationReplayTest}); W2, W4, W7, W9 e W13 dependem do reaper e do failpoint (passada b). Todo teste termina com as invariantes
+ * {@code ReservationReplayTest}); W2, W4, W7, W9 e W13 (reaper e failpoint) estão em {@code SagaReaperTest} e {@code SagaReaperConcorrenteTest}; nesta classe o reaper fica DESLIGADO (surefire). Todo teste termina com as invariantes
  * ({@link InvariantesDaSaga}): vaga certa, nenhum wallet sem hold, nenhum hold sem dono, nenhuma saga presa.
  *
- * <p>Sem reaper nesta passada, o teste que PRECISA deixar uma saga {@code compensating} (stock fora) a resolve à mão no fim, do mesmo
- * jeito que o reaper faria ({@code release} + {@code compensating -> compensated}).</p>
+ * <p>Com o reaper desligado aqui, o teste que PRECISA deixar uma saga {@code compensating} (stock fora) a resolve à mão no fim, do mesmo
+ * jeito que o reaper faz ({@code release} + {@code compensating -> compensated}).</p>
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
