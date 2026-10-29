@@ -1,0 +1,20 @@
+{
+    "escada":  "Deg-50350",
+    "run_id":  50350,
+    "commit":  "35955ef",
+    "commit_completo":  "35955efb1116ff1247d94fcc56cf22d017d662b7",
+    "duracao_s":  60,
+    "mapeamento":  "sequencial",
+    "braco":  "cas",
+    "max_connections":  300,
+    "pool_hikari":  300,
+    "arranjo":  "autoescala+slim",
+    "pct_acompanha":  5,
+    "consulta_ms":  1000,
+    "teto_consulta_s":  35,
+    "params_autoescala":  "AUTOESCALA_X_RPM=56000;AUTOESCALA_GATEWAY_RPS=1600;AUTOESCALA_IDENTITY_RPS=200;AUTOESCALA_CATALOG_RPS=500;AUTOESCALA_ADMISSION_RPS=1600;AUTOESCALA_NOTIFICATION_LAG=100;AUTOESCALA_DESCE_SEG=120;demais_padrao_50_80_30_50",
+    "usuarios":  1000,
+    "eventos":  868,
+    "resumo_no_gerador":  "Projeto/carga/results/summary-degraus-50350.json",
+    "linha_k6":  "k6 run --quiet -e \u0027BASE_URL=http://192.168.68.64:8081\u0027 -e \u0027RPMS=20000,26000,32000,38000,44000,50000,56000,62000,68000,74000,80000,86000,92000,98000\u0027 -e \u0027DURACAO_S=60\u0027 -e \u0027USUARIOS=1000\u0027 -e \u0027SUFIXO=50350\u0027 -e \u0027EVENT_IDS=1-868\u0027 -e \u0027SUMMARY_FILE=Projeto/carga/results/summary-degraus-50350.json\u0027 -e \u0027PCT_CONFIRMA=100\u0027 -e \u0027MAX_VUS=3000\u0027 -e \u0027MAPEAMENTO=sequencial\u0027 -e \u0027PCT_ACOMPANHA=5\u0027 -e \u0027CONSULTA_MS=1000\u0027 -e \u0027TETO_CONSULTA_S=35\u0027 -e \u0027PARADA_P95_MS=5000\u0027 -e \u0027PARADA_JANELA_S=60\u0027 -e \u0027SETUP_S=90\u0027 -e \u0027IDEMPOTENCY_KEY=0\u0027 -e \u0027RUN_ID=50350\u0027 Projeto/carga/degraus/carga-degraus.js"
+}

@@ -1,0 +1,33 @@
+coleta r4-b3 iniciada em 2026-10-29T12:19:04Z (project gerenciador-eventos)
+containers backend: gerenciador-eventos-backend-1 
+containers reservation: gerenciador-eventos-reservation-1 
+containers identity: gerenciador-eventos-identity-1 
+containers catalog: gerenciador-eventos-catalog-1 
+containers admission: gerenciador-eventos-admission-1 
+containers notification: gerenciador-eventos-notification-1 
+containers lb: gerenciador-eventos-lb-1 
+ambiente deste shell (AUTOESCALA_*, ADMISSION_*; exporte aqui os do scaler/up):
+  ADMISSION_X_RPM=56000
+  AUTOESCALA_ADMISSION_RPS=1600
+  AUTOESCALA_CATALOG_RPS=500
+  AUTOESCALA_DESCE_SEG=120
+  AUTOESCALA_GATEWAY_RPS=1600
+  AUTOESCALA_IDENTITY_RPS=200
+  AUTOESCALA_NOTIFICATION_LAG=100
+  AUTOESCALA_X_RPM=56000
+backend (container 4184def1817c):
+  RESERVATION_READPATH=cas
+reservation (container 9e37ec9ca758):
+  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+  SERVER_TOMCAT_THREADS_MAX=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+admission (container 21ef24a0b20a):
+  ADMISSION_X_RPM=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+  ADMISSION_RESERVATION_REPLICAS=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+  ADMISSION_QUEUE_ON=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+  ADMISSION_SYNC_BELOW=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+  ADMISSION_WORKER_CONCURRENCY=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+  ADMISSION_QUEUE_TTL_MS=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+  ADMISSION_QUEUE_MAX_LENGTH=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+  ADMISSION_MAX_WAITING_PER_USER=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+  ADMISSION_WINDOW_MS=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+  ADMISSION_BUCKET_MS=OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH

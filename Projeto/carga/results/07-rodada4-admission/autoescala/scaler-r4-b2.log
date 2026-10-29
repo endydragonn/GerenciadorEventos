@@ -1,0 +1,50 @@
+08:49:51 [scaler] projeto=gerenciador-eventos periodo=2s X=56000 gateway_rps=500 identity_rps=100 catalog_rps=500 admission_rps=1000 notification_lag=100 seco=0 csv=/e/TCC/GerenciadorEventos/Projeto/autoescala/saida/replicas-20261029-084951.csv
+08:49:51 [scaler]   reservation: 1..3 réplicas
+08:49:51 [scaler]   backend: 1..3 réplicas
+08:49:51 [scaler]   identity: 1..3 réplicas
+08:49:51 [scaler]   catalog: 1..3 réplicas
+08:49:51 [scaler]   admission: 1..3 réplicas
+08:49:51 [scaler]   notification: 1..3 réplicas
+08:53:40 [scaler] identity: container novo 0d51f42c6e33 (stand-by)
+08:53:40 [scaler] identity: subir (uso 780/1000, A=1 S=0 B=0, carga=78)
+08:53:45 [scaler] identity: 0d51f42c6e33 no slot id2 em stand-by (peso 0)
+08:54:57 [scaler] identity: descartar 0d51f42c6e33 (slot id2, standby)
+08:54:58 [scaler] identity: sessões ainda abertas no slot id2 ao parar: 0
+08:55:00 [scaler] identity: descartar (uso 0/1000, A=1 S=1 B=0, carga=0)
+08:58:41 [scaler] identity: container novo c9c262b179be (stand-by)
+08:58:41 [scaler] identity: subir (uso 820/1000, A=1 S=0 B=0, carga=82)
+08:58:46 [scaler] identity: c9c262b179be no slot id2 em stand-by (peso 0)
+09:00:01 [scaler] reservation: container novo 07e636372f94 (stand-by)
+09:00:01 [scaler] reservation: subir (uso 750/1000, A=1 S=0 B=0, carga=42032)
+09:00:11 [scaler] reservation: 07e636372f94 no slot rs2 em stand-by (peso 0)
+09:00:17 [scaler] backend: container novo 38dfb2d2f533 (stand-by)
+09:00:17 [scaler] backend: subir (uso 782/1000, A=1 S=0 B=0, carga=391)
+09:00:18 [scaler] identity: descartar c9c262b179be (slot id2, standby)
+09:00:20 [scaler] identity: sessões ainda abertas no slot id2 ao parar: 0
+09:00:25 [scaler] identity: descartar (uso 0/1000, A=1 S=1 B=0, carga=0)
+09:00:33 [scaler] backend: 38dfb2d2f533 no slot gw2 em stand-by (peso 0)
+09:00:48 [scaler] backend: 38dfb2d2f533 (slot gw2) promovida a ativa
+09:00:48 [scaler] backend: promover (uso 1422/1000, A=1 S=1 B=0, carga=711)
+09:00:53 [scaler] admission: container novo a1239b986797 (stand-by)
+09:00:53 [scaler] admission: subir (uso 515/1000, A=1 S=0 B=0, carga=515)
+09:00:59 [scaler] admission: a1239b986797 no slot ad2 em stand-by (peso 0)
+09:02:02 [scaler] backend: container novo 5f47f0e03311 (stand-by)
+09:02:02 [scaler] backend: subir (uso 634/1000, A=2 S=0 B=0, carga=634)
+09:02:12 [scaler] backend: 5f47f0e03311 no slot gw3 em stand-by (peso 0)
+09:02:39 [scaler] reservation: 07e636372f94 (slot rs2) promovida a ativa
+09:02:40 [scaler] reservation: promover (uso 1221/1000, A=1 S=1 B=0, carga=68407)
+09:02:42 [scaler] backend: 5f47f0e03311 (slot gw3) promovida a ativa
+09:02:42 [scaler] backend: promover (uso 811/1000, A=2 S=1 B=0, carga=811)
+09:03:57 [scaler] reservation: descer 07e636372f94 (slot rs2, ativa)
+09:04:03 [scaler] reservation: sessões ainda abertas no slot rs2 ao parar: 0
+09:04:09 [scaler] reservation: descer (uso 218/1000, A=2 S=0 B=0, carga=24431)
+09:05:37 [scaler] backend: descer 5f47f0e03311 (slot gw3, ativa)
+09:05:38 [scaler] backend: sessões ainda abertas no slot gw3 ao parar: 0
+09:05:40 [scaler] backend: descer (uso 0/1000, A=3 S=0 B=0, carga=0)
+09:05:42 [scaler] admission: descartar a1239b986797 (slot ad2, standby)
+09:05:43 [scaler] admission: sessões ainda abertas no slot ad2 ao parar: 0
+09:05:46 [scaler] admission: descartar (uso 0/1000, A=1 S=1 B=0, carga=0)
+09:06:53 [scaler] backend: descer 38dfb2d2f533 (slot gw2, ativa)
+09:06:54 [scaler] backend: sessões ainda abertas no slot gw2 ao parar: 0
+09:06:56 [scaler] backend: descer (uso 0/1000, A=2 S=0 B=0, carga=0)
+write /dev/stdout: The pipe is being closed.
