@@ -11,6 +11,8 @@ created: 2026-10-28
 **Status:** **decidida (usuário, 2026-10-28): A agora, D depois na #197.** A #111 implementa a opção A (override com `docker
 compose --scale` + HAProxy + scaler no host, com os parâmetros abaixo) e a #112 a estende. A opção D (Kubernetes com HPA/KEDA)
 fica para a issue #197, fora do Batch 2.
+**Atualização (usuário, 2026-10-29):** a opção D foi desenhada na #197 (seção "Opção D: Kubernetes (#197, #205)" no fim); a opção A
+continua valendo para quem usa o compose.
 Escrita direto no repositório (sem cópia no vault).
 
 Complementa [Architecture-Decision-Async-Checkout-Queue](Architecture-Decision-Async-Checkout-Queue.md) (o gatilho 80/70 do
@@ -272,3 +274,31 @@ Resultado (2 rodadas; a 2ª com estas diferenças: stand-by do `identity` descar
 - **Nenhum e-mail duplicado:** 1ª rodada, 2501 mensagens no Mailpit = 2501 destinatários distintos (2500 do lote + 1 cadastro real, cujo código foi lido do e-mail); 2ª, 8001 = 8001, 0 duplicados. Todas as réplicas do `notification` com `MAIL_HOST=mailpit`; nenhum e-mail real saiu.
 - **Isolamento:** project removido com `down -v` (0 containers, volumes e redes sobrando); o `gerenciador-db` real seguiu com o `working_dir` de sempre; as env-files do checkout principal entraram por referência (`COMPOSE_ENV_FILES`), sem cópia nem leitura.
 - **Fica para a Rodada 4:** a rodada com todos escalando (overselling 0, nenhum e-mail duplicado, gráfico) com capacidades calibradas, o custo do salto pelo `lb` e o efeito do Hikari 50 e dos 10 workers por réplica do `admission`.
+
+
+## Opção D: Kubernetes (#197, #205) — decisões de 2026-10-29
+
+Spec: [`2026-10-29-k8s-autoescala-design.md`](../superpowers/specs/2026-10-29-k8s-autoescala-design.md) (aprovada pelo usuário com os
+patches da revisão adversarial). Branch de integração `K8s`. O que a opção D decide e onde ela se afasta da opção A:
+
+| # | Decisão | Diferença em relação à opção A |
+|---|---|---|
+| D1 | **kind**, um nó, subindo e caindo por `Projeto/k8s/cluster.sh` | o cluster disputa CPU e RAM com a medição: é apagado durante as rodadas |
+| D2 | **Stack inteira no cluster** (7 serviços, frontend, Postgres + Supavisor, Redpanda, Redis, RabbitMQ); dados descartáveis; Studio/Kong/meta fora; `run-tests.sh` segue no compose | o banco do cluster nasce dos init scripts a cada cluster; o `meu_banco` fica no compose |
+| D3 | **HPA com alvo de uso 0,5**, sem stand-by: a réplica sobe a 50% já com tráfego | não há réplica com peso 0; o gatilho da fila (0,8 de `X × ativas`, #43) não muda |
+| D4 | O `admission` lê `status.readyReplicas` do Deployment `reservation` pela **API do Kubernetes** (RBAC só de `get`) e grava `adm:replicas` (mesma chave e TTL do scaler) | quem escreve a chave é o `admission`, não o scaler; falha da API = fallback `ADMISSION_RESERVATION_REPLICAS` |
+| D5 | **KEDA sem Prometheus**: `reservation` pelo `adm:hot` (scaler `metrics-api`, endpoint do `admission` com token só de métrica), `notification` pelo lag do group, os HTTP por CPU do container da aplicação | nos HTTP a regra passa de req/s para CPU (diferença aceita pelo aceite da #197) |
+| D6 | **Duas trilhas** de balanceamento, escolhidas na subida: **B1** = Istio 1.31.1 com sidecar (balanceia por requisição; retry da malha desligado; probes fora do sidecar); **C** = balanceamento no cliente nas 5 libs `*-client` (DNS round-robin sobre Service headless + TTL de conexão), desligado por padrão | não há HAProxy nem scaler próprio; o Linkerd ficou fora porque o open source só publica releases edge desde fev/2024 |
+| D7 | **Slim como padrão** também no compose (imagens `*.slim` sem `build:`; a completa num override) | entra na `K8s` depois da R5 |
+
+- **#207 no cluster:** probes numa porta de management própria (outro pool de threads), readiness só com o estado do ciclo de vida,
+  liveness de 2 min, nada no caminho (malha ou cliente) ejeta réplica por saturação, `preStop` de 20 s antes do shutdown.
+- **#206 no cluster:** a descida usa a janela de estabilização do HPA (`K8S_DESCE_SEG`, default 120 s, máximo da recomendação na janela) e
+  no máximo 1 pod a cada 60 s; a subida não tem janela.
+- **Pool (Supavisor ≤ 1500):** no cluster, `reservation` 200 e `stock` 60 por réplica, `maxSurge: 0`, conta com 3 réplicas + 1 pod em
+  término por serviço: `4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 4×60 = 1492`. O `stock` escala até 3 (#205, D3 b da saga), só no cluster.
+- **AppArmor:** não aplicável no host do TCC (kernel WSL2 do Docker Desktop sem o módulo); os perfis Seccomp do Slim são aplicados nos pods.
+- **Alternativas registradas:** Linkerd `edge` fixado (mais leve, fora da regra de versão estável); Istio ambient (o L7 exige um waypoint
+  central, que não é sidecar); Prometheus + adapter (req/s fiel, mas mais um componente pesado no host de medição); stand-by emulada por
+  controlador próprio (código nosso, o que o autoscaler nativo quer evitar).
+- **Como ficou implementado:** seção a acrescentar no fim da #197.

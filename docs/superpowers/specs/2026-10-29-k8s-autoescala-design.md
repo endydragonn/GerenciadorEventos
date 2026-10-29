@@ -5,6 +5,9 @@ Data: 2026-10-29. Branch de integração `K8s` (de `Batch_2`, `b116c55`). Base: 
 o mecanismo novo **não pode repetir**: #207 (health check que tira do ar réplica saturada) e #206 (sinal `adm:hot` instantâneo). As
 correções de #206/#207 para o compose e o HAProxy (opção A) ficam fora: aqui elas viram requisito do cluster.
 
+> **Aprovada** (usuário, 2026-10-29) com os patches P1–P10 da revisão adversarial, os esclarecimentos E1–E5 e os ajustes Minor, já
+> incorporados abaixo; P4 = (a).
+>
 > **D6 = duas trilhas** sobre a mesma base: **B1** (malha de serviços com sidecar) e **C** (balanceamento no cliente nas 5 libs
 > `*-client`), escolhidas na subida do cluster sem fork de código, para serem medidas uma contra a outra. Ver "Balanceamento".
 
@@ -38,14 +41,14 @@ Namespace `gerenciador`. Tudo o que o compose base sobe para atender o Flutter e
 
 | Componente | Objeto | Notas |
 |---|---|---|
-| `db` (`supabase/postgres:17.6.1.136`) | `StatefulSet` (1) + `PersistentVolumeClaim` (`local-path`) + Service `db` | mesmos init scripts do compose (abaixo); sem porta no host |
+| `db` (`supabase/postgres:17.6.1.136`) | `StatefulSet` (1) + `PersistentVolumeClaim` (StorageClass `standard` do kind, provisionada pelo local-path-provisioner) + Service `db` | mesmos init scripts do compose (abaixo); sem porta no host |
 | `supabase-pooler` (`supabase/supavisor:2.9.13`) | `Deployment` (1, fixo) + Service | mesmo `command` (migrate → `pooler-upsert.exs` → server), `POOLER_MAX_CLIENT_CONN=1500`, pool real 45 |
 | `redpanda` (v26.2.4) | `StatefulSet` (1) + PVC + Service `redpanda` | mesmos argumentos; `--advertise-kafka-addr=internal://redpanda:9092` resolve no namespace |
 | `redis` (7.4.12-alpine) | `Deployment` (1) + Service | senha do Secret, sem persistência, `maxmemory 512mb volatile-ttl` |
 | `rabbitmq` (4.1.8-alpine) | `Deployment` (1) + Service | `/var/lib/rabbitmq` num `emptyDir` `medium: Memory` (o `tmpfs` do compose) |
 | 7 serviços Java | `Deployment` + Service com o nome do compose | autoescala (abaixo); `notification` sem Service |
 | `frontend` | `Deployment` (1) + Service `NodePort` 30088 | `BACKEND_UPSTREAM` no default (`backend:8081`), nas duas trilhas |
-| `notification-seek`, `stock-seek` | `initContainer` (imagem do redpanda, `rpk`) no próprio pod do `notification`/`stock` | "move o group para o fim só se ele não existe": idempotente, roda a cada pod que sobe, sem coordenação |
+| `notification-seek`, `stock-seek` | `initContainer` (imagem do redpanda, `rpk`) no próprio pod do `notification`/`stock` (e um de espera no `reservation`) | **primeiro espera o tópico consumido ter 3 partições** (`identity.notification` para o `notification`; `reservation.wallet` para `stock` e `reservation`), depois "move o group para o fim só se ele não existe": idempotente, roda a cada pod que sobe, sem coordenação. Assim nenhum consumer assina o tópico com 1 partição e fica até 300 s (refresh de metadados) sem ver as outras (P5). Sem ciclo: o `identity` cria o tópico dele e não depende do `notification` |
 | `particoes` | `Job` | sobe `identity.notification` e `reservation.wallet` para 3 partições (`--num` = quanto adicionar; espera o `identity` criar o tópico dele). Não é irreversível no broker real: o broker do cluster é outro e nasce a cada cluster |
 
 - **Dados descartáveis.** O PVC do `db` e do `redpanda` vive no nó do kind e some no `cluster.sh down` (que roda antes de cada medição no
@@ -77,9 +80,13 @@ Namespace `gerenciador`. Tudo o que o compose base sobe para atender o Flutter e
     para não baixar de novo; as ausentes o nó baixa do registro oficial); gera Secrets e ConfigMaps; `kubectl apply -k`; espera os
     Deployments/StatefulSets ficarem prontos e o `Job` `particoes` terminar.
   - `carregar <svc...>`: recarrega só as imagens dadas e reinicia os Deployments (ciclo de desenvolvimento).
-  - `psql`, `rpk`, `redis-cli`: atalhos de `kubectl exec` (sem imprimir segredo: a senha vai pelo ambiente do pod).
+  - `psql`, `rpk`, `redis-cli`: atalhos de `kubectl exec` (sem imprimir segredo: a senha vai pelo ambiente do pod; o `redis-cli` usa
+    `REDISCLI_AUTH`, nunca `-a`, para a senha não aparecer no argv).
   - `down`: `kind delete cluster` (antes da R5 e de qualquer medição no host).
   - `status`: nós, pods, HPAs/ScaledObjects e réplicas.
+- **Contexto explícito (E4):** todo `kubectl`/`helm` do `cluster.sh` e do e2e passa `--context kind-<nome>` (`kind-gerenciador` ou
+  `kind-gerenciador-e2e`); nunca depende do `current-context`, que o `kind create cluster` troca. Assim o `up` com os Secrets reais nunca cai
+  no cluster de e2e, e o passo de queda do e2e nunca atinge o cluster principal.
 - Ferramentas: `kind`, `helm` e `kubectl` no `PATH` (o `kubectl` vem com o Docker Desktop; os dois primeiros em `E:\TCC\claude-tooling\bin`
   na máquina do TCC). O script aborta com mensagem clara se faltar um deles, `Projeto/.env` ou `Projeto/supabase/.env`.
 - **Recursos:** o cluster inteiro roda no nó do kind (um container). Ordem de grandeza com tudo no mínimo: control plane + KEDA +
@@ -93,7 +100,7 @@ Namespace `gerenciador`. Tudo o que o compose base sobe para atender o Flutter e
 ## Manifests
 
 `Projeto/k8s/base/` (kustomize), um arquivo por componente. Overlays: `e2e` (Mailpit, credenciais efêmeras, sem NodePort), `completa`
-(imagens completas, para depuração), `carga` (`SEED_ENABLED=true`, como o override de carga do compose).
+(imagens completas, para depuração), `carga` (= `e2e` + `SEED_ENABLED=true`: o dry-run nunca usa SMTP real; P2).
 
 - **Nomes e portas iguais ao compose** (`backend:8081`, `reservation:8082`, `catalog:8083`, `identity:8084`, `admission:8085`,
   `stock:8086`, `db:5432`, `supabase-pooler`, `redpanda:9092`, `redis:6379`, `rabbitmq:5672`): os defaults de `*_SERVICE_URL`, do
@@ -102,12 +109,20 @@ Namespace `gerenciador`. Tudo o que o compose base sobe para atender o Flutter e
   compose, `IfNotPresent`.
 - **Ambiente:** o `cluster.sh` gera **um Secret por componente** a partir do `docker compose config --format json` (o mesmo ambiente que o
   compose entrega a cada container, resolvido de `Projeto/.env` e `Projeto/supabase/.env`; arquivo temporário, nunca impresso nem
-  versionado, apagado no fim; mesma técnica do `slim/gerar-imagens-slim.sh`). O manifest usa `envFrom: secretRef`; o que muda no cluster
+  versionado, apagado no fim; mesma técnica do `slim/gerar-imagens-slim.sh`). **Lista fechada** de componentes (os do cluster; nunca Studio, Kong nem meta, que têm `DASHBOARD_PASSWORD`/`SERVICE_ROLE_KEY`). No cluster
+  de e2e e no dry-run os Secrets saem de `docker compose -f docker-compose.yml -f e2e/docker-compose.e2e.yml config` (o mesmo isolamento
+  do e2e em compose: Mailpit, credenciais efêmeras), nunca do compose base (P1). O manifest usa `envFrom: secretRef`; o que muda no cluster
   entra no `env` do manifest (vence o `envFrom`): porta de management, Hikari por réplica, workers do `admission` e, na trilha C, as
   variáveis do balanceamento no cliente. Ninguém precisa acrescentar nada ao `.env`.
-- **`identity-keys`:** PVC `ReadWriteOnce` (`local-path`). Com um nó só, todas as réplicas do `identity` montam o mesmo diretório e a chave
+- **`identity-keys`:** PVC `ReadWriteOnce` (StorageClass `standard`). Com um nó só, todas as réplicas do `identity` montam o mesmo diretório e a chave
   continua sendo criada com `link(2)` (#112): nenhuma mudança de código.
 - **`automountServiceAccountToken: false`** em todos os pods, exceto o `admission` (D4).
+- **Rollout sem pod excedente (P4):** `strategy.rollingUpdate: {maxSurge: 0, maxUnavailable: 1}` nos Deployments com banco (`backend`,
+  `identity`, `catalog`, `reservation`, `stock`, `notification`). O `cluster.sh carregar` com 1 réplica fica alguns segundos sem o serviço,
+  o que é aceitável no ciclo de desenvolvimento.
+- **Término sem 5xx (P10):** `lifecycle.preStop.sleep.seconds: 20` (ação nativa do Kubernetes, não precisa de binário na imagem slim) e
+  `terminationGracePeriodSeconds: 60` nos 7 serviços. Nos 20 s o pod já saiu dos endpoints, do EDS do Envoy (B1) e do DNS headless, e as
+  conexões dos pools giram (C: TTL de 15 s + cache de DNS de 5 s < 20 s); só então o shutdown gracioso do Spring Boot começa.
 - **Recursos:** `requests`/`limits` de CPU e memória em todos os pods (obrigatório para o HPA por CPU e para o scheduler não espremer o nó).
   Valores provisórios no dry-run; a rodada formal calibra.
 - **Seccomp:** `securityContext.seccompProfile: {type: Localhost, localhostProfile: profiles/<svc>-seccomp.json}` nos 7 serviços, com os
@@ -122,7 +137,8 @@ Namespace `gerenciador`. Tudo o que o compose base sobe para atender o Flutter e
 A causa da #207 foi o health check competir com o tráfego (`GET /actuator/health` nas mesmas 300 threads do Tomcat, `inter 2s fall 3`) e o
 `lb` tirar do ar o último servidor vivo. No cluster:
 
-- **Porta de management própria** nos 7 serviços: `MANAGEMENT_SERVER_PORT=8090` só no manifest (o compose não muda). O Spring Boot sobe
+- **Porta de management própria** nos 6 serviços HTTP (o `notification` não tem servidor HTTP: as probes dele repetem o healthcheck do
+  compose, sem porta de management): `MANAGEMENT_SERVER_PORT=8090` só no manifest (o compose não muda). O Spring Boot sobe
   um contexto filho com **outro conector e outro pool de threads**, então a probe não espera atrás das 300 threads ocupadas.
 - **Readiness = só o estado do ciclo de vida.** `management.endpoint.health.probes.enabled=true` e
   `management.endpoint.health.group.readiness.include=readinessState` (explícito: banco, Redis, broker e downstream **não** entram; um
@@ -131,11 +147,14 @@ A causa da #207 foi o health check competir com o tráfego (`GET /actuator/healt
 - **Liveness tolerante.** `/actuator/health/liveness` (só `livenessState`), `timeoutSeconds 5`, `failureThreshold 12`, `periodSeconds 10`
   (2 min sem resposta antes do restart): um pod saturado e vivo não é reiniciado, o que agravaria a saturação.
 - **Startup.** `startupProbe` na readiness, `periodSeconds 2`, `failureThreshold 45` (90 s para o JVM subir sob CPU disputada).
-- **Exposição:** a porta 8090 não entra no Service (só o kubelet a usa). `management.endpoints.web.exposure.include` continua `health`.
+- **Exposição:** a porta 8090 não entra no Service, mas sem NetworkPolicy qualquer pod do cluster a alcança. Ela serve **só** `health`
+  sem detalhes (`management.endpoints.web.exposure.include=health`, `show-details=never`), e o filtro do `X-Internal-Token` da porta de
+  serviço não ganha exceção de caminho.
 - **Infra:** probes equivalentes aos healthchecks do compose (`pg_isready`, `rpk cluster health`, `redis-cli ping`,
   `rabbitmq-diagnostics ping`, `/api/health` do Supavisor), com os mesmos timeouts.
 - **Prova (aceite):** no dry-run com carga acima da capacidade de uma réplica, nenhum pod sai do Service nem reinicia por probe
-  (`kubectl get events` sem `Unhealthy`/`Killing` de probe; `restartCount` 0), e os 5xx do cliente vêm só da aplicação, se vierem.
+  (`kubectl get events` sem `Unhealthy` de readiness/liveness **depois de `Ready`** e sem `Killing` por probe, já que a startupProbe gera
+  `Unhealthy` em todo boot; `restartCount` 0), e os 5xx do cliente vêm só da aplicação, se vierem.
 - **"0 ativas" (2º item da #207):** quem conta réplicas ativas é o `admission` (D4, `readyReplicas`) e o HPA; com a readiness presa ao ciclo
   de vida, um pod saturado continua pronto e contado.
 
@@ -167,42 +186,56 @@ O código das duas convive no mesmo branch; a imagem é a mesma.
   (ztunnel é L4; o balanceamento por requisição exige um waypoint central, que não é sidecar).
 - **Injeção só nos 7 serviços e no `frontend`:** label `istio-injection=enabled` no namespace e `sidecar.istio.io/inject: "false"` em `db`,
   Supavisor, Redpanda, Redis, RabbitMQ e nos `Job`s (um sidecar impede o `Job` de terminar).
-- **Só o HTTP entre serviços passa pelo Envoy:** `traffic.sidecar.istio.io/excludeOutboundPorts` com 5432/6543 (Supavisor), 9092, 6379,
-  5672 e 443 (API do Kubernetes, D4). Assim a comparação B1 × C mede o balanceamento HTTP, não proxy de Postgres e Kafka.
+- **Só o HTTP entre serviços passa pelo Envoy (P9):** `traffic.sidecar.istio.io/excludeOutboundPorts` com **todas** as portas não-HTTP:
+  5432 e 6543 (Postgres/Supavisor), 9092 (Kafka), 6379 (Redis), 5672 (AMQP), 443 (API do Kubernetes, D4), 587 (SMTP real) e 1025 (SMTP do
+  Mailpit; protocolo server-first, que a detecção de protocolo do Istio atrasaria). O Mailpit também fica com `inject: "false"`. Assim a
+  comparação B1 × C mede o balanceamento HTTP, não proxy de Postgres, Kafka e SMTP.
 - **Balanceamento por requisição** (o Envoy usa `LEAST_REQUEST` por padrão) pelas mesmas URLs do compose (`http://reservation:8082`...): o
   sidecar intercepta pelo VIP do Service. Nenhuma env muda.
-- **Sem ejeção por saturação (#207):** nenhum `DestinationRule` com `outlierDetection` e nenhum health check ativo do Envoy; as probes
-  HTTP do kubelet seguem na porta 8090 (o Istio as reescreve pelo `pilot-agent`, `sidecar.istio.io/rewriteAppHTTPProbers` no default).
+- **Sem retry da malha (P7):** `meshConfig.defaultHttpRetryPolicy.attempts: 0`. O Istio repete por padrão (503/connect-failure), o que
+  repetiria POST entre serviços e contrariaria o `disableAutomaticRetries` dos clientes; com 0 a malha não repete nada, como na trilha C.
+- **Sem ejeção por saturação (#207, P8):** nenhum `DestinationRule` com `outlierDetection` e nenhum health check ativo do Envoy. As probes
+  **não** passam pelo sidecar: `sidecar.istio.io/rewriteAppHTTPProbers: "false"` e `traffic.sidecar.istio.io/excludeInboundPorts: "8090"`,
+  e o kubelet fala direto com a porta de management. A readiness do próprio sidecar (15021) fica com o mesmo `failureThreshold` da do app
+  (30 s; anotações `readiness.status.sidecar.istio.io/*`), e o sidecar **não tem limit de CPU** (só request), para um proxy estrangulado
+  não tirar o pod do Service.
   `holdApplicationUntilProxyStarts: true` (o app só sobe com o sidecar pronto) e `EXIT_ON_ZERO_ACTIVE_CONNECTIONS` para o término não
   cortar requisição em voo.
 - **mTLS:** o default do Istio (`PeerAuthentication` PERMISSIVE com mTLS automático entre sidecars). O KEDA (fora da malha) chama o
   endpoint do `admission` em texto puro, o que o PERMISSIVE aceita.
-- **Recursos do sidecar:** `sidecar.istio.io/proxyCPU`/`proxyMemory` fixos (requests 100m/128Mi, limits 1 CPU/256Mi, provisórios); o
-  `istiod` com 1 réplica, requests 200m/512Mi.
+- **Recursos do sidecar:** requests `sidecar.istio.io/proxyCPU` 100m e `proxyMemory` 128Mi, limit só de memória (256Mi; sem limit de CPU,
+  P8), provisórios; o `istiod` com 1 réplica, requests 200m/512Mi.
 - **Custo publicado** (para ler o resultado, não é medição nossa): Istio 1.5 documenta ~0,5 vCPU e 50 MB por 1.000 req/s por proxy e
   +2,8–3,1 ms p90 por salto; no pico da R4 (~4,9 mil req/s internas, 2 proxies por salto) isso seria ~2–5 vCPU no host.
 
 ### Trilha C: balanceamento no cliente
 
 - **Módulo Maven novo `client-lb`** (lib, sem Spring; ~50 linhas + teste), dependência das 5 libs `*-client` (hoje elas não dependem de
-  nada em comum). Expõe uma função que configura o `PoolingHttpClientConnectionManagerBuilder` já existente em cada cliente:
+  nada em comum). Expõe funções que **acrescentam** à montagem já existente de cada cliente, sem trocar os timeouts atuais (E2): o helper recebe o
+  `ConnectionConfig.Builder` de cada cliente (que já tem `connectTimeout`/`socketTimeout`) e só soma o TTL, e recebe o
+  `PoolingHttpClientConnectionManagerBuilder` para o resolver e a política de reuso:
   - `DnsResolver` **round-robin**: a cada conexão nova resolve o host (`InetAddress.getAllByName`) e devolve os endereços rodados, para as
     conexões novas se espalharem pelos pods;
   - `ConnectionConfig.setTimeToLive` (env `CLIENT_LB_TTL_MS`, default 15000): a conexão mais velha que isso é fechada ao voltar ao pool,
     então em até um TTL o pool se refaz e passa a incluir os pods novos (e deixa os que saíram);
   - `PoolReusePolicy.FIFO`: o reuso gira por todas as conexões abertas em vez de concentrar na última devolvida;
-  - retry **só em falha de conexão** (`ConnectException`/`NoRouteToHostException` antes de enviar a requisição), 1 vez, em outro endereço:
-    seguro para POST, porque nada chegou ao servidor.
+  - **sem retry próprio (E3):** o cliente continua com `disableAutomaticRetries`; quando um endereço recusa a conexão, o operador de
+    conexão do HttpClient já tenta o próximo endereço devolvido pelo resolver. Se o teste mostrar que esse failover não acontece, entra uma
+    `HttpRequestRetryStrategy` que aceita **só** `ConnectException` (nunca status HTTP).
 - **Ligado por env e desligado por padrão:** `CLIENT_LB_ENABLED=false` no default de cada `*ClientConfig`; com `false` o cliente é
   montado exatamente como hoje (compose, testes e e2e em compose inalterados). O overlay `trilha-c` liga a env e aponta os
   `*_SERVICE_URL` para Services **headless** (`reservation-pods`, `stock-pods`, `catalog-pods`, `identity-pods`, `admission-pods`;
   `clusterIP: None`, o DNS devolve só pods **prontos**).
-- **Cache de DNS da JVM:** `networkaddress.cache.ttl=5` (propriedade de segurança do JVM, por `JAVA_TOOL_OPTIONS` só no overlay): um pod
-  que sai some do DNS em até 5 s + o `periodSeconds` da readiness.
+- **Cache de DNS da JVM (E1):** `networkaddress.cache.ttl=5` e `networkaddress.cache.negative.ttl=1` num arquivo `java.security` extra
+  (ConfigMap do overlay) passado por `JAVA_TOOL_OPTIONS=-Djava.security.properties=<arquivo>`. `-Dnetworkaddress.cache.ttl` não tem efeito
+  (é propriedade de segurança, não system property; conferido no JDK 25). Um pod que sai do Service some do DNS em até 5 s + os 30 s da
+  readiness; o `preStop` de 20 s cobre a descida planejada (P10).
 - **Sem proxy no caminho e sem health check de proxy:** a #207 não tem onde acontecer. Limite aceito: balanceia por conexão com TTL, não
   por requisição; requisições já em voo numa conexão com um pod que morre falham (não há retry depois de enviar).
 - **Teste:** `DnsResolver` falso com 1 → 3 → 2 endereços: as conexões novas se distribuem pelos 3; depois do TTL o pool não tem conexão
-  para o endereço removido; com `CLIENT_LB_ENABLED=false` o builder fica idêntico ao de hoje.
+  para o endereço removido; um endereço que recusa conexão é pulado sem erro para o chamador. O teste passa pelos **5 `*Client` reais**
+  (não só pela lib isolada) e confere que os timeouts de hoje continuam aplicados com o TTL somado; com `CLIENT_LB_ENABLED=false` a
+  montagem fica idêntica à de hoje.
 
 ### Base sem trilha
 
@@ -213,10 +246,16 @@ explicitamente (`--trilha nenhuma`), para servir de controle no dry-run.
 
 | Serviço | Gatilho | Alvo |
 |---|---|---|
-| `reservation` | KEDA `metrics-api`: `GET /internal/metrics/hot` (novo no `admission`, `X-Internal-Token` por `TriggerAuthentication`), devolve o `adm:hot` | `AverageValue` = `0,5 × ADMISSION_X_RPM` (D3): `réplicas desejadas = ceil(RPM ÷ (0,5 × X))` |
+| `reservation` | KEDA `metrics-api`: `GET /internal/metrics/hot` (novo no `admission`), autenticado pelo **token de métrica** (abaixo), devolve o `adm:hot`; sem a chave, `200` com `0`, nunca 404 (E5: o KEDA em erro congela as réplicas) | `AverageValue` = `0,5 × ADMISSION_X_RPM` (D3): `réplicas desejadas = ceil(RPM ÷ (0,5 × X))`; o `cluster.sh` gera o alvo da **mesma** variável que o `admission` recebe (o dry-run reduz as duas juntas) |
 | `notification` | KEDA `kafka`: lag do group `notification` em `identity.notification` | `lagThreshold` = `0,5 × AUTOESCALA_NOTIFICATION_LAG` (50); `allowIdleConsumers: false` limita às partições |
 | `backend`, `identity`, `catalog`, `admission`, `stock` | KEDA `cpu` com `containerName` = o container da aplicação (vira `ContainerResource` no HPA; o sidecar da trilha B1 não entra na conta) | `Utilization` 50 |
 
+- **KEDA sem acesso amplo a segredos (P3):** o chart do KEDA é instalado com o acesso a secrets restrito ao namespace dele
+  (`KEDA_RESTRICT_SECRET_ACCESS=true`; o nome exato do value é conferido no chart da versão fixada). O `metrics-api` usa um **token só de
+  métrica**: aleatório, gerado pelo `cluster.sh` a cada `up` (fora do `.env`), guardado num Secret do namespace `keda` e referenciado por
+  uma `ClusterTriggerAuthentication`. O `admission` recebe o mesmo valor (`ADMISSION_METRICS_TOKEN`, só no cluster; sem a variável o
+  endpoint responde 401 a tudo) e o aceita **apenas** em `GET /internal/metrics/hot`; o `INTERNAL_API_TOKEN` mestre não sai do namespace
+  `gerenciador`.
 - Diferença documentada na ADR: nos serviços HTTP a regra passa de req/s para CPU (o aceite permite "ou a diferença fica documentada").
   O KEDA não tem scaler que leia uma chave simples do Redis, por isso o `adm:hot` sai por um endpoint do `admission`.
 - **Mínimo e máximo** por serviço configuráveis (`K8S_<SVC>_MIN`/`_MAX`, defaults 1/3 em todos, inclusive o `stock`, #205); o `cluster.sh`
@@ -238,8 +277,8 @@ explicitamente (`--trilha nenhuma`), para servir de controle no dry-run.
   lido de `/var/run/secrets/kubernetes.io/serviceaccount/token` **a cada chamada** (o token projetado gira), CA de `ca.crt` num
   `SSLContext` próprio, namespace do arquivo `namespace`. Lê `status.readyReplicas` (Jackson, já presente) e grava `adm:replicas` com TTL
   de 15 s, a mesma chave e o mesmo TTL que o scaler da opção A grava. **Sem dependência nova.**
-- O script Lua, o fallback e o comportamento no compose não mudam. Falha (API fora, 403, timeout de 1 s, `readyReplicas` ausente, 0 ou
-  fora de 1..1000) **não grava**: a chave expira e vale `ADMISSION_RESERVATION_REPLICAS`, o lado seguro (fila mais cedo). Várias réplicas
+- O script Lua, o fallback e o comportamento no compose não mudam. Falha (API fora, 403, timeout de 1 s, `readyReplicas` ausente ou
+  fora de `[1, K8S_RESERVATION_MAX]`) **não grava**: a chave expira e vale `ADMISSION_RESERVATION_REPLICAS`, o lado seguro (fila mais cedo). Várias réplicas
   do `admission` gravam o mesmo valor (idempotente). Log WARN com limite de frequência.
 - Teste: servidor HTTP falso no lugar da API (resposta com `readyReplicas`, 403, timeout, JSON inválido) → chave gravada ou não; o caminho
   real é coberto no dry-run (subir o `reservation` para 2 e ver `adm:replicas = 2`).
@@ -247,22 +286,25 @@ explicitamente (`--trilha nenhuma`), para servir de controle no dry-run.
 ## `stock` escalável (#205)
 
 - Escala de 1 a 3 por CPU (tabela acima), min/máx configuráveis.
-- **Pool:** Hikari **85 por réplica** no cluster (env no manifest; o compose base mantém 250). O Supavisor do cluster tem o mesmo teto
-  (`POOLER_MAX_CLIENT_CONN=1500`). Conta com tudo no máximo:
+- **Pool (P4 = a):** no cluster, Hikari **200 por réplica no `reservation`** e **60 no `stock`** (env no manifest; o compose base mantém
+  1000 e 250, e o override de autoescala 300 no `reservation`). O Supavisor do cluster tem o mesmo teto (`POOLER_MAX_CLIENT_CONN=1500`). A
+  conta reserva **+1 pod por serviço** (o que está em término depois de uma descida, com o pool ainda aberto; o rollout não soma, porque
+  `maxSurge: 0`):
 
-  | Serviço | Réplicas máx. | Hikari | Total |
+  | Serviço | Pods (máx. + 1 em término) | Hikari | Total |
   |---|---|---|---|
-  | `reservation` | 3 | 300 | 900 |
-  | `backend` | 3 | 10 | 30 |
-  | `notification` | 3 | 3 | 9 |
-  | `identity` | 3 | 50 | 150 |
-  | `catalog` | 3 | 50 | 150 |
-  | `stock` | 3 | 85 | 255 |
-  | `admission` | 3 | 0 (sem datasource) | 0 |
-  | **Soma** | | | **1494 ≤ 1500** |
+  | `reservation` | 4 | 200 | 800 |
+  | `backend` | 4 | 10 | 40 |
+  | `notification` | 4 | 3 | 12 |
+  | `identity` | 4 | 50 | 200 |
+  | `catalog` | 4 | 50 | 200 |
+  | `stock` | 4 | 60 | 240 |
+  | `admission` | 4 | 0 (sem datasource) | 0 |
+  | **Soma** | | | **1492 ≤ 1500** |
 
-  O Hikari 85 fica abaixo do Tomcat 300 do `stock`: threads esperam no Hikari (`connection-timeout` de 5 s); a fila real continua no
-  Supavisor (pool real 45). Máximo acima de 3 em qualquer serviço exige refazer a conta (o README diz). A conta vai para o
+  Com 3 réplicas e nenhuma em término a soma é 1119. Os Hikari 200 e 60 ficam abaixo do Tomcat 300: threads esperam no Hikari
+  (`connection-timeout` de 5 s), e o pool real continua 45 no Supavisor; muda só onde a fila espera. Máximo acima de 3 em qualquer serviço
+  exige refazer a conta (o README diz). A conta vai para o
   `Projeto/Backend/CLAUDE.md`.
 - **Consumo de `reservation.wallet` com 2+ réplicas:** o `StockReleaseConsumer` já é idempotente por `holdId` (UPSERT de um statement com
   `WHERE stock.hold.status = 'held'`) e devolve a vaga com um `UPDATE eventcap` por evento **no fim da mesma transação**, contando só os
@@ -292,28 +334,43 @@ explicitamente (`--trilha nenhuma`), para servir de controle no dry-run.
 
 - Cria um **cluster kind próprio** (`gerenciador-e2e`, sem `extraPortMappings`) e aplica o overlay `e2e`: a stack inteira com Mailpit no
   lugar do Gmail (`MAIL_HOST=mailpit`), as credenciais efêmeras que o `run-e2e.sh` já gera (nada do `.env` real de SMTP chega ao cluster),
-  X baixo no `admission`. Confere o isolamento antes de aplicar (`kubectl kustomize` sem `MAIL_HOST` real, sem NodePort).
+  X baixo no `admission`. **Guarda de isolamento sobre os Secrets gerados (P1)**, antes de qualquer `apply`, com as mesmas regras do
+  `run-e2e.sh` em compose: o Secret do `notification` tem `MAIL_HOST=mailpit`, sem `MAIL_PASSWORD` real e sem auth SMTP; o
+  `kubectl kustomize` não tem NodePort. Qualquer falha aborta o e2e sem criar nada.
 - `E2E_K8S_TRILHA=b1|c` (obrigatória com `E2E_K8S=1`) escolhe a trilha; a validação final roda as duas.
 - O container auxiliar de curl vira um pod `e2e-cli` no namespace (sem sidecar); `GW` continua `http://backend:8081` (o Service do gateway).
   Os helpers que hoje fazem `docker exec` no `db`, `redpanda` e serviços passam a uma função com dois backends (`docker exec` /
   `kubectl exec`).
-- Mesmos passos: cadastro (código lido do e-mail), evento, reserva, confirmação, replay de `catalog.event` e `reservation.wallet`, rajada
-  4b, passos de queda (a) `stock` fora e (b) queda do `reservation` (`kubectl scale --replicas=0` / `kubectl delete pod` no lugar de
-  `docker stop`).
+- Mesmos passos: cadastro (código lido do e-mail), evento, reserva, confirmação, replay de `catalog.event` e `reservation.wallet`, prova
+  do seek (passos 1 e 5b de hoje), rajada 4b, passos de queda (a) `stock` fora e (b) queda do `reservation` no meio da rajada. Equivalentes
+  explícitos do passo (b) (P6): a **pausa** do `stock` (`docker pause` hoje) vira `SIGSTOP`/`SIGCONT` no PID do processo **a partir do nó**
+  (`crictl inspect` → pid; de dentro do container o PID 1 ignora o sinal), e a **queda brusca** do `reservation` (`docker stop -t 0` hoje)
+  vira `kubectl delete pod --grace-period=0 --force`. A asserção continua: ≥ 1 hold liberado (inline, reaper ou lápide) e 0 órfãs ao fim.
 - No fim, `kind delete cluster --name gerenciador-e2e` (`MANTER=1` mantém). O e2e em compose continua o padrão.
 
 ## Dry-run de carga com autoescala (aceites da #197 e #205)
 
-Local, não é medição. Roda **uma vez por trilha** (B1 e C, mesmo roteiro e mesmos parâmetros) e uma vez com `--trilha nenhuma` como controle. Overlay `carga` + capacidades baixas (X e alvos de CPU reduzidos por env) para forçar subida e descida em minutos:
+Local, não é medição. Roda **uma vez por trilha** (B1 e C, mesmo roteiro e mesmos parâmetros) e uma vez com `--trilha nenhuma` como controle. Overlay `carga` (= `e2e` + seed: Mailpit e Secrets do override do e2e, nunca SMTP real, P2) + capacidades baixas (X e alvos de CPU
+reduzidos por env) para forçar subida e descida em minutos. No fim (inclusive em falha, por `trap`) o roteiro reaplica o overlay sem
+`SEED_ENABLED`: depois do dry-run, `POST /bff/seed` responde 404.
 
 - `Projeto/k8s/registrar-replicas.sh`: a cada 2 s grava `ts,servico,prontas,desejadas,metrica` em `Projeto/k8s/saida/replicas-<ts>.csv`
   (gitignored, como o CSV do scaler) a partir de `kubectl get deploy,hpa`.
 - Roteiro: rajada no `cas` acima do limiar → `reservation` e `stock` sobem; degrau oscilante → nenhuma descida no meio (#206); carga acima
   da capacidade de uma réplica do `backend` → nenhum pod sai do Service nem reinicia por probe (#207); rajada em `identity.notification`
   → `notification` até 3 e volta; fim da carga → tudo volta ao mínimo depois da janela.
-- Critérios: overselling 0 no CAS (`ativas ≤ capacity` e `quant` coerente, por `cluster.sh psql`), nenhum e-mail duplicado (Mailpit do
+- Critérios: **0 5xx atribuíveis a descida** (janela de 60 s depois de cada descida no CSV, nas duas trilhas; P10); overselling 0 no CAS (`ativas ≤ capacity` e `quant` coerente, por `cluster.sh psql`), nenhum e-mail duplicado (Mailpit do
   overlay), CSV com subidas e descidas, `adm:replicas` acompanhando o `readyReplicas` (D4), réplica nova recebendo tráfego em até alguns segundos (B1) ou em até um TTL (C) e ociosa no controle, CPU do nó por trilha, linha de
   base de CPU/RAM do nó.
+
+## Segurança (consolidado)
+
+- Segredos só saem do `.env`/`supabase/.env` por `docker compose config` para um arquivo temporário fora do repo (`mktemp`, `chmod 700`,
+  apagado no fim) e viram Secrets de uma lista fechada de componentes. Nada é impresso nem versionado.
+- e2e e dry-run: Secrets do override do e2e (Mailpit, credenciais efêmeras), com guarda sobre os Secrets antes do `apply` (P1, P2).
+- KEDA com acesso a secrets restrito e token só de métrica, gerado a cada `up` e aceito só em `GET /internal/metrics/hot` (P3).
+- `admission`: RBAC só de `get` no Deployment `reservation`; os outros pods sem token de ServiceAccount.
+- `--context` explícito em todo `kubectl`/`helm` (E4); `redis-cli` com `REDISCLI_AUTH`; porta 8090 só com `health` sem detalhes.
 
 ## Fora de escopo
 
