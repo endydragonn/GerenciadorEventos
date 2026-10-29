@@ -6,7 +6,7 @@ tags: [database, dbml, postgresql, schema]
 created: 2026-08-24
 ---
 
-> **Vendorizado de:** `D:\Claude\Brain\01-Projects\Event-Management-System\Database-Schema.md`
+> **Vendorizado de:** documentação externa do projeto, `Database-Schema.md`
 > **Sincronizado em:** 2026-09-03 · sincronização manual (ver `README.md`)
 
 # Database Schema — Event Management System

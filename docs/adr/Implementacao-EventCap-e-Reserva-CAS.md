@@ -6,7 +6,7 @@ tags: [implementation, changelog, eventcap, cas, database, backend, frontend]
 created: 2026-09-01
 ---
 
-> **Vendorizado de:** `D:\Claude\Brain\01-Projects\Event-Management-System\Implementacao-EventCap-e-Reserva-CAS.md`
+> **Vendorizado de:** documentação externa do projeto, `Implementacao-EventCap-e-Reserva-CAS.md`
 > **Sincronizado em:** 2026-09-03 · sincronização manual (ver `README.md`)
 
 # Implementação — EventCap isolado + reserva com CAS

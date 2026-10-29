@@ -1,6 +1,6 @@
 # Backlog — Decomposição do Sistema em Issues Iterativas
 
-Gerado a partir da documentação do vault (`D:\Claude\Brain\01-Projects\Event-Management-System\`).
+Gerado a partir da documentação de arquitetura do projeto (cópia versionada em `docs/adr/`).
 Cada issue é uma fronteira de iteração: **após o merge, `docker compose up` + a suíte de
 testes continuam verdes e o contrato servido ao Flutter não muda.** Numa extração de serviço,
 "verde" = o `gateway` ainda serve o mesmo contrato externo, não só que a suíte compila.
@@ -143,7 +143,7 @@ Também abertas, fora do Batch 2 por decisão do usuário: #16 (`.env`, até o f
 - **Aceite:** `docker compose -f Projeto/docker-compose.yml up -d --build` sobe; `Projeto/Backend/run-tests.sh` roda e o resultado fica registrado. Sem mudança de código.
 - **Depende de:** —
 
-### 2. Vendorizar as ADRs do vault em `docs/adr/`
+### 2. Vendorizar as ADRs em `docs/adr/`
 `fase/0` `area/infra`
 - **Aceite:** os 8 `.md` em `docs/adr/`, links como caminhos relativos, índice em `docs/adr/README.md`.
 - **Depende de:** —

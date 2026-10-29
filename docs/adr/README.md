@@ -1,19 +1,19 @@
-# ADRs de Arquitetura — cópia versionada do vault
+# ADRs de Arquitetura — cópia versionada
 
 Esta pasta é uma **cópia versionada** das ADRs (Architecture Decision Records) e notas de
-arquitetura do TCC (Gerenciador de Eventos). A **fonte de verdade continua no vault Obsidian**
-em `D:\Claude\Brain\01-Projects\Event-Management-System\`; o que está aqui é um espelho para
-que quem clonar o repositório não precise do vault. A sincronização é **manual** por ora —
+arquitetura do TCC (Gerenciador de Eventos). A **fonte de verdade continua na documentação externa**
+do projeto (fora do git); o que está aqui é um espelho para
+que quem clonar o repositório não precise dela. A sincronização é **manual** por ora —
 cada arquivo traz, logo após o frontmatter, um bloco de proveniência dizendo de onde veio e
-quando foi sincronizado. Os wikilinks do Obsidian foram reescritos como links markdown
+quando foi sincronizado. Os wikilinks foram reescritos como links markdown
 relativos; o frontmatter YAML original foi mantido de propósito (é proveniência).
 
 ## Como re-sincronizar
 
-- Fonte: `D:\Claude\Brain\01-Projects\Event-Management-System\` (vault Obsidian).
+- Fonte: a documentação externa de arquitetura do projeto (fora do git).
 - Processo: cópia **manual** dos 8 `.md` listados abaixo, reescrevendo os wikilinks para
   links relativos e atualizando o bloco de proveniência (data de sincronização).
-- Quando: sempre que as ADRs correspondentes mudarem no vault.
+- Quando: sempre que as ADRs correspondentes mudarem na fonte.
 - ADRs novas a partir da Fase 6 (ex.: a do backbone de eventos) nascem **aqui**, sem bloco de
   proveniência; esta pasta é a versão de referência delas.
 
