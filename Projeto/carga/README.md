@@ -255,7 +255,7 @@ duração efetiva = `min(duração do degrau, (janela da parada + 1) × J, (últ
 | `fim_a_fim_p50/p95/p99` | envio → resultado final em ms (201 + confirma, ou estado final + confirma) |
 | `parada`, `params_autoescala`, `arranjo`, `pct_acompanha`, `consulta_ms` | registro da condição de parada e do que o host/gerador rodavam |
 
-A **trava do resumo** continua fechando com os contadores novos (global = soma dos degraus) e confere que cada acompanhamento terminou em exatamente um destino.
+A **trava do resumo** continua fechando com os contadores novos (global = soma dos degraus).
 
 > **Comparabilidade com o X da #40:** o caminho síncrono é idêntico ao da R (padrão **sem** `Idempotency-Key` própria; com ela, `-ComChave`, o `reservation` grava a chave também no síncrono e o X = 56k não a pagava). O que
 > difere é só o espaço entre degraus: `PCT_ACOMPANHA=100` (padrão) alonga de 31 s para 46 s; para reproduzir a escada da #40 use `PCT_ACOMPANHA=0` (31 s). Compare sempre na mesma configuração ("X(2) ≈ X(1)?").
