@@ -118,7 +118,7 @@ commitar ou registrar em log.
 - **`INTERNAL_API_TOKEN` (desde a #33, volta 3):** as chamadas internas gateway → reservation, gateway → catalog (`/internal/**`; #35) e gateway → identity (#36; só o JWKS é isento) exigem um token de serviço
   (header `X-Internal-Token`; 401 sem/errado). **Acrescente ao `Projeto/.env` (você mesmo; o repo nunca edita nem imprime o `.env`)**
   `INTERNAL_API_TOKEN=<valor aleatório>`, por exemplo gerado com `openssl rand -hex 32`. O compose repassa o MESMO valor ao `backend`, ao `identity`, ao
-  `reservation`, ao `stock`, ao `catalog` e ao `admission` (que também o usam nas chamadas entre si: `reservation` → `stock` na saga da #47, worker do `admission` → `reservation` na #42). Não há valor default: sem a variável **qualquer `docker compose`** (inclusive o `up -d db redpanda` dos testes)
+  `reservation`, ao `stock`, ao `catalog` e ao `admission` (que também o usam nas chamadas entre si, por exemplo gateway → `admission` (#41), `reservation` e `catalog` → `stock` (#47) e worker do `admission` → `reservation` (#42)). Não há valor default: sem a variável **qualquer `docker compose`** (inclusive o `up -d db redpanda` dos testes)
   recusa com mensagem clara (`${INTERNAL_API_TOKEN:?...}`), e os serviços também falham no boot. O `run-tests.sh` usa um valor de teste
   explícito (não é segredo).
 - **`REDIS_PASSWORD` (desde a #41):** o Redis (`gerenciador-redis`, só o serviço `admission` o usa) exige senha, sem default. **Acrescente ao `Projeto/.env` (você mesmo; o repo nunca edita nem imprime o `.env`)**
@@ -325,7 +325,7 @@ acompanha uma amostra das reservas em fila (`PCT_ACOMPANHA`) e para com o códig
 RabbitMQ, o contador do Redis e as réplicas por serviço (31 colunas); `limpar-banco.sh` versionado e ciente das réplicas; braço C pelo `lb`. PR #201; detalhes no
 `Projeto/carga/README.md`, "Rodada 4".
 
-**Medido (Batch 2, Rodada 4, issue #179, 2026-10-29):** braço base (sem autoescala) estável até 98k RPM com 0 5xx, fila drenando e CAS com overselling 0; braço C
+**Medido (Batch 2, Rodada 4, issue #179, 2026-10-29):** braço base (sem autoescala) até 98k RPM com 0 5xx e CAS com overselling 0, estável acima do X (50k–98k: efetivo = alvo, fila drenando) e mais lento que a R abaixo dele (1º degrau degradado em 32k); braço C
 parou em 32k/38k pelos 5xx do health check do `lb` (#207) e pela limitação do sinal `adm:hot` (#206), também com overselling 0. PR #208; resultados em
 `Projeto/carga/results/07-rodada4-admission`.
 
@@ -344,5 +344,5 @@ em cada serviço e nos `*-client`. Eles só linkam os resultados das etapas. PR 
 **Decidido, não implementado:** a autoescala em Kubernetes com HPA/KEDA (opção D da ADR `docs/adr/Architecture-Decision-Autoescala.md`, #197) e, junto, o `stock`
 escalável até 3 réplicas (D3 b da saga, #205). O mapa da Opção B (`docs/adr/Architecture-Decision-Microservices-Split.md`) está extraído: `notification` (#32),
 `reservation` (#33), `catalog` (#35), `identity` (#36), `admission` (#41) e `stock` (#47); o `gateway` é o único conteúdo do módulo `monolito` desde a #36. A
-camada de alta carga (#41–#44) e a autoescala opção A (#111/#112) existem e foram medidas na Rodada 4; a saga (#47) é medida na Rodada 5 (#180, em andamento).
+camada de alta carga (#41–#43, com a UI da #44) e a autoescala opção A (#111/#112) existem e foram medidas na Rodada 4; a saga (#47) é medida na Rodada 5 (#180, em andamento, em espera).
 Follow-ups abertos no `BACKLOG.md`, seção Estado.

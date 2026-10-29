@@ -114,7 +114,7 @@ mergeado. Batch 2 (2026-10-28 a 2026-10-29, branch de integração `Batch_2`): #
 #111 → #112, #178 → Rodada 4 (#179) → #47 → #204 → Rodada 5 (#180) e #46; PR final `Batch_2` → `main` pendente.
 
 Issues do Batch 2 fora do import 1–46: #177 (imagens slim, PR #189), #178 (harness da Rodada 4, PR #201), #179 (Rodada 4,
-`Projeto/carga/results/07-rodada4-admission`, PR #208) e #204 (harness da Rodada 5, PR #209), fechadas; #180 (Rodada 5) **em andamento**.
+`Projeto/carga/results/07-rodada4-admission`, PR #208) e #204 (harness da Rodada 5, PR #209), fechadas; #180 (Rodada 5) **em andamento** (em espera).
 
 Follow-ups abertos (2026-10-29):
 
