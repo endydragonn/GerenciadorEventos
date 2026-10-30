@@ -10,6 +10,10 @@ include:
   - path: ./supabase/docker-compose.pooler.yml
   - path: ./supabase/docker-compose.studio.yml
 
+# Os 7 serviços Java rodam, por padrão, as imagens ENXUTAS do Slim (issue #197, D7), sem `build:`: elas precisam existir localmente
+# (`Projeto/slim/gerar-imagens-slim.sh`; `pull_policy: never` faz o `up` falhar na hora com "image not found" em vez de puxar do Docker Hub).
+# `SLIM_TAG` (default `latest`; da shell ou do `.env`) escolhe a tag, p.ex. para gerar/usar um lote novo sem tocar o `:latest`. A imagem completa (Dockerfile), para
+# depurar, vem pelo override `docker-compose.completa.yml`. O `frontend` continua com `build:`.
 services:
   # Postgres do Supabase (issue #18). Pré-requisito: Projeto/supabase/.env existente (ver
   # supabase/README.md). O POSTGRES_USER do container fica o default da imagem
@@ -124,9 +128,8 @@ services:
     restart: unless-stopped
 
   backend:
-    build:
-      context: ./Backend
-      dockerfile: monolito/Dockerfile
+    image: gerenciador-eventos-backend.slim:${SLIM_TAG:-latest}
+    pull_policy: never
     container_name: gerenciador-backend
     env_file:
       - ./.env
@@ -217,9 +220,8 @@ services:
   # o reservation por HTTP (cas) com a Idempotency-Key da mensagem. Desde a #43 o gatilho (uso de X por evento, com histerese) liga o caminho de enfileirar
   # ao POST /internal/admissions: acima do limiar o POST devolve queued e o gateway responde 202.
   admission:
-    build:
-      context: ./Backend
-      dockerfile: admission/Dockerfile
+    image: gerenciador-eventos-admission.slim:${SLIM_TAG:-latest}
+    pull_policy: never
     container_name: gerenciador-admission
     environment:
       # Token de serviço exigido em toda requisição (401 sem/errado). SEM default: falha no boot sem ele.
@@ -278,9 +280,8 @@ services:
   # 1000 (reservation) + 250 (stock) + 10 (backend) + 3 (notification) + 100 (catalog) + 100 (identity) = 1463 <= POOLER_MAX_CLIENT_CONN 1500 (#47).
   # NÃO SOBE com a migração 20261028 pendente (PublicSchemaGuard: public.users ainda existe).
   identity:
-    build:
-      context: ./Backend
-      dockerfile: identity/Dockerfile
+    image: gerenciador-eventos-identity.slim:${SLIM_TAG:-latest}
+    pull_policy: never
     container_name: gerenciador-identity
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0
@@ -322,9 +323,8 @@ services:
   # Chama o stock (eventcap, #47) por HTTP, mas NÃO depende dele no boot: com o stock fora a criação de evento segue e o
   # eventcap vem pela reconciliação do EventCreated (tópico catalog.event, publicado pelo relay daqui; group stock-catalog).
   catalog:
-    build:
-      context: ./Backend
-      dockerfile: catalog/Dockerfile
+    image: gerenciador-eventos-catalog.slim:${SLIM_TAG:-latest}
+    pull_policy: never
     container_name: gerenciador-catalog
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0
@@ -361,9 +361,8 @@ services:
   # desligadas). Fala com o Postgres pelo Supavisor, mesmo tenant e mesmo usuário do backend e do notification, então o pool real
   # (45 / 245) NÃO cresce; a conta dos Hikari (1000 + 250 do stock + 10 + 3 + 100 do catalog + 100 do identity = 1463 <= POOLER_MAX_CLIENT_CONN 1500) está no Backend/CLAUDE.md.
   reservation:
-    build:
-      context: ./Backend
-      dockerfile: reservation/Dockerfile
+    image: gerenciador-eventos-reservation.slim:${SLIM_TAG:-latest}
+    pull_policy: never
     container_name: gerenciador-reservation
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0
@@ -410,9 +409,8 @@ services:
   # 100 (catalog) + 100 (identity) = 1463 <= POOLER_MAX_CLIENT_CONN 1500. Mudar esse número exige refazer a conta (Backend/CLAUDE.md, "Serviço stock").
   # Só o reservation depende dele (service_healthy); o catalog NÃO (a criação de evento segue com o stock fora).
   stock:
-    build:
-      context: ./Backend
-      dockerfile: stock/Dockerfile
+    image: gerenciador-eventos-stock.slim:${SLIM_TAG:-latest}
+    pull_policy: never
     container_name: gerenciador-stock
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0
@@ -473,9 +471,8 @@ services:
   # Projeto/.env), sem JWT_SECRET/reCAPTCHA. Fala com o Postgres pelo Supavisor (mesmo tenant do backend) com um pool
   # Hikari de 3 conexões que NÃO aumenta o pool real do Supavisor (conta no Backend/CLAUDE.md, "Serviço notification").
   notification:
-    build:
-      context: ./Backend
-      dockerfile: notification/Dockerfile
+    image: gerenciador-eventos-notification.slim:${SLIM_TAG:-latest}
+    pull_policy: never
     container_name: gerenciador-notification
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://supabase-pooler:6543/meu_banco?prepareThreshold=0

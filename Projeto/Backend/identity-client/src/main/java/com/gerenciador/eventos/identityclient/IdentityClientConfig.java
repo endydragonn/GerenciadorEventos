@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.gerenciador.eventos.clientlb.ClientLb;
+
 /**
  * Bean do {@link IdentityClient} (o {@code UserApi}/{@code EmailVerificationApi}/{@code MyWalletApi}/{@code RecaptchaApi} que o
  * gateway injeta desde o cutover do identity, issue #36). Tudo por env var: {@code IDENTITY_SERVICE_URL}, {@code INTERNAL_API_TOKEN}
@@ -27,9 +29,11 @@ public class IdentityClientConfig {
             @Value("${identity.client.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${identity.client.connection-request-timeout-ms:5000}") long connectionRequestTimeoutMs,
             @Value("${identity.client.response-timeout-ms:5000}") long responseTimeoutMs,
-            @Value("${identity.client.evict-idle-ms:20000}") long evictIdleMs) {
+            @Value("${identity.client.evict-idle-ms:20000}") long evictIdleMs,
+            @Value("${client.lb.enabled:false}") boolean lbAtivo,
+            @Value("${client.lb.ttl-ms:15000}") long lbTtlMs) {
         return new IdentityClient(baseUrl, internalToken, maxConnections, Duration.ofMillis(connectTimeoutMs),
                 Duration.ofMillis(connectionRequestTimeoutMs), Duration.ofMillis(responseTimeoutMs),
-                Duration.ofMillis(evictIdleMs));
+                Duration.ofMillis(evictIdleMs), new ClientLb(lbAtivo, lbTtlMs));
     }
 }

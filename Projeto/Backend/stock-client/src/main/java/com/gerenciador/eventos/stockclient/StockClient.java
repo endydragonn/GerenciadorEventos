@@ -29,6 +29,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.gerenciador.eventos.clientlb.ClientLb;
 import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.stockclient.api.EventCapacityApi;
 import com.gerenciador.eventos.stockclient.api.HoldLiberadoException;
@@ -65,21 +66,29 @@ public class StockClient implements EventCapacityApi {
     /** @param internalToken {@code INTERNAL_API_TOKEN}, enviado em TODA chamada; obrigatório (sem ele o stock responde 401 a tudo). */
     public StockClient(String baseUrl, String internalToken, int maxConnections, Duration connectTimeout,
             Duration connectionRequestTimeout, Duration responseTimeout, Duration evictIdle) {
+        this(baseUrl, internalToken, maxConnections, connectTimeout, connectionRequestTimeout, responseTimeout, evictIdle,
+                ClientLb.desligado());
+    }
+
+    /** @param lb balanceamento no cliente (trilha C da #197): soma resolver round-robin, TTL e reuso FIFO ao pool; desligado não muda nada */
+    public StockClient(String baseUrl, String internalToken, int maxConnections, Duration connectTimeout,
+            Duration connectionRequestTimeout, Duration responseTimeout, Duration evictIdle,
+            ClientLb lb) {
         if (internalToken == null || internalToken.isBlank()) {
             throw new IllegalStateException("INTERNAL_API_TOKEN não configurado: o cliente do stock precisa do token de "
                     + "serviço (o mesmo valor do serviço stock). Gere um com `openssl rand -hex 32` e ponha no Projeto/.env.");
         }
-        PoolingHttpClientConnectionManager pool = PoolingHttpClientConnectionManagerBuilder.create()
+        ConnectionConfig.Builder conexao = ConnectionConfig.custom()
+                .setConnectTimeout(Timeout.ofMilliseconds(connectTimeout.toMillis()))
+                .setSocketTimeout(Timeout.ofMilliseconds(responseTimeout.toMillis()))
+                // socket fechado pelo stock (queda e volta em menos que o evict de 20 s) é descartado na retirada do pool, sem
+                // depender do default da lib
+                .setValidateAfterInactivity(TimeValue.ofSeconds(2));
+        PoolingHttpClientConnectionManagerBuilder construtor = PoolingHttpClientConnectionManagerBuilder.create()
                 .setMaxConnTotal(maxConnections)
-                .setMaxConnPerRoute(maxConnections)
-                .setDefaultConnectionConfig(ConnectionConfig.custom()
-                        .setConnectTimeout(Timeout.ofMilliseconds(connectTimeout.toMillis()))
-                        .setSocketTimeout(Timeout.ofMilliseconds(responseTimeout.toMillis()))
-                        // socket fechado pelo stock (queda e volta em menos que o evict de 20 s) é descartado na retirada do pool, sem
-                        // depender do default da lib
-                        .setValidateAfterInactivity(TimeValue.ofSeconds(2))
-                        .build())
-                .build();
+                .setMaxConnPerRoute(maxConnections);
+        lb.aplicar(construtor, conexao);
+        PoolingHttpClientConnectionManager pool = construtor.setDefaultConnectionConfig(conexao.build()).build();
         this.httpClient = HttpClients.custom()
                 .setConnectionManager(pool)
                 .setDefaultRequestConfig(RequestConfig.custom()

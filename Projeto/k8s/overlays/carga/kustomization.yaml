@@ -1,0 +1,18 @@
+# Overlay `carga` (issue #197, P2): o overlay e2e (Mailpit no lugar do SMTP real, Services sem NodePort) + `SEED_ENABLED=true` no gateway, para o dry-run de carga semear por
+# POST /bff/seed. Os Secrets saem do `docker compose config` COM o override do e2e (credenciais efêmeras, e-mail só para o Mailpit, nunca o SMTP real), e o cluster.sh os confere
+# (`guarda`) antes de qualquer apply, igual ao e2e. No fim do dry-run o roteiro reaplica o overlay `e2e` (sem esta env): depois dele `POST /bff/seed` responde 404.
+resources:
+  - ../e2e
+patches:
+  - target: {kind: Deployment, name: backend}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: backend}
+      spec:
+        template:
+          spec:
+            containers:
+              - name: backend
+                env:
+                  - {name: SEED_ENABLED, value: "true"}

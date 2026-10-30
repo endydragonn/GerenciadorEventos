@@ -1,8 +1,9 @@
 # Override da AUTOESCALA de `backend` (gateway) e `reservation` (issue #111) e de `identity`, `catalog`, `admission` e `notification` (issue #112)
 # (ADR docs/adr/Architecture-Decision-Autoescala.md, opção A).
 # Opcional: o compose base NÃO muda (run-tests.sh, kit de carga, smokes e o braço "sem autoescala" seguem com os nomes e a porta de sempre).
-#   docker compose -f docker-compose.yml -f docker-compose.autoescala.yml up -d --build --wait
-# Combina com o override enxuto: ... -f docker-compose.yml -f docker-compose.slim.yml -f docker-compose.autoescala.yml
+#   docker compose -f docker-compose.yml -f docker-compose.autoescala.yml up -d --wait
+# Os serviços Java rodam as imagens enxutas do base (#197; gerar com slim/gerar-imagens-slim.sh). Para depurar com as completas:
+#   ... -f docker-compose.yml -f docker-compose.completa.yml -f docker-compose.autoescala.yml up -d --build --wait
 # Quem sobe, promove e derruba réplicas é o scaler no host (autoescala/scaler.sh); sem ele o stack sobe com 1 réplica de cada e funciona igual.
 # Nenhuma variável deste arquivo é segredo e nenhuma exige o `.env` (todas têm default).
 #

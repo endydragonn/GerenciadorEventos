@@ -11,6 +11,8 @@ created: 2026-10-28
 **Status:** **decidida (usuário, 2026-10-28): A agora, D depois na #197.** A #111 implementa a opção A (override com `docker
 compose --scale` + HAProxy + scaler no host, com os parâmetros abaixo) e a #112 a estende. A opção D (Kubernetes com HPA/KEDA)
 fica para a issue #197, fora do Batch 2.
+**Atualização (usuário, 2026-10-29):** a opção D foi desenhada na #197 (seção "Opção D: Kubernetes (#197, #205)" no fim); a opção A
+continua valendo para quem usa o compose.
 Escrita direto no repositório (sem cópia no vault).
 
 Complementa [Architecture-Decision-Async-Checkout-Queue](Architecture-Decision-Async-Checkout-Queue.md) (o gatilho 80/70 do
@@ -272,3 +274,51 @@ Resultado (2 rodadas; a 2ª com estas diferenças: stand-by do `identity` descar
 - **Nenhum e-mail duplicado:** 1ª rodada, 2501 mensagens no Mailpit = 2501 destinatários distintos (2500 do lote + 1 cadastro real, cujo código foi lido do e-mail); 2ª, 8001 = 8001, 0 duplicados. Todas as réplicas do `notification` com `MAIL_HOST=mailpit`; nenhum e-mail real saiu.
 - **Isolamento:** project removido com `down -v` (0 containers, volumes e redes sobrando); o `gerenciador-db` real seguiu com o `working_dir` de sempre; as env-files do checkout principal entraram por referência (`COMPOSE_ENV_FILES`), sem cópia nem leitura.
 - **Fica para a Rodada 4:** a rodada com todos escalando (overselling 0, nenhum e-mail duplicado, gráfico) com capacidades calibradas, o custo do salto pelo `lb` e o efeito do Hikari 50 e dos 10 workers por réplica do `admission`.
+
+
+## Opção D: Kubernetes (#197, #205) — decisões de 2026-10-29
+
+Spec: [`2026-10-29-k8s-autoescala-design.md`](../superpowers/specs/2026-10-29-k8s-autoescala-design.md) (aprovada pelo usuário com os
+patches da revisão adversarial). Branch de integração `K8s`. O que a opção D decide e onde ela se afasta da opção A:
+
+| # | Decisão | Diferença em relação à opção A |
+|---|---|---|
+| D1 | **kind**, um nó, subindo e caindo por `Projeto/k8s/cluster.sh` | o cluster disputa CPU e RAM com a medição: é apagado durante as rodadas |
+| D2 | **Stack inteira no cluster** (7 serviços, frontend, Postgres + Supavisor, Redpanda, Redis, RabbitMQ); dados descartáveis; Studio/Kong/meta fora; `run-tests.sh` segue no compose | o banco do cluster nasce dos init scripts a cada cluster; o `meu_banco` fica no compose |
+| D3 | **HPA com alvo de uso 0,5**, sem stand-by: a réplica sobe a 50% já com tráfego | não há réplica com peso 0; o gatilho da fila (0,8 de `X × ativas`, #43) não muda |
+| D4 | O `admission` lê `status.readyReplicas` do Deployment `reservation` pela **API do Kubernetes** (RBAC só de `get`) e grava `adm:replicas` (mesma chave e TTL do scaler) | quem escreve a chave é o `admission`, não o scaler; falha da API = fallback `ADMISSION_RESERVATION_REPLICAS` |
+| D5 | **KEDA sem Prometheus**: `reservation` pelo `adm:hot` (scaler `metrics-api`, endpoint do `admission` com token só de métrica), `notification` pelo lag do group, os HTTP por CPU do container da aplicação | nos HTTP a regra passa de req/s para CPU (diferença aceita pelo aceite da #197) |
+| D6 | **Duas trilhas** de balanceamento, escolhidas na subida: **B1** = Istio 1.31.1 com sidecar (balanceia por requisição; retry da malha desligado; probes fora do sidecar); **C** = balanceamento no cliente nas 5 libs `*-client` (DNS round-robin sobre Service headless + TTL de conexão), desligado por padrão | não há HAProxy nem scaler próprio; o Linkerd ficou fora porque o open source só publica releases edge desde fev/2024 |
+| D7 | **Slim como padrão** também no compose (imagens `*.slim` sem `build:`; a completa num override) | entra na `K8s` depois da R5 |
+
+- **#207 no cluster:** probes numa porta de management própria (outro pool de threads), readiness só com o estado do ciclo de vida,
+  liveness de 2 min, nada no caminho (malha ou cliente) ejeta réplica por saturação, `preStop` de 20 s antes do shutdown.
+- **#206 no cluster:** a descida usa a janela de estabilização do HPA (`K8S_DESCE_SEG`, default 120 s, máximo da recomendação na janela) e
+  no máximo 1 pod a cada 60 s; a subida não tem janela.
+- **Pool (Supavisor ≤ 1500):** no cluster, `reservation` 200 e `stock` 60 por réplica, `maxSurge: 0`, conta com 3 réplicas + 1 pod em
+  término por serviço: `4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 4×60 = 1492`. O `stock` escala até 3 (#205, D3 b da saga), só no cluster.
+- **AppArmor:** não aplicável no host do TCC (kernel WSL2 do Docker Desktop sem o módulo); os perfis Seccomp do Slim são aplicados nos pods.
+- **Alternativas registradas:** Linkerd `edge` fixado (mais leve, fora da regra de versão estável); Istio ambient (o L7 exige um waypoint
+  central, que não é sidecar); Prometheus + adapter (req/s fiel, mas mais um componente pesado no host de medição); stand-by emulada por
+  controlador próprio (código nosso, o que o autoscaler nativo quer evitar).
+- **Como ficou implementado:** ver a seção "Opção D implementada" abaixo.
+
+## Opção D implementada (#197, etapas 1 a 4b, 2026-10-30)
+
+Implementada na branch `Issue-197` (base `K8s`); a opção A segue sendo a que a R4/R5 medem. Onde a implementação se afastou da spec ou do que a ADR previa:
+
+- **Stack e ciclo de vida (D1, D2).** `Projeto/k8s/cluster.sh up --trilha b1|c|nenhuma` cria o cluster kind (um nó, `kindest/node` fixado por digest), copia os perfis Seccomp, carrega as imagens, gera Secrets e ConfigMaps do `docker compose config` (lista fechada de componentes, nunca Studio/Kong/meta) e aplica um kustomization temporário (overlay + componente da trilha + patch gerado da autoescala). Dados
+  descartáveis (somem no `down`); contexto `kubectl`/`helm` sempre explícito. Overlays `base` (Secrets reais, só no cluster `gerenciador`), `e2e`, `completa` e `carga`; os clusters `gerenciador-e2e*` só aceitam `e2e` e `carga`.
+- **Autoescala (D3, D5): req/s virou CPU nos serviços HTTP.** `backend`, `identity`, `catalog`, `admission` e `stock` escalam por `Utilization` de CPU do container da aplicação (o sidecar não entra); o `reservation` pelo RPM do evento mais quente (`adm:hot`, via `GET /internal/metrics/hot` do `admission`, com um token só de métrica); o `notification` pelo lag do group. A descida usa a janela de estabilização do HPA
+  (`K8S_DESCE_SEG`, 120 s por padrão) e 1 pod por 60 s (#206). A opção A tinha **stand-by** (réplica com peso 0 no `lb` a 50%, promovida a 80%); no HPA não há stand-by: a réplica sobe a 50% já recebendo tráfego. O KEDA não tem scaler de chave do Redis: daí o endpoint. `KEDA_RESTRICT_SECRET_ACCESS=true` (o nome do value no chart é `permissions.operator.restrict.secret`).
+- **Réplicas ativas (D4).** O `admission` lê `readyReplicas` do Deployment `reservation` pela API do Kubernetes (RBAC só `get`) e grava `adm:replicas` (TTL 15 s): a mesma chave do scaler da opção A.
+- **Balanceamento (D6).** B1 (Istio 1.31.1, sidecar, retry desligado, probes fora do sidecar) e C (módulo `client-lb`: DNS round-robin sobre Service headless + TTL de conexão de 15 s). O controle é o Service L4 puro.
+- **AppArmor: não se aplica neste host.** O kernel do Docker Desktop (WSL2) tem o módulo desligado (`/sys/module/apparmor/parameters/enabled = N`); os perfis `*-apparmor-profile` seguem versionados e o campo `appArmorProfile` fica documentado para um host Linux. O Seccomp do Slim **é** aplicado (`Localhost`), somado a `k8s/seccomp-extras.txt`: o perfil cru do Slim não deixa nem o container iniciar.
+- **Seccomp: o achado `getegid`.** O perfil do Slim não tinha `getegid`; sem ele o HotSpot trata o processo como privilegiado e **ignora `JAVA_TOOL_OPTIONS` em silêncio**. Na trilha C isso desligava o `java.security` extra (cache de DNS de 5 s) nos serviços; o e2e da 4a não via (provava com um pod sem perfil). Achado por bissecção na 4b e corrigido no `seccomp-extras.txt`. **Os perfis do Slim do compose
+  (`Projeto/slim/perfis`) têm a mesma lacuna** (só importa onde alguém ligue `JAVA_TOOL_OPTIONS` ou outro caminho que dependa de `getegid`); não foram tocados (R5).
+- **Dados descartáveis e isolamento.** O dry-run roda num cluster `gerenciador-e2e-dry` (credenciais efêmeras, Mailpit, sem porta no host), com `POST /bff/seed` ligado só durante o dry-run e reaplicado desligado no fim (404 conferido).
+- **Resultado do dry-run de carga (local, não é medição; 2026-10-30).** `Projeto/k8s/dry-run.sh --trilha c|b1|nenhuma`, um cluster novo por trilha, X = 600 RPM (alvo do reservation 300 RPM por réplica), CPU alvo 20%, janela de descida 45 s (produção: 120 s), 15000 pedidos de e-mail, evento quente de capacidade 30. **Os critérios automáticos passaram na `c` e na `b1`; a `nenhuma` falhou só o do degrau oscilante (ver abaixo):** `reservation`, `stock`, `notification` e `backend` subiram ao teto de 3 e voltaram a 1; **0 5xx** na janela de 60 s depois de cada descida dos serviços que o tráfego de fundo exercita por HTTP (12 descidas na `c`, 13 na `b1`, 14 na `nenhuma`; as 4 descidas por rodada de `identity` e `notification` o fundo não exercita por HTTP e só foram informadas);
+  o degrau oscilante não derrubou réplica (#206; a prova vem da `c` e da `b1`, onde a métrica por pod chegou a 0; na `nenhuma` o vale foi só 213 por pod, cerca de 638 RPM no total, e o HPA sem a janela também teria ficado em 3 réplicas, então o vale não foi fundo o bastante para provar); `adm:replicas` igual ao `readyReplicas` fora das transições (0 diferenças em 656, 662 e 688 amostras); a réplica nova do reservation recebeu conexão em 16 s (`c`, dentro do TTL de 15 s + cache de DNS de 5 s) e 1 s (`b1`), e **nenhuma** em 60 s no controle (`nenhuma`); com o backend saturado em 1 réplica (CPU máxima do **pod** de 1594m a 2620m; na `b1` é o pod somado ao `istio-proxy`, que não tem limite de CPU, e o limite do container `backend` é 2000m; p95 de 564 ms a 2585 ms) nenhum pod saiu do Service e nenhum container reiniciou nem teve `Unhealthy`
+  de probe (#207); 15000 e-mails sem duplicado nem perdido; overselling 0 (30 reservas ativas para capacidade 30, `quant` 0); `POST /bff/seed` 404 depois. Linha de base do nó (kind, CPU em % de um núcleo / RAM): parado 14 a 16% / 1,3 a 1,5 GiB; com a stack ociosa 48 a 78% / 3,6 a 4,3 GiB (a `b1` custa +0,7 GiB de sidecars); sob a carga de leitura o nó chega a 668% a 963% de CPU médio (inclui o k6; a `c` rodou sem o teto de 6 CPUs do k6, as outras duas com ele).
+- **O que o dry-run achou e mudou:** o `istio-proxy` do gateway saturado estourou o limite de 256Mi e foi OOMKilled (o pod saiu do Service; 10506 falhas de conexão): o limite do sidecar do gateway (`backend`) passou a 1Gi e os demais ficam em 256Mi (request 128Mi em todos; decisão de 2026-10-30: só o do gateway saturado foi OOMKilled; o pico foi só estimado e a memória do Envoy cresce com as conexões simultâneas). **Verificação pendente (próxima janela de host, depois da R5):** rodada de validação da `b1` com essa configuração e a da `c` com o teto de CPU do k6 (`SLIM_TAG=k8s Projeto/k8s/dry-run.sh --trilha b1` e `--trilha c`), medindo o sidecar sozinho com `kubectl top pod --containers`; o `getegid` do Seccomp (acima); o Mailpit guarda só 500 mensagens por padrão (`MP_MAX_MESSAGES=50000` no overlay `e2e`).
+- **Fica para depois:** a rodada formal de medição no cluster (fora de escopo, issue própria); o e2e da trilha `c` com a asserção nova do `Picked up JAVA_TOOL_OPTIONS`; o overlay `completa` só foi renderizado; os perfis Seccomp do compose seguem sem o `getegid`. Detalhes e a operação em [`Projeto/k8s/README.md`](../../Projeto/k8s/README.md).

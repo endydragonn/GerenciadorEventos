@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.gerenciador.eventos.clientlb.ClientLb;
+
 /**
  * Bean do {@link CatalogClient} (o {@code EventApi} que o gateway injeta quando o catalog sai do processo, issue #35). Tudo por
  * env var: {@code CATALOG_SERVICE_URL}, {@code INTERNAL_API_TOKEN} (obrigatória: o contexto não sobe sem ela),
@@ -24,9 +26,11 @@ public class CatalogClientConfig {
             @Value("${catalog.client.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${catalog.client.connection-request-timeout-ms:5000}") long connectionRequestTimeoutMs,
             @Value("${catalog.client.response-timeout-ms:15000}") long responseTimeoutMs,
-            @Value("${catalog.client.evict-idle-ms:20000}") long evictIdleMs) {
+            @Value("${catalog.client.evict-idle-ms:20000}") long evictIdleMs,
+            @Value("${client.lb.enabled:false}") boolean lbAtivo,
+            @Value("${client.lb.ttl-ms:15000}") long lbTtlMs) {
         return new CatalogClient(baseUrl, internalToken, maxConnections, Duration.ofMillis(connectTimeoutMs),
                 Duration.ofMillis(connectionRequestTimeoutMs), Duration.ofMillis(responseTimeoutMs),
-                Duration.ofMillis(evictIdleMs));
+                Duration.ofMillis(evictIdleMs), new ClientLb(lbAtivo, lbTtlMs));
     }
 }

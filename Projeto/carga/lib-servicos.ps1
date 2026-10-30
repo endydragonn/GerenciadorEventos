@@ -33,7 +33,7 @@ function Get-ContainerDoServico {
     $c[0]
 }
 
-# Pura: lista de -f do braco. Ordem: base, carga, [rpm], extras na ordem dada (slim ANTES da autoescala, como no README da autoescala). Os extras
+# Pura: lista de -f do braco. Ordem: base, carga, [rpm], extras na ordem dada (completa e autoescala mexem em chaves disjuntas: a ordem entre elas nao importa). Os extras
 # vem DEPOIS do override de carga de proposito: o carga poe o Hikari do reservation em 1000 e a autoescala em 300 por replica (3 x 1000 estoura o
 # Supavisor, 1500); com a autoescala por ultimo vale 300, e sem ela (braco base) vale 1000. Caminhos relativos a Projeto/ viram absolutos.
 function Get-ArquivosCompose {
@@ -44,10 +44,6 @@ function Get-ArquivosCompose {
         if (-not $e) { continue }
         if ([System.IO.Path]::IsPathRooted($e)) { $l += $e } else { $l += (Join-Path $Projeto $e) }
     }
-    # slim antes da autoescala (so reordena esses dois; o resto mantem a ordem)
-    $iA = -1; $iS = -1
-    for ($i = 0; $i -lt $l.Count; $i++) { if ($l[$i] -match 'docker-compose\.autoescala\.yml$') { $iA = $i }; if ($l[$i] -match 'docker-compose\.slim\.yml$') { $iS = $i } }
-    if ($iA -ge 0 -and $iS -gt $iA) { $t = $l[$iA]; $l[$iA] = $l[$iS]; $l[$iS] = $t }
     , $l
 }
 

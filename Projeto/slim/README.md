@@ -2,8 +2,9 @@
 
 Versões mínimas das imagens de `backend`, `identity`, `catalog`, `reservation`, `stock` (desde a #47), `notification` e `admission` (esta desde a #178), geradas com o
 [Slim](https://github.com/slimtoolkit/slim) (`slim build --target <imagem>`): ele roda o contêiner, observa (ptrace) quais arquivos o
-processo realmente usa enquanto um probe exercita os endpoints, e monta uma imagem só com eles. **Os Dockerfiles não mudam** e a imagem
-original continua o padrão do compose; as `*.slim` entram por um override opcional.
+processo realmente usa enquanto um probe exercita os endpoints, e monta uma imagem só com eles. **Os Dockerfiles não mudam**. Desde a #197 (D7) as `*.slim` são o
+**padrão** do `docker-compose.yml` (sem `build:`; `pull_policy: never`: sem a imagem local o `up` falha com "image not found" em vez de puxar do Docker Hub) e a imagem
+completa (Dockerfile) vem pelo override `docker-compose.completa.yml`, para depurar.
 
 ## Usar
 
@@ -11,16 +12,27 @@ original continua o padrão do compose; as `*.slim` entram por um override opcio
 # 1. gerar as 7 imagens (project isolado gerenciador-e2e-slim; leva ~15-25 min na 1ª vez, o build gordo vem do cache depois)
 Projeto/slim/gerar-imagens-slim.sh                # ou só alguns: Projeto/slim/gerar-imagens-slim.sh identity notification admission
 
-# 2. subir a stack com elas (precisa das imagens locais; o `build: !reset null` do override impede o rebuild da gorda com o nome slim)
-docker compose -f Projeto/docker-compose.yml -f Projeto/docker-compose.slim.yml up -d --wait
+# 2. subir a stack (as slim são o padrão do compose; precisam existir localmente)
+docker compose -f Projeto/docker-compose.yml up -d --wait
 
 # 3. suíte e2e da stack inteira com as imagens slim (o e2e confere que cada um dos 7 serviços roda o ID da imagem *.slim)
-E2E_SLIM=1 Projeto/e2e/run-e2e.sh
+Projeto/e2e/run-e2e.sh
+
+# depurar com a imagem COMPLETA (build do Dockerfile; o override zera o `image` slim, senão o build gordo levaria o nome slim)
+docker compose -f Projeto/docker-compose.yml -f Projeto/docker-compose.completa.yml up -d --build <serviço>
+E2E_COMPLETA=1 Projeto/e2e/run-e2e.sh             # e2e com as completas (também confere o ID da imagem de cada serviço)
 ```
 
-Imagens geradas: `gerenciador-eventos-<serviço>.slim:latest`. Pré-requisitos: Docker (compose v2), python, `Projeto/.env` e
+`up -d --build <serviço>` **não** reconstrói mais os serviços Java: roda a slim que existir (possivelmente velha). Depois de mudar código, rode o passo 1 para o
+serviço tocado e então o `up -d`.
+
+**`SLIM_TAG`** (opcional, default `latest`; vale da shell ou do `Projeto/.env`, como qualquer variável do compose): tag das imagens geradas e usadas
+(`gerenciador-eventos-<serviço>.slim:$SLIM_TAG`) pelo compose, pelo script e pelo `run-e2e.sh`; os dois scripts perguntam ao compose (`config --images`) qual tag ele resolve e a mostram no log. Com outra tag, o `:latest` existente NÃO é sobrescrito:
+`SLIM_TAG=k8s Projeto/slim/gerar-imagens-slim.sh identity` e `SLIM_TAG=k8s docker compose -f Projeto/docker-compose.yml up -d`.
+
+Imagens geradas: `gerenciador-eventos-<serviço>.slim:${SLIM_TAG:-latest}`. Pré-requisitos: Docker (compose v2), python, `Projeto/.env` e
 `Projeto/supabase/.env`; nada é instalado no host (o Slim roda como contêiner `dslim/slim:1.40.11`, versão fixa).
-Idempotente: cada execução regenera as mesmas tags a partir do código atual e derruba o project no fim (`MANTER=1` mantém).
+Idempotente: cada execução regenera as imagens da tag `$SLIM_TAG` a partir do código atual e derruba o project no fim (`MANTER=1` mantém).
 
 ## Antes / depois (`docker image ls`)
 
@@ -57,7 +69,7 @@ o resto da stack gordo ao redor. O serviço gordo de mesmo nome é parado antes,
 | `notification` | Sem HTTP (`--http-probe=false --continue-after 120`): um `VerificationCodeRequested` é produzido em `identity.notification` antes do start; o script exige que o consumer da imagem-alvo o processe (1 e-mail no captador Mailpit). |
 
 Depois de gerar, o script confere que cada imagem slim tem `bash head grep awk` (healthchecks do compose; `printf` é builtin do bash) e que `/var/lib/identity` da `identity.slim` está **vazio** (guarda da chave do JWT, abaixo). O critério final é
-`E2E_SLIM=1 Projeto/e2e/run-e2e.sh` verde: cadastro por e-mail, evento, reserva, confirmação, replay e a rajada do modo fila (passo 4b), com as 7 imagens slim.
+`Projeto/e2e/run-e2e.sh` verde: cadastro por e-mail, evento, reserva, confirmação, replay e a rajada do modo fila (passo 4b), com as 7 imagens slim.
 
 ## Includes e motivo
 
@@ -76,7 +88,7 @@ Certificados do SO (`/etc/ssl/certs`) entram pelo padrão do Slim (`--include-ce
 
 O Slim gera, de graça, um perfil Seccomp (`<serviço>-seccomp.json`, lista de syscalls observadas) e um AppArmor (`<serviço>-apparmor-profile`)
 por serviço; ficam versionados aqui (não têm segredo). **Aplicá-los é opcional e não é o padrão** (decisão da issue #177: fora de escopo):
-o override `docker-compose.slim.yml` não os usa. Para experimentar um serviço:
+o `docker-compose.yml` não os usa. Para experimentar um serviço:
 
 ```yaml
     security_opt:
@@ -101,4 +113,4 @@ negada (EPERM). Se aplicar em produção, repetir a carga e o e2e com o perfil l
   `docker volume rm slim-sensor.1.40.11`.
 - Só os perfis são versionados: `creport.json`, `Dockerfile.reversed` e o arquivo de ambiente do alvo (segredos) ficam num diretório
   temporário que o script apaga.
-- Smoke `cas` na stack real slim: fora deste script (o smoke é do orquestrador). Imagem slim gerada antes de uma mudança de código fica velha (o `E2E_SLIM=1` de 2026-10-28 falhou com o `backend.slim` anterior à #41, que não chamava o `admission`): regenere depois de mudar código.
+- Smoke `cas` na stack real slim: fora deste script (o smoke é do orquestrador). Imagem slim gerada antes de uma mudança de código fica velha (o e2e com as slim de 2026-10-28 falhou com o `backend.slim` anterior à #41, que não chamava o `admission`): regenere depois de mudar código.

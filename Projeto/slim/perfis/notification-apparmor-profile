@@ -6,7 +6,7 @@ profile gerenciador-e2e-slim-notification-apparmor-profile flags=(attach_disconn
   /opt/java/openjdk/bin/java rix,
 
   /tmp/hsperfdata_root/19 w,
-  /tmp/snappy-1.1.10-f82a0bcb-678e-4777-988e-b88dce57c1c5-libsnappyjava.so rw,
+  /tmp/snappy-1.1.10-789f74f8-b234-49b6-9aba-c936c3e73518-libsnappyjava.so rw,
 
   /app/app.jar r,
   /etc/alternatives/awk r,

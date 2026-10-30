@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels: {app: backend}
+spec:
+  # sem `replicas`: a autoescala (KEDA/HPA, issue #197 etapa 4) é dona da contagem; reaplicar o manifest não a volta para 1
+  selector:
+    matchLabels: {app: backend}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
+  template:
+    metadata:
+      labels: {app: backend}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: espera
+          image: busybox:1.37.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              for alvo in supabase-pooler:6543 redpanda:9092 reservation:8082 catalog:8083 identity:8084; do
+                host="${alvo%%:*}"; porta="${alvo##*:}"
+                until timeout 5 nc -w 2 "$host" "$porta" </dev/null; do echo "aguardando $alvo"; sleep 2; done
+              done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+      containers:
+        - name: backend
+          image: gerenciador-eventos-backend.slim:latest
+          imagePullPolicy: Never
+          envFrom:
+            - secretRef: {name: env-backend}
+          env:
+            - {name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE, value: "10"}
+            - {name: MANAGEMENT_SERVER_PORT, value: "8090"}
+            - {name: MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED, value: "true"}
+            - {name: MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE, value: "readinessState"}
+          ports:
+            - {name: http, containerPort: 8081}
+            - {name: mgmt, containerPort: 8090}
+          startupProbe:
+            httpGet: {path: /actuator/health/readiness, port: mgmt}
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 45
+          readinessProbe:
+            httpGet: {path: /actuator/health/readiness, port: mgmt}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: {path: /actuator/health/liveness, port: mgmt}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          lifecycle:
+            preStop:
+              sleep: {seconds: 20}
+          securityContext:
+            seccompProfile: {type: Localhost, localhostProfile: profiles/backend-seccomp.json}
+          resources:
+            requests: {cpu: 500m, memory: 768Mi}
+            limits: {cpu: "2", memory: 1536Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels: {app: backend}
+spec:
+  type: NodePort
+  selector: {app: backend}
+  ports:
+    - {name: http, port: 8081, targetPort: http, nodePort: 30081}

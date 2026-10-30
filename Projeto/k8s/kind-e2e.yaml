@@ -1,0 +1,7 @@
+# Cluster kind do e2e (issue #197): a mesma imagem de nó do kind.yaml, SEM extraPortMappings (nenhuma porta no host: 8081 e 8088 são do
+# cluster principal e da stack do compose). As chamadas HTTP do e2e saem de um pod dentro do cluster.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5

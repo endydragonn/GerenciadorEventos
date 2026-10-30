@@ -1,0 +1,4 @@
+# Valores do chart `metrics-server` (kubernetes-sigs, chart 3.14.0 / app 0.9.0, publicado em 2026-08-19) no kind (issue #197, etapa 4): o kubelet do nó do kind serve um
+# certificado autoassinado, então o metrics-server precisa de --kubelet-insecure-tls (cluster local descartável; sem isso nenhum HPA por CPU lê a métrica).
+args:
+  - --kubelet-insecure-tls

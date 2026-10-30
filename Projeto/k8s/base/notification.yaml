@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification
+  labels: {app: notification}
+spec:
+  # sem `replicas`: a autoescala (KEDA/HPA, issue #197 etapa 4) é dona da contagem; reaplicar o manifest não a volta para 1
+  selector:
+    matchLabels: {app: notification}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
+  template:
+    metadata:
+      labels: {app: notification}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: espera
+          image: busybox:1.37.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              for alvo in supabase-pooler:6543 redpanda:9092; do
+                host="${alvo%%:*}"; porta="${alvo##*:}"
+                until timeout 5 nc -w 2 "$host" "$porta" </dev/null; do echo "aguardando $alvo"; sleep 2; done
+              done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+        - name: seek
+          image: docker.redpanda.com/redpandadata/redpanda:v26.2.4
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -eo pipefail
+              export RPK_BROKERS=redpanda:9092
+              # o tópico só vale com 3 partições (Job `particoes`): assinar antes dele deixaria o consumer até 300 s sem ver as outras
+              until [ "$(rpk topic list | awk -v t=identity.notification '$1 == t {print $2}')" = "3" ]; do echo "aguardando identity.notification com 3 partições"; sleep 2; done
+              # falha do rpk (broker fora) ABORTA aqui (set -e): nunca cai no seek por "não consegui listar"
+              grupos="$(rpk group list)"
+              if awk 'NR > 1 && $2 == "notification" {achou=1} END {exit !achou}' <<<"$grupos"; then
+                echo "group notification já existe: offsets mantidos"
+              else
+                rpk group seek notification --to end --topics identity.notification --allow-new-topics
+              fi
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+      containers:
+        - name: notification
+          image: gerenciador-eventos-notification.slim:latest
+          imagePullPolicy: Never
+          envFrom:
+            - secretRef: {name: env-notification}
+          env:
+            - {name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE, value: "3"}
+          # sem HTTP: "o consumer está ligado ao broker" = conexão TCP ESTABELECIDA (estado 01) para a 9092 (hex 2384) em /proc/net/tcp e tcp6
+          # (o Java abre socket dual-stack: a conexão IPv4 aparece em tcp6). Mesmo healthcheck do compose; a imagem não tem curl nem rpk.
+          startupProbe:
+            exec:
+              command: &conectado
+                - bash
+                - -c
+                - awk '$4=="01" && $3 ~ /:2384$/ {ok=1} END {exit !ok}' /proc/net/tcp /proc/net/tcp6
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 45
+          readinessProbe:
+            exec:
+              command: *conectado
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: *conectado
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          lifecycle:
+            preStop:
+              sleep: {seconds: 20}
+          securityContext:
+            seccompProfile: {type: Localhost, localhostProfile: profiles/notification-seccomp.json}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "1", memory: 1Gi}

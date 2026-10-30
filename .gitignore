@@ -53,3 +53,6 @@ Projeto/supabase/volumes/snippets/
 Projeto/frontend/.dart_tool/
 Projeto/frontend/pubspec.lock
 Projeto/frontend/.flutter-plugins*
+
+# Saída local do cluster Kubernetes (CSV de réplicas do dry-run, etc.; issue #197)
+Projeto/k8s/saida/

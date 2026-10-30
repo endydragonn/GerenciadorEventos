@@ -1,0 +1,16 @@
+# Valores do chart `istio/istiod` 1.31.1 da trilha B1 (issue #197), instalado por helm no `cluster.sh up --trilha b1` (junto com `istio/base`, mesma versão fixa, sem istioctl).
+# Repositório: https://blob.istio.io/istio-release/charts (o antigo istio-release.storage.googleapis.com não publica a série 1.31).
+autoscaleEnabled: false
+replicaCount: 1
+resources:
+  requests: {cpu: 200m, memory: 512Mi}
+meshConfig:
+  # a malha NÃO repete requisições (o Istio repete por padrão 503/connect-failure, inclusive POST): como na trilha C e nos clientes (`disableAutomaticRetries`)
+  defaultHttpRetryPolicy:
+    attempts: 0
+  defaultConfig:
+    # (com sidecar nativo o Kubernetes já ordena o início; mantido como a spec pede)
+    holdApplicationUntilProxyStarts: true
+    proxyMetadata:
+      # o proxy só sai quando as conexões ativas fecham: o término de um pod não corta requisição em voo
+      EXIT_ON_ZERO_ACTIVE_CONNECTIONS: "true"

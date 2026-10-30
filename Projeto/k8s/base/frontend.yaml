@@ -1,0 +1,65 @@
+# Frontend (nginx + Flutter Web), equivalente ao `frontend` do compose: o `proxy_pass` para `backend:8081` vale sem env nova (o Service do gateway tem
+# o mesmo nome). NodePort 30088 -> host 8088 pelo kind.yaml (o overlay e2e tira o NodePort). Imagem construída pelo compose (`docker compose build frontend`).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels: {app: frontend}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: frontend}
+  template:
+    metadata:
+      labels: {app: frontend}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: espera
+          image: busybox:1.37.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - until timeout 5 nc -w 2 backend 8081 </dev/null; do echo "aguardando backend:8081"; sleep 2; done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+      containers:
+        - name: frontend
+          image: gerenciador-eventos-frontend:latest
+          imagePullPolicy: Never
+          ports:
+            - {name: http, containerPort: 80}
+          startupProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {cpu: 500m, memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  labels: {app: frontend}
+spec:
+  type: NodePort
+  selector: {app: frontend}
+  ports:
+    - {name: http, port: 80, targetPort: http, nodePort: 30088}

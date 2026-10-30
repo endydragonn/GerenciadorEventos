@@ -1,0 +1,17 @@
+# Cluster kind principal (issue #197): um nó control-plane, imagem do kind v0.33.0 fixada por digest.
+# Gateway (NodePort 30081) e frontend (NodePort 30088) saem no host em 8081 e 8088 (0.0.0.0: o gerador de carga da rede local chega na
+# 8081 como no compose). O contrato do Flutter (porta e paths) não muda. O nome do cluster vem do `cluster.sh` (--name), não daqui.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    extraPortMappings:
+      - containerPort: 30081
+        hostPort: 8081
+        listenAddress: "0.0.0.0"
+        protocol: TCP
+      - containerPort: 30088
+        hostPort: 8088
+        listenAddress: "0.0.0.0"
+        protocol: TCP

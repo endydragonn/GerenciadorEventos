@@ -48,8 +48,8 @@ COLETA_S       ?= 0
 # Rodada 4 (#178). ESCADA ACIMA DO X com o admission ligado (test-degraus): PCT_ACOMPANHA = % das 202 que acompanham o estado (as demais so contam o 202; baixe
 # acima do X: uma iteracao acompanhada dura ate o TTL da fila de 30 s e esgota os VUs), CONSULTA_MS/TETO_CONSULTA_S = intervalo e teto da consulta, PARADA_P95_MS
 # (0 = sem parada) e PARADA_JANELA_S = parar a escada quando o p95 da reserva numa janela passa do limite (latencia que nao se recupera).
-# ARRANJO e PARAMS_AUTOESCALA so RASTREIAM o que o host roda (vao para o CSV): sem-autoescala | autoescala (+slim); PARAMS_AUTOESCALA="AUTOESCALA_GATEWAY_RPS=500;..." (sem espaco).
-# COMPOSE_EXTRAS = overrides do HOST depois do de carga (setup-host/host-rpm), lista separada por virgula: docker-compose.slim.yml,docker-compose.autoescala.yml
+# ARRANJO e PARAMS_AUTOESCALA so RASTREIAM o que o host roda (vao para o CSV): sem-autoescala | autoescala (+completa se as imagens forem as completas; slim e o padrao desde a #197); PARAMS_AUTOESCALA="AUTOESCALA_GATEWAY_RPS=500;..." (sem espaco).
+# COMPOSE_EXTRAS = overrides do HOST depois do de carga (setup-host/host-rpm), lista separada por virgula: docker-compose.completa.yml,docker-compose.autoescala.yml (as imagens slim sao o padrao desde a #197; o completa as troca pelas completas)
 PCT_ACOMPANHA  ?= 100
 CONSULTA_MS    ?= 1000
 TETO_CONSULTA_S ?= 35
@@ -96,7 +96,7 @@ help:
 	@Write-Host '  make report-degraus  CSV=results\degraus-<id>.csv           (no GERADOR: curva latencia/throughput x carga + degrau X, via Git Bash -> results\degraus-<id>.html)'
 	@Write-Host 'RODADA 4 (#178) - escada ACIMA do X com o admission (202/fila) e a autoescala; a R4 roda o braco SEM autoescala ANTES do braco C (o override sobe topicos para 3 particoes, irreversivel)'
 	@Write-Host '  make test-degraus    ... [PCT_ACOMPANHA=100 CONSULTA_MS=1000 TETO_CONSULTA_S=35 PARADA_P95_MS=0 PARADA_JANELA_S=60 SETUP_S=0 ARRANJO=sem-autoescala PARAMS_AUTOESCALA=k=v;k=v]   (no GERADOR; colunas novas no fim do CSV)'
-	@Write-Host '  make setup-host | host-rpm  COMPOSE_EXTRAS=docker-compose.autoescala.yml   (no HOST: braco C; slim antes: docker-compose.slim.yml,docker-compose.autoescala.yml; replicas achadas por label)'
+	@Write-Host '  make setup-host | host-rpm  COMPOSE_EXTRAS=docker-compose.autoescala.yml   (no HOST: braco C; imagens completas: docker-compose.completa.yml,docker-compose.autoescala.yml; replicas achadas por label)'
 	@Write-Host '  make limpar-banco    (no HOST, entre blocos; scaler PARADO: trunca, FLUSHDB, purge das filas, apaga a chave do JWT de TODAS as replicas do identity, sobe de volta e prova o JWKS)'
 	@Write-Host '  make verificar-rpm   PREFIXO=Deg-<id>   (no HOST, ao fim de CADA bloco: codigo 3 se houver overselling no braco CAS = criterio de parada)'
 	@Write-Host 'RODADA 5 (#204) - saga stock + wallet; protocolo igual ao da R4, so a saga muda (README, secao Rodada 5)'
