@@ -338,11 +338,15 @@ por evento. O `stock` escalável (D3 b) é a #205, junto com a #197.
 minuto e o tempo até resolver as órfãs, e o `make verificar-rpm` ganha o código 4 (órfã que não se resolve). A latência dos passos sai do logger `saga.timing` do
 `reservation` (DEBUG, desligado por padrão). PR #209; detalhes no `Projeto/carga/README.md`, "Rodada 5".
 
+**Medido (Batch 2, Rodada 5, issue #180, 2026-10-29 e 2026-10-30):** a saga (#47) sobre a configuração da R4. Braço base até 98k RPM com 0 5xx, CAS com overselling 0, 0 órfãs e
+0 compensações (lag de devolução da vaga p95 448 ms); braço C calibrado parou em 44k (na R4, 38k), de novo pelos 5xx do health check do `lb` (#207), também com overselling 0.
+PR #218; resultados e tabelas R4 × R5 em `Projeto/carga/results/08-rodada5-saga`.
+
 **Implementado (issue #46, 2026-10-29, Batch 2):** READMEs atualizados ou criados na raiz, em `Projeto/`, `Projeto/Backend/` (e `db/`, `monolito/`), `Projeto/frontend/`,
 em cada serviço e nos `*-client`. Eles só linkam os resultados das etapas. PR #211.
 
 **Decidido, não implementado:** a autoescala em Kubernetes com HPA/KEDA (opção D da ADR `docs/adr/Architecture-Decision-Autoescala.md`, #197) e, junto, o `stock`
 escalável até 3 réplicas (D3 b da saga, #205). O mapa da Opção B (`docs/adr/Architecture-Decision-Microservices-Split.md`) está extraído: `notification` (#32),
 `reservation` (#33), `catalog` (#35), `identity` (#36), `admission` (#41) e `stock` (#47); o `gateway` é o único conteúdo do módulo `monolito` desde a #36. A
-camada de alta carga (#41–#43, com a UI da #44) e a autoescala opção A (#111/#112) existem e foram medidas na Rodada 4; a saga (#47) é medida na Rodada 5 (#180, em andamento, em espera).
+camada de alta carga (#41–#43, com a UI da #44) e a autoescala opção A (#111/#112) existem e foram medidas na Rodada 4; a saga (#47) foi medida na Rodada 5 (#180).
 Follow-ups abertos no `BACKLOG.md`, seção Estado.
