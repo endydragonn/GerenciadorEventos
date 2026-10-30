@@ -6,7 +6,7 @@ tags: [architecture, decision, adr, marketplace, cqrs]
 created: 2026-08-24
 ---
 
-> **Vendorizado de:** `D:\Claude\Brain\01-Projects\Event-Management-System\Architecture-Decision-Stock-Isolation.md`
+> **Vendorizado de:** documentação externa do projeto, `Architecture-Decision-Stock-Isolation.md`
 > **Sincronizado em:** 2026-09-03 · sincronização manual (ver `README.md`)
 
 # Decisão de Arquitetura — Estoque/Capacidade Isolado num Marketplace

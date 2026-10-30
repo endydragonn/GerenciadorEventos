@@ -6,7 +6,7 @@ tags: [architecture, cqrs, event-sourcing, backend]
 created: 2026-08-24
 ---
 
-> **Vendorizado de:** `D:\Claude\Brain\01-Projects\Event-Management-System\Backend-Architecture.md`
+> **Vendorizado de:** documentação externa do projeto, `Backend-Architecture.md`
 > **Sincronizado em:** 2026-09-03 · sincronização manual (ver `README.md`)
 
 # Backend Architecture — CQRS + Event Sourcing com Estoque/Capacidade Isolados
