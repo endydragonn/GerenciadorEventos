@@ -19,7 +19,7 @@ A 1ª tentativa (matriz e escada) rodou com os dados do Docker em **HDD** (`fsyn
 com `pg_test_fsync`): o `UPDATE eventcap` (linha quente) segurava o lock até o commit e a escada travou em ~90 req/s
 (p50 ≈ 28 s). Os dados do Docker foram movidos para SSD NVMe (`fsync` ≈ 0,39 ms) e a matriz e a escada foram
 **refeitas**. Os resultados do HDD ficam só como registro de causa e não entram na comparação:
-`matriz-naive-disco-lento.csv` (a escada do HDD, `degraus-620992`, foi descartada e não está no repo).
+`matriz-naive-disco-lento.csv` e `disco-lento/degraus-620992.csv` (a escada do HDD, descartada; versionada só como registro).
 
 ## Blocos
 
@@ -41,6 +41,9 @@ com `pg_test_fsync`): o `UPDATE eventcap` (linha quente) segurava o lock até o 
 - `degraus-627312.csv`: refino 60k–70k, passo 1k, sobre o banco que a grossa deixou. O 1º degrau (60k) é aquecimento.
 - `baseline-20261024-092806.txt`: latência base de rede do gerador.
 - `matriz-naive-disco-lento.csv`: matriz da 1ª tentativa (HDD), só registro.
+- `summary-degraus-626086.json`, `summary-degraus-627312.json`: resumos do k6 da grossa e do refino (entraram em 2026-10-28).
+- `disco-lento/degraus-620992.csv` e `summary-degraus-620992.json`: a escada da 1ª tentativa, com o Docker em HDD. Entrou em
+  2026-10-28 só como registro de causa; descartada, não entra na comparação.
 
 ## Leitura
 

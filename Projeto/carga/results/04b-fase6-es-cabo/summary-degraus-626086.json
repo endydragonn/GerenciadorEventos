@@ -1,0 +1,284 @@
+{
+  "duracao_degrau_s": 60,
+  "duracao_s": 792.1591599,
+  "usuarios": 200,
+  "eventos": 3781,
+  "pares_planejados": 720009,
+  "max_vus": 3000,
+  "vus_max": 3000,
+  "pct_confirma": 100,
+  "degraus": [
+    {
+      "nome": "degrau_40000",
+      "rpm_alvo": 40000,
+      "cota": 40001,
+      "reservas": 40001,
+      "confirmas": 20001,
+      "erros_5xx": 0,
+      "confirma_5xx": 0,
+      "outros": 0,
+      "sem_login": 0,
+      "alem_dos_pares": 0,
+      "descartadas": 0,
+      "p50_ms": 8.2644,
+      "p95_ms": 208.2911,
+      "p99_ms": 454.0859,
+      "janelas": [
+        {
+          "w": 0,
+          "n": 20000,
+          "p95_ms": 321.53252999999984
+        },
+        {
+          "w": 1,
+          "n": 20001,
+          "p95_ms": 112.6351
+        }
+      ],
+      "p95_max_janela_ms": 321.53252999999984,
+      "fora_das_janelas": 0
+    },
+    {
+      "nome": "degrau_50000",
+      "rpm_alvo": 50000,
+      "cota": 50001,
+      "reservas": 50000,
+      "confirmas": 25000,
+      "erros_5xx": 0,
+      "confirma_5xx": 0,
+      "outros": 0,
+      "sem_login": 0,
+      "alem_dos_pares": 0,
+      "descartadas": 0,
+      "p50_ms": 87.51965000000001,
+      "p95_ms": 257.073785,
+      "p99_ms": 309.9923130000002,
+      "janelas": [
+        {
+          "w": 0,
+          "n": 25000,
+          "p95_ms": 250.79774999999995
+        },
+        {
+          "w": 1,
+          "n": 25000,
+          "p95_ms": 263.16909999999996
+        }
+      ],
+      "p95_max_janela_ms": 263.16909999999996,
+      "fora_das_janelas": 0
+    },
+    {
+      "nome": "degrau_60000",
+      "rpm_alvo": 60000,
+      "cota": 60001,
+      "reservas": 60001,
+      "confirmas": 30002,
+      "erros_5xx": 0,
+      "confirma_5xx": 0,
+      "outros": 0,
+      "sem_login": 0,
+      "alem_dos_pares": 0,
+      "descartadas": 0,
+      "p50_ms": 223.7907,
+      "p95_ms": 468.8803,
+      "p99_ms": 543.5745,
+      "janelas": [
+        {
+          "w": 0,
+          "n": 29999,
+          "p95_ms": 489.26721000000003
+        },
+        {
+          "w": 1,
+          "n": 30002,
+          "p95_ms": 434.58689999999996
+        }
+      ],
+      "p95_max_janela_ms": 489.26721000000003,
+      "fora_das_janelas": 0
+    },
+    {
+      "nome": "degrau_70000",
+      "rpm_alvo": 70000,
+      "cota": 70001,
+      "reservas": 61907,
+      "confirmas": 30997,
+      "erros_5xx": 0,
+      "confirma_5xx": 0,
+      "outros": 0,
+      "sem_login": 0,
+      "alem_dos_pares": 0,
+      "descartadas": 8093,
+      "p50_ms": 2039.2673,
+      "p95_ms": 2287.51452,
+      "p99_ms": 2350.853972,
+      "janelas": [
+        {
+          "w": 0,
+          "n": 31820,
+          "p95_ms": 2281.48698
+        },
+        {
+          "w": 1,
+          "n": 30087,
+          "p95_ms": 2291.75307
+        }
+      ],
+      "p95_max_janela_ms": 2291.75307,
+      "fora_das_janelas": 0
+    },
+    {
+      "nome": "degrau_80000",
+      "rpm_alvo": 80000,
+      "cota": 80001,
+      "reservas": 60959,
+      "confirmas": 30500,
+      "erros_5xx": 0,
+      "confirma_5xx": 0,
+      "outros": 0,
+      "sem_login": 0,
+      "alem_dos_pares": 0,
+      "descartadas": 19042,
+      "p50_ms": 2114.5686,
+      "p95_ms": 2349.74774,
+      "p99_ms": 2423.809752,
+      "janelas": [
+        {
+          "w": 0,
+          "n": 31369,
+          "p95_ms": 2353.82904
+        },
+        {
+          "w": 1,
+          "n": 29590,
+          "p95_ms": 2344.030425
+        }
+      ],
+      "p95_max_janela_ms": 2353.82904,
+      "fora_das_janelas": 0
+    },
+    {
+      "nome": "degrau_90000",
+      "rpm_alvo": 90000,
+      "cota": 90001,
+      "reservas": 61648,
+      "confirmas": 30853,
+      "erros_5xx": 0,
+      "confirma_5xx": 0,
+      "outros": 0,
+      "sem_login": 0,
+      "alem_dos_pares": 0,
+      "descartadas": 28352,
+      "p50_ms": 2103.66105,
+      "p95_ms": 2311.35967,
+      "p99_ms": 2377.9846669999997,
+      "janelas": [
+        {
+          "w": 0,
+          "n": 31615,
+          "p95_ms": 2326.0381
+        },
+        {
+          "w": 1,
+          "n": 30033,
+          "p95_ms": 2293.37016
+        }
+      ],
+      "p95_max_janela_ms": 2326.0381,
+      "fora_das_janelas": 0
+    },
+    {
+      "nome": "degrau_100000",
+      "rpm_alvo": 100000,
+      "cota": 100001,
+      "reservas": 60708,
+      "confirmas": 30400,
+      "erros_5xx": 0,
+      "confirma_5xx": 0,
+      "outros": 0,
+      "sem_login": 0,
+      "alem_dos_pares": 0,
+      "descartadas": 39293,
+      "p50_ms": 2133.98415,
+      "p95_ms": 2368.1766549999998,
+      "p99_ms": 2445.444578,
+      "janelas": [
+        {
+          "w": 0,
+          "n": 31041,
+          "p95_ms": 2367.4625
+        },
+        {
+          "w": 1,
+          "n": 29667,
+          "p95_ms": 2369.29835
+        }
+      ],
+      "p95_max_janela_ms": 2369.29835,
+      "fora_das_janelas": 0
+    },
+    {
+      "nome": "degrau_110000",
+      "rpm_alvo": 110000,
+      "cota": 110001,
+      "reservas": 61897,
+      "confirmas": 31000,
+      "erros_5xx": 0,
+      "confirma_5xx": 0,
+      "outros": 0,
+      "sem_login": 0,
+      "alem_dos_pares": 0,
+      "descartadas": 48103,
+      "p50_ms": 2108.2563,
+      "p95_ms": 2307.9403199999997,
+      "p99_ms": 2368.751712,
+      "janelas": [
+        {
+          "w": 0,
+          "n": 32071,
+          "p95_ms": 2300.00885
+        },
+        {
+          "w": 1,
+          "n": 29826,
+          "p95_ms": 2314.365575
+        }
+      ],
+      "p95_max_janela_ms": 2314.365575,
+      "fora_das_janelas": 0
+    },
+    {
+      "nome": "degrau_120000",
+      "rpm_alvo": 120000,
+      "cota": 120001,
+      "reservas": 60481,
+      "confirmas": 30289,
+      "erros_5xx": 0,
+      "confirma_5xx": 0,
+      "outros": 0,
+      "sem_login": 0,
+      "alem_dos_pares": 0,
+      "descartadas": 59519,
+      "p50_ms": 2146.4084,
+      "p95_ms": 2376.4117,
+      "p99_ms": 2458.5571,
+      "janelas": [
+        {
+          "w": 0,
+          "n": 30777,
+          "p95_ms": 2401.0114599999997
+        },
+        {
+          "w": 1,
+          "n": 29704,
+          "p95_ms": 2337.260365
+        }
+      ],
+      "p95_max_janela_ms": 2401.0114599999997,
+      "fora_das_janelas": 0
+    }
+  ],
+  "faltando": [],
+  "inconsistencias": []
+}
