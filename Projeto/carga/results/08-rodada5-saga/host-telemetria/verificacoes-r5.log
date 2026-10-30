@@ -14,3 +14,18 @@
 ===== 2026-10-29 12:23:14 | saga prefixo Deg-59713 (limite 45s) | config: cas / OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
 sagas convergidas (velhas 0, hold held com saga compensated 0, devolucao pendente 0, orfa inversa 0, quant divergente 0).
 
+﻿===== 2026-10-30 10:05:29 | prefixo Deg-138518 | config: cas / OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+     868 |           60899 |           434000 |                       0 |                 0
+(1 row)
+
+  status   | count 
+-----------+-------
+ confirmed | 60899
+ expired   | 13840
+(2 rows)
+
+===== 2026-10-30 10:05:32 | saga prefixo Deg-138518 (limite 45s) | config: cas / OCI runtime exec failed: exec failed: unable to start container process: exec: "printenv": executable file not found in $PATH
+sagas convergidas (velhas 0, hold held com saga compensated 0, devolucao pendente 0, orfa inversa 0, quant divergente 0).
+
