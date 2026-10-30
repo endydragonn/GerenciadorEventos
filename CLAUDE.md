@@ -50,7 +50,7 @@ padrão do arquivo que você está editando.
 - Mensagens no estilo do histórico (Conventional Commits): `feat:`, `refactor:`, `fix:`,
   `chore:`, `docs:`. Uma mudança lógica por commit.
 - Feche a mensagem de commit com:
-  `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`
+  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
 - Corpo de PR termina com:
   `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
 - **Nunca** versione: `Projeto/.env`, `**/target/`, `**/build/`, dumps de banco, relatórios
