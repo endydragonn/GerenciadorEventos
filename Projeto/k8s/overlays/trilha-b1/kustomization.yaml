@@ -28,7 +28,11 @@ patches:
               # sidecar: request 100m/128Mi, limit SÓ de memória (sem limit de CPU: um proxy estrangulado não pode tirar o pod do Service)
               sidecar.istio.io/proxyCPU: 100m
               sidecar.istio.io/proxyMemory: 128Mi
-              sidecar.istio.io/proxyMemoryLimit: 256Mi
+              # 1Gi, não 256Mi: no dry-run da etapa 4b o sidecar do gateway saturado (3000 conexões de leitura) estourou 256Mi e foi OOMKilled duas vezes (o pod saiu do Service,
+              # 10506 falhas de conexão). O request fica em 128Mi (a conta de RAM com tudo ocioso não muda); o limite só é usado sob saturação.
+              # PROVISÓRIO (decisão pendente; a spec ainda diz 256Mi): o pico do sidecar foi só estimado (~260 a 280Mi por diferença entre rodadas) e a memória do Envoy cresce com as conexões simultâneas;
+              # próximo passo: medir o istio-proxy sozinho (`kubectl top pod --containers`) numa b1 saturada; 512Mi não foi testado.
+              sidecar.istio.io/proxyMemoryLimit: 1Gi
           spec:
             initContainers:
               # ATENCAO: o patch estrategico casa o initContainer `espera` por NOME; um Deployment-alvo SEM `espera` ganharia um initContainer sem imagem e o apply falharia

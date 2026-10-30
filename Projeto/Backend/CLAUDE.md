@@ -1767,9 +1767,9 @@ ID da imagem `*.slim:$SLIM_TAG` (`E2E_COMPLETA=1`: as completas construídas no 
 Tabela antes/depois, includes (com motivo) e perfis Seccomp/AppArmor (opcionais, não aplicados por padrão) em `Projeto/slim/README.md`. Desde a #47 inclui o `stock` (probe de `/internal/holds`,
 `/internal/eventcaps/**` e do `StockReleaseConsumer`, com um `ReservationCancelled` produzido antes do start).
 
-### Cluster Kubernetes (kind) — issue #197, etapas 2, 3 e 4a
+### Cluster Kubernetes (kind) — issue #197, etapas 2, 3, 4a e 4b
 
-A stack inteira também roda num cluster kind de um nó (`Projeto/k8s/`, ver o README de lá): `cluster.sh up --trilha b1|c|nenhuma` (a trilha é obrigatória), com dados descartáveis e a autoescala KEDA/HPA da etapa 4a (abaixo; o dry-run de carga é a 4b).
+A stack inteira também roda num cluster kind de um nó (`Projeto/k8s/`, ver o README de lá): `cluster.sh up --trilha b1|c|nenhuma` (a trilha é obrigatória), com dados descartáveis e a autoescala KEDA/HPA da etapa 4a (abaixo) e o dry-run de carga da 4b (`Projeto/k8s/dry-run.sh --trilha b1|c|nenhuma`, `registrar-replicas.sh`; README de `Projeto/k8s`). O perfil Seccomp do `cluster.sh` precisa do `getegid` (`k8s/seccomp-extras.txt`): sem ele o HotSpot ignora `JAVA_TOOL_OPTIONS` em silêncio.
 O compose, o `run-tests.sh` e o e2e em compose **não mudam**. O que o cluster exige dos serviços:
 - **Actuator só para as probes (#207).** O `identity`, `catalog`, `reservation`, `stock` e `admission` ganharam `spring-boot-starter-actuator` com o HTTP de management **desligado por padrão**
   (`management.server.port=-1`, só `health` exposto, `show-details=never`): sem env nova nada muda no compose. O manifest liga `MANAGEMENT_SERVER_PORT=8090` (outro conector e outro pool de
@@ -1820,7 +1820,7 @@ O compose, o `run-tests.sh` e o e2e em compose **não mudam**. O que o cluster e
   - **`b1` (Istio 1.31.1, sidecar)** — instalado por helm no `up` (`istio/base` + `istio/istiod`, versão fixa, repositório `https://blob.istio.io/istio-release/charts`; `k8s/istio/istiod-values.yaml`): retry da malha desligado
     (`defaultHttpRetryPolicy.attempts: 0`), `holdApplicationUntilProxyStarts`, `EXIT_ON_ZERO_ACTIVE_CONNECTIONS`, istiod com 1 réplica. Sidecar só nos 7 serviços e no frontend (label `istio-injection=enabled` no namespace; `inject: "false"`
     em db, Supavisor, Redpanda, Redis, RabbitMQ, Mailpit e no Job `particoes`); portas não-HTTP fora do Envoy (`excludeOutboundPorts` 5432, 6543, 9092, 6379, 5672, 443, 587, 1025); as probes não passam pelo sidecar
-    (`rewriteAppHTTPProbers: "false"`, `excludeInboundPorts: "8090"`); readiness do sidecar alinhada à do app; proxy com request 100m/128Mi e limit só de memória (256Mi), **sem limit de CPU**. Sem
+    (`rewriteAppHTTPProbers: "false"`, `excludeInboundPorts: "8090"`); readiness do sidecar alinhada à do app; proxy com request 100m/128Mi e limit só de memória (1Gi desde a 4b, era 256Mi; provisório: o pico do sidecar foi só estimado e cresce com as conexões, a medir com `kubectl top pod --containers`), **sem limit de CPU**. Sem
     `DestinationRule`/`outlierDetection` (#207). Nenhuma env de serviço muda: o Envoy intercepta pelo VIP do Service (as mesmas URLs do compose) e balanceia por requisição. O sidecar é nativo (initContainer); os `espera`
     rodam como UID 1337 (o que o iptables do Istio não redireciona), para testarem o Service de verdade.
   - **`nenhuma`** — a base pura (Service L4), o controle da comparação.

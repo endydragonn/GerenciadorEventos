@@ -1,6 +1,8 @@
 # Overlay `completa` (issue #197): as imagens COMPLETAS (as do Dockerfile, sem o Slim) no lugar das `*.slim`, para depuração, como o docker-compose.completa.yml faz no compose.
 # As imagens são as que o compose constrói no project `gerenciador-eventos`:
 #   docker compose -f Projeto/docker-compose.yml -f Projeto/docker-compose.completa.yml build <serviço>   ->   gerenciador-eventos-<serviço>:latest
+# ATENÇÃO: o `cluster.sh` só aceita este overlay com `K8S_PERMITIR_LATEST=1` (as `:latest` completas podem ser as de uma rodada em curso). NÃO construir a `:latest` durante a R5 (nem esta
+# build, que a sobrescreve): só depois da rodada, ou com o consentimento de quem a conduz.
 # (o nome é fixo e não tem tag configurável: SLIM_TAG não vale aqui). Leva os Secrets REAIS, como a base: só vale no cluster `gerenciador` (o cluster.sh recusa nos de e2e).
 # Soma-se às trilhas como a base (K8S_OVERLAY=completa cluster.sh up --trilha ...). Os seccomp continuam os perfis do Slim (mesmos serviços, mesmas syscalls de aplicação).
 resources:

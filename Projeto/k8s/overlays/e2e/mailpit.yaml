@@ -21,6 +21,9 @@ spec:
         - name: mailpit
           image: axllent/mailpit:v1.31.6
           imagePullPolicy: IfNotPresent
+          env:
+            # o padrao do Mailpit guarda so as 500 ultimas mensagens: o dry-run de carga (issue #197) manda milhares de e-mails e confere um a um
+            - {name: MP_MAX_MESSAGES, value: "50000"}
           ports:
             - {name: smtp, containerPort: 1025}
             - {name: http, containerPort: 8025}

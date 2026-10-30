@@ -28,8 +28,8 @@ import jakarta.servlet.http.HttpServletResponse;
  *
  * <p><b>Token só de métrica (issue #197, P3).</b> {@code GET /internal/metrics/hot} (o KEDA, no cluster Kubernetes) NÃO usa o token mestre: exige, nessa
  * rota e só nela, o {@code ADMISSION_METRICS_TOKEN} (outro valor, aleatório, gerado pelo {@code cluster.sh} a cada {@code up}), e o token mestre
- * NÃO abre essa rota; em toda outra rota vale só o mestre, e o de métrica não abre nada. A rota é a de método {@code GET} e {@code getRequestURI()} CRU igual a
- * {@value #ROTA_METRICA_HOT}: qualquer variação ({@code /}, {@code ;x=1}, {@code %68ot}) cai no ramo do mestre (fail-closed). Sem
+ * NÃO abre a rota EXATA; em toda outra rota vale só o mestre, e o de métrica não abre nada. A rota é a de método {@code GET} e {@code getRequestURI()} CRU igual a
+ * {@value #ROTA_METRICA_HOT}: qualquer variação ({@code HEAD}, {@code /}, {@code ;x=1}, {@code %68ot}) cai no ramo do mestre (fail-closed para o token de métrica; como o Spring MVC mapeia essas variações para o mesmo {@code @GetMapping}, o mestre as abre: impacto nulo, o mestre já é superconjunto e a rota só lê o RPM). Sem
  * {@code ADMISSION_METRICS_TOKEN} (compose) a rota responde 401 a tudo e o serviço sobe normalmente.</p>
  *
  * <p>O token NÃO tem valor default (nem no código, nem no compose): o serviço FALHA NO BOOT se a variável faltar. A comparação é em

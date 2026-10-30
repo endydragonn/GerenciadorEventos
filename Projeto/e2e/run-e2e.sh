@@ -321,10 +321,13 @@ if [ "$K8S" = "1" ]; then
     confere "nenhum container reiniciou por probe/falha (restartCount total)" 0 \
         "$(kc get pods -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.restartCount}{"\n"}{end}{end}' | awk '{s += $1} END {print s + 0}')"
     if [ "$TRILHA_K8S" = "c" ]; then
-        # Trilha C: o java.security extra (cache de DNS de 5 s). O log da JVM NAO serve de prova: com o perfil Seccomp Localhost do servico o "Picked up JAVA_TOOL_OPTIONS" (stderr, no
-        # arranque da JVM) nao sai (medido: o mesmo `java -version` o imprime sem o perfil e nao o imprime com ele; o resto do stderr aparece). Prova em duas partes: (1) a variavel esta no
-        # ambiente do PROCESSO da JVM do backend (/proc/<pid>/environ, lido do no); (2) a JVM da MESMA imagem, com a MESMA variavel e o MESMO ConfigMap, enxerga networkaddress.cache.ttl=5
-        # (um pod efemero, SEM o perfil Seccomp: com ele o `-XshowSettings` tambem nao imprime, pelo mesmo motivo do "Picked up"; roda `java -XshowSettings:security:properties`; sem a variavel o ttl nem aparece).
+        # Trilha C: o java.security extra (cache de DNS de 5 s). A prova mais forte e o log da JVM do backend COM o perfil Seccomp: "Picked up JAVA_TOOL_OPTIONS" so sai se o HotSpot LEU a variavel.
+        # (Na 4a ele nao saia e a causa estava mal atribuida: faltava `getegid` nos 7 perfis, o HotSpot nao confirma uid==euid/gid==egid, trata o processo como privilegiado e IGNORA a variavel
+        # em silencio; o `getegid` esta no seccomp-extras.txt desde a 4b.) Alem do log, duas provas independentes do perfil: (1) a variavel esta no ambiente do PROCESSO da JVM do backend
+        # (/proc/<pid>/environ, lido do no); (2) a JVM da MESMA imagem, com a MESMA variavel e o MESMO ConfigMap, enxerga networkaddress.cache.ttl=5 (um pod efemero, SEM o perfil Seccomp: com ele
+        # o `-XshowSettings` nao imprime, pela mesma razao medida na 4a; roda `java -XshowSettings:security:properties`; sem a variavel o ttl nem aparece).
+        confere "trilha c: o log do backend (COM o perfil Seccomp) traz 'Picked up JAVA_TOOL_OPTIONS' (a JVM leu o java.security extra)" 1 \
+        "$(kc logs deploy/backend -c backend 2>&1 | grep -c '^Picked up JAVA_TOOL_OPTIONS: -Djava.security.properties=')"
         BK_CID="$(kc get pod -l app=backend -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="backend")].containerID}' | sed 's#.*://##')"
         BK_PID="$(dexec exec "$PROJETO-control-plane" crictl inspect --output go-template --template '{{.info.pid}}' "$BK_CID" | tr -d '\r')"
         confere "trilha c: JAVA_TOOL_OPTIONS (java.security extra) no ambiente do processo da JVM do backend" 1 \

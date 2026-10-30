@@ -68,3 +68,7 @@ accept4
 recvmmsg
 dup2
 epoll_create
+# getegid (sonda SCMP_ACT_LOG da etapa 4b): sem ele o HotSpot não consegue confirmar que uid==euid e gid==egid, trata o processo como "com privilégios especiais" e IGNORA
+# a JAVA_TOOL_OPTIONS em silêncio (nem o "Picked up JAVA_TOOL_OPTIONS" sai no stderr). Achado por bissecção (docker run com o perfil mesclado, `java -version`): só esta syscall faltava.
+# Na trilha c isso desligava o java.security extra (cache de DNS de 5 s) na JVM do backend, que o e2e da 4a não via (provava com um pod SEM perfil).
+getegid

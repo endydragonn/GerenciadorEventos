@@ -40,7 +40,7 @@ class TokenDeMetricaFilterTest {
         InternalTokenFilter f = new InternalTokenFilter(MESTRE, METRICA);
 
         assertEquals(200, codigo(f, "GET", HOT, METRICA));
-        assertEquals(401, codigo(f, "GET", HOT, MESTRE), "o token mestre NÃO abre a rota da métrica");
+        assertEquals(401, codigo(f, "GET", HOT, MESTRE), "o token mestre NÃO abre a rota EXATA da métrica (variações caem no ramo do mestre; ver o Javadoc do filtro)");
         assertEquals(401, codigo(f, "GET", HOT, null));
         assertEquals(401, codigo(f, "GET", HOT, ""));
         assertEquals(401, codigo(f, "GET", HOT, "errado"));

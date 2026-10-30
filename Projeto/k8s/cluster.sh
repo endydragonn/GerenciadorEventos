@@ -27,7 +27,7 @@
 #  Variáveis: K8S_NOME (gerenciador | gerenciador-e2e*), K8S_OVERLAY (base | e2e | completa | carga), K8S_ESPERA (900, segundos de cada espera), SLIM_TAG (a das *.slim; resolvida
 #  pelo compose como nos outros scripts: shell > Projeto/.env > latest).
 #  Overlays: base (Secrets REAIS, só no cluster `gerenciador`), e2e (Mailpit, credenciais efêmeras, sem NodePort), completa (imagens completas gerenciador-eventos-<svc>:latest no lugar das slim;
-#  Secrets REAIS, só em `gerenciador`; SLIM_TAG não vale), carga (= e2e + SEED_ENABLED=true no gateway, para o dry-run; Secrets do override do e2e, nunca o SMTP real).
+#  Secrets REAIS, só em `gerenciador`; SLIM_TAG não vale; exige K8S_PERMITIR_LATEST=1), carga (= e2e + SEED_ENABLED=true no gateway, para o dry-run; Secrets do override do e2e, nunca o SMTP real).
 #  SLIM_TAG=latest ABORTA (as :latest da R5 não têm o actuator): use SLIM_TAG=k8s até a R5 terminar; K8S_PERMITIR_LATEST=1 só depois que as :latest forem regeradas.
 #  CONTEXTO EXPLÍCITO (E4): todo kubectl daqui passa --context kind-<nome>; nunca depende do current-context (o `kind create` o troca).
 #  Segredos: os Secrets saem do `docker compose config` (o ambiente que o compose entrega a cada container) para arquivos temporários (mktemp, chmod 700,
@@ -108,7 +108,11 @@ compose() {
 }
 
 resolver_tag() { # a tag das slim que o compose resolve (shell > .env > latest), como nos outros scripts
-    [ "$IMG_COMPLETA" = 1 ] && { SLIM_TAG=""; return 0; } # overlay completa: imagens gerenciador-eventos-<svc>:latest, SLIM_TAG não vale
+    if [ "$IMG_COMPLETA" = 1 ]; then # overlay completa: imagens gerenciador-eventos-<svc>:latest, SLIM_TAG não vale
+        # as :latest das imagens completas podem ser as de uma rodada de medição em curso (R5): construir/sobrescrevê-las pede o mesmo cuidado das *.slim:latest
+        [ "${K8S_PERMITIR_LATEST:-}" = 1 ] || abortar "overlay 'completa' usa gerenciador-eventos-<serviço>:latest (as imagens completas): só com K8S_PERMITIR_LATEST=1, depois que nenhuma rodada de medição depender delas."
+        SLIM_TAG=""; return 0
+    fi
     SLIM_TAG="$(compose config --images 2>/dev/null | sed -n 's/^gerenciador-eventos-backend\.slim://p' | tr -d '\r')"
     [ -n "$SLIM_TAG" ] || abortar "não consegui resolver a tag das slim (docker compose config --images não devolveu gerenciador-eventos-backend.slim:<tag>)."
     # As *.slim:latest da R5 não têm o actuator (probes da 8090): com elas os 5 serviços nunca ficam prontos e o `up` só falharia depois de K8S_ESPERA.
@@ -373,8 +377,11 @@ EOF
 
 guardar_trilha() { # logo depois do cluster existir: o namespace leva a trilha do `up`; um `up --trilha X` sobre um cluster de OUTRA trilha aborta (misturaria as duas em silêncio)
     if k get namespace "$NS" >/dev/null 2>&1; then
-        k get namespace -l "trilha-balanceamento=$TRILHA" -o name | grep -q . \
-            || abortar "o cluster $NOME já subiu com outra trilha (kubectl --context $CTX get ns $NS --show-labels): misturar trilhas invalida a comparação. Faça 'cluster.sh down' e suba de novo com --trilha $TRILHA."
+        local atual
+        atual="$(k get namespace "$NS" -o jsonpath="{.metadata.labels['trilha-balanceamento']}")"
+        [ -n "$atual" ] || abortar "o namespace $NS do cluster $NOME existe SEM o label trilha-balanceamento (cluster criado fora do cluster.sh ou antes da guarda): faça 'cluster.sh down' e suba de novo com --trilha $TRILHA."
+        [ "$atual" = "$TRILHA" ] \
+            || abortar "o cluster $NOME já subiu com a trilha '$atual' (kubectl --context $CTX get ns $NS --show-labels): misturar trilhas invalida a comparação. Faça 'cluster.sh down' e suba de novo com --trilha $TRILHA."
     else
         k create namespace "$NS" >/dev/null && k label namespace "$NS" "trilha-balanceamento=$TRILHA" >/dev/null || abortar "criar o namespace $NS com o label da trilha falhou."
     fi
@@ -467,7 +474,7 @@ cmd_up() {
     instalar_autoescala # também com `--so`: o `kubectl apply -l` mapeia TODOS os recursos do render (sem o CRD dos ScaledObjects falha); o `up` completo seguinte só repete o `helm upgrade --install`
     [ "$TRILHA" = b1 ] && instalar_istio
     configmaps_e_segredos
-    [ -n "$so" ] || autoescala_segredos
+    autoescala_segredos # também com `--so`: o admission (secretKeyRef não opcional) e o ScaledObject do reservation precisam dos Secrets; idempotente (reaproveita o token)
     # b1: o namespace passa a injetar o sidecar (db, Supavisor, Redpanda, Redis, RabbitMQ, Mailpit e o Job particoes têm inject=false nos manifests da trilha)
     [ "$TRILHA" = b1 ] && { k label namespace "$NS" istio-injection=enabled --overwrite >/dev/null || abortar "label istio-injection no namespace $NS falhou."; ok "namespace $NS com istio-injection=enabled"; }
     if [ -n "$so" ]; then render | kn apply -l "app=$so" -f - || abortar "kubectl apply -l app=$so falhou."
