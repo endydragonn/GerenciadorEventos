@@ -354,8 +354,8 @@ PR #218; resultados e tabelas R4 × R5 em `Projeto/carga/results/08-rodada5-saga
 **Implementado (issue #46, 2026-10-29, Batch 2):** READMEs atualizados ou criados na raiz, em `Projeto/`, `Projeto/Backend/` (e `db/`, `monolito/`), `Projeto/frontend/`,
 em cada serviço e nos `*-client`. Eles só linkam os resultados das etapas. PR #211.
 
-**Implementado (#197, branch `K8s`):** a autoescala em Kubernetes com HPA/KEDA (opção D da ADR `docs/adr/Architecture-Decision-Autoescala.md`; cluster kind,
-trilhas B1/C, dry-run local em `Projeto/k8s/README.md`). **Decidido, não implementado:** o `stock` escalável até 3 réplicas (D3 b da saga, #205). O mapa da Opção B (`docs/adr/Architecture-Decision-Microservices-Split.md`) está extraído: `notification` (#32),
+**Implementado (#197 e #205, branch `K8s`):** a autoescala em Kubernetes com HPA/KEDA (opção D da ADR `docs/adr/Architecture-Decision-Autoescala.md`; cluster kind,
+trilhas B1/C, dry-run local em `Projeto/k8s/README.md`) e o `stock` escalável até 3 réplicas no cluster (D3 b da saga, #205; o compose segue com 1). O mapa da Opção B (`docs/adr/Architecture-Decision-Microservices-Split.md`) está extraído: `notification` (#32),
 `reservation` (#33), `catalog` (#35), `identity` (#36), `admission` (#41) e `stock` (#47); o `gateway` é o único conteúdo do módulo `monolito` desde a #36. A
 camada de alta carga (#41–#43, com a UI da #44) e a autoescala opção A (#111/#112) existem e foram medidas na Rodada 4; a saga (#47) foi medida na Rodada 5 (#180).
 Follow-ups abertos no `BACKLOG.md`, seção Estado.
