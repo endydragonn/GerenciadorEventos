@@ -111,12 +111,12 @@ Rodada 2 (#31, ponto 2 da série) feita em 2026-10-19 (PR #148). Fase 7: #32 →
 `Fase_7` (PRs #152 e #153; PR final #156 `Fase_7` → `main`, mergeado em 2026-10-25); a #34 (Rodada 3) foi feita em 2026-10-24 com o gerador (resultados em `Projeto/carga/results/05-distribuido`) e fechada em 2026-10-26; a #35 (`catalog`) fechou em 2026-10-25 (PR #157). Batch 1 (2026-10-26 a 2026-10-28, branch de integração `Batch_1`): #36 →
 #37 → #38 → Rodada R (`Projeto/carga/results/06-batch1-final`) → #40 → #39, mais os follow-ups acima; PR final #175 `Batch_1` → `main`
 mergeado. Batch 2 (2026-10-28 a 2026-10-29, branch de integração `Batch_2`): #166 ‖ (#170 → #171), #84 ‖ #15, #41 → #42 → #43 → #44, #177,
-#111 → #112, #178 → Rodada 4 (#179) → #47 → #204 → Rodada 5 (#180) e #46; PR final `Batch_2` → `main` pendente.
+#111 → #112, #178 → Rodada 4 (#179) → #47 → #204 → Rodada 5 (#180) e #46, todas feitas; PR final `Batch_2` → `main` aguardando o merge.
 
 Issues do Batch 2 fora do import 1–46: #177 (imagens slim, PR #189), #178 (harness da Rodada 4, PR #201), #179 (Rodada 4,
-`Projeto/carga/results/07-rodada4-admission`, PR #208) e #204 (harness da Rodada 5, PR #209), fechadas; #180 (Rodada 5) **em andamento** (em espera).
+`Projeto/carga/results/07-rodada4-admission`, PR #208) #204 (harness da Rodada 5, PR #209) e #180 (Rodada 5, `Projeto/carga/results/08-rodada5-saga`, PR #218), fechadas.
 
-Follow-ups abertos (2026-10-29):
+Follow-ups abertos (2026-10-30):
 
 | Issue | Assunto |
 |---|---|
