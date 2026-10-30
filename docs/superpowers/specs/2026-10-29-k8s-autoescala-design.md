@@ -203,8 +203,9 @@ O código das duas convive no mesmo branch; a imagem é a mesma.
   cortar requisição em voo.
 - **mTLS:** o default do Istio (`PeerAuthentication` PERMISSIVE com mTLS automático entre sidecars). O KEDA (fora da malha) chama o
   endpoint do `admission` em texto puro, o que o PERMISSIVE aceita.
-- **Recursos do sidecar:** requests `sidecar.istio.io/proxyCPU` 100m e `proxyMemory` 128Mi, limit só de memória (256Mi; sem limit de CPU,
-  P8), provisórios; o `istiod` com 1 réplica, requests 200m/512Mi.
+- **Recursos do sidecar:** requests `sidecar.istio.io/proxyCPU` 100m e `proxyMemory` 128Mi, limit só de memória (256Mi; no `backend` (gateway) 1Gi, decisão de
+  2026-10-30: no dry-run da 4b só o sidecar do gateway saturado, com 3000 conexões de leitura, foi OOMKilled com 256Mi; sem limit de CPU,
+  P8); o `istiod` com 1 réplica, requests 200m/512Mi.
 - **Custo publicado** (para ler o resultado, não é medição nossa): Istio 1.5 documenta ~0,5 vCPU e 50 MB por 1.000 req/s por proxy e
   +2,8–3,1 ms p90 por salto; no pico da R4 (~4,9 mil req/s internas, 2 proxies por salto) isso seria ~2–5 vCPU no host.
 
