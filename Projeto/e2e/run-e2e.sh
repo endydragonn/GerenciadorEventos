@@ -47,6 +47,11 @@
 #  Os helpers que fazem `docker exec`/`docker compose exec` passam por `sexec`; stock fora = `kubectl scale`, pausa do stock = SIGSTOP/SIGCONT no PID a partir do
 #  no (crictl), queda do reservation = SIGKILL no PID pelo no (como o `docker stop -t 0`; o `kubectl delete pod --force` desmonta a rede do pod e nao deixa orfas). O isolamento (Secrets e NodePort) e conferido por `cluster.sh guarda`
 #  ANTES de qualquer apply. No fim `kind delete cluster` (MANTER=1 mantem).
+#  AUTOESCALA (#197, etapa 4): o cluster tem KEDA + metrics-server e os 7 ScaledObjects. Para o roteiro ter UMA replica por servico (varios passos assumem um pod so), o e2e sobe com
+#  K8S_<SVC>_MIN=MAX=1 (K8S_DESCE_SEG=5) e K8S_RESERVATION_MAX=2 (o teto que o admission aceita ler), e logo depois do `up` limita o ScaledObject do reservation a 1. Os passos que precisam de
+#  2 replicas (7: catalog; 8: reservation) mexem no min/max do ScaledObject, nunca em `kubectl scale` (o HPA o desfaria); "stock fora" PAUSA o ScaledObject do stock antes de escalar a 0. O passo 8 confere
+#  ScaledObjects/HPAs Ready com metrica lida, `GET /internal/metrics/hot` (token de metrica: 200; sem token, token errado e token de metrica em outra rota: 401) e `adm:replicas` = readyReplicas do reservation (D4).
+#  Sem carga pesada: o dry-run de carga (etapa 4b) e quem prova a subida e a descida sob carga.
 #  Compatibilidade: Linux/macOS e Git Bash do Windows (Docker Desktop).
 # =============================================================================
 
@@ -245,6 +250,9 @@ if [ "$K8S" = "1" ]; then
     case "$TRILHA_K8S" in nenhuma|b1|c) ;; *) abortar "E2E_K8S=1 exige E2E_K8S_TRILHA=nenhuma|c|b1 (a trilha de balanceamento; obtido: '$TRILHA_K8S')." ;; esac
     [ "${E2E_COMPLETA:-0}" = "1" ] && abortar "E2E_K8S=1 roda so as *.slim (E2E_COMPLETA=1 vale so para o compose)."
     for f in kind kubectl $([ "$TRILHA_K8S" = b1 ] && echo helm); do command -v "$f" >/dev/null 2>&1 || abortar "preciso de '$f' no PATH (kind em E:\\TCC\\claude-tooling\\bin)."; done
+    # autoescala (#197, etapa 4): uma replica por servico no roteiro (min=max=1); o reservation sobe com teto 2 (o admission so grava adm:replicas dentro de [1, max]) e e limitado a 1 depois do up
+    for _s in BACKEND IDENTITY CATALOG STOCK NOTIFICATION ADMISSION; do export "K8S_${_s}_MIN=1" "K8S_${_s}_MAX=1"; done
+    export K8S_RESERVATION_MIN=1 K8S_RESERVATION_MAX=2 K8S_DESCE_SEG=5
     cluster guarda --trilha "$TRILHA_K8S" || abortar "o isolamento NAO pode ser verificado/garantido: nada foi criado."
     ok "Secrets do overlay e2e conferidos (mailpit, credenciais efemeras, X baixo) e manifests sem NodePort"
 else
@@ -305,8 +313,50 @@ if [ "$K8S" = "1" ]; then
         confere "secret env-$sec sem chaves de Studio/Kong/meta (DASHBOARD_*, SERVICE_ROLE_KEY, ANON_KEY, SUPABASE_*_KEY, PG_META_CRYPTO_KEY)" "" \
             "$(kc get secret "env-$sec" -o json | "$PY" -c 'import json, sys; p = {"DASHBOARD_USERNAME", "DASHBOARD_PASSWORD", "SERVICE_ROLE_KEY", "ANON_KEY", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY", "PG_META_CRYPTO_KEY", "STUDIO_DEFAULT_ORGANIZATION", "STUDIO_DEFAULT_PROJECT"}; print(",".join(sorted(k for k in json.load(sys.stdin)["data"] if k in p)))' | tr -d '[:space:]')"
     done
+    kc patch scaledobject reservation --type merge -p '{"spec":{"maxReplicaCount":1}}' >/dev/null || abortar "nao consegui limitar o ScaledObject do reservation a 1 replica"
+    confere "namespace com o label da trilha do up (guarda contra misturar trilhas)" "$TRILHA_K8S" \
+        "$(kubectl --context "$CTX" get namespace "$K8S_NS" -o jsonpath="{.metadata.labels['trilha-balanceamento']}")"
+    confere "ScaledObjects Ready (7: reservation, notification, backend, identity, catalog, admission, stock)" 7 \
+        "$(kc get scaledobject -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | grep -c True)"
     confere "nenhum container reiniciou por probe/falha (restartCount total)" 0 \
         "$(kc get pods -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.restartCount}{"\n"}{end}{end}' | awk '{s += $1} END {print s + 0}')"
+    if [ "$TRILHA_K8S" = "c" ]; then
+        # Trilha C: o java.security extra (cache de DNS de 5 s). O log da JVM NAO serve de prova: com o perfil Seccomp Localhost do servico o "Picked up JAVA_TOOL_OPTIONS" (stderr, no
+        # arranque da JVM) nao sai (medido: o mesmo `java -version` o imprime sem o perfil e nao o imprime com ele; o resto do stderr aparece). Prova em duas partes: (1) a variavel esta no
+        # ambiente do PROCESSO da JVM do backend (/proc/<pid>/environ, lido do no); (2) a JVM da MESMA imagem, com a MESMA variavel e o MESMO ConfigMap, enxerga networkaddress.cache.ttl=5
+        # (um pod efemero, SEM o perfil Seccomp: com ele o `-XshowSettings` tambem nao imprime, pelo mesmo motivo do "Picked up"; roda `java -XshowSettings:security:properties`; sem a variavel o ttl nem aparece).
+        BK_CID="$(kc get pod -l app=backend -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="backend")].containerID}' | sed 's#.*://##')"
+        BK_PID="$(dexec exec "$PROJETO-control-plane" crictl inspect --output go-template --template '{{.info.pid}}' "$BK_CID" | tr -d '\r')"
+        confere "trilha c: JAVA_TOOL_OPTIONS (java.security extra) no ambiente do processo da JVM do backend" 1 \
+            "$(dexec exec "$PROJETO-control-plane" sh -c "tr '\\0' '\\n' </proc/$BK_PID/environ" | tr -d '\r' | grep -c '^JAVA_TOOL_OPTIONS=-Djava.security.properties=/etc/java-security/java.security$')"
+        JSEC_POD="$CLI-jsec"
+        kc delete pod "$JSEC_POD" --ignore-not-found --now >/dev/null 2>&1
+        kc apply -f - >/dev/null <<EOF || abortar "nao consegui criar o pod da prova do java.security"
+apiVersion: v1
+kind: Pod
+metadata: {name: $JSEC_POD, labels: {app: e2e-jsec, sidecar.istio.io/inject: "false"}}
+spec:
+  restartPolicy: Never
+  enableServiceLinks: false
+  automountServiceAccountToken: false
+  volumes:
+    - {name: js, configMap: {name: java-security}}
+  containers:
+    - name: java
+      image: gerenciador-eventos-backend.slim:$SLIM_TAG
+      imagePullPolicy: Never
+      command: [java, "-XshowSettings:security:properties", "-version"]
+      env:
+        - {name: JAVA_TOOL_OPTIONS, value: "-Djava.security.properties=/etc/java-security/java.security"}
+      volumeMounts:
+        - {name: js, mountPath: /etc/java-security, readOnly: true}
+EOF
+        for i in $(seq 1 60); do [ "$(kc get pod "$JSEC_POD" -o jsonpath='{.status.phase}')" = "Succeeded" ] && break; sleep 2; done
+        JSEC_OUT="$(kc logs "$JSEC_POD" 2>&1 | tr -d '\r')"
+        confere "trilha c: a JVM com o java.security extra enxerga networkaddress.cache.ttl=5 e negative.ttl=1" "1 1" \
+            "$(grep -c 'networkaddress.cache.ttl=5$' <<<"$JSEC_OUT") $(grep -c 'networkaddress.cache.negative.ttl=1$' <<<"$JSEC_OUT")"
+        kc delete pod "$JSEC_POD" --now >/dev/null 2>&1
+    fi
     if [ "$TRILHA_K8S" = "b1" ]; then
         # B1 (#197): sidecar so nos 7 servicos e no frontend; nenhum na infra, no Mailpit e no Job; proxy sem limit de CPU; sidecar NATIVO (initContainer); sem reinicio do proxy
         COM_PROXY="$(kc get pods -o jsonpath='{range .items[*]}{.metadata.labels.app}{" "}{range .spec.initContainers[*]}{.name}{","}{end}{range .spec.containers[*]}{.name}{","}{end}{"\n"}{end}' \
@@ -320,6 +370,10 @@ if [ "$K8S" = "1" ]; then
         PROXY_RES="$(kc get pod -l app=backend -o jsonpath='{.items[0].spec.initContainers[?(@.name=="istio-proxy")].resources}')"
         confere "istio-proxy: request de CPU 100m e SEM limit de CPU (limit so de memoria 256Mi)" "sim 256Mi" \
             "$(grep -q '"requests":{"cpu":"100m"' <<<"$PROXY_RES" && ! grep -oE '"limits":\{[^}]*\}' <<<"$PROXY_RES" | grep -q cpu && echo sim || echo nao) $(grep -oE '"limits":\{[^}]*\}' <<<"$PROXY_RES" | grep -oE '[0-9]+Mi')"
+        confere "b1: mesh config do istio com defaultHttpRetryPolicy.attempts: 0 (a malha nao repete POST)" sim \
+            "$([ "$(kubectl --context "$CTX" -n istio-system get configmap istio -o jsonpath='{.data.mesh}' | grep -Ec 'attempts: *0')" -ge 1 ] && echo sim || echo nao)"
+        confere "b1: EXIT_ON_ZERO_ACTIVE_CONNECTIONS no istio-proxy do backend (termino sem cortar requisicao em voo)" sim \
+            "$([ "$(kc get pod -l app=backend -o jsonpath='{.items[0].spec.initContainers[?(@.name=="istio-proxy")].env[*].name}' | tr ' ' '\n' | grep -cx EXIT_ON_ZERO_ACTIVE_CONNECTIONS)" -ge 1 ] && echo sim || echo nao)"
         confere "istio-proxy nao reiniciou (restartCount total dos sidecars)" 0 \
             "$(kc get pods -o jsonpath='{range .items[*]}{range .status.initContainerStatuses[?(@.name=="istio-proxy")]}{.restartCount}{"\n"}{end}{end}' | awk '{s += $1} END {print s + 0}')"
     fi
@@ -607,6 +661,8 @@ pid_no() { # app: PID do processo do container NO NO (de dentro o PID 1 ignora S
 }
 stock_fora() {
     if [ "$K8S" = "1" ]; then
+        # o ScaledObject (min 1) revive o Deployment: PAUSA antes de escalar a 0 (autoscaling.keda.sh/paused) e solta no stock_volta
+        kc annotate scaledobject stock autoscaling.keda.sh/paused=true --overwrite >/dev/null || abortar "pausar o ScaledObject do stock falhou"
         kc scale deploy/stock --replicas=0 >/dev/null || abortar "kubectl scale do stock para 0 falhou"
         for i in $(seq 1 60); do [ -z "$(kc get pods -l app=stock -o name)" ] && break; sleep 2; done
     else
@@ -619,6 +675,7 @@ stock_volta() {
     if [ "$K8S" = "1" ]; then
         kc scale deploy/stock --replicas=1 >/dev/null || abortar "kubectl scale do stock para 1 falhou"
         kc rollout status deploy/stock --timeout=180s >/dev/null || abortar "o stock nao voltou a ficar pronto"
+        kc annotate scaledobject stock autoscaling.keda.sh/paused- >/dev/null || abortar "soltar a pausa do ScaledObject do stock falhou"
     else
         dexec start "$STOCK_CID" >/dev/null || abortar "docker start do stock falhou"
         esperar_saudavel "$STOCK_CID" 120 || abortar "o stock nao voltou a ficar healthy"
@@ -915,10 +972,11 @@ confere "GET $GET_URL (o evento do passo 4)" 200 "$(cli curl -s -m 10 -o /dev/nu
 cli bash -c 'rm -f /tmp/parar; fim=$((SECONDS + 600)); n=0; while [ ! -f /tmp/parar ] && [ "$SECONDS" -lt "$fim" ]; do curl -s -m 5 -o /dev/null "$1"; n=$((n + 1)); done; echo "$n"' bash "$GET_URL" >"$TMP/trafego.out" 2>&1 &
 TRAFEGO_PID=$!
 sleep 30 # aquecimento: as conexoes ociosas do e2e sao evictadas (evict-idle 20 s) e sobra a que esta em uso
-kc scale deploy/catalog --replicas=2 >/dev/null || { cli touch /tmp/parar; abortar "kubectl scale do catalog para 2 falhou"; }
+# 2 replicas pelo ScaledObject (o HPA desfaria um `kubectl scale`): min=max=2; no fim volta a 1/1
+kc patch scaledobject catalog --type merge -p '{"spec":{"minReplicaCount":2,"maxReplicaCount":2}}' >/dev/null || { cli touch /tmp/parar; abortar "patch do ScaledObject do catalog para 2 falhou"; }
 for i in $(seq 1 120); do [ "$(kc get deploy catalog -o jsonpath='{.status.readyReplicas}')" = "2" ] && break; sleep 2; done
 confere "catalog com 2 replicas prontas" 2 "$(kc get deploy catalog -o jsonpath='{.status.readyReplicas}')"
-[ "$FALHAS" -eq 0 ] || { cli touch /tmp/parar; abortar "o catalog nao subiu a 2 replicas"; }
+[ "$(kc get deploy catalog -o jsonpath='{.status.readyReplicas}')" = "2" ] || { cli touch /tmp/parar; abortar "o catalog nao subiu a 2 replicas"; }
 CAT_NOVO="$(kc get pods -l app=catalog -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | tr -d '\r' | grep -vx "$CAT_VELHO" | head -1)"
 [ -n "$CAT_NOVO" ] || { cli touch /tmp/parar; abortar "nao achei o pod novo do catalog"; }
 # janela de medida: no controle (nenhuma) 45 s fixos, esperando 0; nas trilhas b1 e c ate 120 s, parando na 1a conexao no pod novo (na c o novo so entra quando o TTL de
@@ -940,7 +998,34 @@ if [ "$TRILHA_K8S" = "nenhuma" ]; then
 else
     confere "trilha $TRILHA_K8S: o pod novo RECEBEU conexao do gateway (>= 1)" sim "$([ "$MAX_NOVO" -ge 1 ] && echo sim || echo nao)"
 fi
-kc scale deploy/catalog --replicas=1 >/dev/null 2>&1
+kc patch scaledobject catalog --type merge -p '{"spec":{"minReplicaCount":1,"maxReplicaCount":1}}' >/dev/null 2>&1
+
+echo "==> 8. autoescala (#197, etapa 4): HPAs com metrica lida, metrica do admission e adm:replicas (D4)"
+hpas_com_metrica() { kc get hpa -o jsonpath='{range .items[*]}{.status.currentMetrics[0].type}{"\n"}{end}' | grep -c .; }
+for i in $(seq 1 60); do [ "$(hpas_com_metrica)" = "7" ] && break; sleep 3; done
+confere "HPAs criados pelo KEDA (keda-hpa-<servico>)" 7 "$(kc get hpa -o name | grep -c 'keda-hpa-')"
+confere "HPAs com a metrica lida (currentMetrics presente: metrics-server e external metrics funcionando)" 7 "$(hpas_com_metrica)"
+confere "kubectl top pods (metrics-server responde)" sim "$([ "$(kc top pods --no-headers 2>/dev/null | grep -c .)" -ge 1 ] && echo sim || echo nao)"
+# o token SO de metrica (Secret admission-metrics do namespace): vai no argv de um curl efemero (nao e o INTERNAL_API_TOKEN do .env)
+TOKEN_METRICA="$(kc get secret admission-metrics -o jsonpath='{.data.token}' | base64 -d)"
+HOT_URL="http://admission:8085/internal/metrics/hot"
+confere "GET /internal/metrics/hot com o token de metrica" 200 "$(cli curl -s -m 10 -o /dev/null -w '%{http_code}' -H "X-Internal-Token: $TOKEN_METRICA" "$HOT_URL")"
+confere "corpo do /internal/metrics/hot traz o rpm inteiro" sim "$([ "$(cli curl -s -m 10 -H "X-Internal-Token: $TOKEN_METRICA" "$HOT_URL" | grep -Ec '"rpm":[0-9]+')" -ge 1 ] && echo sim || echo nao)"
+confere "GET /internal/metrics/hot sem token" 401 "$(cli curl -s -m 10 -o /dev/null -w '%{http_code}' "$HOT_URL")"
+confere "GET /internal/metrics/hot com token errado" 401 "$(cli curl -s -m 10 -o /dev/null -w '%{http_code}' -H 'X-Internal-Token: errado' "$HOT_URL")"
+confere "o token de metrica NAO abre outra rota do admission" 401 \
+    "$(cli curl -s -m 10 -o /dev/null -w '%{http_code}' -H "X-Internal-Token: $TOKEN_METRICA" "http://admission:8085/internal/admissions/events/1/rpm")"
+# D4: com o reservation em 2 replicas, o admission le readyReplicas pela API do Kubernetes e grava adm:replicas = 2 (o caminho real: ServiceAccount, CA do cluster, RBAC)
+adm_replicas() { sexec redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli GET adm:replicas' | tr -d '[:space:]'; }
+kc patch scaledobject reservation --type merge -p '{"spec":{"minReplicaCount":2,"maxReplicaCount":2}}' >/dev/null || abortar "patch do ScaledObject do reservation para 2 falhou"
+for i in $(seq 1 120); do [ "$(kc get deploy reservation -o jsonpath='{.status.readyReplicas}')" = "2" ] && break; sleep 3; done
+confere "reservation com 2 replicas prontas (readyReplicas)" 2 "$(kc get deploy reservation -o jsonpath='{.status.readyReplicas}')"
+for i in $(seq 1 30); do [ "$(adm_replicas)" = "2" ] && break; sleep 2; done
+confere "adm:replicas (gravada pelo admission pela API do Kubernetes) == readyReplicas do reservation" 2 "$(adm_replicas)"
+kc patch scaledobject reservation --type merge -p '{"spec":{"minReplicaCount":1,"maxReplicaCount":1}}' >/dev/null 2>&1
+for i in $(seq 1 120); do [ "$(kc get deploy reservation -o jsonpath='{.status.readyReplicas}')" = "1" ] && break; sleep 3; done
+for i in $(seq 1 30); do [ "$(adm_replicas)" = "1" ] && break; sleep 2; done
+confere "reservation de volta a 1 replica e adm:replicas acompanha" "1 1" "$(kc get deploy reservation -o jsonpath='{.status.readyReplicas}') $(adm_replicas)"
 fi
 
 echo "=================================================="

@@ -3,6 +3,7 @@ package com.gerenciador.eventos.clientlb;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -42,6 +43,14 @@ class ClientLbTest {
         assertArrayEquals(new InetAddress[] {ip(2), ip(3), ip(1)}, rr.resolve("x"));
         assertArrayEquals(new InetAddress[] {ip(3), ip(1), ip(2)}, rr.resolve("x"));
         assertArrayEquals(new InetAddress[] {ip(1), ip(2), ip(3)}, rr.resolve("x"));
+    }
+
+    @Test
+    void ttlZeroOuNegativoComOBalanceamentoLigadoERecusado() {
+        assertThrows(IllegalArgumentException.class, () -> new ClientLb(true, 0));
+        assertThrows(IllegalArgumentException.class, () -> new ClientLb(true, -1));
+        new ClientLb(true, 1); // o menor valido
+        new ClientLb(false, 0); // desligado nao usa o TTL: nao valida
     }
 
     @Test

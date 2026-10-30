@@ -1767,10 +1767,10 @@ ID da imagem `*.slim:$SLIM_TAG` (`E2E_COMPLETA=1`: as completas construídas no 
 Tabela antes/depois, includes (com motivo) e perfis Seccomp/AppArmor (opcionais, não aplicados por padrão) em `Projeto/slim/README.md`. Desde a #47 inclui o `stock` (probe de `/internal/holds`,
 `/internal/eventcaps/**` e do `StockReleaseConsumer`, com um `ReservationCancelled` produzido antes do start).
 
-### Cluster Kubernetes (kind) — issue #197, etapas 2 e 3
+### Cluster Kubernetes (kind) — issue #197, etapas 2, 3 e 4a
 
-A stack inteira também roda num cluster kind de um nó (`Projeto/k8s/`, ver o README de lá): `cluster.sh up --trilha b1|c|nenhuma` (a trilha é obrigatória; a autoescala KEDA/HPA é da
-etapa 4), com as réplicas fixas em 1 e dados descartáveis. O compose, o `run-tests.sh` e o e2e em compose **não mudam**. O que o cluster exige dos serviços:
+A stack inteira também roda num cluster kind de um nó (`Projeto/k8s/`, ver o README de lá): `cluster.sh up --trilha b1|c|nenhuma` (a trilha é obrigatória), com dados descartáveis e a autoescala KEDA/HPA da etapa 4a (abaixo; o dry-run de carga é a 4b).
+O compose, o `run-tests.sh` e o e2e em compose **não mudam**. O que o cluster exige dos serviços:
 - **Actuator só para as probes (#207).** O `identity`, `catalog`, `reservation`, `stock` e `admission` ganharam `spring-boot-starter-actuator` com o HTTP de management **desligado por padrão**
   (`management.server.port=-1`, só `health` exposto, `show-details=never`): sem env nova nada muda no compose. O manifest liga `MANAGEMENT_SERVER_PORT=8090` (outro conector e outro pool de
   threads que a API, então a probe não espera atrás das 300 threads), `management.endpoint.health.probes.enabled=true` e o grupo `readiness` só com `readinessState` (banco, Redis, broker e
@@ -1788,8 +1788,21 @@ etapa 4), com as réplicas fixas em 1 e dados descartáveis. O compose, o `run-t
 - **Seccomp:** o perfil do Slim cru não deixa nem o container iniciar (faltam as syscalls do runc) nem o relay Kafka do catalog funcionar (`writev`/`shutdown`); o `cluster.sh` soma `k8s/seccomp-extras.txt` ao perfil de cada serviço
   antes de copiá-lo para o nó (detalhes e o risco no `Projeto/k8s/README.md`). AppArmor não se aplica ao kernel do Docker Desktop.
 - **Término sem 5xx:** `preStop.sleep` 20 s + `terminationGracePeriodSeconds` 60; `maxSurge: 0, maxUnavailable: 1` nos serviços com banco.
+- **Autoescala (#197, etapa 4a; D5 = a, KEDA sem Prometheus; detalhes e tabela em `Projeto/k8s/README.md`, "Autoescala").** `cluster.sh up` instala metrics-server (chart 3.14.0) e KEDA (chart 2.21.0, `KEDA_RESTRICT_SECRET_ACCESS=true`) por helm e aplica 7 ScaledObjects: `reservation` por
+  `metrics-api` em `GET /internal/metrics/hot` do `admission` (alvo `AverageValue` = `0,5 × ADMISSION_X_RPM`, da mesma variável que o admission recebe), `notification` por `kafka` (lag do group), os demais (`backend`, `identity`, `catalog`, `admission`, `stock`) por `cpu` 50% do container da aplicação.
+  `K8S_<SVC>_MIN`/`_MAX` (default 1/3, teto 3 por causa da conta do pool acima), `K8S_DESCE_SEG` (120), descida de 1 pod por 60 s e subida de 1 pod por 15 s (#206). **Duas mudanças no `admission` (módulo `admission`, sem dependência nova, nada muda no compose):**
+  - **`GET /internal/metrics/hot` (`MetricsController`)**: devolve `{"rpm": <adm:hot>}`, `200` com `0` se a chave não existe (**nunca 404**: o KEDA, em erro, congela as réplicas) e 503 com o Redis fora. O `InternalTokenFilter` ganhou o **token só de métrica** (`ADMISSION_METRICS_TOKEN`, `admission.metrics.token`, **só no
+    cluster**: gerado pelo `cluster.sh` a cada cluster novo, Secret `admission-metrics`, fora do `.env`): nessa rota (método `GET` e `getRequestURI()` cru IGUAL a `/internal/metrics/hot`; qualquer variação cai no ramo do mestre, fail-closed) vale **só** o token de métrica, e o `INTERNAL_API_TOKEN` mestre
+    **não** abre a rota; em toda outra rota vale só o mestre e o de métrica não abre nada. Sem `ADMISSION_METRICS_TOKEN` (compose) a rota responde 401 a tudo e o serviço sobe normalmente. Testes sem infra: `TokenDeMetricaFilterTest` e `MetricsHotTest`.
+  - **Réplicas ativas pela API do Kubernetes (D4 = b)**: `ReplicasDoKubernetes`, `@Scheduled` de 2 s ligado só por `admission.k8s.replicas.enabled` (`ADMISSION_K8S_REPLICAS_ENABLED`, default `false`; o `@EnableScheduling` está na própria classe condicional, então no compose nem existe scheduler). `GET
+    https://kubernetes.default.svc/apis/apps/v1/namespaces/<ns>/deployments/reservation` com o `java.net.http.HttpClient` (token da ServiceAccount relido a cada chamada, `ca.crt` num `SSLContext` próprio, namespace do arquivo, timeout de 1 s), grava `adm:replicas` com TTL 15 s (a chave do scaler da opção A; o Lua não muda). Falha ou
+    `readyReplicas` ausente/0/fora de `[1, K8S_RESERVATION_MAX]` (`admission.k8s.replicas.max`) **não grava**: vale `ADMISSION_RESERVATION_REPLICAS`. RBAC só de `get` em `deployments/reservation`; só o admission monta o token. Teste: `ReplicasDoKubernetesTest` (servidor HTTP falso: readyReplicas, 401/403/500,
+    timeout, JSON inválido, fora do intervalo, token relido, falha do Redis); o caminho real (TLS, RBAC) é coberto no e2e do cluster. **Envs novas** (só no cluster, sem default inseguro e sem nada novo no `.env`): `ADMISSION_METRICS_TOKEN`, `ADMISSION_K8S_REPLICAS_ENABLED`, `K8S_RESERVATION_MAX`.
+  - `CLIENT_LB_TTL_MS` passou a ser validada (`> 0` com `CLIENT_LB_ENABLED=true`; `ClientLb` recusa, `ClientLbTest`).
 - e2e: `SLIM_TAG=k8s E2E_K8S=1 E2E_K8S_TRILHA=nenhuma|c|b1 Projeto/e2e/run-e2e.sh` (cluster próprio `gerenciador-e2e`, sem porta no host; pod `e2e-cli` com a imagem Maven, sem sidecar). O passo 7 (só no cluster) sobe uma 2ª réplica do `catalog`
-  com GETs sequenciais no gateway e mede as conexões ESTABLISHED do gateway no pod novo: nas trilhas `b1` e `c` o pod novo recebe, na `nenhuma` (o controle: Service L4) não.
+  com GETs sequenciais no gateway e mede as conexões ESTABLISHED do gateway no pod novo: nas trilhas `b1` e `c` o pod novo recebe, na `nenhuma` (o controle: Service L4) não. Desde a 4a o e2e sobe com min=max=1 nos ScaledObjects
+  (`K8S_<SVC>_MIN/MAX=1`; o reservation com teto 2, limitado a 1 logo depois do `up`), o passo 7 e o novo passo 8 mexem no min/max do ScaledObject (nunca `kubectl scale`), "stock fora" pausa o ScaledObject (`autoscaling.keda.sh/paused`) e o passo 8 confere
+  ScaledObjects/HPAs, o `/internal/metrics/hot` (200 com o token de métrica, 401 sem token/errado/noutra rota) e `adm:replicas` = `readyReplicas` do reservation (2 e de volta a 1).
 - **Trilhas de balanceamento (#197, etapa 3).** O `Service` do Kubernetes balanceia por conexão, e os 5 clientes mantêm as conexões abertas (`max-keep-alive-requests=-1`): um pod novo não recebe tráfego
   das conexões já abertas. `cluster.sh up --trilha ...` escolhe como resolver isso, sobre a mesma base e a mesma imagem (trocar = `down` + `up`); as trilhas são **componentes kustomize**
   (`k8s/overlays/trilha-*`) que o `cluster.sh` soma, num kustomization temporário, ao overlay `base` ou `e2e`:

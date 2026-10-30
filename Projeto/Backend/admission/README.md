@@ -15,6 +15,8 @@ chamada pelo gateway pela lib [`admission-client`](../admission-client/README.md
     por usuário ou fila cheia); `400` para pedido malformado. Redis fora ou lento (timeout de 200 ms) dá **503**: o fail-open é do cliente (gateway).
   - `GET /internal/admissions/events/{eventId}/rpm`: RPM atual do evento (só leitura).
   - `GET /internal/admissions/result?userId=&idempotencyKey=`: estado da mensagem (`queued`, `pending`, `rejected` ou `timed_out`) ou `404`.
+  - `GET /internal/metrics/hot` (#197, só no cluster Kubernetes): `{"rpm": <adm:hot>}` (0 sem a chave, nunca 404) para o KEDA escalar o `reservation`. Aceita **só** o token de métrica (`ADMISSION_METRICS_TOKEN`); o `INTERNAL_API_TOKEN` não abre essa rota e o de métrica não abre nenhuma outra. Sem a variável responde 401 a tudo.
+  - Job `ReplicasDoKubernetes` (#197, desligado por padrão: `admission.k8s.replicas.enabled`): grava `adm:replicas` com o `readyReplicas` do Deployment `reservation`, lido da API do Kubernetes a cada 2 s.
 - **Contador:** buckets de `ADMISSION_BUCKET_MS` (50 ms) somados numa janela de `ADMISSION_WINDOW_MS` (200 ms), num script Lua (uma ida ao Redis,
   atômica). O RPM é só sinal de carga: nada de capacidade é decidido por ele.
 - **Gatilho (por evento, no mesmo script):** `uso = RPM do evento / (X x réplicas do reservation)`, com `ADMISSION_X_RPM` e `ADMISSION_RESERVATION_REPLICAS`.

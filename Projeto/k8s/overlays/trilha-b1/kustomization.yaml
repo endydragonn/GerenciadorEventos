@@ -31,7 +31,8 @@ patches:
               sidecar.istio.io/proxyMemoryLimit: 256Mi
           spec:
             initContainers:
-              # o `espera` (nc) roda como o UID do proxy (1337), que o iptables do Istio NÃO redireciona: a espera testa o Service de verdade (kube-proxy, só pods prontos),
+              # ATENCAO: o patch estrategico casa o initContainer `espera` por NOME; um Deployment-alvo SEM `espera` ganharia um initContainer sem imagem e o apply falharia
+              # (hoje os 8 alvos o têm). O `espera` (nc) roda como o UID do proxy (1337), que o iptables do Istio NÃO redireciona: a espera testa o Service de verdade (kube-proxy, só pods prontos),
               # não o listener do Envoy, que aceitaria a conexão mesmo sem backend
               - name: espera
                 securityContext:

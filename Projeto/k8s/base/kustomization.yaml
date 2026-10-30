@@ -12,7 +12,9 @@ resources:
   - catalog.yaml
   - reservation.yaml
   - stock.yaml
+  - admission-rbac.yaml
   - admission.yaml
   - backend.yaml
   - notification.yaml
   - frontend.yaml
+  - autoescala.yaml

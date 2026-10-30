@@ -4,7 +4,7 @@ metadata:
   name: backend
   labels: {app: backend}
 spec:
-  replicas: 1
+  # sem `replicas`: a autoescala (KEDA/HPA, issue #197 etapa 4) é dona da contagem; reaplicar o manifest não a volta para 1
   selector:
     matchLabels: {app: backend}
   strategy:
@@ -29,7 +29,7 @@ spec:
             - |
               for alvo in supabase-pooler:6543 redpanda:9092 reservation:8082 catalog:8083 identity:8084; do
                 host="${alvo%%:*}"; porta="${alvo##*:}"
-                until nc -w 2 "$host" "$porta" </dev/null; do echo "aguardando $alvo"; sleep 2; done
+                until timeout 5 nc -w 2 "$host" "$porta" </dev/null; do echo "aguardando $alvo"; sleep 2; done
               done
           resources:
             requests: {cpu: 10m, memory: 8Mi}

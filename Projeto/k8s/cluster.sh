@@ -14,20 +14,25 @@
 #                                       --trilha é OBRIGATÓRIO (não existe subida sem trilha por acidente): `b1` = malha de serviços com sidecar (Istio 1.31.1
 #                                       instalado por helm: istio/base + istio/istiod), `c` = balanceamento no cliente (módulo Maven client-lb + Services headless),
 #                                       `nenhuma` = a base pura (Service L4 do Kubernetes), o controle. Trocar de trilha = `down` + `up --trilha <outra>`.
-#    guarda --trilha ...                só confere o isolamento do overlay e2e (Secrets e NodePort) com a trilha somada; não cria nada
+#                                       Desde a etapa 4 o `up` instala (helm, versões de chart FIXAS, --wait) o metrics-server e o KEDA (todas as trilhas) e aplica os ScaledObjects da
+#                                       autoescala (D5): reservation pelo adm:hot do admission, notification pelo lag, os demais por CPU. K8S_<SVC>_MIN/_MAX (default 1/3), K8S_DESCE_SEG (120),
+#                                       K8S_CPU_ALVO (50) e AUTOESCALA_NOTIFICATION_LAG (100) viram o patch gerado; o alvo do reservation é 0,5 x o ADMISSION_X_RPM que o admission recebe.
+#    guarda --trilha ...                só confere o isolamento do overlay e2e/carga (Secrets e NodePort) com a trilha somada; não cria nada
 #    imagem <img...>                    carrega imagens avulsas no nó (o e2e usa para o pod auxiliar)
 #    carregar <svc...>                  recarrega as imagens dadas (slim ou frontend) no nó e reinicia os Deployments (ciclo de desenvolvimento)
 #    psql | rpk | redis-cli [args]      atalhos de `kubectl exec` (a senha vai pelo ambiente do pod, nunca no argv)
 #    status                             nós, pods e serviços
 #    down                               `kind delete cluster` (antes de qualquer medição no host: o cluster disputa CPU e RAM)
 #
-#  Variáveis: K8S_NOME (gerenciador | gerenciador-e2e*), K8S_OVERLAY (base | e2e), K8S_ESPERA (900, segundos de cada espera), SLIM_TAG (a das *.slim; resolvida
+#  Variáveis: K8S_NOME (gerenciador | gerenciador-e2e*), K8S_OVERLAY (base | e2e | completa | carga), K8S_ESPERA (900, segundos de cada espera), SLIM_TAG (a das *.slim; resolvida
 #  pelo compose como nos outros scripts: shell > Projeto/.env > latest).
+#  Overlays: base (Secrets REAIS, só no cluster `gerenciador`), e2e (Mailpit, credenciais efêmeras, sem NodePort), completa (imagens completas gerenciador-eventos-<svc>:latest no lugar das slim;
+#  Secrets REAIS, só em `gerenciador`; SLIM_TAG não vale), carga (= e2e + SEED_ENABLED=true no gateway, para o dry-run; Secrets do override do e2e, nunca o SMTP real).
 #  SLIM_TAG=latest ABORTA (as :latest da R5 não têm o actuator): use SLIM_TAG=k8s até a R5 terminar; K8S_PERMITIR_LATEST=1 só depois que as :latest forem regeradas.
 #  CONTEXTO EXPLÍCITO (E4): todo kubectl daqui passa --context kind-<nome>; nunca depende do current-context (o `kind create` o troca).
 #  Segredos: os Secrets saem do `docker compose config` (o ambiente que o compose entrega a cada container) para arquivos temporários (mktemp, chmod 700,
 #  apagados no fim) e de lá para o cluster, numa lista fechada de componentes (nunca Studio/Kong/meta). Nada é impresso nem versionado.
-#  Pré-requisitos: docker (compose v2), kind e kubectl no PATH (o kind e o helm, este só para a trilha b1, em E:\TCC\claude-tooling\bin na máquina do TCC; o kubectl
+#  Pré-requisitos: docker (compose v2), kind e kubectl no PATH (o kind e o helm, este desde a etapa 4 em toda trilha (KEDA e metrics-server), em E:\TCC\claude-tooling\bin na máquina do TCC; o kubectl
 #  vem com o Docker Desktop), python, Projeto/.env e Projeto/supabase/.env. Todo helm leva --kube-context kind-<nome> (E4), como o kubectl. Quem roda up/down/carregar segue o lock Docker do projeto (E:/TCC/.lock-docker).
 # =============================================================================
 
@@ -48,7 +53,13 @@ SERVICOS="backend identity catalog reservation stock notification admission"
 COMPONENTES="db supabase-pooler redis rabbitmq $SERVICOS"
 ISTIO_VERSAO=1.31.1                                    # release stable (2026-09-21), fixa; as 1.31.2/1.31.3 têm menos de duas semanas
 ISTIO_REPO=https://blob.istio.io/istio-release/charts  # o istio-release.storage.googleapis.com não publica a série 1.31
+KEDA_VERSAO=2.21.0                                     # chart kedacore/keda (appVersion 2.21.0), publicado em 2026-09-23, fixo
+KEDA_REPO=https://kedacore.github.io/charts
+METRICS_SERVER_VERSAO=3.14.0                           # chart kubernetes-sigs/metrics-server (appVersion 0.9.0), publicado em 2026-08-19, fixo
+METRICS_SERVER_REPO=https://kubernetes-sigs.github.io/metrics-server
 TRILHA=""
+# serviços sob autoescala (KEDA): os 7 Java; o frontend e a infra ficam com 1 réplica fixa
+AUTOESCALADOS="backend identity catalog reservation stock notification admission"
 
 # Git Bash: o kubectl/docker/kind são nativos do Windows e a conversão de path do MSYS reescreveria "/bin/sh", "/actuator/..." nos argumentos
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'; WIN=1 ;; *) WIN=0 ;; esac
@@ -64,11 +75,15 @@ case "$NOME" in
     gerenciador|gerenciador-e2e*) ;;
     *) abortar "K8S_NOME='$NOME' inválido: o nome é 'gerenciador' ou começa com 'gerenciador-e2e'." ;;
 esac
+IMG_COMPLETA=0
 case "$OVERLAY" in
     base) case "$NOME" in gerenciador-e2e*) abortar "overlay 'base' leva os Secrets REAIS (Projeto/.env): não vai para o cluster '$NOME' (use K8S_OVERLAY=e2e)." ;; esac
           OVERLAY_DIR="k8s/base"; COMPOSE_E2E=0 ;;
+    completa) case "$NOME" in gerenciador-e2e*) abortar "overlay 'completa' leva os Secrets REAIS (Projeto/.env): não vai para o cluster '$NOME' (use K8S_OVERLAY=e2e)." ;; esac
+          OVERLAY_DIR="k8s/overlays/completa"; COMPOSE_E2E=0; IMG_COMPLETA=1 ;;
     e2e)  OVERLAY_DIR="k8s/overlays/e2e"; COMPOSE_E2E=1 ;;
-    *)    abortar "K8S_OVERLAY='$OVERLAY' inválido (base | e2e)." ;;
+    carga) OVERLAY_DIR="k8s/overlays/carga"; COMPOSE_E2E=1 ;; # e2e + SEED_ENABLED: Secrets do override do e2e (Mailpit, credenciais efêmeras), nunca o SMTP real (P2)
+    *)    abortar "K8S_OVERLAY='$OVERLAY' inválido (base | e2e | completa | carga)." ;;
 esac
 KIND_CFG="k8s/kind.yaml"; case "$NOME" in gerenciador-e2e*) KIND_CFG="k8s/kind-e2e.yaml" ;; esac
 
@@ -82,7 +97,7 @@ for c in python3 python; do "$c" -c 'import json' >/dev/null 2>&1 && { PY="$c"; 
 
 ferramentas() {
     local f
-    for f in docker kind kubectl $([ "$TRILHA" = b1 ] && echo helm); do command -v "$f" >/dev/null 2>&1 || abortar "preciso de '$f' no PATH (kind e helm ficam em E:\\TCC\\claude-tooling\\bin na máquina do TCC; o helm só é preciso na trilha b1)."; done
+    for f in docker kind kubectl helm; do command -v "$f" >/dev/null 2>&1 || abortar "preciso de '$f' no PATH (kind e helm ficam em E:\\TCC\\claude-tooling\\bin na máquina do TCC; o helm instala o KEDA e o metrics-server em toda trilha)."; done
     [ -n "$PY" ] || abortar "preciso de python (python3) para filtrar o JSON do 'docker compose config'."
     [ -f .env ] && [ -f supabase/.env ] || abortar "faltam Projeto/.env e/ou Projeto/supabase/.env (ver supabase/README.md)."
 }
@@ -93,6 +108,7 @@ compose() {
 }
 
 resolver_tag() { # a tag das slim que o compose resolve (shell > .env > latest), como nos outros scripts
+    [ "$IMG_COMPLETA" = 1 ] && { SLIM_TAG=""; return 0; } # overlay completa: imagens gerenciador-eventos-<svc>:latest, SLIM_TAG não vale
     SLIM_TAG="$(compose config --images 2>/dev/null | sed -n 's/^gerenciador-eventos-backend\.slim://p' | tr -d '\r')"
     [ -n "$SLIM_TAG" ] || abortar "não consegui resolver a tag das slim (docker compose config --images não devolveu gerenciador-eventos-backend.slim:<tag>)."
     # As *.slim:latest da R5 não têm o actuator (probes da 8090): com elas os 5 serviços nunca ficam prontos e o `up` só falharia depois de K8S_ESPERA.
@@ -102,21 +118,78 @@ resolver_tag() { # a tag das slim que o compose resolve (shell > .env > latest),
     fi
 }
 
-escolher_trilha() { # $1 = valor de --trilha; valida e, com b1|c, soma o componente da trilha ao overlay (base ou e2e) num kustomization TEMPORÁRIO
+validar_trilha() { # $1 = valor de --trilha
     case "$1" in
         nenhuma|b1|c) TRILHA="$1" ;;
         "") abortar "falta --trilha: use --trilha b1 (Istio com sidecar), --trilha c (balanceamento no cliente) ou --trilha nenhuma (a base pura, o controle). Não existe subida sem trilha por acidente." ;;
         *) abortar "trilha '$1' inválida (b1 | c | nenhuma)." ;;
     esac
-    [ "$TRILHA" = nenhuma ] && return 0
-    # o kustomize não lê fora da própria pasta: copia base e overlays (só manifests, poucos KB) e monta a seleção ao lado
-    mkdir -p "$TMP/k8s/sel" && cp -r "$SCRIPT_DIR/base" "$SCRIPT_DIR/overlays" "$TMP/k8s/" || abortar "montar o kustomization temporário da trilha falhou."
+}
+
+inteiro_entre() { # nome valor min max
+    [[ "$2" =~ ^[0-9]+$ ]] && [ "$2" -ge "$3" ] && [ "$2" -le "$4" ] || abortar "$1='$2' inválido (inteiro de $3 a $4)."
+}
+
+# Monta, num kustomization TEMPORÁRIO (o kustomize não lê fora da própria pasta: copia base e overlays, só manifests, poucos KB), a seleção que o `up` aplica:
+# o overlay (base | e2e | completa | carga) + o componente da trilha (b1 | c) + o PATCH GERADO da autoescala (K8S_<SVC>_MIN/_MAX, K8S_DESCE_SEG, K8S_CPU_ALVO, o alvo do
+# reservation e o lagThreshold do notification). Sempre montado (também em --trilha nenhuma): o `guardar` renderiza exatamente o que será aplicado.
+montar_selecao() {
+    local s S vmin vmax min max desce cpu lag lagalvo alvo resmax=3 patches="" componentes=""
+    desce="${K8S_DESCE_SEG:-120}"; inteiro_entre K8S_DESCE_SEG "$desce" 0 3600
+    cpu="${K8S_CPU_ALVO:-50}"; inteiro_entre K8S_CPU_ALVO "$cpu" 1 100
+    lag="${AUTOESCALA_NOTIFICATION_LAG:-100}"; inteiro_entre AUTOESCALA_NOTIFICATION_LAG "$lag" 2 1000000
+    lagalvo=$((lag / 2)) # 0,5 x a referência de lag (regra 50/80 da autoescala)
+    # o alvo do reservation sai da MESMA variável que o admission recebe (ADMISSION_X_RPM no ambiente do compose): gerar_env o grava em $TMP/adm-alvo.
+    # As violações de isolamento são do `guardar`; aqui só se lê o alvo.
+    gerar_env >/dev/null 2>&1 || true
+    [ -s "$TMP/adm-alvo" ] || abortar "não consegui ler o ADMISSION_X_RPM do admission no 'docker compose config' (o alvo do reservation no KEDA é 0,5 x ele)."
+    alvo="$(tr -d '[:space:]' <"$TMP/adm-alvo")"
+    for s in $AUTOESCALADOS; do
+        S="$(echo "$s" | tr 'a-z' 'A-Z')"; vmin="K8S_${S}_MIN"; vmax="K8S_${S}_MAX"
+        min="${!vmin:-1}"; max="${!vmax:-3}"
+        # teto 3: a conta do Supavisor (1492 <= 1500, spec "stock escalável") supõe no máximo 3 réplicas por serviço + 1 em término; acima disso, refazer a conta
+        inteiro_entre "$vmin" "$min" 1 3; inteiro_entre "$vmax" "$max" 1 3
+        [ "$min" -le "$max" ] || abortar "$vmin ($min) maior que $vmax ($max)."
+        [ "$s" = reservation ] && resmax="$max"
+        patches+="  - target: {kind: ScaledObject, name: $s}
+    patch: |-
+      - {op: replace, path: /spec/minReplicaCount, value: $min}
+      - {op: replace, path: /spec/maxReplicaCount, value: $max}
+      - {op: replace, path: /spec/advanced/horizontalPodAutoscalerConfig/behavior/scaleDown/stabilizationWindowSeconds, value: $desce}
+"
+        case "$s" in
+            reservation)  patches+="      - {op: replace, path: /spec/triggers/0/metadata/targetValue, value: \"$alvo\"}
+" ;;
+            notification) patches+="      - {op: replace, path: /spec/triggers/0/metadata/lagThreshold, value: \"$lagalvo\"}
+" ;;
+            *)            patches+="      - {op: replace, path: /spec/triggers/0/metadata/value, value: \"$cpu\"}
+" ;;
+        esac
+    done
+    # o admission usa o MESMO maxReplicaCount do reservation como teto da leitura de readyReplicas (uma fonte só)
+    patches+="  - target: {kind: Deployment, name: admission}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: admission}
+      spec:
+        template:
+          spec:
+            containers:
+              - name: admission
+                env:
+                  - {name: K8S_RESERVATION_MAX, value: \"$resmax\"}
+"
+    [ "$TRILHA" = nenhuma ] || componentes="components:
+  - ../overlays/trilha-$TRILHA
+"
+    mkdir -p "$TMP/k8s/sel" && cp -r "$SCRIPT_DIR/base" "$SCRIPT_DIR/overlays" "$TMP/k8s/" || abortar "montar o kustomization temporário da seleção falhou."
     cat > "$TMP/k8s/sel/kustomization.yaml" <<EOF
 namespace: $NS
 resources:
   - ../${OVERLAY_DIR#k8s/}
-components:
-  - ../overlays/trilha-$TRILHA
+${componentes}patches:
+${patches}
 EOF
     OVERLAY_DIR="$TMPW/k8s/sel"
 }
@@ -154,6 +227,18 @@ for nome in componentes:
             if "\n" in str(v):
                 print("   aviso: env-%s: %s descartada (valor com quebra de linha)" % (nome, k)); continue
             f.write("%s=%s\n" % (k, v))
+# alvo do reservation no KEDA (D5): 0,5 x o ADMISSION_X_RPM que o admission RECEBE (a MESMA variável: o dry-run reduz as duas juntas). Não é segredo.
+adm_env = c["services"]["admission"].get("environment") or {}
+try:
+    x_rpm = float(adm_env.get("ADMISSION_X_RPM") or 56000)
+except ValueError:
+    x_rpm = 0.0
+if x_rpm <= 0:
+    erros.append("admission: ADMISSION_X_RPM=%s invalido (numero > 0)" % adm_env.get("ADMISSION_X_RPM"))
+else:
+    alvo = x_rpm * 0.5
+    with open(os.path.join(saida, "adm-alvo"), "w", newline="\n") as f:
+        f.write(str(int(alvo)) if alvo == int(alvo) else repr(alvo))
 if e2e:
     env = c["services"]["notification"].get("environment") or {}
     if env.get("MAIL_HOST") != "mailpit" or env.get("MAIL_PORT") != "1025" or env.get("MAIL_SMTP_AUTH") != "false" \
@@ -226,13 +311,73 @@ instalar_istio() { # trilha b1: istio/base + istio/istiod 1.31.1 por helm (vers�
     ok "Istio $ISTIO_VERSAO (istio/base + istio/istiod, 1 réplica do istiod) instalado por helm"
 }
 
-helm_istio() { # release chart [args...]: até 3 tentativas (o repositório do Istio é uma busca de rede); na falha imprime a saída do helm
-    local rel="$1" chart="$2" i; shift 2
+helm_chart() { # release chart repo versão namespace [args...]: até 3 tentativas (o repositório do chart é uma busca de rede); na falha imprime a saída do helm (charts sem segredo)
+    local rel="$1" chart="$2" repo="$3" ver="$4" ns="$5" i; shift 5
     for i in 1 2 3; do
-        h upgrade --install "$rel" "$chart" --repo "$ISTIO_REPO" --version "$ISTIO_VERSAO" -n istio-system "$@" --wait --timeout "${ESPERA}s" >"$TMP/helm.out" 2>&1 && return 0
+        h upgrade --install "$rel" "$chart" --repo "$repo" --version "$ver" -n "$ns" "$@" --wait --timeout "${ESPERA}s" >"$TMP/helm.out" 2>&1 && return 0
         echo "   (helm $rel, tentativa $i de 3 falhou)" >&2; tail -5 "$TMP/helm.out" >&2; sleep 5
     done
     return 1
+}
+
+helm_istio() { # release chart [args...]
+    local rel="$1" chart="$2"; shift 2
+    helm_chart "$rel" "$chart" "$ISTIO_REPO" "$ISTIO_VERSAO" istio-system "$@"
+}
+
+instalar_autoescala() { # metrics-server + KEDA por helm (versões de chart FIXAS), em toda trilha; precisam existir ANTES do apply (CRDs dos ScaledObjects, métricas do HPA)
+    helm_chart metrics-server metrics-server "$METRICS_SERVER_REPO" "$METRICS_SERVER_VERSAO" kube-system -f k8s/helm/metrics-server-values.yaml || abortar "helm metrics-server $METRICS_SERVER_VERSAO falhou (kubectl --context $CTX -n kube-system get pods)."
+    helm_chart keda keda "$KEDA_REPO" "$KEDA_VERSAO" keda --create-namespace -f k8s/helm/keda-values.yaml || abortar "helm keda $KEDA_VERSAO falhou (kubectl --context $CTX -n keda get pods)."
+    local api
+    for api in v1beta1.metrics.k8s.io v1beta1.external.metrics.k8s.io; do # o HPA só lê métrica com as APIs agregadas disponíveis
+        k wait --for=condition=Available "apiservice/$api" --timeout="${ESPERA}s" >/dev/null || abortar "o APIService $api não ficou disponível (metrics-server/KEDA)."
+    done
+    ok "metrics-server $METRICS_SERVER_VERSAO e KEDA $KEDA_VERSAO (KEDA_RESTRICT_SECRET_ACCESS=true) instalados por helm"
+}
+
+autoescala_segredos() { # o token SÓ de métrica (P3), a ClusterTriggerAuthentication e o Service do Redpanda visível ao namespace do KEDA. Nada disto passa pelo kustomize (o transformador de
+    # namespace tiraria o Secret do `keda`). Gerado FORA do .env, nunca impresso. Reaproveita o valor se o Secret já existe neste cluster (um `up` repetido não pode deixar o admission e o
+    # KEDA com valores diferentes: 401 e o reservation congelado); cluster novo = token novo.
+    local tf="$TMP/metrics-token" tfw="$TMPW/metrics-token"
+    if k -n keda get secret admission-metrics >/dev/null 2>&1; then
+        k -n keda get secret admission-metrics -o jsonpath='{.data.apiKey}' | base64 -d >"$tf"
+    else
+        "$PY" -c 'import secrets, sys; sys.stdout.write(secrets.token_hex(32))' >"$tf"
+    fi
+    [ -s "$tf" ] || abortar "não consegui gerar/ler o token de métrica."
+    k -n keda create secret generic admission-metrics --from-file=apiKey="$tfw" --dry-run=client -o yaml | k apply -f - >/dev/null || abortar "secret admission-metrics (keda)."
+    kn create secret generic admission-metrics --from-file=token="$tfw" --dry-run=client -o yaml | kn apply -f - >/dev/null || abortar "secret admission-metrics ($NS)."
+    k apply -f - >/dev/null <<EOF || abortar "ClusterTriggerAuthentication / Service redpanda do namespace keda."
+apiVersion: keda.sh/v1alpha1
+kind: ClusterTriggerAuthentication
+metadata:
+  name: admission-metrics
+spec:
+  secretTargetRef:
+    - parameter: apiKey
+      name: admission-metrics
+      key: apiKey
+---
+# o broker anuncia redpanda:9092 (nome curto): o scaler kafka, que roda no namespace keda, só o resolve com este alias para o Service do namespace $NS
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  namespace: keda
+spec:
+  type: ExternalName
+  externalName: redpanda.$NS.svc.cluster.local
+EOF
+    ok "token de métrica (Secret keda/admission-metrics e $NS/admission-metrics), ClusterTriggerAuthentication e alias redpanda no namespace keda"
+}
+
+guardar_trilha() { # logo depois do cluster existir: o namespace leva a trilha do `up`; um `up --trilha X` sobre um cluster de OUTRA trilha aborta (misturaria as duas em silêncio)
+    if k get namespace "$NS" >/dev/null 2>&1; then
+        k get namespace -l "trilha-balanceamento=$TRILHA" -o name | grep -q . \
+            || abortar "o cluster $NOME já subiu com outra trilha (kubectl --context $CTX get ns $NS --show-labels): misturar trilhas invalida a comparação. Faça 'cluster.sh down' e suba de novo com --trilha $TRILHA."
+    else
+        k create namespace "$NS" >/dev/null && k label namespace "$NS" "trilha-balanceamento=$TRILHA" >/dev/null || abortar "criar o namespace $NS com o label da trilha falhou."
+    fi
 }
 
 criar_cluster() {
@@ -295,7 +440,8 @@ esperar() { # [app]: sem argumento espera tudo
     done
     kn get deploy mailpit >/dev/null 2>&1 && { kn rollout status deploy/mailpit --timeout="$t" || abortar "mailpit não ficou pronto."; }
     kn wait --for=condition=complete job/particoes --timeout="$t" || abortar "o Job particoes não terminou em $t."
-    ok "tudo pronto (Deployments, StatefulSets e o Job particoes)"
+    kn wait --for=condition=Ready scaledobject --all --timeout="$t" || { kn get scaledobject,hpa; abortar "os ScaledObjects não ficaram Ready em $t (kubectl --context $CTX -n $NS describe scaledobject; logs do keda-operator no namespace keda)."; }
+    ok "tudo pronto (Deployments, StatefulSets, o Job particoes e os ScaledObjects Ready)"
 }
 
 cmd_up() {
@@ -307,17 +453,21 @@ cmd_up() {
             *) abortar "argumento desconhecido: $1" ;;
         esac
     done
-    escolher_trilha "$trilha"
+    validar_trilha "$trilha"
     ferramentas
+    montar_selecao
     echo "==> up: cluster $NOME (contexto $CTX), overlay $OVERLAY, trilha $trilha${so:+, só app=$so}"
     guardar
-    resolver_tag; ok "tag das slim: $SLIM_TAG (a que o compose resolve: shell > Projeto/.env > latest)"
+    resolver_tag; ok "tag das slim: ${SLIM_TAG:-n/a (overlay completa)} (a que o compose resolve: shell > Projeto/.env > latest)"
     criar_cluster
+    guardar_trilha
     copiar_seccomp
     local imagens=(); mapfile -t imagens < <(imagens_do_cluster | tr -d '\r')
     carregar_imagens "${imagens[@]}"
+    instalar_autoescala # também com `--so`: o `kubectl apply -l` mapeia TODOS os recursos do render (sem o CRD dos ScaledObjects falha); o `up` completo seguinte só repete o `helm upgrade --install`
     [ "$TRILHA" = b1 ] && instalar_istio
     configmaps_e_segredos
+    [ -n "$so" ] || autoescala_segredos
     # b1: o namespace passa a injetar o sidecar (db, Supavisor, Redpanda, Redis, RabbitMQ, Mailpit e o Job particoes têm inject=false nos manifests da trilha)
     [ "$TRILHA" = b1 ] && { k label namespace "$NS" istio-injection=enabled --overwrite >/dev/null || abortar "label istio-injection no namespace $NS falhou."; ok "namespace $NS com istio-injection=enabled"; }
     if [ -n "$so" ]; then render | kn apply -l "app=$so" -f - || abortar "kubectl apply -l app=$so falhou."
@@ -332,7 +482,8 @@ cmd_carregar() {
     for s in "$@"; do
         case "$s" in
             frontend) imagens+=("gerenciador-eventos-frontend:latest") ;;
-            backend|identity|catalog|reservation|stock|notification|admission) imagens+=("gerenciador-eventos-$s.slim:$SLIM_TAG") ;;
+            backend|identity|catalog|reservation|stock|notification|admission)
+                if [ "$IMG_COMPLETA" = 1 ]; then imagens+=("gerenciador-eventos-$s:latest"); else imagens+=("gerenciador-eventos-$s.slim:$SLIM_TAG"); fi ;;
             *) abortar "serviço desconhecido: $s" ;;
         esac
     done
@@ -344,13 +495,13 @@ cmd_carregar() {
 cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "$cmd" in
     up) cmd_up "$@" ;;
-    guarda) [ "${1:-}" = --trilha ] || abortar "uso: cluster.sh guarda --trilha b1|c|nenhuma"; escolher_trilha "${2:-}"; ferramentas; guardar ;;
+    guarda) [ "${1:-}" = --trilha ] || abortar "uso: cluster.sh guarda --trilha b1|c|nenhuma"; validar_trilha "${2:-}"; ferramentas; montar_selecao; guardar ;;
     carregar) cmd_carregar "$@" ;;
     imagem) ferramentas; carregar_imagens "$@" ;; # imagens avulsas (o e2e carrega a do pod auxiliar de curl)
     psql) kn exec -i sts/db -- sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$POSTGRES_DB" "$@"' sh "$@" ;;
     rpk) kn exec -i sts/redpanda -- rpk "$@" ;;
     redis-cli) kn exec -i deploy/redis -- sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli "$@"' sh "$@" ;;
-    status) k get nodes; kn get pods,svc,pvc -o wide ;;
+    status) k get nodes; kn get pods,svc,pvc -o wide; kn get scaledobject,hpa ;;
     down) kind get clusters 2>/dev/null | tr -d '\r' | grep -qx "$NOME" && kind delete cluster --name "$NOME" || echo "(cluster $NOME não existe)" ;;
-    *) sed -n '5,32p' "$0"; exit 1 ;;
+    *) awk 'NR >= 6 && /^# =+$/ {exit} NR >= 6' "$SCRIPT_DIR/cluster.sh"; exit 1 ;;
 esac

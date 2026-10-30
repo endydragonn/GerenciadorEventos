@@ -1,0 +1,31 @@
+# RBAC mínimo do admission (issue #197, D4): só `get` no Deployment `reservation` do próprio namespace. Nem `list`, nem `watch`, nem escrita, nem outro recurso.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: admission
+  labels: {app: admission}
+automountServiceAccountToken: false # o pod do admission liga no próprio spec; ninguém mais herda o token do SA
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: admission-le-reservation
+  labels: {app: admission}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["reservation"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: admission-le-reservation
+  labels: {app: admission}
+subjects:
+  - kind: ServiceAccount
+    name: admission
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: admission-le-reservation

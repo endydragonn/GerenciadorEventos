@@ -1,0 +1,15 @@
+# Overlay `completa` (issue #197): as imagens COMPLETAS (as do Dockerfile, sem o Slim) no lugar das `*.slim`, para depuração, como o docker-compose.completa.yml faz no compose.
+# As imagens são as que o compose constrói no project `gerenciador-eventos`:
+#   docker compose -f Projeto/docker-compose.yml -f Projeto/docker-compose.completa.yml build <serviço>   ->   gerenciador-eventos-<serviço>:latest
+# (o nome é fixo e não tem tag configurável: SLIM_TAG não vale aqui). Leva os Secrets REAIS, como a base: só vale no cluster `gerenciador` (o cluster.sh recusa nos de e2e).
+# Soma-se às trilhas como a base (K8S_OVERLAY=completa cluster.sh up --trilha ...). Os seccomp continuam os perfis do Slim (mesmos serviços, mesmas syscalls de aplicação).
+resources:
+  - ../../base
+images:
+  - {name: gerenciador-eventos-backend.slim, newName: gerenciador-eventos-backend, newTag: latest}
+  - {name: gerenciador-eventos-identity.slim, newName: gerenciador-eventos-identity, newTag: latest}
+  - {name: gerenciador-eventos-catalog.slim, newName: gerenciador-eventos-catalog, newTag: latest}
+  - {name: gerenciador-eventos-reservation.slim, newName: gerenciador-eventos-reservation, newTag: latest}
+  - {name: gerenciador-eventos-stock.slim, newName: gerenciador-eventos-stock, newTag: latest}
+  - {name: gerenciador-eventos-notification.slim, newName: gerenciador-eventos-notification, newTag: latest}
+  - {name: gerenciador-eventos-admission.slim, newName: gerenciador-eventos-admission, newTag: latest}

@@ -4,15 +4,16 @@ metadata:
   name: admission
   labels: {app: admission}
 spec:
-  replicas: 1
+  # sem `replicas`: a autoescala (KEDA/HPA, issue #197 etapa 4) é dona da contagem; reaplicar o manifest não a volta para 1
   selector:
     matchLabels: {app: admission}
   template:
     metadata:
       labels: {app: admission}
     spec:
-      # automountServiceAccountToken fica false aqui também: o ServiceAccount/RBAC da leitura das réplicas pela API do Kubernetes (D4) chega na etapa 4
-      automountServiceAccountToken: false
+      # SÓ o admission monta o token de ServiceAccount (D4): ele lê status.readyReplicas do Deployment reservation pela API do Kubernetes (RBAC mínimo em admission-rbac.yaml)
+      serviceAccountName: admission
+      automountServiceAccountToken: true
       enableServiceLinks: false
       terminationGracePeriodSeconds: 60
       securityContext:
@@ -27,7 +28,7 @@ spec:
             - |
               for alvo in redis:6379 rabbitmq:5672 reservation:8082; do
                 host="${alvo%%:*}"; porta="${alvo##*:}"
-                until nc -w 2 "$host" "$porta" </dev/null; do echo "aguardando $alvo"; sleep 2; done
+                until timeout 5 nc -w 2 "$host" "$porta" </dev/null; do echo "aguardando $alvo"; sleep 2; done
               done
           resources:
             requests: {cpu: 10m, memory: 8Mi}
@@ -40,6 +41,14 @@ spec:
             - secretRef: {name: env-admission}
           env:
             - {name: MANAGEMENT_SERVER_PORT, value: "8090"}
+            # D4: o job de 2 s que grava adm:replicas com o readyReplicas do reservation (desligado no compose). K8S_RESERVATION_MAX = o maxReplicaCount do reservation
+            # (o cluster.sh o troca, junto com o do ScaledObject, a partir de K8S_RESERVATION_MAX): leitura fora de [1, max] não grava
+            - {name: ADMISSION_K8S_REPLICAS_ENABLED, value: "true"}
+            - {name: K8S_RESERVATION_MAX, value: "3"}
+            # token SÓ de métrica do KEDA (aceito apenas em GET /internal/metrics/hot): Secret gerado pelo cluster.sh a cada cluster novo, fora do .env
+            - name: ADMISSION_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef: {name: admission-metrics, key: token}
             - {name: MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED, value: "true"}
             - {name: MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE, value: "readinessState"}
           ports:

@@ -36,6 +36,10 @@ public final class ClientLb {
 
     /** O resolver de origem é injetável para o teste controlar os endereços (1 → 3 → 2) sem DNS de verdade. */
     public ClientLb(boolean ativo, long ttlMs, DnsResolver origem) {
+        if (ativo && ttlMs <= 0) {
+            // TTL 0 descartaria a conexão a cada lease (reconexão por requisição); negativo é erro de digitação
+            throw new IllegalArgumentException("CLIENT_LB_TTL_MS (" + ttlMs + ") deve ser maior que 0 com CLIENT_LB_ENABLED=true");
+        }
         this.ativo = ativo;
         this.ttlMs = ttlMs;
         this.resolver = new DnsRoundRobin(origem);

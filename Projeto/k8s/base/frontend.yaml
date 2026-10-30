@@ -24,7 +24,7 @@ spec:
           command:
             - sh
             - -c
-            - until nc -w 2 backend 8081 </dev/null; do echo "aguardando backend:8081"; sleep 2; done
+            - until timeout 5 nc -w 2 backend 8081 </dev/null; do echo "aguardando backend:8081"; sleep 2; done
           resources:
             requests: {cpu: 10m, memory: 8Mi}
             limits: {cpu: 100m, memory: 32Mi}
