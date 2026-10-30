@@ -371,8 +371,10 @@ EOF
         confere "sidecar nativo: istio-proxy em initContainerStatuses do backend" istio-proxy \
             "$(kc get pod -l app=backend -o jsonpath='{.items[0].status.initContainerStatuses[?(@.name=="istio-proxy")].name}')"
         PROXY_RES="$(kc get pod -l app=backend -o jsonpath='{.items[0].spec.initContainers[?(@.name=="istio-proxy")].resources}')"
-        confere "istio-proxy: request de CPU 100m e SEM limit de CPU (limit so de memoria 256Mi)" "sim 256Mi" \
-            "$(grep -q '"requests":{"cpu":"100m"' <<<"$PROXY_RES" && ! grep -oE '"limits":\{[^}]*\}' <<<"$PROXY_RES" | grep -q cpu && echo sim || echo nao) $(grep -oE '"limits":\{[^}]*\}' <<<"$PROXY_RES" | grep -oE '[0-9]+Mi')"
+        confere "istio-proxy do backend: request de CPU 100m e SEM limit de CPU (limit so de memoria: 1Gi, o gateway recebe as conexoes de leitura)" "sim 1Gi" \
+            "$(grep -q '"requests":{"cpu":"100m"' <<<"$PROXY_RES" && ! grep -oE '"limits":\{[^}]*\}' <<<"$PROXY_RES" | grep -q cpu && echo sim || echo nao) $(grep -oE '"limits":\{[^}]*\}' <<<"$PROXY_RES" | grep -oE '[0-9]+[GM]i')"
+        confere "istio-proxy dos demais (identity): limit de memoria 256Mi" 256Mi \
+            "$(kc get pod -l app=identity -o jsonpath='{.items[0].spec.initContainers[?(@.name=="istio-proxy")].resources.limits.memory}')"
         confere "b1: mesh config do istio com defaultHttpRetryPolicy.attempts: 0 (a malha nao repete POST)" sim \
             "$([ "$(kubectl --context "$CTX" -n istio-system get configmap istio -o jsonpath='{.data.mesh}' | grep -Ec 'attempts: *0')" -ge 1 ] && echo sim || echo nao)"
         confere "b1: EXIT_ON_ZERO_ACTIVE_CONNECTIONS no istio-proxy do backend (termino sem cortar requisicao em voo)" sim \
