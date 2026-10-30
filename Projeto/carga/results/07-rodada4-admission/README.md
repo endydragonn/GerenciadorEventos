@@ -123,7 +123,8 @@ um degrau); o resto no padrão (coluna `params_autoescala` do CSV).
 Parada `p95_acima_de_5000ms_em_janela_de_60s_no_degrau_38000` (k6 código 99), 3000 VUs no degrau de 38k. Banco depois da fila drenar: 40.424
 `confirmed`, 8.969 `expired`, 2.973 `pending`, que expiraram em seguida (11.942 `expired`, 0 `pending`): nenhuma órfã; overselling 0.
 Réplicas (`autoescala/replicas-20261029-091215.csv`, UTC): nada sobe até o 32k; `reservation` com stand-by em 12:25:22, promovida em
-12:26:54; `backend` com stand-by em 12:25:44, promovida em 12:27:16. Os dois ficam em 2 até o scaler parar; `identity`, `catalog`,
+12:26:54; `backend` com stand-by em 12:25:44, promovida em 12:27:16. Os dois ficam em 2 até descer (`reservation` às 12:29:55, `backend` às 12:30:04; o scaler parou às 12:31:09), e entre 12:27:16 e 12:27:58 o
+`backend` oscila de 0 a 2 ativas pelas quedas do `lb`; `identity`, `catalog`,
 `admission` e `notification` ficam em 1.
 
 ## Comparação com a Rodada R (etapa 06)
@@ -175,17 +176,17 @@ Leitura:
   usuário passa de 5 acima de ~44k. É o comportamento do desenho; mais usuários reduziriam o 429.
 - **Bloco 2 (braço C) já lento em 20k e parado em 32k.** Evidência (`host-telemetria/*r4-b2*`, `autoescala/`, estatísticas do `lb`):
   1. **Sinal do reservation instável.** O scaler usa `adm:hot` (RPM da janela de 200 ms do evento mais quente). Amostrado a cada ~6–10 s,
-     ele oscila de 0 a 1,5 (no 20k do braço C a coleta leu 38–47k contra 15–21k no bloco 1). Subiu o reservation com 20k oferecidos e o
+     ele oscila de 0 a 1,5 (no 20k do braço C a coleta leu de 7k a 47k, 4 de 11 amostras entre 38k e 47k, contra 15–21k no bloco 1). Subiu o reservation com 20k oferecidos e o
      **desceu no meio do degrau de 32k**: os 60 s de `AUTOESCALA_DESCE_SEG` cobriram o espaço de 46 s sem carga entre os degraus mais um
      degrau engasgado (uso 0–0,2).
   2. **Capacidades provisórias baixas para o que o bloco 1 mediu.** Com `AUTOESCALA_GATEWAY_RPS=500` o scaler subiu 2 gateways extras
      (12:00 e 12:02), mais a stand-by do `admission` e duas do `identity` (`AUTOESCALA_IDENTITY_RPS=100` contra os logins do setup). No
-     bloco 1, uma réplica de cada aguentou 98k RPM (~1.633 reservas/s) sem 5xx. São 5 JVMs subindo no mesmo host durante a escada. A CPU do host
+     bloco 1, uma réplica de cada aguentou 98k RPM (~1.633 reservas/s) sem 5xx. São 6 JVMs subindo no mesmo host, 4 delas durante a escada (as 2 stand-bys do `identity` subiram no setup). A CPU do host
      (média por janela de 30 s, mesmo contador nos dois blocos) já estava perto do teto nos dois braços: 20k / 26k / 32k = 113 / 112 / 110 no
      braço C contra 95 / 90 / 107 no bloco 1, e 56–66 contra 38–50 no setup. As subidas pesam, mas a CPU sozinha não separa os dois braços.
   3. **Os 5xx são do `lb`, não dos serviços.** No `show stat` do HAProxy, o backend `gateway` tem `hrsp_5xx` = `econ` = 4.175 (= 3.148 + 1.027
      do k6) e os servidores `gw1..gw3` têm 0 5xx próprios. O mecanismo é o health check do `lb`, no item abaixo.
-  4. **O pool não explica a diferença:** o pool real é o do Supavisor (245) nos dois braços e ficou cheio nos dois (`pg_ativas` 245); o
+  4. **O pool não explica a diferença:** o pool real é o do Supavisor (245) nos dois braços e ficou cheio nos dois (`pg_ativas` 245–246); o
      Hikari 300 por réplica contra 1000 está atrás do mesmo 245.
 - **Causa dos 5xx dos blocos 2 e 3: o health check do `lb` derruba o gateway saturado** (`autoescala/lb-estado-r4-b2-b3.log`). O
   `GET /actuator/health` do HAProxy (`inter 2s`, `fall 3`) divide as 300 threads do Tomcat com o tráfego. Com o gateway saturado, o check
@@ -194,14 +195,14 @@ Leitura:
   - Bloco 3: gw1 cai às 12:27:05 com 2.992 sessões, e gw1/gw2 alternam DOWN/UP até 12:27:52.
   - Nesses intervalos toda requisição nova recebe 503 do próprio `lb`: no `show stat`, o backend `gateway` tem `econ` = `hrsp_5xx` (4.175 no
     bloco 2; 13.845 acumulado depois do bloco 3, ~9.670 dele, contra 9.537 do k6). Os servidores não têm 5xx próprios.
-  - O scaler lê a mesma queda: em 12:27:16 e 12:27:39 o `backend` aparece com 0 ativas, uso 999,999, e ele promove a stand-by.
+  - O scaler lê a mesma queda: em 12:27:16 e 12:27:39 o `backend` aparece com 0 ativas, uso 999,999; ele promove a stand-by em 12:27:16 (em 12:27:39 já não há stand-by).
   - O bloco 1 não tem `lb`: o gateway saturado só fica lento (p95 de 1,5–1,8 s em 38k e 44k) e não é ejetado.
   - O braço C também é mais lento antes disso, com 4 saltos a mais pelo `lb` por reserva (gateway → admission e gateway → reservation): em
     32k o p95 foi de 2,73 s, contra 1,43 s no bloco 1.
 - **Follow-up #207 (health check do gateway no `lb`)**, depois da R5 e fora do Batch 2. Caminhos possíveis: um `timeout check`/`fall` mais
   tolerante, o health check fora do pool do Tomcat, ou nunca tirar o último servidor ativo.
 - **Limitação conhecida (follow-up #206): o `adm:hot` não é suavizado.** É o RPM da janela de 200 ms do evento mais quente, lido pelo scaler
-  a cada laço; no sequencial ele oscila entre 0 e ~2× o oferecido. O bloco 3 calibra só as capacidades e o `AUTOESCALA_DESCE_SEG`, sem
+  a cada laço; no sequencial ele oscila entre 0 e ~3,6× o oferecido (135k no degrau de 38k do bloco 1). O bloco 3 calibra só as capacidades e o `AUTOESCALA_DESCE_SEG`, sem
   mudar código, então essa oscilação continua no sinal do reservation.
 - O `registro-r4-b<n>-*.txt` da coleta também não lê o ambiente dos containers `reservation` e `admission` (mesmo motivo). Os valores da
   seção "Configuração" foram lidos por `docker inspect` (só nomes públicos) antes de cada braço.

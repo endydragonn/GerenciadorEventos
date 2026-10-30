@@ -1,0 +1,58 @@
+2026-10-30T12:39:18.972448058Z [WARNING]  (8) : Server catalog/ct1 ('catalog') is UP/READY (resolves again).
+2026-10-30T12:39:18.972676051Z [WARNING]  (8) : Server identity/id1 ('identity') is UP/READY (resolves again).
+2026-10-30T12:39:19.743983336Z [WARNING]  (8) : Server catalog/ct1 is DOWN, reason: Layer4 connection problem, info: "Connection refused", check duration: 0ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:39:19.744008195Z [ALERT]    (8) : backend 'catalog' has no server available!
+2026-10-30T12:39:20.143819620Z [WARNING]  (8) : Server identity/id1 is DOWN, reason: Layer4 connection problem, info: "Connection refused", check duration: 0ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:39:20.143823810Z [ALERT]    (8) : backend 'identity' has no server available!
+2026-10-30T12:39:22.747668413Z [WARNING]  (8) : Server catalog/ct1 is UP, reason: Layer4 check passed, check duration: 0ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T12:39:24.978296517Z [WARNING]  (8) : Server reservation/rs1 ('reservation') is UP/READY (resolves again).
+2026-10-30T12:39:25.147943876Z [WARNING]  (8) : Server identity/id1 is UP, reason: Layer4 check passed, check duration: 0ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T12:39:25.344097946Z [WARNING]  (8) : Server reservation/rs1 is DOWN, reason: Layer4 connection problem, info: "Connection refused", check duration: 0ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:39:25.344103468Z [ALERT]    (8) : backend 'reservation' has no server available!
+2026-10-30T12:39:30.349167083Z [WARNING]  (8) : Server reservation/rs1 is UP, reason: Layer4 check passed, check duration: 0ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T12:39:30.986139150Z [WARNING]  (8) : Server gateway/gw1 ('backend') is UP/READY (resolves again).
+2026-10-30T12:39:30.986142701Z [WARNING]  (8) : Server admission/ad1 ('admission') is UP/READY (resolves again).
+2026-10-30T12:39:32.544166265Z [WARNING]  (8) : Server admission/ad1 is DOWN, reason: Layer4 connection problem, info: "Connection refused", check duration: 0ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:39:32.544169295Z [ALERT]    (8) : backend 'admission' has no server available!
+2026-10-30T12:39:32.943546264Z [WARNING]  (8) : Server gateway/gw1 is DOWN, reason: Layer4 connection problem, info: "Connection refused", check duration: 0ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:39:32.943596756Z [ALERT]    (8) : backend 'gateway' has no server available!
+2026-10-30T12:39:35.548779669Z [WARNING]  (8) : Server admission/ad1 is UP, reason: Layer4 check passed, check duration: 0ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T12:39:36.076585785Z [WARNING]  (8) : Server gateway/gw1 is UP, reason: Layer7 check passed, code: 200, check duration: 5ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T12:40:46.261625718Z [WARNING]  (8) : Server gateway/gw1 is DOWN, reason: Layer4 timeout, check duration: 2000ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:40:46.261629228Z [ALERT]    (8) : backend 'gateway' has no server available!
+2026-10-30T12:40:47.612249099Z [WARNING]  (8) : Server admission/ad1 is DOWN, reason: Layer4 timeout, check duration: 2001ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:40:47.612269319Z [ALERT]    (8) : backend 'admission' has no server available!
+2026-10-30T12:40:48.824773357Z [WARNING]  (8) : Server catalog/ct1 is DOWN, reason: Layer4 timeout, check duration: 2001ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:40:48.824786407Z [ALERT]    (8) : backend 'catalog' has no server available!
+2026-10-30T12:40:50.424854815Z [WARNING]  (8) : Server reservation/rs1 is DOWN, reason: Layer4 timeout, check duration: 2002ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:40:50.424902669Z [ALERT]    (8) : backend 'reservation' has no server available!
+2026-10-30T12:40:51.199830466Z [WARNING]  (8) : Server identity/id1 is DOWN, reason: Layer4 timeout, check duration: 2001ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:40:51.199878070Z [ALERT]    (8) : backend 'identity' has no server available!
+2026-10-30T12:40:58.204084008Z [WARNING]  (8) : Server identity/id1 is UP, reason: Layer4 check passed, check duration: 0ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T12:41:09.279566922Z [WARNING]  (8) : Server gateway/gw1 was DOWN and now enters maintenance (DNS timeout status).
+2026-10-30T12:41:10.635851964Z [WARNING]  (8) : Server admission/ad1 was DOWN and now enters maintenance (DNS timeout status).
+2026-10-30T12:41:13.848292405Z [WARNING]  (8) : Server catalog/ct1 is UP, reason: Layer4 check passed, check duration: 0ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T12:41:14.694374239Z [WARNING]  (8) : Server reservation/rs1 is UP, reason: Layer4 check passed, check duration: 0ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T12:41:19.642826976Z [WARNING]  (8) : Server admission/ad1 ('admission') is UP/READY (resolves again).
+2026-10-30T12:41:27.300498551Z [WARNING]  (8) : Server gateway/gw1 ('backend') is UP/READY (resolves again).
+2026-10-30T12:41:28.279688384Z [WARNING]  (8) : Server gateway/gw1 is DOWN, reason: Layer4 connection problem, info: "Connection refused", check duration: 0ms. 0 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:41:28.279695805Z [ALERT]    (8) : backend 'gateway' has no server available!
+2026-10-30T12:41:33.295597544Z [WARNING]  (8) : Server gateway/gw1 is UP, reason: Layer7 check passed, code: 200, check duration: 5ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T12:59:00.561608422Z [WARNING]  (8) : Server reservation/rs2 ('reservation') is UP/READY (resolves again).
+2026-10-30T12:59:01.420914719Z [WARNING]  (8) : Server reservation/rs2 is DOWN, reason: Layer4 connection problem, info: "Connection refused", check duration: 0ms. 1 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:59:10.425315857Z [WARNING]  (8) : Server reservation/rs2 is UP, reason: Layer4 check passed, check duration: 0ms. 2 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T12:59:29.850595646Z [WARNING]  (8) : Server gateway/gw2 ('backend') is UP/READY (resolves again).
+2026-10-30T12:59:31.023567898Z [WARNING]  (8) : Server gateway/gw2 is DOWN, reason: Layer4 connection problem, info: "Connection refused", check duration: 0ms. 1 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T12:59:44.388943036Z [WARNING]  (8) : Server gateway/gw2 is UP, reason: Layer7 check passed, code: 200, check duration: 9ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T13:01:35.809071944Z [WARNING]  (8) : Server admission/ad2 ('admission') is UP/READY (resolves again).
+2026-10-30T13:01:36.613089585Z [WARNING]  (8) : Server admission/ad2 is DOWN, reason: Layer4 connection problem, info: "Connection refused", check duration: 0ms. 1 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T13:01:41.617588216Z [WARNING]  (8) : Server admission/ad2 is UP, reason: Layer4 check passed, check duration: 0ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T13:02:41.803543936Z [WARNING]  (8) : Server gateway/gw1 is DOWN, reason: Layer7 timeout, check duration: 2002ms. 0 active and 0 backup servers left. 2890 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T13:02:41.803577168Z [ALERT]    (8) : backend 'gateway' has no server available!
+2026-10-30T13:02:48.813148669Z [WARNING]  (8) : Server gateway/gw1 is UP, reason: Layer7 check passed, code: 200, check duration: 1ms. 1 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T13:03:02.030282580Z [WARNING]  (8) : Server gateway/gw1 is DOWN, reason: Layer7 timeout, check duration: 2001ms. 1 active and 0 backup servers left. 2542 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T13:03:09.150949143Z [WARNING]  (8) : Server gateway/gw1 is UP, reason: Layer7 check passed, code: 200, check duration: 72ms. 2 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T13:03:13.457714246Z [WARNING]  (8) : Server gateway/gw2 is DOWN, reason: Layer7 timeout, check duration: 2000ms. 1 active and 0 backup servers left. 2769 sessions active, 0 requeued, 0 remaining in queue.
+2026-10-30T13:03:18.016250201Z [WARNING]  (8) : Server gateway/gw2 is UP, reason: Layer7 check passed, code: 200, check duration: 60ms. 2 active and 0 backup servers online. 0 sessions requeued, 0 total in queue.
+2026-10-30T13:04:37.865761186Z [WARNING]  (8) : Server admission/ad2 is UP (leaving forced drain).
+2026-10-30T13:04:38.114137479Z [WARNING]  (8) : Server admission/ad2 is going DOWN for maintenance (No IP for server ). 1 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.

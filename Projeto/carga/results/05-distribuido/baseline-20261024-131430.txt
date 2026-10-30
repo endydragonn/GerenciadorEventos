@@ -1,0 +1,7 @@
+﻿data: 2026-10-24T13:14:30
+alvo: http://<HOST_IP>:8081
+gerador: <gerador>  (AMD Ryzen 5 7600 6-Core Processor              )
+rede: 1 Gbps
+k6: k6.exe v2.2.0 (commit/00a9a1b7f5, go1.26.5, windows/amd64)
+ping: sem resposta (ICMP pode estar bloqueado no host; use so a medicao HTTP)
+http: p50=15,8ms p95=18,0ms max=20,0ms (n=30)

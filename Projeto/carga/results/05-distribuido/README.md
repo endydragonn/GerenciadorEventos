@@ -61,6 +61,15 @@
   `PCT_CONFIRMA=100`. 146.400 aceitas (todas confirmadas), 48.614 lotado, 0 erros 5xx, 0 outros, 0 descartes. p50 / p95 /
   p99 (ms): reserva 4,8 / 6,6 / 9,3; confirma 3,1 / 4,5 / 6,9; busca 16,0 / 19,9 / 25,9; evento 2,4 / 3,7 / 6,2; carteira
   4,6 / 10,1 / 26,3; pior requisição 165,6 ms.
+- `baseline-20261024-131430.txt`: latência base de rede do gerador no início da tarde (HTTP p50 15,8 / p95 18,0 ms, n = 30).
+- `gerador/`: o que ficou só no gerador e entrou depois (2026-10-28):
+  - `summary-degraus-640677.json`, `summary-degraus-642947.json`, `summary-ale-644172.json`: resumos do k6 da escada grossa, do
+    refino e do aleatório.
+  - `telemetria-gerador-degraus-640677.csv` e `-642947.csv`: CPU/RAM do gerador na grossa e no refino.
+  - `telemetria-gerador-degraus-641371.csv`: escada de ~15 min entre a grossa e o refino que não gerou CSV (sem linha no
+    resultado; só a telemetria ficou).
+  - `telemetria-gerador-matriz-20261024-133949.csv` (20 s, execução interrompida), `-134234.csv` e `-134629.csv` (~2 min cada):
+    telemetria das matrizes; o braço de cada arquivo não ficou registrado.
 
 ## Leitura
 
