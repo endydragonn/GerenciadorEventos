@@ -12,6 +12,7 @@ Uma pasta por etapa da arquitetura. O `README.md` de cada uma diz o que estava i
 | [`05-distribuido/`](05-distribuido/) | Fase 7: `reservation` e `notification` como serviços; `gateway` chama o `reservation` por HTTP. Rodada 3, cabo, SSD | 2026-10-24 |
 | [`06-batch1-final/`](06-batch1-final/) | Batch 1 (`b072346`): `notification`, `reservation`, `catalog` e `identity` como serviços, `gateway` só roteia e valida o JWT pelo JWKS; harness da #38 (escada `sequencial` e `intercalado`). Rodada R, cabo, SSD | 2026-10-28 |
 | [`07-rodada4-admission/`](07-rodada4-admission/) | Batch 2 (`35955ef`): `admission` (#41–#43: contador no Redis, fila RabbitMQ, gatilho 80/70, 202) e autoescala (#111/#112: override + HAProxy + scaler), imagens slim (#177), kit da #178. Rodada 4: sem autoescala estável até 98k (0 5xx, fila drenando), braço C parado em 32k/38k pelo health check do `lb` (#207); CAS 0 | 2026-10-29 |
+| [`08-rodada5-saga/`](08-rodada5-saga/) | Batch 2 (`850d38e`): a configuração da 07 mais a saga `stock` + `wallet` (#47: serviço `stock` com hold + CAS, `reservation` orquestrador, compensação inline e reaper) e o kit da #204. Rodada 5: sem autoescala estável até 98k (0 5xx, 0 órfãs, 0 compensações, lag de devolução p95 448 ms), braço C parado em 44k (R4: 38k) pelo health check do `lb` (#207); CAS 0 | 2026-10-29 e 2026-10-30 |
 
 A comparação lado a lado das 3 configurações (tabela e gráficos) está na subseção "Comparação das 3 configurações (issue #39)" de [`docs/artigo/experimento-monolito.md`](../../../docs/artigo/experimento-monolito.md).
 

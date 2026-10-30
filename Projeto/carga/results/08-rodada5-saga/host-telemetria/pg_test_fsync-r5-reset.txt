@@ -1,0 +1,36 @@
+2 seconds per test
+O_DIRECT supported on this platform for open_datasync and open_sync.
+
+Compare file sync methods using one 8kB write:
+(in "wal_sync_method" preference order, except fdatasync is Linux's default)
+        open_datasync                      2526.180 ops/sec     396 usecs/op
+        fdatasync                          2647.707 ops/sec     378 usecs/op
+        fsync                              2275.528 ops/sec     439 usecs/op
+        fsync_writethrough                              n/a
+        open_sync                          1973.217 ops/sec     507 usecs/op
+
+Compare file sync methods using two 8kB writes:
+(in "wal_sync_method" preference order, except fdatasync is Linux's default)
+        open_datasync                      1314.196 ops/sec     761 usecs/op
+        fdatasync                          2543.257 ops/sec     393 usecs/op
+        fsync                              2118.346 ops/sec     472 usecs/op
+        fsync_writethrough                              n/a
+        open_sync                          1105.895 ops/sec     904 usecs/op
+
+Compare open_sync with different write sizes:
+(This is designed to compare the cost of writing 16kB in different write
+open_sync sizes.)
+         1 * 16kB open_sync write          1957.855 ops/sec     511 usecs/op
+         2 *  8kB open_sync writes         1095.438 ops/sec     913 usecs/op
+         4 *  4kB open_sync writes          551.707 ops/sec    1813 usecs/op
+         8 *  2kB open_sync writes          250.092 ops/sec    3999 usecs/op
+        16 *  1kB open_sync writes          131.262 ops/sec    7618 usecs/op
+
+Test if fsync on non-write file descriptor is honored:
+(If the times are similar, fsync() can sync data written on a different
+descriptor.)
+        write, fsync, close                2014.613 ops/sec     496 usecs/op
+        write, close, fsync                1909.386 ops/sec     524 usecs/op
+
+Non-sync'ed 8kB writes:
+        write                           1073496.845 ops/sec       1 usecs/op
