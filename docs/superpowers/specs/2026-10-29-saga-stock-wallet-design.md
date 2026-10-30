@@ -17,6 +17,8 @@ commit. A compensação hoje é o `rollback`. `EventCapRepository.release` devol
 Aceitas pela sessão de interface em caráter provisório; o merge do PR da #47 na `Batch_2` aguarda a confirmação do usuário. Se a
 R5 mostrar o `stock` saturado, a D3 é reaberta.
 
+> **Nota (#205):** D3 (b) implementada no cluster Kubernetes (`stock` de 1 a 3 réplicas, Hikari 60 por réplica; spec do K8s, seção "`stock` escalável"); o compose segue com (a). O consumo de `reservation.wallet` com 2+ réplicas está provado em `StockReleaseConsumerTest`.
+
 | # | Pergunta | Opções (trade-off em uma frase) | Decidido |
 |---|---|---|---|
 | D1 | Orquestração ou coreografia na reserva? | **(a) Orquestração síncrona pelo `wallet`**: o `reservation` chama o `stock` por HTTP dentro do pedido, e o 201 `pending` com `expiresAt`, o 400 "Evento lotado" e o read-your-writes seguem iguais (`HttpContractTest` intacto). Custa +1 salto HTTP e +2 commits por tentativa. **(b) Coreografia por eventos** (`SlotRequested` → `stock` consome → `SlotHeld`/`SlotRejected` → `wallet` consome): sem salto síncrono, mas a resposta do `POST` não sabe se havia vaga. O contrato `/bff` mudaria (sempre 202 + consulta) ou o gateway teria de esperar o evento, e toda reserva pagaria o lag do relay + consumer, que na Rodada 2 chegou a ~793 mil mensagens de backlog. | **(a)**. A (b) quebra o aceite ("`HttpContractTest` sem mudança de expectativa") |

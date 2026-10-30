@@ -1695,6 +1695,10 @@ O `reservation` mantém nome, container, porta `:8082` e a API `/internal/reserv
   (`STOCK_CLIENT_*`). **Conta do Supavisor (≤ 1500):** base 1000 (reservation) + 250 (stock) + 10 (backend) + 3 (notification) + 100 (catalog) + 100 (identity) =
   **1463**; override de autoescala 3×300 + 3×10 + 3×3 + 3×50 + 3×50 + 250 = **1489** (folga de 11; pré-condição da R5: Hikari de identity/catalog da R4 ≤ 51 por
   réplica, senão o Hikari do `stock` = 1500 − soma da R4). Nenhum Hikari da R4 muda.
+  **No cluster Kubernetes (#205, D3 b) o `stock` escala de 1 a 3 réplicas** (`K8S_STOCK_MIN`/`K8S_STOCK_MAX`, default 1/3, KEDA por CPU do container, teto 3 imposto pelo
+  `cluster.sh`) com Hikari **60** por réplica; a conta do cluster (4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 4×60 = **1492 ≤ 1500**; com 3 réplicas e nenhuma em término, 1119) está em
+  "Cluster Kubernetes". O compose segue com 1 réplica e 250. O `stock` não tem job agendado (o reaper é do `reservation`): com N réplicas só os dois consumers dividem o
+  tópico, e ambos são idempotentes (provado em `StockReleaseConsumerTest` e `CatalogReconciliationTest`, abaixo).
 - **Schema e migração**: `db/init-scripts/16-stock.sql` (schema `stock`, `eventcap` movido do `13-reservation.sql`, `hold`), na lista do `db/supabase-app-init.sql`;
   banco existente: `db/migrations/20261029-stock-schema.sql` (+ `verify-20261029-migration.{sh,sql}`) — **com backend, reservation, catalog e stock parados e depois do
   backup `pg_dump -h localhost -U admin --clean --if-exists -n reservation meu_banco`**; move `reservation.eventcap` para `stock`, cria `stock.hold`, as colunas da saga
@@ -1706,7 +1710,9 @@ O `reservation` mantém nome, container, porta `:8082` e a API `/internal/reserv
   desenvolvida (`meu_banco_s5` criado com os init scripts da worktree). O módulo `reservation` trunca também o schema `stock` (`test.db.schemas=reservation,stock`).
 - **Testes** (Postgres e Redpanda reais): módulo `stock` — `StockHoldTest` (S1–S4, S7, S8: idempotência por `holdId`, `release` idempotente e lápide, overselling 0
   com releases misturados, release × reservar em voo), `StockReleaseConsumerTest` (S5/S5b: lote com duplicatas/tipos misturados, `quant` agregado, rebalance, `Cancelled`
-  v1 sem `holdId`, `earliest`), `EventCapUpdatePolicyTest` (S6: conversão ilimitado → limitado), `CatalogReconciliationTest`, `StockApiE2ETest`, `StockConfigTest`;
+  v1 sem `holdId`, `earliest`; **#205, 2+ réplicas:** além do rebalance com dois containers no mesmo group, 4 réplicas ao MESMO tempo com o mesmo lote de
+  `ReservationCancelled`/`ReservationExpired` repetidos do mesmo `holdId`, e lotes que só se sobrepõem em 2 eventos: cada hold sai de `held` UMA vez (soma exata dos retornos),
+  `eventcap.quant` sobe exatamente 1 por hold e não há deadlock; libera-se só parte dos holds de propósito, porque o teto de `devolver` esconderia a devolução em dobro), `EventCapUpdatePolicyTest` (S6: conversão ilimitado → limitado), `CatalogReconciliationTest`, `StockApiE2ETest`, `StockConfigTest`;
   módulo `reservation` — `ReservationSagaTest` (W1, W3, W5, W6, W8, W10–W12), `SagaReaperTest` (W2, W4, W7, W13), `SagaReaperConcorrenteTest` (W9), com o `stock` REAL
   atrás do `StockProxy` (JDK `HttpServer` que fica fora, atrasa ou comita e perde a resposta), `SagaDb` e o helper `InvariantesDaSaga` (o único código de teste que lê os
   dois schemas: `quant = capacity − holds debitados`, nenhum `walletevent` ativo sem hold `held`, **e no sentido inverso** todo hold `held` tem `walletevent` ativo, saga em
