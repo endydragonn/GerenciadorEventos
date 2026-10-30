@@ -8,10 +8,13 @@
 #  manifests de Projeto/k8s (kustomize embutido no kubectl). Os dados do cluster são DESCARTÁVEIS (somem no `down`); o `meu_banco` do compose não é tocado.
 #
 #  Subcomandos:
-#    up --trilha nenhuma [--so <app>]   cria o cluster (se não existe), carrega as imagens, gera Secrets/ConfigMaps e aplica os manifests; espera tudo
+#    up --trilha b1|c|nenhuma [--so <app>]
+#                                       cria o cluster (se não existe), carrega as imagens, gera Secrets/ConfigMaps e aplica os manifests; espera tudo
 #                                       ficar pronto. `--so redpanda` aplica e espera só o `app=redpanda` (o e2e planta um evento antes do resto).
-#                                       As trilhas de balanceamento (b1, c) chegam na etapa 3: aqui só `--trilha nenhuma` (a base pura, o controle).
-#    guarda                             só confere o isolamento do overlay e2e (Secrets e NodePort); não cria nada
+#                                       --trilha é OBRIGATÓRIO (não existe subida sem trilha por acidente): `b1` = malha de serviços com sidecar (Istio 1.31.1
+#                                       instalado por helm: istio/base + istio/istiod), `c` = balanceamento no cliente (módulo Maven client-lb + Services headless),
+#                                       `nenhuma` = a base pura (Service L4 do Kubernetes), o controle. Trocar de trilha = `down` + `up --trilha <outra>`.
+#    guarda --trilha ...                só confere o isolamento do overlay e2e (Secrets e NodePort) com a trilha somada; não cria nada
 #    imagem <img...>                    carrega imagens avulsas no nó (o e2e usa para o pod auxiliar)
 #    carregar <svc...>                  recarrega as imagens dadas (slim ou frontend) no nó e reinicia os Deployments (ciclo de desenvolvimento)
 #    psql | rpk | redis-cli [args]      atalhos de `kubectl exec` (a senha vai pelo ambiente do pod, nunca no argv)
@@ -24,8 +27,8 @@
 #  CONTEXTO EXPLÍCITO (E4): todo kubectl daqui passa --context kind-<nome>; nunca depende do current-context (o `kind create` o troca).
 #  Segredos: os Secrets saem do `docker compose config` (o ambiente que o compose entrega a cada container) para arquivos temporários (mktemp, chmod 700,
 #  apagados no fim) e de lá para o cluster, numa lista fechada de componentes (nunca Studio/Kong/meta). Nada é impresso nem versionado.
-#  Pré-requisitos: docker (compose v2), kind e kubectl no PATH (o kind em E:\TCC\claude-tooling\bin na máquina do TCC; o kubectl vem com o Docker
-#  Desktop), python, Projeto/.env e Projeto/supabase/.env. Quem roda up/down/carregar segue o lock Docker do projeto (E:/TCC/.lock-docker).
+#  Pré-requisitos: docker (compose v2), kind e kubectl no PATH (o kind e o helm, este só para a trilha b1, em E:\TCC\claude-tooling\bin na máquina do TCC; o kubectl
+#  vem com o Docker Desktop), python, Projeto/.env e Projeto/supabase/.env. Todo helm leva --kube-context kind-<nome> (E4), como o kubectl. Quem roda up/down/carregar segue o lock Docker do projeto (E:/TCC/.lock-docker).
 # =============================================================================
 
 set -uo pipefail
@@ -43,10 +46,14 @@ NODE="$NOME-control-plane"
 SERVICOS="backend identity catalog reservation stock notification admission"
 # lista FECHADA de componentes com Secret de ambiente (env-<componente>): nunca Studio, Kong nem meta (têm DASHBOARD_PASSWORD/SERVICE_ROLE_KEY)
 COMPONENTES="db supabase-pooler redis rabbitmq $SERVICOS"
+ISTIO_VERSAO=1.31.1                                    # release stable (2026-09-21), fixa; as 1.31.2/1.31.3 têm menos de duas semanas
+ISTIO_REPO=https://blob.istio.io/istio-release/charts  # o istio-release.storage.googleapis.com não publica a série 1.31
+TRILHA=""
 
 # Git Bash: o kubectl/docker/kind são nativos do Windows e a conversão de path do MSYS reescreveria "/bin/sh", "/actuator/..." nos argumentos
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'; WIN=1 ;; *) WIN=0 ;; esac
 k() { kubectl --context "$CTX" "$@"; }
+h() { helm --kube-context "$CTX" "$@"; }
 kn() { kubectl --context "$CTX" -n "$NS" "$@"; }
 
 ok()   { echo "   [ok]    $1"; }
@@ -74,7 +81,8 @@ PY=""
 for c in python3 python; do "$c" -c 'import json' >/dev/null 2>&1 && { PY="$c"; break; }; done
 
 ferramentas() {
-    for f in docker kind kubectl; do command -v "$f" >/dev/null 2>&1 || abortar "preciso de '$f' no PATH (kind e helm ficam em E:\\TCC\\claude-tooling\\bin na máquina do TCC)."; done
+    local f
+    for f in docker kind kubectl $([ "$TRILHA" = b1 ] && echo helm); do command -v "$f" >/dev/null 2>&1 || abortar "preciso de '$f' no PATH (kind e helm ficam em E:\\TCC\\claude-tooling\\bin na máquina do TCC; o helm só é preciso na trilha b1)."; done
     [ -n "$PY" ] || abortar "preciso de python (python3) para filtrar o JSON do 'docker compose config'."
     [ -f .env ] && [ -f supabase/.env ] || abortar "faltam Projeto/.env e/ou Projeto/supabase/.env (ver supabase/README.md)."
 }
@@ -92,6 +100,25 @@ resolver_tag() { # a tag das slim que o compose resolve (shell > .env > latest),
     if [ "$SLIM_TAG" = latest ] && [ "${K8S_PERMITIR_LATEST:-}" != 1 ]; then
         abortar "a tag das slim resolvida é 'latest' (imagens da R5, SEM actuator). Até a R5 terminar use SLIM_TAG=k8s (gere com 'SLIM_TAG=k8s Projeto/slim/gerar-imagens-slim.sh'). Depois que as :latest forem regeradas, K8S_PERMITIR_LATEST=1 libera."
     fi
+}
+
+escolher_trilha() { # $1 = valor de --trilha; valida e, com b1|c, soma o componente da trilha ao overlay (base ou e2e) num kustomization TEMPORÁRIO
+    case "$1" in
+        nenhuma|b1|c) TRILHA="$1" ;;
+        "") abortar "falta --trilha: use --trilha b1 (Istio com sidecar), --trilha c (balanceamento no cliente) ou --trilha nenhuma (a base pura, o controle). Não existe subida sem trilha por acidente." ;;
+        *) abortar "trilha '$1' inválida (b1 | c | nenhuma)." ;;
+    esac
+    [ "$TRILHA" = nenhuma ] && return 0
+    # o kustomize não lê fora da própria pasta: copia base e overlays (só manifests, poucos KB) e monta a seleção ao lado
+    mkdir -p "$TMP/k8s/sel" && cp -r "$SCRIPT_DIR/base" "$SCRIPT_DIR/overlays" "$TMP/k8s/" || abortar "montar o kustomization temporário da trilha falhou."
+    cat > "$TMP/k8s/sel/kustomization.yaml" <<EOF
+namespace: $NS
+resources:
+  - ../${OVERLAY_DIR#k8s/}
+components:
+  - ../overlays/trilha-$TRILHA
+EOF
+    OVERLAY_DIR="$TMPW/k8s/sel"
 }
 
 render() { # manifests do overlay, com a tag das slim aplicada (a base usa :latest)
@@ -193,6 +220,21 @@ carregar_imagens() { # carrega no nó o que existe no Docker local; imagem de in
     ok "$n imagem(ns) carregada(s) no nó $NODE"
 }
 
+instalar_istio() { # trilha b1: istio/base + istio/istiod 1.31.1 por helm (versão fixa, sem istioctl); idempotente (upgrade --install)
+    helm_istio istio-base base --create-namespace || abortar "helm istio/base $ISTIO_VERSAO falhou."
+    helm_istio istiod istiod -f k8s/istio/istiod-values.yaml || abortar "helm istio/istiod $ISTIO_VERSAO falhou (kubectl --context $CTX -n istio-system get pods)."
+    ok "Istio $ISTIO_VERSAO (istio/base + istio/istiod, 1 réplica do istiod) instalado por helm"
+}
+
+helm_istio() { # release chart [args...]: até 3 tentativas (o repositório do Istio é uma busca de rede); na falha imprime a saída do helm
+    local rel="$1" chart="$2" i; shift 2
+    for i in 1 2 3; do
+        h upgrade --install "$rel" "$chart" --repo "$ISTIO_REPO" --version "$ISTIO_VERSAO" -n istio-system "$@" --wait --timeout "${ESPERA}s" >"$TMP/helm.out" 2>&1 && return 0
+        echo "   (helm $rel, tentativa $i de 3 falhou)" >&2; tail -5 "$TMP/helm.out" >&2; sleep 5
+    done
+    return 1
+}
+
 criar_cluster() {
     if kind get clusters 2>/dev/null | tr -d '\r' | grep -qx "$NOME"; then ok "cluster $NOME já existe"
     else
@@ -265,12 +307,7 @@ cmd_up() {
             *) abortar "argumento desconhecido: $1" ;;
         esac
     done
-    case "$trilha" in
-        nenhuma) ;;
-        b1|c) abortar "a trilha '$trilha' chega na etapa 3 (issue #197); por ora só --trilha nenhuma." ;;
-        "") abortar "falta --trilha: use 'up --trilha nenhuma' (as trilhas b1 e c chegam na etapa 3; não existe subida sem trilha por acidente)." ;;
-        *) abortar "trilha '$trilha' inválida (nenhuma | b1 | c)." ;;
-    esac
+    escolher_trilha "$trilha"
     ferramentas
     echo "==> up: cluster $NOME (contexto $CTX), overlay $OVERLAY, trilha $trilha${so:+, só app=$so}"
     guardar
@@ -279,7 +316,10 @@ cmd_up() {
     copiar_seccomp
     local imagens=(); mapfile -t imagens < <(imagens_do_cluster | tr -d '\r')
     carregar_imagens "${imagens[@]}"
+    [ "$TRILHA" = b1 ] && instalar_istio
     configmaps_e_segredos
+    # b1: o namespace passa a injetar o sidecar (db, Supavisor, Redpanda, Redis, RabbitMQ, Mailpit e o Job particoes têm inject=false nos manifests da trilha)
+    [ "$TRILHA" = b1 ] && { k label namespace "$NS" istio-injection=enabled --overwrite >/dev/null || abortar "label istio-injection no namespace $NS falhou."; ok "namespace $NS com istio-injection=enabled"; }
     if [ -n "$so" ]; then render | kn apply -l "app=$so" -f - || abortar "kubectl apply -l app=$so falhou."
     else render | kn apply -f - || abortar "kubectl apply falhou."; fi
     esperar "$so"
@@ -304,7 +344,7 @@ cmd_carregar() {
 cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "$cmd" in
     up) cmd_up "$@" ;;
-    guarda) ferramentas; guardar ;;
+    guarda) [ "${1:-}" = --trilha ] || abortar "uso: cluster.sh guarda --trilha b1|c|nenhuma"; escolher_trilha "${2:-}"; ferramentas; guardar ;;
     carregar) cmd_carregar "$@" ;;
     imagem) ferramentas; carregar_imagens "$@" ;; # imagens avulsas (o e2e carrega a do pod auxiliar de curl)
     psql) kn exec -i sts/db -- sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$POSTGRES_DB" "$@"' sh "$@" ;;
@@ -312,5 +352,5 @@ case "$cmd" in
     redis-cli) kn exec -i deploy/redis -- sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli "$@"' sh "$@" ;;
     status) k get nodes; kn get pods,svc,pvc -o wide ;;
     down) kind get clusters 2>/dev/null | tr -d '\r' | grep -qx "$NOME" && kind delete cluster --name "$NOME" || echo "(cluster $NOME não existe)" ;;
-    *) sed -n '5,23p' "$0"; exit 1 ;;
+    *) sed -n '5,32p' "$0"; exit 1 ;;
 esac

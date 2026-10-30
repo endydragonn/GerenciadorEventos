@@ -6,6 +6,7 @@
 FROM maven:3.9.7-eclipse-temurin-21-jammy AS build
 WORKDIR /build
 COPY pom.xml checkstyle.xml checkstyle-suppressions.xml ./
+COPY client-lb ./client-lb
 COPY admission-client ./admission-client
 COPY reservation-client ./reservation-client
 COPY admission ./admission

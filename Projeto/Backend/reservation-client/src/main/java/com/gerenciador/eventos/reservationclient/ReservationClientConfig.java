@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.gerenciador.eventos.clientlb.ClientLb;
+
 
 /**
  * Bean do {@link ReservationClient} do monólito (o {@code EventWalletApi} que o gateway injeta; a capacidade é do serviço stock desde a #47). Tudo por env var (nomes no application.properties do monólito):
@@ -23,9 +25,11 @@ public class ReservationClientConfig {
             @Value("${reservation.client.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${reservation.client.connection-request-timeout-ms:5000}") long connectionRequestTimeoutMs,
             @Value("${reservation.client.response-timeout-ms:10000}") long responseTimeoutMs,
-            @Value("${reservation.client.evict-idle-ms:20000}") long evictIdleMs) {
+            @Value("${reservation.client.evict-idle-ms:20000}") long evictIdleMs,
+            @Value("${client.lb.enabled:false}") boolean lbAtivo,
+            @Value("${client.lb.ttl-ms:15000}") long lbTtlMs) {
         return new ReservationClient(baseUrl, internalToken, maxConnections, Duration.ofMillis(connectTimeoutMs),
                 Duration.ofMillis(connectionRequestTimeoutMs), Duration.ofMillis(responseTimeoutMs),
-                Duration.ofMillis(evictIdleMs));
+                Duration.ofMillis(evictIdleMs), new ClientLb(lbAtivo, lbTtlMs));
     }
 }

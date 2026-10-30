@@ -36,7 +36,7 @@ public class ModuleBoundaryArchTest {
             .should().resideInAnyPackage(
                 "com.gerenciador.eventos",
                 RAIZ + "catalogclient..", RAIZ + "reservationclient..",
-                RAIZ + "identityclient..", RAIZ + "admissionclient..", RAIZ + "stockclient..", RAIZ + "shared..", RAIZ + "gateway..")
+                RAIZ + "identityclient..", RAIZ + "admissionclient..", RAIZ + "stockclient..", RAIZ + "clientlb..", RAIZ + "shared..", RAIZ + "gateway..")
             .because("o layout por camadas (POJO/Repository/Service/config/security) foi trocado "
                 + "por pacotes-por-serviço (issue #23)");
 

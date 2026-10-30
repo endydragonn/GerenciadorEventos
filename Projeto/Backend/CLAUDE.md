@@ -56,7 +56,7 @@ serviço é um módulo com o próprio jar e Dockerfile; o que é comum é uma li
 
 ```
 Backend/
-  pom.xml                agregador (módulos: shared, reservation-client, stock-client, catalog-client, identity-client, admission-client, monolito, notification, reservation, stock, catalog, identity, admission)
+  pom.xml                agregador (módulos: shared, client-lb, reservation-client, stock-client, catalog-client, identity-client, admission-client, monolito, notification, reservation, stock, catalog, identity, admission)
   checkstyle*.xml        um só para todos os módulos (${maven.multiModuleProjectDirectory})
   run-tests.sh           roda o reactor inteiro
   shared/                LIB (jar simples, sem repackage): DatabaseConnection + shared.events (EventStore, relay, consumer,
@@ -114,7 +114,7 @@ Backend/
 
 `./run-tests.sh` — sobe um container Maven na rede `gerenciador-net`, com `--env-file ../.env`
 (URL direta `db:5432`, **sem passar pelo pooler**),
-e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `reservation-client`, `stock-client`, `catalog-client`, `identity-client`, `admission-client`, `monolito`, `notification`,
+e roda `mvn -fae clean test` na raiz: o **reactor inteiro** (`shared`, `client-lb`, `reservation-client`, `stock-client`, `catalog-client`, `identity-client`, `admission-client`, `monolito`, `notification`,
 `reservation`, `stock`, `catalog`, `identity`, `admission`; `-fae` = um módulo vermelho não esconde o resultado dos outros). **Pré-requisito do `stock` (#47):** o banco migrado (`db/migrations/20261029-stock-schema.sql`): o script ABORTA se `reservation.eventcap` ainda existe ou se faltam `stock.eventcap`/`stock.hold`, e se o
 `gerenciador-stock` (ou réplica com o label do serviço) estiver rodando; ao fim move os groups `stock`/`stock-catalog` para o fim dos tópicos. `TEST_DB_NAME` (default `meu_banco`) e `ENV_FILE` (default
 `../.env`) permitem rodar os testes num banco isolado (o `meu_banco` fica no schema da R4); o banco novo é criado com os init scripts da worktree. **Pré-requisito do `catalog` (#35):** o banco
@@ -1767,10 +1767,10 @@ ID da imagem `*.slim:$SLIM_TAG` (`E2E_COMPLETA=1`: as completas construídas no 
 Tabela antes/depois, includes (com motivo) e perfis Seccomp/AppArmor (opcionais, não aplicados por padrão) em `Projeto/slim/README.md`. Desde a #47 inclui o `stock` (probe de `/internal/holds`,
 `/internal/eventcaps/**` e do `StockReleaseConsumer`, com um `ReservationCancelled` produzido antes do start).
 
-### Cluster Kubernetes (kind) — issue #197, etapa 2
+### Cluster Kubernetes (kind) — issue #197, etapas 2 e 3
 
-A stack inteira também roda num cluster kind de um nó (`Projeto/k8s/`, ver o README de lá): `cluster.sh up --trilha nenhuma` (só a base; as trilhas de balanceamento B1/C são da
-etapa 3 e a autoescala KEDA/HPA da etapa 4), com as réplicas fixas em 1 e dados descartáveis. O compose, o `run-tests.sh` e o e2e em compose **não mudam**. O que o cluster exige dos serviços:
+A stack inteira também roda num cluster kind de um nó (`Projeto/k8s/`, ver o README de lá): `cluster.sh up --trilha b1|c|nenhuma` (a trilha é obrigatória; a autoescala KEDA/HPA é da
+etapa 4), com as réplicas fixas em 1 e dados descartáveis. O compose, o `run-tests.sh` e o e2e em compose **não mudam**. O que o cluster exige dos serviços:
 - **Actuator só para as probes (#207).** O `identity`, `catalog`, `reservation`, `stock` e `admission` ganharam `spring-boot-starter-actuator` com o HTTP de management **desligado por padrão**
   (`management.server.port=-1`, só `health` exposto, `show-details=never`): sem env nova nada muda no compose. O manifest liga `MANAGEMENT_SERVER_PORT=8090` (outro conector e outro pool de
   threads que a API, então a probe não espera atrás das 300 threads), `management.endpoint.health.probes.enabled=true` e o grupo `readiness` só com `readinessState` (banco, Redis, broker e
@@ -1788,7 +1788,29 @@ etapa 3 e a autoescala KEDA/HPA da etapa 4), com as réplicas fixas em 1 e dados
 - **Seccomp:** o perfil do Slim cru não deixa nem o container iniciar (faltam as syscalls do runc) nem o relay Kafka do catalog funcionar (`writev`/`shutdown`); o `cluster.sh` soma `k8s/seccomp-extras.txt` ao perfil de cada serviço
   antes de copiá-lo para o nó (detalhes e o risco no `Projeto/k8s/README.md`). AppArmor não se aplica ao kernel do Docker Desktop.
 - **Término sem 5xx:** `preStop.sleep` 20 s + `terminationGracePeriodSeconds` 60; `maxSurge: 0, maxUnavailable: 1` nos serviços com banco.
-- e2e: `SLIM_TAG=k8s E2E_K8S=1 E2E_K8S_TRILHA=nenhuma Projeto/e2e/run-e2e.sh` (cluster próprio `gerenciador-e2e`, sem porta no host; pod `e2e-cli` com a imagem Maven).
+- e2e: `SLIM_TAG=k8s E2E_K8S=1 E2E_K8S_TRILHA=nenhuma|c|b1 Projeto/e2e/run-e2e.sh` (cluster próprio `gerenciador-e2e`, sem porta no host; pod `e2e-cli` com a imagem Maven, sem sidecar). O passo 7 (só no cluster) sobe uma 2ª réplica do `catalog`
+  com GETs sequenciais no gateway e mede as conexões ESTABLISHED do gateway no pod novo: nas trilhas `b1` e `c` o pod novo recebe, na `nenhuma` (o controle: Service L4) não.
+- **Trilhas de balanceamento (#197, etapa 3).** O `Service` do Kubernetes balanceia por conexão, e os 5 clientes mantêm as conexões abertas (`max-keep-alive-requests=-1`): um pod novo não recebe tráfego
+  das conexões já abertas. `cluster.sh up --trilha ...` escolhe como resolver isso, sobre a mesma base e a mesma imagem (trocar = `down` + `up`); as trilhas são **componentes kustomize**
+  (`k8s/overlays/trilha-*`) que o `cluster.sh` soma, num kustomization temporário, ao overlay `base` ou `e2e`:
+  - **`c` (balanceamento no cliente)** — lib Maven **`client-lb`** (`com.gerenciador.eventos.clientlb`, sem Spring; dependência das 5 libs `*-client`). `ClientLb.aplicar(poolBuilder, connectionConfigBuilder)` é chamado por cada
+    `*Client` antes do `build()` e, ligado, SOMA ao que o cliente já monta: `DnsResolver` round-robin (cada conexão nova resolve o host e roda os endereços em uma posição), `ConnectionConfig.setTimeToLive`
+    (`CLIENT_LB_TTL_MS`, default 15000) e `PoolReusePolicy.FIFO`; os timeouts de conexão, socket e resposta ficam os do cliente. **Sem retry próprio:** o cliente segue com `disableAutomaticRetries` e o
+    failover para o próximo endereço (um que recusa a conexão) é do operador de conexão do HttpClient 5 (provado no teste, então não entrou `HttpRequestRetryStrategy`). **Desligado por padrão:**
+    `CLIENT_LB_ENABLED=false` (`client.lb.enabled`, em `monolito`, `catalog`, `reservation` e `admission`; no `admission` o bean do worker pool tem a mesma env) = a montagem de sempre; cada `*Client` ganhou um construtor
+    com o `ClientLb` como último parâmetro e o antigo delega com `ClientLb.desligado()`. O overlay liga `CLIENT_LB_ENABLED` nos 4 serviços que chamam serviços (gateway → identity/catalog/reservation/admission,
+    catalog e reservation → stock, admission → reservation), aponta os `*_SERVICE_URL` para os Services **headless** `*-pods` (o DNS devolve só pods prontos) e passa o cache de DNS da JVM para 5 s
+    (`networkaddress.cache.ttl=5`, `negative.ttl=1`) por um `java.security` extra em ConfigMap (`JAVA_TOOL_OPTIONS=-Djava.security.properties=...`; `-Dnetworkaddress.cache.ttl` não vale). Teste:
+    `ClientLbTest` (resolver e flag, no módulo `client-lb`) e `ClientLbCincoClientesTest` no **monolito** (o único módulo que enxerga os 5 clientes sem ciclo Maven; sem Docker nem banco:
+    `mvn -pl monolito -am test -Dtest=ClientLbCincoClientesTest -Dsurefire.failIfNoSpecifiedTests=false`): pelos 5 `*Client` reais, "pods" são servidores JDK em 127.0.0.1/2/3 na mesma porta e o DNS é falso (1 → 3 → 2
+    endereços): as conexões novas se espalham, depois do TTL o endereço removido não recebe mais nada, um endereço que recusa a conexão é pulado, o timeout de resposta de hoje continua e `desligado` não usa o resolver da trilha.
+  - **`b1` (Istio 1.31.1, sidecar)** — instalado por helm no `up` (`istio/base` + `istio/istiod`, versão fixa, repositório `https://blob.istio.io/istio-release/charts`; `k8s/istio/istiod-values.yaml`): retry da malha desligado
+    (`defaultHttpRetryPolicy.attempts: 0`), `holdApplicationUntilProxyStarts`, `EXIT_ON_ZERO_ACTIVE_CONNECTIONS`, istiod com 1 réplica. Sidecar só nos 7 serviços e no frontend (label `istio-injection=enabled` no namespace; `inject: "false"`
+    em db, Supavisor, Redpanda, Redis, RabbitMQ, Mailpit e no Job `particoes`); portas não-HTTP fora do Envoy (`excludeOutboundPorts` 5432, 6543, 9092, 6379, 5672, 443, 587, 1025); as probes não passam pelo sidecar
+    (`rewriteAppHTTPProbers: "false"`, `excludeInboundPorts: "8090"`); readiness do sidecar alinhada à do app; proxy com request 100m/128Mi e limit só de memória (256Mi), **sem limit de CPU**. Sem
+    `DestinationRule`/`outlierDetection` (#207). Nenhuma env de serviço muda: o Envoy intercepta pelo VIP do Service (as mesmas URLs do compose) e balanceia por requisição. O sidecar é nativo (initContainer); os `espera`
+    rodam como UID 1337 (o que o iptables do Istio não redireciona), para testarem o Service de verdade.
+  - **`nenhuma`** — a base pura (Service L4), o controle da comparação.
 
 ## Cadastro em duas fases + e-mail
 

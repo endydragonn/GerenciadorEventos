@@ -27,6 +27,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.gerenciador.eventos.clientlb.ClientLb;
 import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.catalogclient.api.EventApi;
@@ -62,18 +63,26 @@ public class CatalogClient implements EventApi {
     /** @param internalToken {@code INTERNAL_API_TOKEN}, enviado em TODA chamada; obrigatório (o catalog responde 401 sem ele) */
     public CatalogClient(String baseUrl, String internalToken, int maxConnections, Duration connectTimeout,
             Duration connectionRequestTimeout, Duration responseTimeout, Duration evictIdle) {
+        this(baseUrl, internalToken, maxConnections, connectTimeout, connectionRequestTimeout, responseTimeout, evictIdle,
+                ClientLb.desligado());
+    }
+
+    /** @param lb balanceamento no cliente (trilha C da #197): soma resolver round-robin, TTL e reuso FIFO ao pool; desligado não muda nada */
+    public CatalogClient(String baseUrl, String internalToken, int maxConnections, Duration connectTimeout,
+            Duration connectionRequestTimeout, Duration responseTimeout, Duration evictIdle,
+            ClientLb lb) {
         if (internalToken == null || internalToken.isBlank()) {
             throw new IllegalStateException("INTERNAL_API_TOKEN não configurado: o cliente do catalog precisa do token de "
                     + "serviço (o mesmo valor do serviço catalog). Gere um com `openssl rand -hex 32` e ponha no Projeto/.env.");
         }
-        PoolingHttpClientConnectionManager pool = PoolingHttpClientConnectionManagerBuilder.create()
+        ConnectionConfig.Builder conexao = ConnectionConfig.custom()
+                .setConnectTimeout(Timeout.ofMilliseconds(connectTimeout.toMillis()))
+                .setSocketTimeout(Timeout.ofMilliseconds(responseTimeout.toMillis()));
+        PoolingHttpClientConnectionManagerBuilder construtor = PoolingHttpClientConnectionManagerBuilder.create()
                 .setMaxConnTotal(maxConnections)
-                .setMaxConnPerRoute(maxConnections)
-                .setDefaultConnectionConfig(ConnectionConfig.custom()
-                        .setConnectTimeout(Timeout.ofMilliseconds(connectTimeout.toMillis()))
-                        .setSocketTimeout(Timeout.ofMilliseconds(responseTimeout.toMillis()))
-                        .build())
-                .build();
+                .setMaxConnPerRoute(maxConnections);
+        lb.aplicar(construtor, conexao);
+        PoolingHttpClientConnectionManager pool = construtor.setDefaultConnectionConfig(conexao.build()).build();
         this.httpClient = HttpClients.custom()
                 .setConnectionManager(pool)
                 .setDefaultRequestConfig(RequestConfig.custom()

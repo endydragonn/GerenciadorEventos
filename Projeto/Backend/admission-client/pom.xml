@@ -27,6 +27,11 @@
             <artifactId>spring-web</artifactId>
         </dependency>
         <!-- Cliente HTTP com pool de conexões dimensionável (o do JDK/RestTemplate default não tem pool configurável). -->
+        <!-- Balanceamento no cliente da trilha C (#197): DNS round-robin, TTL e reuso FIFO, desligado por padrão. -->
+        <dependency>
+            <groupId>com.example.demo</groupId>
+            <artifactId>client-lb</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.apache.httpcomponents.client5</groupId>
             <artifactId>httpclient5</artifactId>

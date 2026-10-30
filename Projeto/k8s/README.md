@@ -5,8 +5,8 @@ os mesmos nomes de Service e portas do compose (`backend:8081`, `reservation:808
 `stock:8086`, `supabase-pooler:6543`, `redpanda:9092`, `redis:6379`, `rabbitmq:5672`). Spec:
 [`docs/superpowers/specs/2026-10-29-k8s-autoescala-design.md`](../../docs/superpowers/specs/2026-10-29-k8s-autoescala-design.md).
 
-**Estado (etapa 2 de 4):** cluster, manifests da stack inteira, probes, Secrets/ConfigMaps, `cluster.sh` e o e2e contra o cluster. **Ainda não
-existem:** as trilhas de balanceamento (`--trilha b1|c`, etapa 3), KEDA/HPA e o `metrics-server` (etapa 4: nada instalado por helm até lá), o endpoint
+**Estado (etapa 3 de 4):** cluster, manifests da stack inteira, probes, Secrets/ConfigMaps, `cluster.sh`, o e2e contra o cluster e as **duas trilhas de balanceamento** (`--trilha b1|c`, mais `nenhuma` como controle). **Ainda não
+existem:** KEDA/HPA e o `metrics-server` (etapa 4; o único helm de hoje é o do Istio na trilha `b1`), o endpoint
 `/internal/metrics/hot`, a leitura das réplicas pela API do Kubernetes e o dry-run de carga. As réplicas são **fixas em 1**.
 
 ## Avisos
@@ -25,11 +25,11 @@ existem:** as trilhas de balanceamento (`--trilha b1|c`, etapa 3), KEDA/HPA e o 
 ## Usar
 
 ```bash
-# ferramentas no PATH: kind, kubectl (vem com o Docker Desktop) e, a partir da etapa 4, helm (E:\TCC\claude-tooling\bin na máquina do TCC)
+# ferramentas no PATH: kind, kubectl (vem com o Docker Desktop) e, só para a trilha b1 (e para a etapa 4), helm (kind e helm em E:\TCC\claude-tooling\bin na máquina do TCC)
 # pré-requisitos: as 7 *.slim (Projeto/slim/gerar-imagens-slim.sh) e a imagem do frontend (docker compose -f Projeto/docker-compose.yml build frontend)
 # + Projeto/.env e Projeto/supabase/.env (nada deles é impresso ou versionado)
 
-Projeto/k8s/cluster.sh up --trilha nenhuma      # cria o cluster `gerenciador`, carrega as imagens, gera Secrets/ConfigMaps, aplica e espera
+Projeto/k8s/cluster.sh up --trilha nenhuma      # (ou --trilha c | --trilha b1) cria o cluster `gerenciador`, carrega as imagens, gera Secrets/ConfigMaps, aplica e espera
 Projeto/k8s/cluster.sh status                   # nós, pods, serviços e PVCs
 Projeto/k8s/cluster.sh psql -c 'select 1'       # atalhos de kubectl exec: psql (no db), rpk (no redpanda), redis-cli (REDISCLI_AUTH, nunca -a)
 Projeto/k8s/cluster.sh carregar identity        # depois de regerar uma slim: recarrega a imagem no nó e reinicia o Deployment
@@ -43,8 +43,33 @@ As imagens do projeto são obrigatórias no Docker local (o `up` aborta dizendo 
 Docker Desktop o `kind load docker-image` falha ("content digest ... not found") com imagem de registro multi-plataforma; por isso as do projeto (plataforma única) vão por `kind load` e as de infra por
 `docker save --platform linux/<arch> | ctr images import` direto no nó. O **primeiro** `up` leva vários minutos só importando ~6 GB de imagens.
 
-**Trilhas.** `--trilha` é obrigatório (sem ele o script aborta e explica: não existe subida "sem balanceamento" por acidente). Hoje só `nenhuma` (a base pura: Service L4 do
-Kubernetes, o controle). `b1` (Istio com sidecar) e `c` (balanceamento no cliente) abortam com "chega na etapa 3". O ponto de extensão são novos overlays em `overlays/`.
+**Trilhas de balanceamento (`--trilha`, obrigatório).** O `Service` do Kubernetes (kube-proxy) balanceia **por conexão TCP**, e os 5 clientes HTTP dos serviços (`reservation-`, `stock-`, `catalog-`, `identity-`,
+`admission-client`) mantêm as conexões abertas sob carga: **um pod novo não recebe tráfego** das conexões já abertas (7 arestas: gateway → identity, catalog, reservation, admission; catalog e reservation → stock; admission →
+reservation). Sem `--trilha` o script aborta e lista as três opções (não existe subida "sem balanceamento" por acidente). A mesma base e a mesma imagem servem às três; as trilhas são **componentes kustomize**
+(`overlays/trilha-b1`, `overlays/trilha-c`) que o `cluster.sh` soma, num kustomization temporário, ao overlay `base` ou `e2e`.
+
+| `--trilha` | O que faz | Custo / limite |
+|---|---|---|
+| `nenhuma` | a base pura: Service L4 do Kubernetes. É o **controle** da comparação | uma réplica nova fica sem conexão do gateway enquanto o pool mantiver as que tem |
+| `c` | **balanceamento no cliente** (módulo Maven `client-lb`, em `Projeto/Backend/client-lb`): `CLIENT_LB_ENABLED=true` nos 4 serviços que chamam serviços (gateway, catalog, reservation, admission), `*_SERVICE_URL` para Services **headless** (`reservation-pods`, `stock-pods`, `catalog-pods`, `identity-pods`, `admission-pods`: o DNS devolve só pods prontos), DNS round-robin + TTL de conexão de 15 s (`CLIENT_LB_TTL_MS`) + reuso FIFO, e o cache de DNS da JVM em 5 s por um `java.security` extra (`JAVA_TOOL_OPTIONS=-Djava.security.properties=...`) | balanceia **por conexão com TTL**, não por requisição; uma réplica nova entra em até TTL + 5 s; requisição em voo numa conexão com um pod que morre falha (não há retry depois de enviar). Sem proxy no caminho |
+| `b1` | **malha de serviços com sidecar: Istio 1.31.1** (`istio/base` + `istio/istiod` por helm, versão fixa, sem `istioctl`; `istio/istiod-values.yaml`; repositório `https://blob.istio.io/istio-release/charts`). Sidecar só nos 7 serviços e no frontend; balanceamento **por requisição** (`LEAST_REQUEST`) pelas mesmas URLs do compose | **custo do Envoy:** um proxy por pod (request 100m/128Mi, sem limit de CPU, 256Mi de memória) + o `istiod` (200m/512Mi); no pico da R4 (~4,9 mil req/s internas, 2 proxies por salto) a documentação do Istio sugere ~2–5 vCPU no host, e ~+3 ms p90 por salto. Medido na rodada formal, não aqui |
+
+Por que Istio e não Linkerd: o Linkerd open source só publica releases `edge` desde fev/2024 (as stable exigem o Buoyant Enterprise); a regra do projeto é versão estável publicada há mais de duas semanas
+(Istio 1.31.1 é de 2026-09-21; 1.31.2/1.31.3 são mais novas). **Como trocar de trilha:** `cluster.sh down` e `cluster.sh up --trilha <outra>` (o cluster é descartável).
+
+**B1 em detalhe.** Retry da malha desligado (`meshConfig.defaultHttpRetryPolicy.attempts: 0`: o Istio repetiria 503/connect-failure, inclusive POST, contra o `disableAutomaticRetries` dos clientes);
+`holdApplicationUntilProxyStarts` e `EXIT_ON_ZERO_ACTIVE_CONNECTIONS`; mTLS no default (PERMISSIVE). **Só o HTTP entre serviços passa pelo Envoy**: `excludeOutboundPorts` 5432, 6543, 9092, 6379, 5672, 443, 587 e 1025
+(Postgres/Supavisor, Kafka, Redis, AMQP, API do Kubernetes, SMTP real e do Mailpit). `inject: "false"` em db, Supavisor, Redpanda, Redis, RabbitMQ, Mailpit e no Job `particoes` (um sidecar impede o Job de terminar) e
+nos pods auxiliares do e2e. **Nada tira do ar uma réplica por saturação (#207):** sem `DestinationRule`, sem `outlierDetection`, sem health check ativo do Envoy; as probes não passam pelo sidecar
+(`rewriteAppHTTPProbers: "false"`, `excludeInboundPorts: "8090"`), a readiness do sidecar (15021) tem o mesmo `failureThreshold` da do app e o proxy não tem limit de CPU. O sidecar é **nativo** (initContainer com
+`restartPolicy: Always`); os `initContainers` `espera` rodam com `runAsUser: 1337` (o UID que o iptables do Istio não redireciona), para a espera testar o Service de verdade e não o listener do Envoy.
+
+**C em detalhe.** `client-lb` soma ao pool de cada cliente (HttpClient 5) um `DnsResolver` round-robin (cada conexão nova resolve o host e roda os endereços), `ConnectionConfig.setTimeToLive` e `PoolReusePolicy.FIFO`; os
+timeouts de hoje ficam. Sem retry próprio: o operador de conexão do HttpClient já tenta o próximo endereço quando um recusa (provado em teste). Desligado por padrão (`CLIENT_LB_ENABLED=false`): compose, testes e e2e em
+compose usam a montagem de sempre. Ver `Projeto/Backend/client-lb/README.md` e o `Projeto/Backend/CLAUDE.md`, "Trilhas de balanceamento".
+
+**Prova de balanceamento (passo 7 do e2e):** com GETs sequenciais passando pelo gateway, o `catalog` sobe a 2 réplicas e o e2e mede as conexões ESTABLISHED na porta 8083 **dentro do pod novo** (lidas do nó):
+`b1` e `c` precisam ter pelo menos 1; `nenhuma` precisa ter 0 em 45 s (o controle mostra o problema). A etapa 4 repete isso com a autoescala e mede o custo de CPU por trilha.
 
 **Variáveis:** `K8S_NOME` (`gerenciador` ou `gerenciador-e2e*`), `K8S_OVERLAY` (`base` | `e2e`), `K8S_ESPERA` (900 s por espera), `K8S_PERMITIR_LATEST` (1 = aceita `SLIM_TAG=latest`; só depois da R5). Segredos reais só vão para o overlay `base`
 e nunca para um cluster `gerenciador-e2e*`.
@@ -56,8 +81,9 @@ e nunca para um cluster `gerenciador-e2e*`.
 | `kind.yaml` / `kind-e2e.yaml` | um nó, imagem `kindest/node` do kind v0.33.0 por digest; o principal publica NodePort 30081 → host 8081 e 30088 → 8088 (`0.0.0.0`); o do e2e não publica nada |
 | `base/` | um arquivo por componente (kustomize); namespace `gerenciador` criado pelo `cluster.sh`; StatefulSets `db` e `redpanda` (PVC `standard`), Deployments dos 7 serviços, Supavisor, Redis, RabbitMQ e frontend, Job `particoes` |
 | `overlays/e2e/` | a base + Mailpit, os Services do gateway e do frontend sem NodePort |
+| `overlays/trilha-c/`, `overlays/trilha-b1/` | componentes kustomize das trilhas de balanceamento (somados ao `base` ou ao `e2e` pelo `cluster.sh`); `istio/istiod-values.yaml` = valores do chart do Istio da `b1` |
 | `seccomp-extras.txt` | syscalls somadas aos perfis do Slim ao copiá-los para o nó |
-| `cluster.sh` | `up`, `guarda`, `carregar`, `imagem`, `psql`, `rpk`, `redis-cli`, `status`, `down` |
+| `cluster.sh` | `up`, `guarda --trilha ...`, `carregar`, `imagem`, `psql`, `rpk`, `redis-cli`, `status`, `down` |
 
 - **Ambiente dos pods:** um Secret `env-<componente>` por componente, gerado do `docker compose config` (o mesmo ambiente que o compose entrega a cada container),
   em arquivos temporários (`mktemp`, `chmod 700`, apagados no fim). Lista fechada de componentes: `db`, `supabase-pooler`, `redis`, `rabbitmq` e os 7 serviços (nunca Studio, Kong nem meta). `db` e `supabase-pooler` recebem do compose o `supabase/.env` inteiro; o
@@ -97,7 +123,7 @@ e nunca para um cluster `gerenciador-e2e*`.
 ## e2e contra o cluster
 
 ```bash
-SLIM_TAG=k8s E2E_K8S=1 E2E_K8S_TRILHA=nenhuma Projeto/e2e/run-e2e.sh   # cluster próprio `gerenciador-e2e`, sem porta no host; MANTER=1 mantém
+SLIM_TAG=k8s E2E_K8S=1 E2E_K8S_TRILHA=nenhuma Projeto/e2e/run-e2e.sh   # (ou =c | =b1) cluster próprio `gerenciador-e2e`, sem porta no host; MANTER=1 mantém
 ```
 
 Mesmos passos do e2e do compose (cadastro com o código lido do Mailpit, evento, reserva, confirmação, seek, rajada do modo fila, as faltas do `stock` e do `reservation`, replay), mais as
@@ -105,7 +131,7 @@ asserções de probes/management. Equivalentes: `stock` fora = `kubectl scale`; 
 SIGKILL no PID, a partir do nó, como o `docker stop -t 0` (desvio do texto da spec, que diz `kubectl delete pod --grace-period=0 --force`: o `delete` desmonta também a rede do pod, os pedidos pendentes no `stock` pausado são descartados e não sobra órfã nenhuma para a compensação; o SIGKILL deixa o kubelet reiniciar o container no mesmo pod); o "2º up" do `notification` = recriar o pod e ler o log do `initContainer` `seek`; o replay roda num pod Maven efêmero (baixa as dependências a
 cada rodada). O isolamento (Secrets e NodePort) é conferido por `cluster.sh guarda` antes de criar qualquer coisa.
 
-## Pendências anotadas (etapas 3 e 4)
+## Pendências anotadas (etapa 4)
 
 - **Etapa 4 (dry-run de carga):** no cluster o `/actuator/health` do gateway na 8081 responde **401** (só a 8090 serve `health`, por `management.server.port`; no compose a 8081 o serve). Afeta o
   `Projeto/carga/limpar-banco.sh` (que só loga o health) e qualquer kit que bata em `BASE_URL/actuator/health` pela 8081: apontar para a 8090 (o Service não a expõe: `kubectl port-forward` ou o IP do pod) ou ignorar.

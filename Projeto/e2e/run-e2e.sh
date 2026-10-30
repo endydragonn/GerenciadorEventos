@@ -41,7 +41,9 @@
 #  cada container roda o ID da imagem gorda construida no project (`<project>-<servico>:latest`).
 #  E2E_K8S=1 (#197, D2): em vez do project compose, cria um cluster kind PROPRIO (`gerenciador-e2e`, sem porta no host: k8s/kind-e2e.yaml) e roda os MESMOS
 #  passos contra a stack inteira nele (overlay k8s/overlays/e2e: Mailpit, Secrets do override e2e com credenciais efemeras; nada do SMTP real). Exige
-#  E2E_K8S_TRILHA=nenhuma (as trilhas b1 e c chegam na etapa 3), kind e kubectl no PATH e as *.slim:$SLIM_TAG. Todo kubectl leva --context kind-<cluster>.
+#  E2E_K8S_TRILHA=nenhuma|c|b1 (a trilha de balanceamento, obrigatoria; b1 instala o Istio por helm e tambem exige o helm no PATH), kind e kubectl no PATH e as
+#  *.slim:$SLIM_TAG. Todo kubectl/helm leva --context kind-<cluster>. O passo 7 (so no cluster) prova o balanceamento: uma replica NOVA do catalog recebe
+#  conexao do gateway nas trilhas b1 e c e NAO recebe na nenhuma (o controle: o Service L4 mantem as conexoes do pool nos pods velhos).
 #  Os helpers que fazem `docker exec`/`docker compose exec` passam por `sexec`; stock fora = `kubectl scale`, pausa do stock = SIGSTOP/SIGCONT no PID a partir do
 #  no (crictl), queda do reservation = SIGKILL no PID pelo no (como o `docker stop -t 0`; o `kubectl delete pod --force` desmonta a rede do pod e nao deixa orfas). O isolamento (Secrets e NodePort) e conferido por `cluster.sh guarda`
 #  ANTES de qualquer apply. No fim `kind delete cluster` (MANTER=1 mantem).
@@ -92,6 +94,7 @@ dc() { dexec compose -p "$PROJETO" -f docker-compose.yml -f e2e/docker-compose.e
 K8S="${E2E_K8S:-0}"
 CTX="kind-$PROJETO"
 K8S_NS=gerenciador
+TRILHA_K8S="${E2E_K8S_TRILHA:-}"
 kc() { # kubectl do cluster do e2e: o contexto e SEMPRE explicito (o `kind create` troca o current-context)
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*) MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' kubectl --context "$CTX" -n "$K8S_NS" "$@" ;;
@@ -239,10 +242,10 @@ echo "=================================================="
 
 if [ "$K8S" = "1" ]; then
     echo "==> 0. isolamento (Secrets e NodePort) ANTES de criar o cluster"
-    [ "${E2E_K8S_TRILHA:-}" = "nenhuma" ] || abortar "E2E_K8S=1 exige E2E_K8S_TRILHA=nenhuma (as trilhas b1 e c chegam na etapa 3 da issue #197)."
+    case "$TRILHA_K8S" in nenhuma|b1|c) ;; *) abortar "E2E_K8S=1 exige E2E_K8S_TRILHA=nenhuma|c|b1 (a trilha de balanceamento; obtido: '$TRILHA_K8S')." ;; esac
     [ "${E2E_COMPLETA:-0}" = "1" ] && abortar "E2E_K8S=1 roda so as *.slim (E2E_COMPLETA=1 vale so para o compose)."
-    for f in kind kubectl; do command -v "$f" >/dev/null 2>&1 || abortar "preciso de '$f' no PATH (kind em E:\\TCC\\claude-tooling\\bin)."; done
-    cluster guarda || abortar "o isolamento NAO pode ser verificado/garantido: nada foi criado."
+    for f in kind kubectl $([ "$TRILHA_K8S" = b1 ] && echo helm); do command -v "$f" >/dev/null 2>&1 || abortar "preciso de '$f' no PATH (kind em E:\\TCC\\claude-tooling\\bin)."; done
+    cluster guarda --trilha "$TRILHA_K8S" || abortar "o isolamento NAO pode ser verificado/garantido: nada foi criado."
     ok "Secrets do overlay e2e conferidos (mailpit, credenciais efemeras, X baixo) e manifests sem NodePort"
 else
 echo "==> 0. isolamento (config) ANTES do up"
@@ -274,7 +277,7 @@ derrubar
 # longa para o consumer nao descarta-lo por vencido): sem o seek o group novo (earliest) o leria e mandaria o e-mail ao captador.
 if [ "$K8S" = "1" ]; then
     # 1a no cluster: cria o cluster, carrega as imagens, gera Secrets/ConfigMaps e aplica SO o redpanda (app=redpanda); o resto vem no 1c
-    K8S_ESPERA="$ESPERA_UP" cluster up --trilha nenhuma --so redpanda || abortar "o redpanda do cluster nao ficou pronto"
+    K8S_ESPERA="$ESPERA_UP" cluster up --trilha "$TRILHA_K8S" --so redpanda || abortar "o redpanda do cluster nao ficou pronto"
 else
 dc up -d --wait --wait-timeout "$ESPERA_UP" redpanda || abortar "o redpanda do project nao ficou healthy"
 fi
@@ -293,7 +296,7 @@ PRODUZIDO="$(sexec redpanda rpk topic produce identity.notification -k pendente 
 confere "pedido de e-mail pendente produzido em identity.notification (offset 0)" sim "$(grep -q 'offset 0' <<<"$PRODUZIDO" && echo sim || echo nao)"
 if [ "$K8S" = "1" ]; then
     # 1c no cluster: aplica o resto (o `up` espera Deployments, StatefulSets e o Job `particoes`); depois confere cada workload e o Job
-    K8S_ESPERA="$ESPERA_UP" cluster up --trilha nenhuma || { kc get pods; abortar "o cluster nao ficou todo pronto. Logs: kubectl --context $CTX -n $K8S_NS logs <pod> [-c <init>]"; }
+    K8S_ESPERA="$ESPERA_UP" cluster up --trilha "$TRILHA_K8S" || { kc get pods; abortar "o cluster nao ficou todo pronto. Logs: kubectl --context $CTX -n $K8S_NS logs <pod> [-c <init>]"; }
     for alvo in sts/db sts/redpanda deploy/supabase-pooler deploy/redis deploy/rabbitmq deploy/mailpit deploy/frontend $(for s in backend identity catalog reservation stock notification admission; do echo deploy/$s; done); do
         confere "$alvo pronto (prontas/desejadas)" "1/1" "$(kc get "$alvo" -o jsonpath='{.status.readyReplicas}/{.spec.replicas}')"
     done
@@ -304,6 +307,22 @@ if [ "$K8S" = "1" ]; then
     done
     confere "nenhum container reiniciou por probe/falha (restartCount total)" 0 \
         "$(kc get pods -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.restartCount}{"\n"}{end}{end}' | awk '{s += $1} END {print s + 0}')"
+    if [ "$TRILHA_K8S" = "b1" ]; then
+        # B1 (#197): sidecar so nos 7 servicos e no frontend; nenhum na infra, no Mailpit e no Job; proxy sem limit de CPU; sidecar NATIVO (initContainer); sem reinicio do proxy
+        COM_PROXY="$(kc get pods -o jsonpath='{range .items[*]}{.metadata.labels.app}{" "}{range .spec.initContainers[*]}{.name}{","}{end}{range .spec.containers[*]}{.name}{","}{end}{"\n"}{end}' \
+            | awk '$2 ~ /istio-proxy/ {print $1}' | sort | tr '\n' ' ' | sed 's/ $//')"
+        confere "istio-proxy presente nos 7 servicos e no frontend (e so neles)" "admission backend catalog frontend identity notification reservation stock" "$COM_PROXY"
+        confere "istio-proxy ausente em db, supabase-pooler, redpanda, redis, rabbitmq, mailpit e no Job particoes" "" \
+            "$(kc get pods -o jsonpath='{range .items[*]}{.metadata.labels.app}{.metadata.labels.job-name}{" "}{range .spec.initContainers[*]}{.name}{","}{end}{range .spec.containers[*]}{.name}{","}{end}{"\n"}{end}' \
+                | awk '$2 ~ /istio-proxy/ && $1 ~ /^(db|supabase-pooler|redpanda|redis|rabbitmq|mailpit|particoes)$/ {print $1}' | tr '\n' ' ' | sed 's/ $//')"
+        confere "sidecar nativo: istio-proxy em initContainerStatuses do backend" istio-proxy \
+            "$(kc get pod -l app=backend -o jsonpath='{.items[0].status.initContainerStatuses[?(@.name=="istio-proxy")].name}')"
+        PROXY_RES="$(kc get pod -l app=backend -o jsonpath='{.items[0].spec.initContainers[?(@.name=="istio-proxy")].resources}')"
+        confere "istio-proxy: request de CPU 100m e SEM limit de CPU (limit so de memoria 256Mi)" "sim 256Mi" \
+            "$(grep -q '"requests":{"cpu":"100m"' <<<"$PROXY_RES" && ! grep -oE '"limits":\{[^}]*\}' <<<"$PROXY_RES" | grep -q cpu && echo sim || echo nao) $(grep -oE '"limits":\{[^}]*\}' <<<"$PROXY_RES" | grep -oE '[0-9]+Mi')"
+        confere "istio-proxy nao reiniciou (restartCount total dos sidecars)" 0 \
+            "$(kc get pods -o jsonpath='{range .items[*]}{range .status.initContainerStatuses[?(@.name=="istio-proxy")]}{.restartCount}{"\n"}{end}{end}' | awk '{s += $1} END {print s + 0}')"
+    fi
 else
 dc up -d --build --wait --wait-timeout "$ESPERA_UP" || { dc ps -a; abortar "up --wait falhou (algum servico nao ficou healthy). Logs: docker compose -p $PROJETO ... logs <servico>"; }
 SAUDE="$(dc ps -a --format '{{.Service}} {{.State}} {{or .Health "-"}} {{.ExitCode}}' | tr -d '\r')"
@@ -344,7 +363,7 @@ if [ "$K8S" = "1" ]; then
     # pod auxiliar de curl no namespace (sem sidecar), com a imagem Maven (curl, bash, xargs, mvn do replay) carregada no no
     cluster imagem "$IMAGEM_MVN" || abortar "carregar a imagem auxiliar no no falhou"
     kc delete pod "$CLI" --ignore-not-found --now >/dev/null 2>&1
-    kc run "$CLI" --image="$IMAGEM_MVN" --image-pull-policy=IfNotPresent --restart=Never --overrides='{"spec":{"automountServiceAccountToken":false}}' --command -- sleep infinity >/dev/null || abortar "nao consegui subir o pod auxiliar de curl"
+    kc run "$CLI" --image="$IMAGEM_MVN" --labels=sidecar.istio.io/inject=false --image-pull-policy=IfNotPresent --restart=Never --overrides='{"spec":{"automountServiceAccountToken":false}}' --command -- sleep infinity >/dev/null || abortar "nao consegui subir o pod auxiliar de curl"
     kc wait --for=condition=ready "pod/$CLI" --timeout=180s >/dev/null || abortar "o pod auxiliar de curl nao ficou pronto"
 else
 dexec rm -f "$CLI" >/dev/null 2>&1
@@ -568,7 +587,7 @@ NO_K8S="$PROJETO-control-plane"
 esperar_pod_novo() { # app pod_antigo timeout_s (cluster): ate existir um pod Ready de nome diferente do antigo
     local fim=$((SECONDS + $3)) novo
     while [ "$SECONDS" -lt "$fim" ]; do
-        novo="$(kc get pods -l "app=$1" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.containerStatuses[0].ready}{"\n"}{end}' 2>/dev/null | awk -v a="$2" '$1 != a && $2 == "true" {print $1}')"
+        novo="$(kc get pods -l "app=$1" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.containerStatuses[?(@.name=="'"$1"'")].ready}{"\n"}{end}' 2>/dev/null | awk -v a="$2" '$1 != a && $2 == "true" {print $1}')"
         [ -n "$novo" ] && return 0
         sleep 2
     done
@@ -577,7 +596,7 @@ esperar_pod_novo() { # app pod_antigo timeout_s (cluster): ate existir um pod Re
 esperar_reinicio() { # app pod restartCount_antes timeout_s (cluster): ate o container do pod reiniciar e ficar Ready
     local fim=$((SECONDS + $4)) r
     while [ "$SECONDS" -lt "$fim" ]; do
-        r="$(kc get pod "$2" -o jsonpath='{.status.containerStatuses[0].restartCount} {.status.containerStatuses[0].ready}' 2>/dev/null)"
+        r="$(kc get pod "$2" -o jsonpath='{.status.containerStatuses[?(@.name=="'"$1"'")].restartCount} {.status.containerStatuses[?(@.name=="'"$1"'")].ready}' 2>/dev/null)"
         [ "${r%% *}" -gt "$3" ] 2>/dev/null && [ "${r##* }" = "true" ] && return 0
         sleep 2
     done
@@ -629,7 +648,7 @@ reservation_queda() {
     if [ "$K8S" = "1" ]; then
         RES_POD="$(kc get pods -l app=reservation -o jsonpath='{.items[0].metadata.name}')"
         [ -n "$RES_POD" ] || abortar "sem pod do reservation"
-        RES_RESTARTS="$(kc get pod "$RES_POD" -o jsonpath='{.status.containerStatuses[0].restartCount}')"
+        RES_RESTARTS="$(kc get pod "$RES_POD" -o jsonpath='{.status.containerStatuses[?(@.name=="reservation")].restartCount}')"
         # SIGKILL no PID do processo, a partir do no (como o `docker stop -t 0`): o kubelet reinicia o container no MESMO pod/rede, e o kernel fecha os sockets
         # do processo morto com os pedidos ja enviados ao stock pausado. (`kubectl delete pod --force` desmonta tambem a rede do pod: os pedidos pendentes no
         # stock pausado eram descartados e a queda nao deixava nenhuma saga orfa para compensar.)
@@ -797,7 +816,7 @@ if [ "$K8S" = "1" ]; then
     kc apply -f - >/dev/null <<EOF || abortar "nao consegui criar o pod do replay"
 apiVersion: v1
 kind: Pod
-metadata: {name: $REPLAY_POD, labels: {app: e2e-replay}}
+metadata: {name: $REPLAY_POD, labels: {app: e2e-replay, sidecar.istio.io/inject: "false"}}
 spec:
   restartPolicy: Never
   enableServiceLinks: false
@@ -873,6 +892,56 @@ for classe in CatalogReplayE2eTest ReservationReplayE2eTest; do
     confere "$classe rodou 1 teste, 0 falhas, 0 pulados (replay sem divergencia)" sim \
         "$(grep -q "Tests run: 1, Failures: 0, Errors: 0, Skipped: 0.* -- in .*$classe" "$TMP/replay.log" && echo sim || echo nao)"
 done
+
+if [ "$K8S" = "1" ]; then
+echo "==> 7. balanceamento (trilha $TRILHA_K8S, #197): uma replica NOVA do catalog recebe conexao do gateway?"
+# O gateway chama o catalog por UMA conexao em uso (GETs sequenciais abaixo). Com o catalog em 2 replicas: no Service L4 (nenhuma) a conexao do pool continua no
+# pod velho e o novo fica sem nada; na trilha c o TTL de 15 s do client-lb refaz a conexao e o DNS round-robin a leva tambem ao pod novo; na b1 o Envoy balanceia
+# por requisicao. A medida e o numero de conexoes ESTABLISHED na porta 8083 DENTRO do pod novo (netns do container, lido do no), amostrado a cada 2 s.
+CAT_VELHO="$(kc get pods -l app=catalog -o jsonpath='{.items[0].metadata.name}')"
+GET_URL="$GW/bff/events/$EVENT_ID"
+conexoes_8083() { # pod: conexoes ESTABLISHED na porta 8083 do pod (tcp e tcp6 do netns do container, vistos do no)
+    local cid pid
+    cid="$(kc get pod "$1" -o jsonpath='{.status.containerStatuses[?(@.name=="catalog")].containerID}' | sed 's#.*://##')"
+    pid="$(dexec exec "$NO_K8S" crictl inspect --output go-template --template '{{.info.pid}}' "$cid" | tr -d '\r')"
+    [ -n "$pid" ] || { echo 0; return; }
+    dexec exec "$NO_K8S" sh -c "cat /proc/$pid/net/tcp /proc/$pid/net/tcp6" | tr -d '\r' \
+        | awk -v p="$(printf '%04X' 8083)" '$4 == "01" {n = split($2, a, ":"); if (a[n] == p) c++} END {print c + 0}'
+}
+confere "GET $GET_URL (o evento do passo 4)" 200 "$(cli curl -s -m 10 -o /dev/null -w '%{http_code}' "$GET_URL")"
+# GETs SEQUENCIAIS no gateway (uma conexao do gateway ao catalog em uso) do inicio ao fim do passo, num pod auxiliar sem sidecar; param pelo arquivo /tmp/parar (teto de 600 s).
+# Comecam ANTES do scale: a conexao quente nao pode ociosar durante a subida da replica (o pool a evictaria e a proxima abriria uma conexao nova, que o kube-proxy poderia
+# levar ao pod novo e estragar o controle).
+cli bash -c 'rm -f /tmp/parar; fim=$((SECONDS + 600)); n=0; while [ ! -f /tmp/parar ] && [ "$SECONDS" -lt "$fim" ]; do curl -s -m 5 -o /dev/null "$1"; n=$((n + 1)); done; echo "$n"' bash "$GET_URL" >"$TMP/trafego.out" 2>&1 &
+TRAFEGO_PID=$!
+sleep 30 # aquecimento: as conexoes ociosas do e2e sao evictadas (evict-idle 20 s) e sobra a que esta em uso
+kc scale deploy/catalog --replicas=2 >/dev/null || { cli touch /tmp/parar; abortar "kubectl scale do catalog para 2 falhou"; }
+for i in $(seq 1 120); do [ "$(kc get deploy catalog -o jsonpath='{.status.readyReplicas}')" = "2" ] && break; sleep 2; done
+confere "catalog com 2 replicas prontas" 2 "$(kc get deploy catalog -o jsonpath='{.status.readyReplicas}')"
+[ "$FALHAS" -eq 0 ] || { cli touch /tmp/parar; abortar "o catalog nao subiu a 2 replicas"; }
+CAT_NOVO="$(kc get pods -l app=catalog -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | tr -d '\r' | grep -vx "$CAT_VELHO" | head -1)"
+[ -n "$CAT_NOVO" ] || { cli touch /tmp/parar; abortar "nao achei o pod novo do catalog"; }
+# janela de medida: no controle (nenhuma) 45 s fixos, esperando 0; nas trilhas b1 e c ate 120 s, parando na 1a conexao no pod novo (na c o novo so entra quando o TTL de
+# 15 s refaz a conexao e o DNS sorteia o pod novo: cada conexao nova tem ~50% de chance, entao a janela e folgada)
+JANELA=45; [ "$TRILHA_K8S" = "nenhuma" ] || JANELA=120
+MAX_NOVO=0
+FIM_JANELA=$((SECONDS + JANELA))
+while [ "$SECONDS" -lt "$FIM_JANELA" ]; do
+    n="$(conexoes_8083 "$CAT_NOVO")"; [ "${n:-0}" -gt "$MAX_NOVO" ] && MAX_NOVO="$n"
+    [ "$TRILHA_K8S" != "nenhuma" ] && [ "$MAX_NOVO" -ge 1 ] && break
+    sleep 2
+done
+cli touch /tmp/parar
+wait "$TRAFEGO_PID"
+confere "GETs sequenciais durante o passo (requisicoes >= 10)" sim "$([ "$(tr -d '[:space:]' <"$TMP/trafego.out")" -ge 10 ] 2>/dev/null && echo sim || echo nao)"
+echo "   conexoes ESTABLISHED do gateway no pod novo do catalog ($CAT_NOVO), maximo amostrado: $MAX_NOVO"
+if [ "$TRILHA_K8S" = "nenhuma" ]; then
+    confere "controle (Service L4): o pod novo NAO recebeu conexao do gateway em 45 s (o pool manteve a conexao no pod velho)" 0 "$MAX_NOVO"
+else
+    confere "trilha $TRILHA_K8S: o pod novo RECEBEU conexao do gateway (>= 1)" sim "$([ "$MAX_NOVO" -ge 1 ] && echo sim || echo nao)"
+fi
+kc scale deploy/catalog --replicas=1 >/dev/null 2>&1
+fi
 
 echo "=================================================="
 if [ "$FALHAS" -eq 0 ]; then echo "   RESULTADO: E2E OK (stack inteira, fluxo, e-mail no captador, replay sem divergencia)"; else echo "   RESULTADO: $FALHAS ASSERCAO(OES) FALHARAM"; fi

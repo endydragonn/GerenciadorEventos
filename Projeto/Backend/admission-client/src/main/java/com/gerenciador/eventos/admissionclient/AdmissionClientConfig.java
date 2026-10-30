@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.gerenciador.eventos.clientlb.ClientLb;
+
 /**
  * Bean do {@link AdmissionClient} do monólito (o {@code AdmissionApi} que o gateway injeta). Tudo por env var (nomes no
  * application.properties do monólito): {@code ADMISSION_SERVICE_URL}, {@code INTERNAL_API_TOKEN} (obrigatória: o contexto não sobe
@@ -27,9 +29,12 @@ public class AdmissionClientConfig {
             @Value("${admission.client.connection-request-timeout-ms:200}") long connectionRequestTimeoutMs,
             @Value("${admission.client.response-timeout-ms:500}") long responseTimeoutMs,
             @Value("${admission.client.evict-idle-ms:20000}") long evictIdleMs,
-            @Value("${admission.client.open-ms:5000}") long openMs) {
+            @Value("${admission.client.open-ms:5000}") long openMs,
+            @Value("${client.lb.enabled:false}") boolean lbAtivo,
+            @Value("${client.lb.ttl-ms:15000}") long lbTtlMs) {
         return new AdmissionClient(baseUrl, internalToken, maxConnections, Duration.ofMillis(connectTimeoutMs),
                 Duration.ofMillis(connectionRequestTimeoutMs), Duration.ofMillis(responseTimeoutMs),
-                Duration.ofMillis(evictIdleMs), FALHAS_PARA_ABRIR, Duration.ofMillis(openMs), System::nanoTime);
+                Duration.ofMillis(evictIdleMs), FALHAS_PARA_ABRIR, Duration.ofMillis(openMs), System::nanoTime,
+                new ClientLb(lbAtivo, lbTtlMs));
     }
 }

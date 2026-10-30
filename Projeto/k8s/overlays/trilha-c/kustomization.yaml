@@ -1,0 +1,98 @@
+# Trilha C (issue #197, D6): balanceamento no cliente. COMPONENTE kustomize (não overlay solto): o `cluster.sh up --trilha c` soma este componente ao overlay
+# escolhido (base ou e2e) num kustomization temporário, então a trilha vale com qualquer um. Liga o `client-lb` (módulo Maven `client-lb`: DNS round-robin, TTL de
+# conexão e reuso FIFO) nos 4 serviços que chamam outro serviço por HTTP, e aponta as URLs para os Services HEADLESS (`*-pods`: o DNS devolve só os pods PRONTOS).
+# O cache de DNS da JVM vai para 5 s por um java.security extra (`networkaddress.cache.ttl` é propriedade de segurança: -Dnetworkaddress.cache.ttl não vale).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - headless.yaml
+configMapGenerator:
+  - name: java-security
+    files:
+      - java.security
+    options:
+      disableNameSuffixHash: true
+patches:
+  # gateway -> identity, catalog, reservation, admission
+  - target: {kind: Deployment, name: backend}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: backend}
+      spec:
+        template:
+          spec:
+            volumes:
+              - {name: java-security, configMap: {name: java-security}}
+            containers:
+              - name: backend
+                env:
+                  - {name: CLIENT_LB_ENABLED, value: "true"}
+                  - {name: CLIENT_LB_TTL_MS, value: "15000"}
+                  - {name: JAVA_TOOL_OPTIONS, value: "-Djava.security.properties=/etc/java-security/java.security"}
+                  - {name: IDENTITY_SERVICE_URL, value: "http://identity-pods:8084"}
+                  - {name: CATALOG_SERVICE_URL, value: "http://catalog-pods:8083"}
+                  - {name: RESERVATION_SERVICE_URL, value: "http://reservation-pods:8082"}
+                  - {name: ADMISSION_SERVICE_URL, value: "http://admission-pods:8085"}
+                volumeMounts:
+                  - {name: java-security, mountPath: /etc/java-security, readOnly: true}
+  # catalog -> stock
+  - target: {kind: Deployment, name: catalog}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: catalog}
+      spec:
+        template:
+          spec:
+            volumes:
+              - {name: java-security, configMap: {name: java-security}}
+            containers:
+              - name: catalog
+                env:
+                  - {name: CLIENT_LB_ENABLED, value: "true"}
+                  - {name: CLIENT_LB_TTL_MS, value: "15000"}
+                  - {name: JAVA_TOOL_OPTIONS, value: "-Djava.security.properties=/etc/java-security/java.security"}
+                  - {name: STOCK_SERVICE_URL, value: "http://stock-pods:8086"}
+                volumeMounts:
+                  - {name: java-security, mountPath: /etc/java-security, readOnly: true}
+  # reservation -> stock
+  - target: {kind: Deployment, name: reservation}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: reservation}
+      spec:
+        template:
+          spec:
+            volumes:
+              - {name: java-security, configMap: {name: java-security}}
+            containers:
+              - name: reservation
+                env:
+                  - {name: CLIENT_LB_ENABLED, value: "true"}
+                  - {name: CLIENT_LB_TTL_MS, value: "15000"}
+                  - {name: JAVA_TOOL_OPTIONS, value: "-Djava.security.properties=/etc/java-security/java.security"}
+                  - {name: STOCK_SERVICE_URL, value: "http://stock-pods:8086"}
+                volumeMounts:
+                  - {name: java-security, mountPath: /etc/java-security, readOnly: true}
+  # admission (worker pool) -> reservation
+  - target: {kind: Deployment, name: admission}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: admission}
+      spec:
+        template:
+          spec:
+            volumes:
+              - {name: java-security, configMap: {name: java-security}}
+            containers:
+              - name: admission
+                env:
+                  - {name: CLIENT_LB_ENABLED, value: "true"}
+                  - {name: CLIENT_LB_TTL_MS, value: "15000"}
+                  - {name: JAVA_TOOL_OPTIONS, value: "-Djava.security.properties=/etc/java-security/java.security"}
+                  - {name: RESERVATION_SERVICE_URL, value: "http://reservation-pods:8082"}
+                volumeMounts:
+                  - {name: java-security, mountPath: /etc/java-security, readOnly: true}

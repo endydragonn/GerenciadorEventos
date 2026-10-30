@@ -23,6 +23,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
+import com.gerenciador.eventos.clientlb.ClientLb;
 import com.gerenciador.eventos.admissionclient.api.AdmissionApi;
 import com.gerenciador.eventos.admissionclient.api.AdmissionRecusadaException;
 import com.gerenciador.eventos.admissionclient.api.AdmissionRequest;
@@ -75,6 +76,15 @@ public class AdmissionClient implements AdmissionApi, AutoCloseable {
     public AdmissionClient(String baseUrl, String internalToken, int maxConnections, Duration connectTimeout,
             Duration connectionRequestTimeout, Duration responseTimeout, Duration evictIdle, int falhasParaAbrir,
             Duration abertoPor, LongSupplier relogio) {
+        this(baseUrl, internalToken, maxConnections, connectTimeout, connectionRequestTimeout, responseTimeout, evictIdle,
+                falhasParaAbrir, abertoPor, relogio, ClientLb.desligado());
+    }
+
+    /** @param lb balanceamento no cliente (trilha C da #197): soma resolver round-robin, TTL e reuso FIFO ao pool; desligado não muda nada */
+    public AdmissionClient(String baseUrl, String internalToken, int maxConnections, Duration connectTimeout,
+            Duration connectionRequestTimeout, Duration responseTimeout, Duration evictIdle, int falhasParaAbrir,
+            Duration abertoPor, LongSupplier relogio,
+            ClientLb lb) {
         if (internalToken == null || internalToken.isBlank()) {
             throw new IllegalStateException("INTERNAL_API_TOKEN não configurado: o cliente do admission precisa do token de "
                     + "serviço (o mesmo valor do serviço admission). Gere um com `openssl rand -hex 32` e ponha no Projeto/.env.");
@@ -84,14 +94,14 @@ public class AdmissionClient implements AdmissionApi, AutoCloseable {
         this.relogio = relogio;
         this.avisos = LogComLimite.warn(log, INTERVALO_LOG_NANOS, relogio);
         this.erros = LogComLimite.error(log, INTERVALO_LOG_NANOS, relogio);
-        PoolingHttpClientConnectionManager pool = PoolingHttpClientConnectionManagerBuilder.create()
+        ConnectionConfig.Builder conexao = ConnectionConfig.custom()
+                .setConnectTimeout(Timeout.ofMilliseconds(connectTimeout.toMillis()))
+                .setSocketTimeout(Timeout.ofMilliseconds(responseTimeout.toMillis()));
+        PoolingHttpClientConnectionManagerBuilder construtor = PoolingHttpClientConnectionManagerBuilder.create()
                 .setMaxConnTotal(maxConnections)
-                .setMaxConnPerRoute(maxConnections)
-                .setDefaultConnectionConfig(ConnectionConfig.custom()
-                        .setConnectTimeout(Timeout.ofMilliseconds(connectTimeout.toMillis()))
-                        .setSocketTimeout(Timeout.ofMilliseconds(responseTimeout.toMillis()))
-                        .build())
-                .build();
+                .setMaxConnPerRoute(maxConnections);
+        lb.aplicar(construtor, conexao);
+        PoolingHttpClientConnectionManager pool = construtor.setDefaultConnectionConfig(conexao.build()).build();
         this.httpClient = HttpClients.custom()
                 .setConnectionManager(pool)
                 .setDefaultRequestConfig(RequestConfig.custom()

@@ -1,0 +1,68 @@
+# Trilha B1 (issue #197, D6): malha de serviços com sidecar (Istio 1.31.1, release stable, instalado por helm no `cluster.sh up --trilha b1`). COMPONENTE kustomize:
+# o `cluster.sh` o soma ao overlay escolhido (base ou e2e) num kustomization temporário. O `cluster.sh` também põe `istio-injection=enabled` no namespace; aqui:
+#  - os 7 serviços e o frontend recebem o sidecar com as anotações da spec (portas não-HTTP fora do Envoy, probes direto no kubelet, recursos do proxy);
+#  - db, Supavisor, Redpanda, Redis, RabbitMQ, Mailpit e o Job `particoes` ficam SEM sidecar (um sidecar impede o Job de terminar; o resto não é HTTP entre serviços).
+# Sem DestinationRule e sem outlierDetection (#207): nada tira do ar uma réplica por saturação; a única fonte de "réplica fora" é a readiness do Kubernetes.
+# mTLS no default do Istio (PERMISSIVE). Retry da malha desligado (meshConfig.defaultHttpRetryPolicy.attempts: 0, em k8s/istio/istiod-values.yaml).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target: {kind: Deployment, name: "backend|identity|catalog|reservation|stock|admission|notification|frontend"}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: x}
+      spec:
+        template:
+          metadata:
+            annotations:
+              # só o HTTP entre serviços passa pelo Envoy: Postgres/Supavisor 5432 e 6543, Kafka 9092, Redis 6379, AMQP 5672, API do Kubernetes 443 (D4), SMTP 587 (real)
+              # e 1025 (Mailpit; protocolo server-first, que a detecção de protocolo do Istio atrasaria)
+              traffic.sidecar.istio.io/excludeOutboundPorts: "5432,6543,9092,6379,5672,443,587,1025"
+              # as probes NÃO passam pelo sidecar (#207): o kubelet fala direto com a porta de management (8090), que o Envoy não captura
+              sidecar.istio.io/rewriteAppHTTPProbers: "false"
+              traffic.sidecar.istio.io/excludeInboundPorts: "8090"
+              # readiness do próprio sidecar (15021) alinhada à do app: 30 s sem resposta antes de sair do Service
+              readiness.status.sidecar.istio.io/periodSeconds: "5"
+              readiness.status.sidecar.istio.io/failureThreshold: "6"
+              # sidecar: request 100m/128Mi, limit SÓ de memória (sem limit de CPU: um proxy estrangulado não pode tirar o pod do Service)
+              sidecar.istio.io/proxyCPU: 100m
+              sidecar.istio.io/proxyMemory: 128Mi
+              sidecar.istio.io/proxyMemoryLimit: 256Mi
+          spec:
+            initContainers:
+              # o `espera` (nc) roda como o UID do proxy (1337), que o iptables do Istio NÃO redireciona: a espera testa o Service de verdade (kube-proxy, só pods prontos),
+              # não o listener do Envoy, que aceitaria a conexão mesmo sem backend
+              - name: espera
+                securityContext:
+                  runAsUser: 1337
+  - target: {kind: StatefulSet, name: "db|redpanda"}
+    patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata: {name: x}
+      spec:
+        template:
+          metadata:
+            labels:
+              sidecar.istio.io/inject: "false"
+  - target: {kind: Deployment, name: "supabase-pooler|redis|rabbitmq|mailpit"}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: x}
+      spec:
+        template:
+          metadata:
+            labels:
+              sidecar.istio.io/inject: "false"
+  - target: {kind: Job, name: particoes}
+    patch: |-
+      apiVersion: batch/v1
+      kind: Job
+      metadata: {name: x}
+      spec:
+        template:
+          metadata:
+            labels:
+              sidecar.istio.io/inject: "false"
