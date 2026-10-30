@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -134,6 +135,91 @@ public class StockReleaseConsumerTest extends StockTestSupport {
         assertEquals(3, quant(b));
         assertInvariante(a);
         assertInvariante(b);
+    }
+
+    // ------------------------------------------------------------------ #205: 2+ réplicas ao MESMO tempo
+
+    /**
+     * Stock escalável (issue #205): no rebalance a MESMA mensagem pode chegar a duas ou mais réplicas ao mesmo tempo (a que perdeu a
+     * partição ainda processa o lote, a que ganhou o reentrega). Quatro "réplicas" largam juntas (threads, conexões próprias) com o
+     * MESMO lote: {@code ReservationCancelled} e {@code ReservationExpired} repetidos do mesmo {@code holdId}. Cada hold sai de
+     * {@code held} UMA vez (a soma dos retornos é exata) e o {@code quant} sobe exatamente 1 por hold liberado. Libera-se só parte dos
+     * holds de propósito: o teto de {@code devolver} (clamp em {@code capacity}) esconderia uma devolução dupla se todos fossem liberados.
+     */
+    @Test
+    public void mesmoLoteEmQuatroReplicasAoMesmoTempoLiberaCadaHoldUmaVez() throws Exception {
+        for (int rodada = 0; rodada < 5; rodada++) {
+            long ev = novoEvento(8);
+            UUID[] h = new UUID[8];
+            for (int i = 0; i < h.length; i++) {
+                h[i] = hold(ev, HoldRequest.CAS);
+            }
+            assertEquals(0, quant(ev));
+
+            List<String> lote = new ArrayList<>();
+            for (int i = 0; i < 5; i++) { // h0..h4: cada um por Cancelled e por Expired, e repetido
+                lote.add(msg("ReservationCancelled", ev, h[i]));
+                lote.add(msg("ReservationExpired", ev, h[i]));
+                lote.add(msg("ReservationCancelled", ev, h[i]));
+            }
+            List<Integer> liberados = Concorrencia.emParalelo(4, () -> consumer.liberar(lote));
+
+            assertEquals(5, liberados.stream().mapToInt(Integer::intValue).sum(), "cada hold liberado UMA vez entre as réplicas: " + liberados);
+            assertEquals(5, quant(ev), "5 holds liberados = exatamente 5 vagas devolvidas (rodada " + rodada + ")");
+            for (int i = 0; i < 5; i++) {
+                assertEquals("released", statusDoHold(h[i]));
+            }
+            for (int i = 5; i < 8; i++) {
+                assertEquals("held", statusDoHold(h[i]));
+            }
+            assertInvariante(ev);
+        }
+    }
+
+    /**
+     * Lotes que só se SOBREPÕEM (partições diferentes com a mesma chave de evento, ou reentrega parcial), em dois eventos, com as
+     * réplicas largando juntas: sem deadlock (os locks saem na ordem do índice e o {@code eventcap} por {@code event_id}), a união dos
+     * holds é liberada e cada um UMA vez.
+     */
+    @Test
+    public void lotesQueSeSobrepoemEmReplicasConcorrentesLiberamAUniaoUmaVezCadaHold() throws Exception {
+        for (int rodada = 0; rodada < 5; rodada++) {
+            long a = novoEvento(8);
+            long b = novoEvento(8);
+            UUID[] ha = new UUID[8];
+            UUID[] hb = new UUID[8];
+            for (int i = 0; i < 8; i++) {
+                ha[i] = hold(a, HoldRequest.CAS);
+                hb[i] = hold(b, HoldRequest.CAS);
+            }
+            // a união são h0..h5 dos dois eventos (12 holds); h6 e h7 ficam held
+            List<Callable<Integer>> replicas = List.of(
+                    () -> consumer.liberar(lote("ReservationCancelled", a, ha, 0, 4, b, hb, 0, 4)),
+                    () -> consumer.liberar(lote("ReservationExpired", b, hb, 2, 6, a, ha, 2, 6)),
+                    () -> consumer.liberar(lote("ReservationCancelled", b, hb, 0, 6, a, ha, 0, 6)),
+                    () -> consumer.liberar(lote("ReservationExpired", a, ha, 3, 5, b, hb, 3, 5)));
+            List<Integer> liberados = Concorrencia.emParalelo(replicas);
+
+            assertEquals(12, liberados.stream().mapToInt(Integer::intValue).sum(), "união de 12 holds, cada um UMA vez: " + liberados);
+            assertEquals(6, quant(a), "evento a: 6 vagas devolvidas (rodada " + rodada + ")");
+            assertEquals(6, quant(b), "evento b: 6 vagas devolvidas (rodada " + rodada + ")");
+            assertEquals("held", statusDoHold(ha[6]));
+            assertEquals("held", statusDoHold(hb[7]));
+            assertInvariante(a);
+            assertInvariante(b);
+        }
+    }
+
+    /** Mensagens dos holds [de1, ate1) do evento 1 e [de2, ate2) do evento 2, nessa ordem (a ordem não muda o lock: o lote vira um conjunto). */
+    private List<String> lote(String tipo, long ev1, UUID[] h1, int de1, int ate1, long ev2, UUID[] h2, int de2, int ate2) throws Exception {
+        List<String> out = new ArrayList<>();
+        for (int i = de1; i < ate1; i++) {
+            out.add(msg(tipo, ev1, h1[i]));
+        }
+        for (int i = de2; i < ate2; i++) {
+            out.add(msg(tipo, ev2, h2[i]));
+        }
+        return out;
     }
 
     // ------------------------------------------------------------------ S5b: o que não pode travar a partição

@@ -259,6 +259,19 @@ Cada coluna é um cluster novo, criado pelo `dry-run.sh`; todos os critérios au
 - **Mailpit guarda só 500 mensagens por padrão** (`MP_MAX_MESSAGES`): subiu para 50000 no overlay `e2e`, senão a conferência de e-mails duplicados/perdidos seria vácua.
 - **Os `stages` do k6 são rampas lineares**, não patamares: o roteiro usa um estágio curto de subida e um patamar com o mesmo alvo.
 
+### Dry-run com o `stock` escalado (#205; a rodar depois da R5)
+
+O `stock` já é autoescalado por CPU como os outros 4 serviços HTTP (`K8S_STOCK_MIN`/`K8S_STOCK_MAX`, default 1/3; Hikari 60 por réplica, conta 1492 ≤ 1500 acima), e a **fase A** do dry-run (rajada de reservas no `cas`) o faz subir: não há parâmetro novo, o dry-run da #197 já é o da #205.
+Comando (sob o lock Docker, depois do aviso de fim da R5; gerar antes as imagens com `SLIM_TAG=k8s Projeto/slim/gerar-imagens-slim.sh`):
+
+```bash
+SLIM_TAG=k8s Projeto/k8s/dry-run.sh --trilha nenhuma     # (ou b1 | c); o `stock` com os defaults 1/3
+```
+
+Critério do aceite da #205, ambos automáticos no `dry-run-analise.py` (código de saída 0 só com todos ok): **`stock` chega a 2+ réplicas** (`stock sobe (max N) e desce por CPU na mesma rajada`, N ≥ 2) e **overselling 0 no CAS** (com o evento esgotado: reservas ativas == capacidade, `eventcap.quant` coerente com os holds `held` debitados; `resumo.txt`, arquivos `overselling*.txt` e `quant-incoerente.txt`).
+A prova de que o consumo de `reservation.wallet` com 2+ réplicas não devolve a vaga duas vezes é o teste de `StockReleaseConsumerTest` (infra real, sem cluster): o roteiro do dry-run não cancela nem expira reservas (o evento quente tem `max_time_in_line` de 3600 s), então ele não exerce a devolução; `quant-incoerente.txt` = 0 só confere a invariante do CAS.
+Precedente: no dry-run da #197 (tabela acima) o `stock` chegou a **3** réplicas nas três trilhas, com overselling 0 (30 ativas para capacidade 30, `quant` 0).
+
 ## Pendências anotadas (etapa 4b)
 
 - **Dry-run de carga:** no cluster o `/actuator/health` do gateway na 8081 responde **401** (só a 8090 serve `health`, por `management.server.port`; no compose a 8081 o serve). Afeta o
