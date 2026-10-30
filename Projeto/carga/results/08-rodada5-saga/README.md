@@ -134,8 +134,9 @@ Latências em ms, de todas as respostas do POST (201, 202, 409 e 429).
 - Entre as 13.302 acompanhadas: 8.460 admitidas, 4.842 `rejected`, 0 `timed_out` e 0 `sem_estado`.
 - Total: 268.772 respostas 202 e 359.068 429. `k6 run` com código 0, resumo no ref `R5-gerador-01` (`0fa9d01`).
 - Banco do host depois da fila drenar:
-  - 158.155 `confirmed` e 162.562 `expired` (as 202 não acompanhadas viram `pending` e expiram);
-  - 0 `pending` e 0 evento acima da capacidade.
+  - 158.155 `confirmed`, 160.527 `expired` e 2.035 `pending` na verificação (`verificacoes-r5.log`); as `pending` são 202 não acompanhadas, que
+    expiram em seguida pelo job (162.562 `expired` contados pela soma, sem retrato posterior);
+  - 0 evento acima da capacidade.
 - Fila `admission.requests`: no máximo 4.418 mensagens (bem abaixo do teto de 100.000) e 0 ao fim. A dead-letter (`admission.timed_out`)
   ficou em 0 em todas as amostras, e o k6 deu `timed_out` 0.
 
@@ -195,7 +196,7 @@ no padrão.
 
 - **Réplicas × tempo** (`autoescala/replicas-20261030-094150.csv`, em UTC; local = UTC − 3):
   - `reservation`: stand-by às 12:59:01, no degrau de 32k (uso 0,58); promovida às 13:02:30, no de 44k (uso 0,83);
-  - `backend`: stand-by às 12:59:30 (uso 0,61); promovida às 13:02:58 com 0 ativas (uso 999,999, porque o `lb` tinha tirado o gw1);
+  - `backend`: stand-by às 12:59:30 (uso 0,61); promovida às 13:02:58 com 0 ativas na leitura do scaler (uso 999,999; o log do `lb` mostra o gw1 DOWN às 13:02:41 e às 13:03:02, e UP às 13:02:48);
   - `admission`: stand-by às 13:01:36, descartada às 13:04:38;
   - `identity`, `catalog` e `notification` ficaram em 1.
 - **Os 5xx são do `lb`, de novo (#207)** (`autoescala/lb-estado-r5-b2.log` e `show stat`):
@@ -226,7 +227,7 @@ Mesma escada sequencial, mesmos parâmetros do k6 e a mesma regra do X: p95 de j
 | Compensações por minuto | — (sem saga) | 0 (inline e reaper) |
 | Órfãs e tempo até resolver | — | 0 órfãs; sem amostra de tempo |
 | Lag de devolução p50 / p95 / máx. | — (devolução síncrona na mesma transação) | 118 / 448 / 1.568 ms |
-| Banco depois da fila drenar | 151.319 `confirmed`, 167.425 `expired` | 158.155 `confirmed`, 162.562 `expired` |
+| Banco depois da fila drenar | 151.319 `confirmed`, 167.425 `expired` | 158.155 `confirmed`, 160.527 `expired`, 2.035 `pending` (expiradas depois) |
 | Fila `admission.requests` (máx.) / dead-letter | 4.419 / 0 | 4.418 / 0 |
 | Conexões ativas no pooler (máx.) / esperando lock (máx.) | 246 / 243 | 242 / 235 |
 | CPU do host (média do contador na coleta inteira) / máx. | 75,0 / 114 | 78,8 / 114 |
