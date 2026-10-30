@@ -11,6 +11,10 @@
     Remove-NetFirewallRule -DisplayName 'TCC postgres 5433'
   - sobe a stack com o override de carga (read path cas|naive, lag do read model, log de SQL desligado)
   - espera o backend ficar saudavel e mostra os IPs para usar no gerador
+  - com -ComposeExtras (issue #178): mais overrides DEPOIS do de carga, ex. docker-compose.slim.yml e docker-compose.autoescala.yml (braco C). Paths
+    relativos a Projeto\. A autoescala vem por ultimo de proposito (Hikari do reservation 300 por replica, e nao 1000 do override de carga).
+    O scaler (autoescala\scaler.sh) tem de usar os MESMOS -f e o mesmo ambiente: o script imprime a linha. As replicas passam a se chamar
+    <project>-<servico>-<n> e o kit as acha por label (lib-servicos.ps1).
 
   Com -Verificar -EventId N: consulta o Postgres (docker exec) e mostra o resultado real da
   disputa (reservas por status, vagas restantes e overselling). Use depois de cada rodada.
@@ -20,6 +24,7 @@
   .\setup-host.ps1 -ReadPath naive
   .\setup-host.ps1 -ReadPath naive -GeradorIp 192.168.0.20   # para a matriz (abre a 5433 so p/ o gerador)
   .\setup-host.ps1 -Verificar -EventId 12
+  .\setup-host.ps1 -ComposeExtras docker-compose.autoescala.yml     # braco C (a R4 roda o braco sem autoescala ANTES: o override aumenta as particoes, irreversivel)
 #>
 [CmdletBinding()]
 param(
@@ -27,13 +32,15 @@ param(
     [switch]$SemBuild,
     [switch]$Verificar,
     [int]$EventId = 0,
-    [string]$GeradorIp = ''
+    [string]$GeradorIp = '',
+    [string[]]$ComposeExtras = @()
 )
 
 $ErrorActionPreference = 'Stop'
 $Projeto = Split-Path $PSScriptRoot -Parent
 $Compose = Join-Path $Projeto 'docker-compose.yml'
 $Override = Join-Path $PSScriptRoot 'docker-compose.carga.yml'
+. (Join-Path $PSScriptRoot 'lib-servicos.ps1')   # containers por label e lista de -f
 
 function Info($m) { Write-Host "[host] $m" -ForegroundColor Cyan }
 function Ok($m)   { Write-Host "[ ok ] $m" -ForegroundColor Green }
@@ -45,7 +52,9 @@ function Registrar($alvo, $saida) {
     $dir = Join-Path $PSScriptRoot 'results'
     New-Item -ItemType Directory -Force $dir | Out-Null
     # RESERVATION_READPATH e do backend (gateway); relay/consumer sao do servico reservation (#33)
-    $cfg = ((docker exec gerenciador-backend printenv RESERVATION_READPATH 2>$null) + ' / ' + ((docker exec gerenciador-reservation printenv EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED 2>$null) -join ' / '))
+    # containers por label (issue #178): com a autoescala as replicas nao se chamam gerenciador-<servico>
+    $cb = Get-ContainerDoServico backend; $cr = Get-ContainerDoServico reservation
+    $cfg = ($(if ($cb) { docker exec $cb printenv RESERVATION_READPATH 2>$null }) + ' / ' + (@($(if ($cr) { docker exec $cr printenv EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED 2>$null })) -join ' / '))
     $cab = "===== {0} | {1} | config: {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $alvo, $cfg
     Add-Content -Path (Join-Path $dir 'verificacoes.log') -Value (@($cab, $saida, '') -join "`n") -Encoding utf8
 }
@@ -54,15 +63,15 @@ function Registrar($alvo, $saida) {
 if ($Verificar) {
     if ($EventId -le 0) { Fail 'Informe -EventId com o id do evento da rodada.' }
     $sql = @"
-SELECT 'eventcap' AS origem, capacity, quant AS vagas_restantes FROM reservation.eventcap WHERE event_id = $EventId;
+SELECT 'eventcap' AS origem, capacity, quant AS vagas_restantes FROM stock.eventcap WHERE event_id = $EventId;
 SELECT status, count(*) AS qtd FROM reservation.walletevent WHERE event_id = $EventId GROUP BY status ORDER BY status;
 SELECT count(*) FILTER (WHERE status IN ('pending','confirmed')) AS ativas,
-       (SELECT capacity FROM reservation.eventcap WHERE event_id = $EventId) AS capacity,
+       (SELECT capacity FROM stock.eventcap WHERE event_id = $EventId) AS capacity,
        count(*) FILTER (WHERE status IN ('pending','confirmed'))
-         - (SELECT capacity FROM reservation.eventcap WHERE event_id = $EventId) AS overselling
+         - (SELECT capacity FROM stock.eventcap WHERE event_id = $EventId) AS overselling
 FROM reservation.walletevent WHERE event_id = $EventId;
 "@
-    $saida = $sql | docker exec -i gerenciador-db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' | Out-String
+    $saida = $sql | docker exec -i (Get-ContainerDb) sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' | Out-String
     Write-Host $saida
     $rc = $LASTEXITCODE
     Registrar "evento $EventId" $saida.TrimEnd()
@@ -127,7 +136,8 @@ Get-NetConnectionProfile | ForEach-Object {
 # ---------------------------------------------------------------- subir a stack
 $env:RESERVATION_READPATH = $ReadPath
 Info "Subindo a stack (readpath=$ReadPath no gateway; servico reservation com relay e consumer de eventos ligados pelo compose)..."
-$composeArgs = @('compose', '-f', $Compose, '-f', $Override, 'up', '-d')
+$arquivos = Get-ArquivosCompose -Projeto $Projeto -Carga $Override -Extras $ComposeExtras
+$composeArgs = @('compose') + (ConvertTo-ArgsCompose -Arquivos $arquivos) + @('up', '-d')
 if (-not $SemBuild) { $composeArgs += '--build' }
 & docker @composeArgs
 if ($LASTEXITCODE -ne 0) { Fail 'docker compose falhou.' }
@@ -137,13 +147,20 @@ Info 'Aguardando o backend (ate 180 s)...'
 $ok = $false
 for ($i = 0; $i -lt 90; $i++) {
     try {
-        $r = Invoke-WebRequest -Uri 'http://localhost:8081/actuator/health' -UseBasicParsing -TimeoutSec 3
+        $r = Invoke-WebRequest -Uri "$(Get-UrlSaudeHost)/actuator/health" -UseBasicParsing -TimeoutSec 3
         if ($r.StatusCode -eq 200) { $ok = $true; break }
     } catch { }
     Start-Sleep -Seconds 2
 }
-if (-not $ok) { Fail 'Backend nao ficou saudavel. Veja: docker logs gerenciador-backend --tail 100' }
+if (-not $ok) { Fail 'Backend nao ficou saudavel. Veja: docker logs <container do backend> --tail 100 (docker ps --filter label=com.docker.compose.service=backend)' }
 Ok 'Backend respondendo em /actuator/health (o compose so o sobe com o servico reservation saudavel).'
+Test-HikariDoReservation -Arquivos $arquivos
+if (@($ComposeExtras | Where-Object { $_ -match 'autoescala' }).Count -gt 0) {
+    Write-Host ''
+    Write-Host 'Braco C: rode o scaler no MESMO ambiente e com os MESMOS -f (Git Bash; Ctrl+C encerra; PARE-O antes de limpar o banco):' -ForegroundColor Cyan
+    Write-Host ("  AUTOESCALA_COMPOSE_ARQUIVOS='{0}' Projeto/autoescala/scaler.sh" -f (Get-ArquivosDoScaler -Projeto $Projeto -Arquivos $arquivos))
+    Write-Host '  (as variaveis do up valem para as replicas novas: RESERVATION_READPATH, AUTOESCALA_*; AUTOESCALA_X_RPM = ADMISSION_X_RPM). Registre os AUTOESCALA_* na rodada.'
+}
 
 # ---------------------------------------------------------------- resumo
 Write-Host ''

@@ -9,13 +9,17 @@
 #  - no Git Bash o binário do Docker é nativo do Windows e não entende "/e/...",
 #    então usamos "pwd -W" (-> "E:/...") e desligamos a conversão de path do MSYS.
 #
-# Roda o REACTOR inteiro (issues #32, #33, #35 e #36, Fase 7): shared + reservation-client + catalog-client + identity-client + monolito + notification +
-# reservation + catalog + identity, um `mvn clean test` na raiz do Backend/.
+# Roda o REACTOR inteiro (issues #32, #33, #35, #36, #41, #42 e #47, Fase 7): shared + reservation-client + stock-client + catalog-client + identity-client + admission-client +
+# monolito + notification + reservation + stock + catalog + identity + admission, um `mvn clean test` na raiz do Backend/.
 # Os relatórios Surefire de todos os módulos são copiados para Backend/target/surefire-reports (nomes de classe únicos).
 #
-# Pré-requisito: a stack no ar pra existir a rede, o banco e o broker (Redpanda; os testes do backbone de
-# eventos, issue #27, publicam e consomem nele de verdade)
-#   docker compose -f Projeto/docker-compose.yml up -d db redpanda
+# Pré-requisito: a stack no ar pra existir a rede, o banco, o broker (Redpanda; os testes do backbone de
+# eventos, issue #27, publicam e consomem nele de verdade), o Redis (os testes do contador do admission, #41, usam o real) e o RabbitMQ
+# (os testes da fila de admissão e do worker pool, #42, também)
+#   docker compose -f Projeto/docker-compose.yml up -d db redpanda redis rabbitmq
+# O compose recusa subir sem REDIS_PASSWORD, RABBITMQ_USER e RABBITMQ_PASSWORD (Projeto/.env, ou exportadas na shell só para o comando).
+# Se a variável estiver exportada AQUI também, o container de teste usa essa (-e REDIS_PASSWORD, -e RABBITMQ_USER, -e RABBITMQ_PASSWORD);
+# senão usa a do --env-file (Projeto/.env).
 # O cache do Maven fica no volume nomeado "gerenciador-eventos-m2" (persiste entre
 # execuções; não é removido por "docker compose down -v").
 
@@ -28,8 +32,24 @@ echo ""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [ ! -f "$PROJECT_ROOT/.env" ]; then
-    echo "❌ Não encontrei $PROJECT_ROOT/.env (credenciais do banco). Abortando."
+# Banco dos testes (#47): por padrão o meu_banco de sempre. Um banco do mesmo container criado com os init-scripts da árvore atual
+# (ex.: TEST_DB_NAME=meu_banco_s5) deixa o meu_banco intocado, no schema que a stack viva espera. Vale para as conferências de
+# schema por psql abaixo E para o container de teste (SPRING_DATASOURCE_URL do .env com meu_banco trocado por este nome; a URL nunca é
+# impressa). O resto (broker, Redis, volume da chave do identity) é compartilhado.
+TEST_DB_NAME="${TEST_DB_NAME:-meu_banco}"
+if ! [[ "$TEST_DB_NAME" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "❌ TEST_DB_NAME inválido: '$TEST_DB_NAME' (esperado [a-z][a-z0-9_]*)."
+    echo ""
+    exit 1
+fi
+if [ "$TEST_DB_NAME" != "meu_banco" ]; then
+    echo "ℹ️  Testes no banco $TEST_DB_NAME (o meu_banco não é tocado)."
+fi
+
+# ENV_FILE (opcional): caminho de OUTRO .env, para quem roda de uma worktree sem o .env (ele é gitignored). Padrão: Projeto/.env.
+ENV_FILE="${ENV_FILE:-$PROJECT_ROOT/.env}"
+if [ ! -f "$ENV_FILE" ]; then
+    echo "❌ Não encontrei $ENV_FILE (credenciais do banco). Abortando."
     echo ""
     exit 1
 fi
@@ -38,7 +58,7 @@ fi
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         HOST_SRC="$(cd "$SCRIPT_DIR" && pwd -W)"
-        HOST_ENV_FILE="$(cd "$PROJECT_ROOT" && pwd -W)/.env"
+        HOST_ENV_FILE="$(cd "$(dirname "$ENV_FILE")" && pwd -W)/$(basename "$ENV_FILE")"
         export MSYS_NO_PATHCONV=1
         export MSYS2_ARG_CONV_EXCL='*'
         CONTAINER_HOME=/root
@@ -46,7 +66,7 @@ case "$(uname -s)" in
         ;;
     *)
         HOST_SRC="$SCRIPT_DIR"
-        HOST_ENV_FILE="$PROJECT_ROOT/.env"
+        HOST_ENV_FILE="$ENV_FILE"
         CONTAINER_HOME=/tmp/mvnhome
         PLATFORM_ARGS=(
             --user "$(id -u):$(id -g)"
@@ -56,11 +76,11 @@ case "$(uname -s)" in
         ;;
 esac
 
-# Os testes batem num Postgres e num Redpanda reais: sem o container no ar, falha cedo e explica.
-for CONTAINER in gerenciador-db gerenciador-redpanda; do
+# Os testes batem num Postgres, num Redpanda, num Redis e num RabbitMQ reais: sem o container no ar, falha cedo e explica.
+for CONTAINER in gerenciador-db gerenciador-redpanda gerenciador-redis gerenciador-rabbitmq; do
     if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != "true" ]; then
-        echo "❌ O container $CONTAINER não está no ar. Rode:"
-        echo "   docker compose -f Projeto/docker-compose.yml up -d db redpanda"
+        echo "❌ O container $CONTAINER não está no ar. Rode (o compose exige REDIS_PASSWORD, RABBITMQ_USER e RABBITMQ_PASSWORD no Projeto/.env ou exportadas na shell):"
+        echo "   docker compose -f Projeto/docker-compose.yml up -d db redpanda redis rabbitmq"
         echo ""
         exit 1
     fi
@@ -95,6 +115,16 @@ if [ -n "$(docker ps -q -f name=^gerenciador-reservation$)" ]; then
     exit 1
 fi
 
+# O serviço stock (#47) tem o consumer de devolução (group stock, reservation.wallet) e a reconciliação (stock-catalog, catalog.event) ligados
+# no compose: dividiria o banco e o Redpanda dos testes (devolveria vaga de holds de teste e criaria eventcap para ids de evento de teste).
+# Falha cedo, como nos outros serviços.
+if [ -n "$(docker ps -q -f name=^gerenciador-stock$)" ]; then
+    echo "❌ O container gerenciador-stock está rodando: os consumers dele disputam o banco e o Redpanda dos testes."
+    echo "   Pare-o antes: docker stop gerenciador-stock"
+    echo ""
+    exit 1
+fi
+
 # O serviço catalog (#35) tem o relay do catalog.event_outbox ligado no compose: drenaria o outbox dos testes do módulo catalog
 # (quebrando as provas de outbox/replay) e dividiria o banco deles. Falha cedo, como nos outros serviços.
 if [ -n "$(docker ps -q -f name=^gerenciador-catalog$)" ]; then
@@ -109,6 +139,41 @@ fi
 if [ -n "$(docker ps -q -f name=^gerenciador-identity$)" ]; then
     echo "❌ O container gerenciador-identity está rodando: o relay dele disputa o banco e o Redpanda dos testes."
     echo "   Pare-o antes: docker stop gerenciador-identity"
+    echo ""
+    exit 1
+fi
+
+# O serviço admission (#41/#42) conta e guarda a fila no MESMO Redis dos testes (chaves adm:*): vivo, ele contaria tentativas de teste e
+# apagaria resultados deles (e os ids de evento se repetem depois do TRUNCATE ... RESTART IDENTITY). As filas do RabbitMQ dos testes têm
+# prefixo próprio (nunca as admission.* do serviço), então o broker não colide. Falha cedo, como nos outros serviços.
+if [ -n "$(docker ps -q -f name=^gerenciador-admission$)" ]; then
+    echo "❌ O container gerenciador-admission está rodando: ele dividiria o Redis dos testes (as filas do RabbitMQ dos testes têm prefixo próprio)."
+    echo "   Pare-o antes: docker stop gerenciador-admission"
+    echo ""
+    exit 1
+fi
+
+# Réplicas da autoescala (#111, docker-compose.autoescala.yml): sem container_name fixo (<project>-<serviço>-<n>), então as guardas por nome acima
+# não as veem. Mesmas razões, achadas pelo label do compose (project padrão gerenciador-eventos; o do e2e, gerenciador-e2e, tem banco e broker
+# próprios e não conta).
+REPLICAS_VIVAS="$(docker ps --filter "label=com.docker.compose.project=gerenciador-eventos" \
+    --filter "label=com.docker.compose.service" --format '{{.Names}} {{.Label "com.docker.compose.service"}}' \
+    | awk '$2 ~ /^(backend|notification|reservation|stock|catalog|identity|admission|lb)$/ {print $1}' | tr '\n' ' ')"
+if [ -n "$REPLICAS_VIVAS" ]; then
+    echo "❌ Há containers de serviço rodando (réplicas e lb da autoescala, sem o nome fixo gerenciador-*): $REPLICAS_VIVAS"
+    echo "   Eles disputam o banco, o Redpanda e o Redis dos testes. Pare o scaler (Projeto/autoescala/scaler.sh, Ctrl+C) e os containers: docker stop $REPLICAS_VIVAS"
+    echo ""
+    exit 1
+fi
+
+# Redis dos testes: FLUSHDB no INÍCIO e ao FIM da rodada (verde ou vermelha). O admission está parado (guarda acima), então nada de
+# produção vive nesse banco; as chaves do contador usam ids de evento que o RESTART IDENTITY recicla, e uma contagem de uma rodada
+# antiga seria lida como carga da seguinte. A senha vem do ambiente do próprio container do Redis (compose), nunca da linha de comando.
+limpar_redis() {
+    docker exec gerenciador-redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli FLUSHDB' 2>&1 | tr -d '\r'
+}
+if [ "$(limpar_redis)" != "OK" ]; then
+    echo "❌ Não consegui dar FLUSHDB no gerenciador-redis (senha? o container foi criado com REDIS_PASSWORD?)."
     echo ""
     exit 1
 fi
@@ -139,7 +204,7 @@ apagar_chave_identity
 # O script NÃO aplica o 14-catalog.sql: num banco não migrado ele criaria catalog.event vazia ao lado de public.event. Só confere o
 # estado e aborta com o caminho da migração. O usuário do app vem do ambiente do próprio container (APP_DB_USER).
 ESTADO_CATALOG="$(echo "SELECT to_regclass('public.event') IS NULL, to_regclass('catalog.event') IS NOT NULL;" \
-    | docker exec -i gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d meu_banco -At' 2>&1)"
+    | docker exec -i -e TEST_DB_NAME="$TEST_DB_NAME" gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$TEST_DB_NAME" -At' 2>&1)"
 if [ "$ESTADO_CATALOG" != "t|t" ]; then
     echo "❌ O banco não está no schema do serviço catalog (public.event ainda existe ou catalog.event não existe; psql: $ESTADO_CATALOG)."
     echo "   Pare o backend e o catalog, faça o backup e aplique a migração (ver o cabeçalho do arquivo):"
@@ -155,13 +220,30 @@ fi
 # public.users (e o serviço identity, que também recusa subir assim, rodaria os testes sobre tabelas que não são as do app). Só confere o
 # estado e aborta com o caminho da migração; a saída do psql entra na mensagem (nada de esconder o erro).
 ESTADO_IDENTITY="$(echo "SELECT to_regclass('public.users') IS NULL, to_regclass('identity.users') IS NOT NULL;" \
-    | docker exec -i gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d meu_banco -At' 2>&1)"
+    | docker exec -i -e TEST_DB_NAME="$TEST_DB_NAME" gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$TEST_DB_NAME" -At' 2>&1)"
 if [ "$ESTADO_IDENTITY" != "t|t" ]; then
     echo "❌ O banco não está no schema do serviço identity (public.users ainda existe ou identity.users não existe; psql: $ESTADO_IDENTITY)."
     echo "   Pare o backend e o identity, faça o backup e aplique a migração (ver o cabeçalho do arquivo):"
     echo "   docker exec gerenciador-db pg_dump -h localhost -U admin --clean --if-exists -n public meu_banco > <fora do repo>/meu_banco-public.sql"
     echo "   docker exec -i gerenciador-db psql -h localhost -U supabase_admin -d meu_banco -v ON_ERROR_STOP=1 \\"
     echo "     < Projeto/Backend/db/migrations/20261028-identity-schema.sql"
+    echo ""
+    exit 1
+fi
+
+# Schema do serviço stock (#47): bancos novos já nascem com ele (supabase-app-init.sql, 16-stock.sql); um volume existente precisa da migração
+# 20261029 (move reservation.eventcap para stock, cria stock.hold e as colunas da saga em walletevent/idempotency_key, com o backfill dos
+# holds). O script NÃO aplica o 16-stock.sql: num banco não migrado ele criaria stock.eventcap vazia ao lado de reservation.eventcap. Só
+# confere o estado e aborta com o caminho da migração; a saída do psql entra na mensagem (nada de esconder o erro).
+ESTADO_STOCK="$(echo "SELECT to_regclass('reservation.eventcap') IS NULL, to_regclass('stock.eventcap') IS NOT NULL, to_regclass('stock.hold') IS NOT NULL;" \
+    | docker exec -i -e TEST_DB_NAME="$TEST_DB_NAME" gerenciador-db sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$TEST_DB_NAME" -At' 2>&1)"
+if [ "$ESTADO_STOCK" != "t|t|t" ]; then
+    echo "❌ O banco de teste ($TEST_DB_NAME) não está no schema do serviço stock (reservation.eventcap ainda existe, ou stock.eventcap/stock.hold não existe; psql: $ESTADO_STOCK)."
+    echo "   Migração 20261029 pendente: pare o backend, o reservation, o catalog e o stock, faça o backup e aplique (ver o cabeçalho do arquivo):"
+    echo "   docker exec gerenciador-db pg_dump -h localhost -U admin --clean --if-exists -n reservation $TEST_DB_NAME > <fora do repo>/$TEST_DB_NAME-reservation.sql"
+    echo "   docker exec -i gerenciador-db psql -h localhost -U supabase_admin -d $TEST_DB_NAME -v ON_ERROR_STOP=1 \\"
+    echo "     < Projeto/Backend/db/migrations/20261029-stock-schema.sql"
+    echo "   (ou recrie o banco de teste com os init-scripts atuais, que já têm o schema stock)"
     echo ""
     exit 1
 fi
@@ -196,15 +278,33 @@ mkdir -p "$SCRIPT_DIR/target"
 # INTERNAL_API_TOKEN: token de serviço das chamadas internas gateway -> reservation (#33) e gateway -> catalog (#35). Valor de
 # TESTE explícito, não é segredo; os serviços e os clientes não sobem sem a variável (sem default).
 #
+# REDIS_HOST=redis: o Redis do compose na rede gerenciador-net (o default do admission, localhost, não existe dentro do container de teste).
+# REDIS_PASSWORD: repassada da shell com -e SÓ se estiver exportada (senão vale a do --env-file, Projeto/.env).
+#
+# RABBITMQ_HOST=rabbitmq: o RabbitMQ do compose na rede gerenciador-net (#42; o default do admission, localhost, não existe dentro do container
+# de teste). RABBITMQ_USER e RABBITMQ_PASSWORD: repassadas da shell com -e SÓ se estiverem exportadas (senão valem as do --env-file).
+#
 # SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092: o broker interno do compose (o default do application.properties,
 # localhost:9092, não existe dentro do container de teste).
 # EVENTS_CONSUMER_GROUP=gerenciador-eventos-test: os testes têm group próprio, para nunca entrar (e causar
 # rebalance) no group do backend vivo (gerenciador-eventos) que consome do mesmo Redpanda.
+REDIS_ARGS=(-e REDIS_HOST=redis -e RABBITMQ_HOST=rabbitmq)
+if [ -n "${REDIS_PASSWORD:-}" ]; then
+    REDIS_ARGS+=(-e REDIS_PASSWORD)
+fi
+for VARIAVEL in RABBITMQ_USER RABBITMQ_PASSWORD; do
+    if [ -n "${!VARIAVEL:-}" ]; then
+        REDIS_ARGS+=(-e "$VARIAVEL")
+    fi
+done
+
 docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
   "${PLATFORM_ARGS[@]}" \
+  "${REDIS_ARGS[@]}" \
   -e IDEMPOTENCY_RETENTION_SCAN_MS=3600000 \
   -e NOTIFICATION_EVENTS_RETENTION_SCAN_MS=3600000 \
   -e RESERVATION_READPATH=cas \
+  -e "TEST_DB_NAME=$TEST_DB_NAME" \
   -e INTERNAL_API_TOKEN=token-de-teste-nao-e-segredo \
   -e SPRING_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092 \
   -e EVENTS_CONSUMER_GROUP=gerenciador-eventos-test \
@@ -217,6 +317,19 @@ docker run --rm --network gerenciador-net --env-file "$HOST_ENV_FILE" \
     mkdir -p /tmp/build "$MVN_REPO"
     cp -r /workspace-src/* /tmp/build/ 2>/dev/null || true
     cd /tmp/build
+
+    # Banco dos testes (#47): troca /meu_banco por /TEST_DB_NAME na URL do .env (substituição de string, só o segmento do caminho; a
+    # URL nunca é impressa). ABORTA se a troca não pegar ou se a URL ainda apontar para o meu_banco: cada módulo dá TRUNCATE nos
+    # schemas dele, e o meu_banco ficaria exposto. Casamento LITERAL (aspas): sem "?" como glob.
+    if [ "$TEST_DB_NAME" != "meu_banco" ]; then
+        export SPRING_DATASOURCE_URL="${SPRING_DATASOURCE_URL/\/meu_banco//$TEST_DB_NAME}"
+        case "$SPRING_DATASOURCE_URL" in
+            */"meu_banco"|*/"meu_banco?"*)
+                echo "❌ A URL do banco de teste ainda aponta para o meu_banco. Abortando."; exit 99 ;;
+            */"$TEST_DB_NAME"|*/"$TEST_DB_NAME?"*) ;;
+            *) echo "❌ A URL do banco de teste não aponta para $TEST_DB_NAME (SPRING_DATASOURCE_URL ausente ou sem /meu_banco). Abortando."; exit 99 ;;
+        esac
+    fi
 
     # Executar testes (todo download fica no volume de cache do m2)
     mvn -q -fae -Dmaven.repo.local="$MVN_REPO" clean test
@@ -248,19 +361,29 @@ fi
 # descartaria (o eventId não está no event_store depois do TRUNCATE), mas um backlog desses custaria minutos; `reservation-catalog`
 # (reconciliação do eventcap pelo EventCreated) CRIARIA eventcap para ids de evento de teste, que se repetem depois de um
 # TRUNCATE ... RESTART IDENTITY e pegariam a capacidade errada. Move os dois para o FIM dos tópicos (a guarda acima garante que
-# estão sem membros), rodando SEMPRE. --allow-new-topics cobre o group/tópico que ainda não existe.
-for GRUPO_TOPICO in "reservation:reservation.wallet" "reservation-catalog:catalog.event"; do
+# estão sem membros), rodando SEMPRE. --allow-new-topics cobre o group/tópico que ainda não existe. Desde a #47 também os groups do serviço
+# stock: `stock` (devolução de vaga; relida do tópico, liberaria holds que os testes já truncaram, sem efeito mas com backlog) e `stock-catalog`
+# (reconciliação do eventcap do stock, mesma razão do `reservation-catalog`). O `reservation-catalog` segue até a passada que o remove.
+for GRUPO_TOPICO in "reservation:reservation.wallet" "reservation-catalog:catalog.event" "stock:reservation.wallet" "stock-catalog:catalog.event"; do
     GRUPO="${GRUPO_TOPICO%%:*}"
     TOPICO="${GRUPO_TOPICO##*:}"
     if docker exec gerenciador-redpanda rpk group seek "$GRUPO" --to end --topics "$TOPICO" --allow-new-topics >/dev/null 2>&1; then
-        echo "✅ Group $GRUPO movido para o fim de $TOPICO (eventos de teste não chegam ao serviço reservation)."
+        echo "✅ Group $GRUPO movido para o fim de $TOPICO (eventos de teste não chegam ao serviço dono do group)."
     else
-        echo "⚠️  Não consegui mover o group $GRUPO para o fim de $TOPICO. ANTES de subir o reservation, rode:"
+        echo "⚠️  Não consegui mover o group $GRUPO para o fim de $TOPICO. ANTES de subir o serviço dono do group, rode:"
         echo "   docker exec gerenciador-redpanda rpk group seek $GRUPO --to end --topics $TOPICO --allow-new-topics"
     fi
 done
 
 apagar_chave_identity
+
+# FLUSHDB do fim da rodada: as contagens dos testes não ficam para a próxima (nem para o admission, quando subir).
+if [ "$(limpar_redis)" = "OK" ]; then
+    echo "✅ Redis dos testes zerado (FLUSHDB)."
+else
+    echo "⚠️  Não consegui dar FLUSHDB no gerenciador-redis ao fim da rodada. ANTES de subir o admission, rode:"
+    echo "   docker exec gerenciador-redis sh -c 'REDISCLI_AUTH=\"\$REDIS_PASSWORD\" redis-cli FLUSHDB'"
+fi
 
 echo ""
 echo "=================================================="

@@ -36,14 +36,14 @@ public class ModuleBoundaryArchTest {
             .should().resideInAnyPackage(
                 "com.gerenciador.eventos",
                 RAIZ + "catalogclient..", RAIZ + "reservationclient..",
-                RAIZ + "identityclient..", RAIZ + "shared..", RAIZ + "gateway..")
+                RAIZ + "identityclient..", RAIZ + "admissionclient..", RAIZ + "stockclient..", RAIZ + "shared..", RAIZ + "gateway..")
             .because("o layout por camadas (POJO/Repository/Service/config/security) foi trocado "
                 + "por pacotes-por-serviço (issue #23)");
 
     /** O gateway só chama o catalog pelo contrato ({@code catalogclient.api}), nunca pelo {@code CatalogClient} concreto. */
     @ArchTest
     static final ArchRule gateway_so_usa_modulos_pela_api =
-        soPelaApi("gateway", "catalogclient", "identityclient");
+        soPelaApi("gateway", "catalogclient", "identityclient", "admissionclient");
 
     /**
      * O que SAIU do monólito na #33 não volta: nada aqui depende do pacote do serviço reservation (o código dele mora no
@@ -76,7 +76,8 @@ public class ModuleBoundaryArchTest {
         noClasses()
             .that().resideInAPackage(RAIZ + "reservationclient..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "identityclient..", RAIZ + "gateway..")
+                RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "identityclient..", RAIZ + "admissionclient..", RAIZ + "stockclient..",
+                RAIZ + "gateway..")
             .because("reservation-client é uma lib de contrato HTTP, usada também pelo serviço reservation");
 
     @ArchTest
@@ -84,7 +85,8 @@ public class ModuleBoundaryArchTest {
         noClasses()
             .that().resideInAPackage(RAIZ + "catalogclient..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                RAIZ + "identity..", RAIZ + "reservationclient..", RAIZ + "identityclient..", RAIZ + "gateway..")
+                RAIZ + "identity..", RAIZ + "reservationclient..", RAIZ + "identityclient..", RAIZ + "admissionclient..", RAIZ + "stockclient..",
+                RAIZ + "gateway..")
             .because("catalog-client é uma lib de contrato HTTP, usada também pelo serviço catalog");
 
     /** A lib do identity (#36) também é só contrato e transporte: nada do monólito nem das outras libs. */
@@ -93,8 +95,33 @@ public class ModuleBoundaryArchTest {
         noClasses()
             .that().resideInAPackage(RAIZ + "identityclient..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "reservationclient..", RAIZ + "gateway..")
+                RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "reservationclient..", RAIZ + "admissionclient..", RAIZ + "stockclient..",
+                RAIZ + "gateway..")
             .because("identity-client é uma lib de contrato HTTP, usada também pelo serviço identity");
+
+    /** A lib do admission (#41) também é só contrato e transporte: nada do monólito nem das outras libs. */
+    @ArchTest
+    static final ArchRule admissionclient_nao_depende_de_modulo_do_monolito =
+        noClasses()
+            .that().resideInAPackage(RAIZ + "admissionclient..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "reservationclient..", RAIZ + "identityclient..",
+                RAIZ + "stockclient..", RAIZ + "gateway..")
+            .because("admission-client é uma lib de contrato HTTP, usada também pelo serviço admission");
+
+    /** O código do serviço stock (#47) mora no módulo Maven {@code stock}, fora do classpath do monólito. */
+    @ArchTest
+    static final ArchRule nada_depende_do_codigo_do_servico_stock =
+        noClasses()
+            .should().dependOnClassesThat().resideInAPackage(RAIZ + "stock..")
+            .because("o stock é outro serviço (issue #47): o monólito só usaria o cliente HTTP stockclient");
+
+    /** O código do serviço admission (#41) mora no módulo Maven {@code admission}, fora do classpath do monólito. */
+    @ArchTest
+    static final ArchRule nada_depende_do_codigo_do_servico_admission =
+        noClasses()
+            .should().dependOnClassesThat().resideInAPackage(RAIZ + "admission..")
+            .because("o admission é outro serviço (issue #41): o monólito só usa o cliente HTTP admissionclient");
 
     /**
      * O envio de e-mail saiu do monólito na #32 (virou o serviço {@code notification}): nada aqui pode depender do
@@ -122,7 +149,7 @@ public class ModuleBoundaryArchTest {
             .that().resideInAPackage(RAIZ + "shared..")
             .should().dependOnClassesThat().resideInAnyPackage(
                 RAIZ + "identity..", RAIZ + "catalogclient..", RAIZ + "reservationclient..",
-                RAIZ + "identityclient..", RAIZ + "gateway..")
+                RAIZ + "identityclient..", RAIZ + "admissionclient..", RAIZ + "stockclient..", RAIZ + "gateway..")
             .because("shared é infra sem domínio: módulos dependem dele, nunca o contrário");
 
     /** O contrato público não pode vazar classe interna (de nenhum módulo): só {@code *.api}, shared e libs. */
@@ -130,8 +157,8 @@ public class ModuleBoundaryArchTest {
     static final ArchRule api_nao_depende_de_classe_interna =
         noClasses()
             .that().resideInAnyPackage(
-                RAIZ + "catalogclient.api..", RAIZ + "identityclient.api..")
-            .should().dependOnClassesThat(internoDe("catalogclient", "identityclient", "gateway"))
+                RAIZ + "catalogclient.api..", RAIZ + "identityclient.api..", RAIZ + "admissionclient.api..")
+            .should().dependOnClassesThat(internoDe("catalogclient", "identityclient", "admissionclient", "gateway"))
             .because("o pacote api é o contrato público: só pode depender de outros *.api, de shared e "
                 + "de libs, nunca de Service/Repository/config interno (issue #23)");
 

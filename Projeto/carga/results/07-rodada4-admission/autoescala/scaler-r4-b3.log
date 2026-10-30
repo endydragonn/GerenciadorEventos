@@ -1,0 +1,24 @@
+09:12:15 [scaler] projeto=gerenciador-eventos periodo=2s X=56000 gateway_rps=1600 identity_rps=200 catalog_rps=500 admission_rps=1600 notification_lag=100 seco=0 csv=/e/TCC/GerenciadorEventos/Projeto/autoescala/saida/replicas-20261029-091215.csv
+09:12:15 [scaler]   reservation: 1..3 réplicas
+09:12:15 [scaler]   backend: 1..3 réplicas
+09:12:15 [scaler]   identity: 1..3 réplicas
+09:12:15 [scaler]   catalog: 1..3 réplicas
+09:12:15 [scaler]   admission: 1..3 réplicas
+09:12:15 [scaler]   notification: 1..3 réplicas
+09:25:22 [scaler] reservation: container novo 40b6786a568c (stand-by)
+09:25:22 [scaler] reservation: subir (uso 593/1000, A=1 S=0 B=0, carga=33220)
+09:25:29 [scaler] reservation: 40b6786a568c no slot rs2 em stand-by (peso 0)
+09:25:44 [scaler] backend: container novo 50a3f83df7e6 (stand-by)
+09:25:44 [scaler] backend: subir (uso 512/1000, A=1 S=0 B=0, carga=820)
+09:25:51 [scaler] backend: 50a3f83df7e6 no slot gw2 em stand-by (peso 0)
+09:26:53 [scaler] reservation: 40b6786a568c (slot rs2) promovida a ativa
+09:26:54 [scaler] reservation: promover (uso 865/1000, A=1 S=1 B=0, carga=48447)
+09:27:16 [scaler] backend: 50a3f83df7e6 (slot gw2) promovida a ativa
+09:27:16 [scaler] backend: promover (uso 999999/1000, A=0 S=1 B=1, carga=781)
+09:29:49 [scaler] reservation: descer 40b6786a568c (slot rs2, ativa)
+09:29:50 [scaler] reservation: sessões ainda abertas no slot rs2 ao parar: 0
+09:29:55 [scaler] reservation: descer (uso 0/1000, A=2 S=0 B=0, carga=0)
+09:30:01 [scaler] backend: descer 50a3f83df7e6 (slot gw2, ativa)
+09:30:02 [scaler] backend: sessões ainda abertas no slot gw2 ao parar: 0
+09:30:04 [scaler] backend: descer (uso 0/1000, A=2 S=0 B=0, carga=0)
+09:31:09 [scaler] encerrado (adm:replicas expira em 15s e o admission volta ao ADMISSION_RESERVATION_REPLICAS)

@@ -7,7 +7,7 @@
 // - Exibição de detalhes do evento selecionado
 // - Busca de detalhes do evento via API se necessário
 // - Verificação de autenticação do usuário
-// - Criação de inscrição via API (/bff/event-wallets)
+// - Reserva em duas fases via PainelReserva (/bff/event-wallets: reservar, fila 202, confirmar)
 // - Associação automática usuário-evento (userId + eventId)
 // - SnackBars para feedback de sucesso/erro
 // - Tratamento de erros (já inscrito, evento lotado, erro de conexão)
@@ -16,7 +16,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'auth.dart';
 import 'package:intl/intl.dart';
 import 'telaHomePage.dart'; // HomePageData
@@ -25,6 +24,7 @@ import 'package:http/http.dart' as http;
 import 'modals.dart'; // SnackBars
 import 'dart:convert';
 import '../config/app_config.dart';
+import '../widgets/painel_reserva.dart';
 
 class EventRegistrationScreen extends StatefulWidget {
   final int? eventId;
@@ -48,7 +48,7 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
   @override
   void initState() {
     super.initState();
-    _checkAuthentication();
+    if (!_checkAuthentication()) return; // sem token a tela fecha: não carrega o evento (setState depois do dispose)
     if (widget.event != null) {
       _eventData = widget.event;
     } else if (widget.eventId != null) {
@@ -56,14 +56,18 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
     }
   }
 
-  Future<void> _checkAuthentication() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('auth_token');
-    if (token == null || token.isEmpty) {
-      if (mounted) {
-        Navigator.pushReplacementNamed(context, '/login');
-      }
-    }
+  // O token vive em ApiAuth.token (memória, restaurado no boot por ApiAuth.initialize). Antes lia
+  // 'auth_token' do SharedPreferences, chave que não existe (o ApiAuth grava 'jwt_token'), e navegava
+  // para '/login', rota que o main.dart não declara. Sem token só avisa e volta.
+  bool _checkAuthentication() {
+    final token = ApiAuth.token;
+    if (token != null && token.isNotEmpty) return true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AppModals.showError(context, 'Autenticação Necessária', 'Entre na sua conta para se inscrever em um evento.');
+      Navigator.pop(context);
+    });
+    return false;
   }
 
   Future<void> _loadEventDetails() async {
@@ -114,90 +118,20 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
     return DateFormat('dd/MM/yyyy \'às\' HH:mm').format(date);
   }
 
-  Future<void> _submitRegistration(BuildContext context) async {
-    if (_eventData == null) return;
-    
-    final homePageData = Provider.of<HomePageData>(context, listen: false);
-    final user = homePageData.user;
-
-    // Verificar se o usuário está logado
-    if (user == null || user.isEmpty) {
-      AppModals.showError(
-        context,
-        'Autenticação Necessária',
-        'Você precisa estar logado para se inscrever em um evento',
-      );
-      return;
-    }
-
-    final enrollment = {
-      'userId': user['user_id'],
-      'eventId': _eventData!['event_id'],
-    };
-
-    try {
-      final headers = ApiAuth.jsonHeaders();
-
-      // Passo 1: reservar a vaga (UPDATE condicional atômico no backend -> status 'pending')
-      final reserveResp = await http.post(
-        Uri.parse('${AppConfig.apiBaseUrl}/bff/event-wallets'),
-        headers: headers,
-        body: jsonEncode(enrollment),
-      );
-
-      if (!mounted) return;
-
-      if (reserveResp.statusCode != 201 && reserveResp.statusCode != 200) {
-        String errorMsg = 'Você já está inscrito neste evento ou o evento está lotado.';
-        try {
-          errorMsg = utf8.decode(reserveResp.bodyBytes);
-        } catch (_) {}
-        AppModals.showError(
+  void _aoConfirmar() {
+    if (!mounted) return;
+    AppModals.showSuccess(
+      context,
+      'Inscrição Confirmada',
+      'Você foi inscrito no evento com sucesso!',
+      onOk: () {
+        if (!mounted) return;
+        Navigator.pushReplacement(
           context,
-          reserveResp.statusCode == 400 ? 'Inscrição Inválida' : 'Erro na Inscrição',
-          errorMsg,
+          MaterialPageRoute(builder: (context) => const MainScreen()),
         );
-        return;
-      }
-
-      // Passo 2: confirmar a reserva (pending -> confirmed).
-      // Obs.: se o usuário fechar o app antes deste passo, o job de expiração do backend
-      // devolve a vaga automaticamente após eventcap.max_time_in_line.
-      final confirmResp = await http.post(
-        Uri.parse('${AppConfig.apiBaseUrl}/bff/event-wallets/confirm'),
-        headers: headers,
-        body: jsonEncode(enrollment),
-      );
-
-      if (!mounted) return;
-
-      if (confirmResp.statusCode == 200) {
-        AppModals.showSuccess(
-          context,
-          'Inscrição Confirmada',
-          'Você foi inscrito no evento com sucesso!',
-          onOk: () {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (context) => const MainScreen()),
-            );
-          },
-        );
-      } else {
-        String errorMsg = 'Não foi possível confirmar a reserva. Tente novamente.';
-        try {
-          errorMsg = utf8.decode(confirmResp.bodyBytes);
-        } catch (_) {}
-        AppModals.showError(context, 'Confirmação Pendente', errorMsg);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      AppModals.showError(
-        context,
-        'Erro de Conexão',
-        'Não foi possível conectar ao servidor. Verifique sua conexão.',
-      );
-    }
+      },
+    );
   }
 
   @override
@@ -401,47 +335,13 @@ class _EventRegistrationScreenState extends State<EventRegistrationScreen> {
             
             const SizedBox(height: 24),
             
-            // Botões
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: temVagas ? () => _submitRegistration(context) : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      disabledBackgroundColor: Colors.grey,
-                    ),
-                    child: const Text(
-                      'Confirmar Inscrição',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.pop(context),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.red,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      side: const BorderSide(color: Colors.red),
-                    ),
-                    child: const Text(
-                      'Cancelar',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ),
-              ],
+            // Reserva em duas fases (painel cuida de reservar, fila, contagem e confirmar)
+            PainelReserva(
+              // Observa o provider: se o /bff/users/me do boot terminar depois de abrir a tela, o userId chega aqui.
+              userId: Provider.of<HomePageData>(context).user['user_id'],
+              eventId: eventId,
+              temVagas: temVagas,
+              onConfirmada: _aoConfirmar,
             ),
             
             if (!temVagas) ...[

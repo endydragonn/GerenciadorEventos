@@ -21,10 +21,10 @@
             <groupId>com.example.demo</groupId>
             <artifactId>catalog-client</artifactId>
         </dependency>
-        <!-- Cliente do serviço reservation: o eventcap nasce/muda/sai por chamada HTTP (PUT/PATCH/batch/DELETE /internal/eventcaps). -->
+        <!-- Cliente do serviço stock (#47): o eventcap nasce/muda/sai por chamada HTTP (PUT/PATCH/batch/DELETE /internal/eventcaps). -->
         <dependency>
             <groupId>com.example.demo</groupId>
-            <artifactId>reservation-client</artifactId>
+            <artifactId>stock-client</artifactId>
         </dependency>
         <!-- API interna HTTP (sem Spring Security: só alcançável na rede gerenciador-net; autenticada por X-Internal-Token) -->
         <dependency>

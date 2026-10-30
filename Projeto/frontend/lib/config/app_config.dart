@@ -7,11 +7,9 @@
 // backend em dev sem Nginx: --dart-define=API_BASE_URL=http://localhost:8081
 // (ver frontend/CLAUDE.md).
 
-const String API_BASE_URL = String.fromEnvironment(
-  'API_BASE_URL',
-  defaultValue: '',
-);
-
 class AppConfig {
-  static const String apiBaseUrl = API_BASE_URL;
+  static const String apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: '',
+  );
 }

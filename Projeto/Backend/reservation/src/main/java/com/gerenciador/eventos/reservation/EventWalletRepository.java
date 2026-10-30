@@ -8,6 +8,7 @@ import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
@@ -20,40 +21,49 @@ import com.gerenciador.eventos.reservationclient.api.EventWallet;
  *
  * <p>A linha carrega o {@code status} da máquina de estados
  * ({@code pending -> confirmed / expired / cancelled}). As operações que precisam ser
- * atômicas com o agregado {@code eventcap} (reservar, expirar, cancelar) recebem a
- * {@link Connection} da transação do serviço chamador.</p>
+ * atômicas com o append do evento (reservar, expirar, cancelar) recebem a {@link Connection} da transação do serviço chamador.
+ * A vaga (capacidade) é do serviço stock: aqui só o {@code hold_id} que a liga à reserva corrente (#47).</p>
  */
 @Repository
-public class EventWalletRepository implements ReservationWriter {
+public class EventWalletRepository {
+
+    /** Resultado de uma guarda de saída do estado ativo: a {@code version} após a transição e o {@code hold_id} da reserva (devolvido ao stock por evento). {@code versao == 0}: a guarda não afetou linha. */
+    public record Transicao(int versao, UUID holdId) {
+        static final Transicao NENHUMA = new Transicao(0, null);
+
+        public boolean aplicada() {
+            return versao > 0;
+        }
+    }
 
     @Autowired
     private DatabaseConnection databaseConnection;
 
     /**
-     * Cria (ou revive, se estava expired/cancelled) a reserva como {@code pending}.
-     * Deve ser chamada DEPOIS de um {@code tryReserve} bem-sucedido, na mesma transação.
-     * Se já existir uma reserva {@code pending}/{@code confirmed}, o UPSERT não altera nada
-     * e o método devolve {@code 0} (o chamador deve então liberar a vaga / dar rollback).
+     * Cria (ou revive, se estava expired/cancelled) a reserva como {@code pending}, gravando o {@code hold_id} da tentativa
+     * (reviver grava o hold NOVO: uma reserva revivida nunca libera o hold da anterior). Roda na tx2 da saga, depois de o stock
+     * ter segurado a vaga. Se já existir uma reserva {@code pending}/{@code confirmed}, o UPSERT não altera nada
+     * e o método devolve {@code 0} (o chamador compensa).
      *
      * <p>A guarda é o próprio UPSERT, e a versão do evento sai dela ({@code RETURNING version}, sem SELECT
      * separado): a 1ª reserva do par é a versão 1; reviver uma cancelada/expirada continua o mesmo stream
      * ({@code version + 1}). A linha fica travada até o commit do chamador.</p>
      * @return a {@code version} do stream após a transição, ou {@code 0} se a guarda não afetou linha.
      */
-    @Override
-    public int reservePending(Connection conn, Long userId, Long eventId, LocalDateTime expiresAt)
+    public int reservePending(Connection conn, Long userId, Long eventId, LocalDateTime expiresAt, UUID holdId)
             throws SQLException {
-        String sql = "INSERT INTO reservation.walletevent (user_id, event_id, status, expires_at, version) "
-                + "VALUES (?, ?, 'pending', ?, 1) "
+        String sql = "INSERT INTO reservation.walletevent (user_id, event_id, status, expires_at, version, hold_id) "
+                + "VALUES (?, ?, 'pending', ?, 1, ?) "
                 + "ON CONFLICT (user_id, event_id) DO UPDATE "
                 + "  SET status = 'pending', expires_at = EXCLUDED.expires_at, "
-                + "      version = walletevent.version + 1, updated_at = CURRENT_TIMESTAMP "
+                + "      version = walletevent.version + 1, hold_id = EXCLUDED.hold_id, updated_at = CURRENT_TIMESTAMP "
                 + "  WHERE walletevent.status IN ('expired', 'cancelled') "
                 + "RETURNING version";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setLong(1, userId);
             stmt.setLong(2, eventId);
             stmt.setTimestamp(3, Timestamp.valueOf(expiresAt));
+            stmt.setObject(4, holdId);
             return versaoDaGuarda(stmt);
         }
     }
@@ -77,18 +87,18 @@ public class EventWalletRepository implements ReservationWriter {
     /**
      * Marca a reserva como {@code expired} SOMENTE se ela ainda estiver {@code pending} e
      * vencida — evita expirar uma reserva que o usuário confirmou entre a varredura do job
-     * e este UPDATE. @return a {@code version} após a transição, ou {@code 0} se não expirou.
+     * e este UPDATE. @return a transição ({@code hold_id} para a devolução da vaga, por evento), ou {@link Transicao#NENHUMA}.
      */
-    public int expireIfStale(Connection conn, Long userId, Long eventId) throws SQLException {
+    public Transicao expireIfStale(Connection conn, Long userId, Long eventId) throws SQLException {
         String sql = "UPDATE reservation.walletevent "
                 + "SET status = 'expired', expires_at = NULL, version = version + 1, updated_at = CURRENT_TIMESTAMP "
                 + "WHERE user_id = ? AND event_id = ? AND status = 'pending' "
                 + "  AND expires_at < CURRENT_TIMESTAMP "
-                + "RETURNING version";
+                + "RETURNING version, hold_id";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setLong(1, userId);
             stmt.setLong(2, eventId);
-            return versaoDaGuarda(stmt);
+            return transicaoDaGuarda(stmt);
         }
     }
 
@@ -98,18 +108,25 @@ public class EventWalletRepository implements ReservationWriter {
      * devolução dupla da vaga quando duas remoções concorrem (dois cliques, retry de rede, ou
      * corrida com o {@link com.gerenciador.eventos.reservation.ReservationExpiryService}).
      * Usa a transação do chamador.
-     * @return a {@code version} após a transição ({@code > 0}: cancelou de fato, a vaga deve ser devolvida);
-     *         {@code 0} se já estava cancelled/expired ou não existe (nada a devolver).
+     * @return a transição ({@code aplicada()}: cancelou de fato; o {@code hold_id} vai no evento e o stock devolve a vaga ao consumi-lo);
+     *         {@link Transicao#NENHUMA} se já estava cancelled/expired ou não existe (nada a devolver).
      */
-    public int cancelIfActive(Connection conn, Long userId, Long eventId) throws SQLException {
+    public Transicao cancelIfActive(Connection conn, Long userId, Long eventId) throws SQLException {
         String sql = "UPDATE reservation.walletevent "
                 + "SET status = 'cancelled', expires_at = NULL, version = version + 1, updated_at = CURRENT_TIMESTAMP "
                 + "WHERE user_id = ? AND event_id = ? AND status IN ('pending', 'confirmed') "
-                + "RETURNING version";
+                + "RETURNING version, hold_id";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setLong(1, userId);
             stmt.setLong(2, eventId);
-            return versaoDaGuarda(stmt);
+            return transicaoDaGuarda(stmt);
+        }
+    }
+
+    /** Guarda de saída do estado ativo ({@code RETURNING version, hold_id}). */
+    private static Transicao transicaoDaGuarda(PreparedStatement stmt) throws SQLException {
+        try (ResultSet rs = stmt.executeQuery()) {
+            return rs.next() ? new Transicao(rs.getInt(1), (UUID) rs.getObject(2)) : Transicao.NENHUMA;
         }
     }
 

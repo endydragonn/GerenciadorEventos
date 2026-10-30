@@ -21,7 +21,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -67,6 +67,7 @@ public final class FakeReservationServer {
     private final Map<String, LocalDateTime> chaveExpira = new ConcurrentHashMap<>();
     private final Map<Long, Integer> projecao = new ConcurrentHashMap<>(); // ativos "vistos" pelo consumer (defasado)
     private final List<String> chamadas = new CopyOnWriteArrayList<>();
+    private final List<String> chavesDeReserva = new CopyOnWriteArrayList<>(); // header Idempotency-Key de cada POST /internal/reservations (null = ausente)
     private volatile boolean falharCriacaoDeCapacidade;
 
     private FakeReservationServer() throws IOException {
@@ -88,6 +89,7 @@ public final class FakeReservationServer {
         chaveExpira.clear();
         projecao.clear();
         chamadas.clear();
+        chavesDeReserva.clear();
     }
 
     /** "METODO /caminho" de cada chamada recebida, na ordem. */
@@ -97,6 +99,12 @@ public final class FakeReservationServer {
 
     public void limparChamadas() {
         chamadas.clear();
+        chavesDeReserva.clear();
+    }
+
+    /** O header {@code Idempotency-Key} que cada {@code POST /internal/reservations} recebeu, na ordem; {@code null} = sem o header. */
+    public List<String> chavesDeReserva() {
+        return Collections.unmodifiableList(new ArrayList<>(chavesDeReserva));
     }
 
     /** O que o "consumer" já aplicou na projeção de disponibilidade do evento (default 0: consumer parado). */
@@ -257,6 +265,7 @@ public final class FakeReservationServer {
             long userId = corpo.get("userId").asLong();
             long eventId = corpo.get("eventId").asLong();
             String chave = ex.getRequestHeaders().getFirst("Idempotency-Key");
+            chavesDeReserva.add(chave);
             if (chave == null || chave.isBlank()) chave = UUID.randomUUID().toString();
             if (chave.length() > 255) throw new IllegalArgumentException("Idempotency-Key deve ter no máximo 255 caracteres");
             EventWallet salva = salvo(userId, eventId, chave);

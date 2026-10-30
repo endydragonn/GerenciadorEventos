@@ -97,7 +97,7 @@ limpar() {
         # sem FK entre schemas: a ordem nao importa. O stream do evento fica no catalog.event_store (log imutavel; a
         # identity de event_id nunca recicla o id, entao o stream orfao e inofensivo), como no smoke do reservation.
         psql_db "DELETE FROM reservation.walletevent WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name = '$NOME_EVENTO');
-                 DELETE FROM reservation.eventcap WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name = '$NOME_EVENTO');
+                 DELETE FROM stock.eventcap WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name = '$NOME_EVENTO');
                  DELETE FROM catalog.event WHERE event_name = '$NOME_EVENTO';
                  DELETE FROM identity.users WHERE email LIKE 'smoke35-$SUFIXO-%@example.com';" >/dev/null 2>&1 || true
     fi
@@ -159,8 +159,8 @@ confere "http://localhost:$CATALOG_PORTA a partir do host (000 = sem conexao)" 0
 echo "==> d) o banco esta no schema do servico"
 confere "to_regclass('public.event') IS NULL" t "$(psql_db "SELECT to_regclass('public.event') IS NULL" | tr -d '[:space:]')"
 confere "evento em catalog.event" 1 "$(psql_db "SELECT count(*) FROM catalog.event WHERE event_id = $EVENT_ID" | tr -d '[:space:]')"
-confere "reservation.eventcap.capacity do evento (criado pela chamada catalog -> reservation)" 3 \
-    "$(psql_db "SELECT capacity FROM reservation.eventcap WHERE event_id = $EVENT_ID" | tr -d '[:space:]')"
+confere "stock.eventcap.capacity do evento (criado pela chamada catalog -> reservation)" 3 \
+    "$(psql_db "SELECT capacity FROM stock.eventcap WHERE event_id = $EVENT_ID" | tr -d '[:space:]')"
 
 echo "==> e) event store DO SERVICO e outbox escoando (relay)"
 confere "EventCreated em catalog.event_store" 1 \

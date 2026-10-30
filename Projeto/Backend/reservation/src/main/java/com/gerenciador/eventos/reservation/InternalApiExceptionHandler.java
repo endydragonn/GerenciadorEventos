@@ -17,7 +17,7 @@ import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictExceptio
 /**
  * Status HTTP da API interna: o corpo de toda resposta de erro é a MENSAGEM em texto puro (o {@code ReservationClient} a
  * repassa como mensagem da exceção). 400 = regra de negócio ({@link IllegalArgumentException}: "Evento lotado", "Vínculo
- * já existente"...), 400 também para pedido malformado, 422 = {@code Idempotency-Key} reusada com outro evento, 500 = o resto.
+ * já existente"...), 400 também para pedido malformado, 422 = {@code Idempotency-Key} reusada com outro evento, 503 = saga indisponível ({@link SagaIndisponivelException}, #47: repetir é seguro), 500 = o resto.
  */
 @RestControllerAdvice
 public class InternalApiExceptionHandler {
@@ -39,6 +39,14 @@ public class InternalApiExceptionHandler {
     @ExceptionHandler(IdempotencyConflictException.class)
     ResponseEntity<String> conflitoDeChave(IdempotencyConflictException ex) {
         return texto(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());
+    }
+
+    @ExceptionHandler(SagaIndisponivelException.class)
+    ResponseEntity<String> sagaIndisponivel(SagaIndisponivelException ex) {
+        if (ex.getCause() != null) {
+            log.warn("[reservation] {} ({})", ex.getMessage(), ex.getCause().toString());
+        }
+        return texto(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage());
     }
 
     @ExceptionHandler(RuntimeException.class)

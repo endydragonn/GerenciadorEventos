@@ -1,0 +1,35 @@
+# Override das imagens ENXUTAS dos serviços (issue #177, Slim). Opcional: a imagem original (Dockerfile) continua o padrão do compose.
+#   docker compose -f docker-compose.yml -f docker-compose.slim.yml up -d --wait
+# As imagens `gerenciador-eventos-<serviço>.slim` são geradas por slim/gerar-imagens-slim.sh (ver slim/README.md) e precisam existir
+# localmente (`pull_policy: never`: sem elas o `up` falha na hora, sem tentar puxar do Docker Hub). `build: !reset null` é obrigatório: sem ele o `up --build` reconstruiria a imagem gorda COM O NOME slim e o override
+# não provaria nada. Healthchecks, env e volumes não mudam (vêm do docker-compose.yml).
+
+services:
+  backend:
+    build: !reset null
+    image: gerenciador-eventos-backend.slim:latest
+    pull_policy: never
+  identity:
+    build: !reset null
+    image: gerenciador-eventos-identity.slim:latest
+    pull_policy: never
+  catalog:
+    build: !reset null
+    image: gerenciador-eventos-catalog.slim:latest
+    pull_policy: never
+  reservation:
+    build: !reset null
+    image: gerenciador-eventos-reservation.slim:latest
+    pull_policy: never
+  stock:
+    build: !reset null
+    image: gerenciador-eventos-stock.slim:latest
+    pull_policy: never
+  notification:
+    build: !reset null
+    image: gerenciador-eventos-notification.slim:latest
+    pull_policy: never
+  admission:
+    build: !reset null
+    image: gerenciador-eventos-admission.slim:latest
+    pull_policy: never

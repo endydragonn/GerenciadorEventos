@@ -430,17 +430,21 @@ public final class FakeIdentityServer {
     private synchronized User atualizar(long id, User novo) {
         Conta c = conta(id);
         validarObrigatorios(novo);
+        Conta dono = porEmailOuNull(novo.getEmail());
+        if (dono != null && dono != c) { // como o serviço (#166): e-mail de outra conta, sem diferenciar caixa
+            throw new IllegalArgumentException("Já existe um cadastro com estes dados (e-mail, telefone ou nome)");
+        }
         c.user.setName(novo.getName());
         c.user.setEmail(novo.getEmail());
         c.user.setFone(novo.getFone());
         if (novo.getIsAdmin() != null) {
             c.user.setIsAdmin(novo.getIsAdmin()); // como o serviço: admin é gravável, host NUNCA
         }
-        if (novo.getPassword() != null && !novo.getPassword().isEmpty()) {
-            c.senha = novo.getPassword();
-        }
+        // como o serviço (#171): o PUT IGNORA o password (só /password e /password-with-mfa trocam a senha) e a resposta não leva senha
         c.user.setUpdatedAt(LocalDateTime.now().truncatedTo(ChronoUnit.MICROS));
-        return copiar(c.user);
+        User resposta = copiar(c.user);
+        resposta.setPassword(null);
+        return resposta;
     }
 
     private synchronized boolean trocarSenha(long id, String atual, String nova) {

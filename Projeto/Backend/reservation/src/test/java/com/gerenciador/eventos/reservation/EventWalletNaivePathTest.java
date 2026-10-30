@@ -61,9 +61,9 @@ public class EventWalletNaivePathTest extends ReservationTestSupport {
 
         assertEquals(2, contarWalletevent(e.getEvent_id(), "confirmed"),
                 "2 linhas confirmadas para capacity 1 — overselling");
-        assertEquals(1, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(1, capacidade(e.getEvent_id()).getQuant(),
                 "o caminho ingênuo não tocou o CAS: eventcap.quant continua 1");
-        assertEquals(1, eventAvailabilityRepository.findAvailable(e.getEvent_id()),
+        assertEquals(1, eventWalletService.disponibilidade(e.getEvent_id()),
                 "consumer parado: a projeção ainda diz 1 vaga, mesmo com 2 reservas ativas");
         assertEquals(2, contarSlotReserved(e.getEvent_id()), "o braço naive também appenda SlotReserved");
     }
@@ -77,7 +77,7 @@ public class EventWalletNaivePathTest extends ReservationTestSupport {
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
                 eventWalletService.addLink(new EventWallet(novoUsuario("b").getId(), e.getEvent_id()), null, false));
         assertTrue(ex.getMessage().toLowerCase().contains("lotado"), "veio: " + ex.getMessage());
-        assertEquals(0, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(0, capacidade(e.getEvent_id()).getQuant());
     }
 
     /**
@@ -88,7 +88,7 @@ public class EventWalletNaivePathTest extends ReservationTestSupport {
     public void eventoNovoSemLinhaNaProjecaoJaTemDisponibilidadeIgualACapacidade() {
         Evento e = novoEvento(null, "Naive Disp Null", 3);
 
-        assertEquals(3, eventAvailabilityRepository.findAvailable(e.getEvent_id()));
+        assertEquals(3, eventWalletService.disponibilidade(e.getEvent_id()));
         assertEquals(3, eventWalletService.disponibilidade(e.getEvent_id()));
         assertEquals("pending", eventWalletService.addLink(new EventWallet(novoUsuario("u").getId(), e.getEvent_id()),
                 null, true).getStatus());
@@ -105,7 +105,7 @@ public class EventWalletNaivePathTest extends ReservationTestSupport {
     public void eventoIlimitadoTemDisponibilidadeMenosUm() throws Exception {
         Evento e = novoEvento(null, "Naive Ilimitado", -1);
         projetar(e.getEvent_id(), 50);
-        assertEquals(-1, eventAvailabilityRepository.findAvailable(e.getEvent_id()));
+        assertEquals(-1, eventWalletService.disponibilidade(e.getEvent_id()));
     }
 
     /** {@code ativos} negativo (um {@code Cancelled} de linha anterior ao ES) não faz a disponibilidade passar da capacidade. */
@@ -113,7 +113,7 @@ public class EventWalletNaivePathTest extends ReservationTestSupport {
     public void ativosNegativoNaoFazADisponibilidadePassarDaCapacidade() throws Exception {
         Evento e = novoEvento(null, "Naive Ativos Negativo", 4);
         projetar(e.getEvent_id(), -1);
-        assertEquals(4, eventAvailabilityRepository.findAvailable(e.getEvent_id()), "no máximo a capacidade");
+        assertEquals(4, eventWalletService.disponibilidade(e.getEvent_id()), "no máximo a capacidade");
     }
 
     /** A leitura nunca olha {@code eventcap.quant} (viraria o CAS): só {@code capacity - ativos}. */
@@ -122,12 +122,12 @@ public class EventWalletNaivePathTest extends ReservationTestSupport {
         Evento e = novoEvento(null, "Naive Nao Le Quant", 4);
         try (Connection conn = databaseConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(
-                     "UPDATE reservation.eventcap SET quant = 0 WHERE event_id = ?")) {
+                     "UPDATE stock.eventcap SET quant = 0 WHERE event_id = ?")) {
             ps.setLong(1, e.getEvent_id());
             ps.executeUpdate();
         }
         projetar(e.getEvent_id(), 1);
-        assertEquals(3, eventAvailabilityRepository.findAvailable(e.getEvent_id()),
+        assertEquals(3, eventWalletService.disponibilidade(e.getEvent_id()),
                 "capacity 4 - ativos 1, ignorando quant = 0");
     }
 
@@ -158,7 +158,7 @@ public class EventWalletNaivePathTest extends ReservationTestSupport {
         assertEquals("pending", repetida.getStatus());
         assertEquals(primeira.getExpiresAt(), repetida.getExpiresAt());
         assertEquals(1, contarWalletevent(e.getEvent_id(), "pending"));
-        assertEquals(1, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "naive não toca eventcap");
+        assertEquals(1, capacidade(e.getEvent_id()).getQuant(), "naive não toca eventcap");
         assertEquals(1, contarSlotReserved(e.getEvent_id()), "a repetição não appenda de novo");
     }
 

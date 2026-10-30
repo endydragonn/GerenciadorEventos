@@ -276,6 +276,10 @@ com outro locale; teto real de conexões de ~300 para 245) e também o estado do
 | 10000 | 100 | 80 ± 0 | 80–80 | 5 de 5 | 6211 | 117,8 (96,9–141,5) | 720,8 |
 | 10000 | 200 | 180 ± 0 | 180–180 | 5 de 5 | 4211 | 161,3 (148,8–179,2) | 981,5 |
 
+![Overselling médio por lag no ponto 1 (pós-pooler), capacity 20, duas faixas de N. CAS: 0 em todas as execuções (medido só no lag de 5000 ms; a linha tracejada o repete nos demais). Ingênuo, N = 100: 77,6 (lag 500 ms), 80 (2000), 76,8 (5000) e 80 (10000); N = 200: 116 (500, desvio 87,7, mínimo 15 e máximo 180) e 180 nos demais lags.](graficos/matriz-pooler.svg)
+
+*Figura: overselling × lag, ponto 1 (média das 5 repetições; barra = ±1 desvio, que pode passar do teto N − capacity, linha fina = mín–máx). Regenerável com `graficos/gera-graficos-fase2.sh`.*
+
 **O lag observado passou a respeitar o configurado.** Com o banco limpo, no lag de 500 ms o `lag_obs_disparo` ficou
 entre 151 e 428 ms (média de 275; `lag_obs_max` até 503), contra 851–2095 ms (média de 1592) na matriz
 pré-pooler. Nos demais lags, a média do `lag_obs_disparo` (1227, 2746 e 5211 ms) fica perto de metade do lag, como se
@@ -357,6 +361,10 @@ de saída 0). p95 da reserva: média de 53,7 ms (46,9–66,3) com N = 100 e 77,1
 | 10000 | 100 | 80 ± 0 | 80–80 | 5541 | 95,9 (74,6–139,3) |
 | 10000 | 200 | 180 ± 0 | 180–180 | 6337 | 115,7 (98,9–145,1) |
 
+![Overselling médio por lag na matriz pré-pooler (monólito + HikariCP), capacity 20. CAS: 0 em todas as execuções (medido só no lag de 5000 ms; a linha tracejada o repete nos demais). Ingênuo: 80 com N = 100 e 180 com N = 200 nos quatro lags (500, 2000, 5000 e 10000 ms), sem variação com o lag.](graficos/matriz-prepooler.svg)
+
+*Figura: overselling × lag, pré-pooler (média das 5 repetições; desvio zero em todos os pontos). Regenerável com `graficos/gera-graficos-fase2.sh`.*
+
 **Forma observada: patamar no teto N − capacidade, sem variação com o lag.** Em todas as 40 execuções todos
 os N clientes foram aceitos e confirmaram (`confirmed = N`), então o overselling é sempre o máximo possível
 (80 e 180) e o desvio é zero. A hipótese de que o overselling cresce com o lag **não foi observada** nesta
@@ -409,6 +417,14 @@ Degraus da escada que define o X (`degraus-956799`), em ms:
 | 120.000 | 97.156 | 0 | 1405,7 | 1406,6 | 1619,3 | 22.845 |
 | 130.000 | 98.139 | 0 | 1396,5 | 1422,1 | 1635,7 | 31.862 |
 
+![Escada de 60k a 130k RPM pré-pooler (degraus-956799): o p95 da pior janela de 30 s fica entre 125,0 e 235,5 ms até 90k e passa a 1339,8 ms em 100k (X = 100.000, traço vertical), 1369,8, 1406,6 e 1422,1 ms em 110k, 120k e 130k; o throughput estaciona em ~1650 reservas/s (1650,6 em 100k) e a taxa de 5xx é 0 em todos os degraus.](graficos/escada-prepooler-956799.svg)
+
+*Figura: escada larga pré-pooler (`degraus-956799`), a mesma tabela acima.*
+
+![Escada fina de 95k a 100k RPM pré-pooler (degraus-958305), passo de 1k: o p95 da pior janela de 30 s é 259,1 ms em 95k e 494,4 ms em 96k, salta para 4254,3 ms em 97k (X = 97.000, traço vertical, com 10.459 descartes e RPM efetivo de 86.542) e fica em 1391,7, 1361,3 e 1315,9 ms em 98k, 99k e 100k; taxa de 5xx 0 em todos os degraus.](graficos/escada-prepooler-958305.svg)
+
+*Figura: escada fina pré-pooler (`degraus-958305`), a que localiza o X = 97.000 usado na comparação das 3 configurações. Regenerável com `graficos/gera-graficos-fase2.sh`.*
+
 Os descartes a partir de 100k vêm da latência do host: com os VUs pré-alocados, só há descarte quando a
 iteração passa de `MAX_VUS ÷ (RPM/60)` s. O gerador ficou com CPU de no máximo 66% e mais de 4 GB livres. O
 report marca X como firme, com aviso de descartes no mesmo degrau.
@@ -442,6 +458,10 @@ nenhum degrau.
 | `degraus-28082` | 20k → 55k, passo 5k, sem `netsh` | 20k–50k limpos; p95 de janela de 5–8 ms até 35k, depois 36 ms (40k), 62 ms (45k) e 98 ms (50k). O degrau de 55k está **contaminado** por 2021 erros de porta do cliente |
 | `degraus-32105` | 50k → 130k, passo 10k, com `netsh` | limpo até 70k (janelas de 366, 192 e 392 ms). Satura em 80k (efetivo 75,3k, p95 de janela de 1865 ms, 5,8% de descartes) e de 80k a 130k o efetivo estaciona em ~74,6–77,3k, p95 de ~1,8–1,9 s |
 | `degraus-33459` | 70k → 80k, passo 1k | 70k degradou (janela de 1982 ms, 514 descartes): aquecimento depois do seed, pois na `32105` o mesmo 70k ficou limpo. De 71k a 77k sem descartes e janela entre 368 e 1170 ms (71k e 75k passam de 1 s por pouco). De 78k em diante, saturação sustentada: efetivo de ~72,9–75,5k, descartes de 3% a 8%, janela de ~1,9 s |
+
+![Escada fina de 70k a 80k RPM pelo pooler (degraus-33459), passo de 1k: o p95 da pior janela de 30 s é 1981,9 ms em 70k (aquecimento: o veredito automático do report, X = 70.000, esmaecido na figura e rotulado "não usado", não vale), cai para 368,3 ms em 73k, fica entre 368,3 e 1170,3 ms de 71k a 77k (1002,9 em 71k e 1170,3 em 75k acima de 1 s) e sobe para 1906,8, 1939,9 e 1869,0 ms em 78k, 79k e 80k, com RPM efetivo de 75.501, 72.905 e 74.599 e descartes de 2500, 6096 e 5401; taxa de 5xx 0 em todos os degraus. O X adotado, 78.000, tem traço sólido rotulado "X adotado" nos três painéis.](graficos/escada-pooler-33459.svg)
+
+*Figura: escada fina pelo pooler (`degraus-33459`). O traço sólido marca o X adotado, ≈ 78.000, o primeiro degrau de saturação sustentada; o traço esmaecido (70k) é o veredito automático do report, contaminado pelo aquecimento e não usado. Regenerável com `graficos/gera-graficos-fase2.sh`.*
 
 **X pelo pooler ≈ 78.000 RPM** (~1300 reservas/s): primeiro degrau de saturação sustentada (último degrau sem descartes:
 77k, janela de ~0,9 s; joelho entre 74k e 78k). É o mesmo critério de leitura do X pré-pooler, ≈ 97.000 (referência, com
@@ -814,6 +834,51 @@ estado do banco diferentes:** o ponto 2 (04) rodou no Wi-Fi e, nos blocos 1 a 3b
 os pontos**, sem isolar uma variável por vez (a arquitetura, o Hikari do monólito, o pool HTTP, o timeout, o token interno e a #57
 mudaram junto). (iv) O ponto 1 rodou com **Tomcat de 200 threads**; do ponto 2 em diante, 300. (v) O X do 04b é **só limite inferior**
 (≥ 60k). (vi) O lag não tem a mesma definição nos pontos: é uma variável configurada no ponto 1 e uma medida do pipeline depois.
+
+### Rodada 4 (admission e autoescala acima do X, 2026-10-29; issue #179)
+
+Rodada 4, contra a `Batch_2` em `35955ef`: a configuração da Rodada R mais o `admission` (#41–#43: contador de RPM por evento no Redis, janela
+de 200 ms, fila no RabbitMQ com worker pool, gatilho 80/70 de `X × réplicas` com X = 56k, `202` e consulta de estado), a autoescala (#111/#112,
+opção A: override do compose, HAProxy e scaler no host) e as imagens slim (#177). Fonte: `Projeto/carga/results/07-rodada4-admission/`
+(README da etapa e `degraus-*.csv`). Escada sequencial de 20k a 98k RPM, passo de 6k, 60 s por degrau, 1000 usuários, 5% das respostas `202`
+acompanhadas até o estado final, parada por p95 acima de 5 s numa janela de 60 s, banco limpo antes de cada bloco, `pg_test_fsync` 0,37–0,39 ms.
+
+| Bloco | Braço | Resultado | Overselling (CAS) |
+|---|---|---|---|
+| 1 (`degraus-46496`) | sem autoescala | 14 degraus completos, 0 5xx, 0 descartes; fila drenada (máx. 4.419, 0 ao fim), dead-letter 0 | 0 |
+| 2 (`degraus-49019`) | autoescala, parâmetros provisórios | parada no 32k (p95 de janela 5,58 s); 4.175 5xx (3.148 reserva, 1.027 confirma), 1.162 descartes | 0 |
+| 3 (`degraus-50350`) | autoescala calibrada | parada no 38k (p95 de janela 6,00 s); 9.537 5xx (7.557 reserva, 1.980 confirma), 4.609 descartes | 0 |
+
+**Contra a Rodada R** (mesma escada e mesma regra do X):
+
+| | R (06, `b072346`) | R4 bloco 1 | R4 bloco 2 | R4 bloco 3 |
+|---|---|---|---|---|
+| 1º degrau degradado fora do aquecimento | **56k** (54k limpo) | **32k** (26k limpo) | 20k (já no 1º degrau) | 26k |
+| p50 / p95 / p99 a 32k (ms) | 5,2 / 36,6 / 76,2 | 217,3 / 1.430,3 / 1.950,7 | 1.302,5 / 5.580,7 / 6.650,9 | 554,7 / 2.731,9 / 3.884,3 |
+| p50 / p95 / p99 a 56k (ms) | 215,3 / 1.141,3 / 1.984,1 | 4,7 / 377,9 / 654,7 | — | — |
+| Taxa de 5xx | 0 | 0 | 10,2% no 32k | 24,1% no 38k |
+| Tempo até admitir p95 | — | 2,2–3,0 s até 38k; 15,0–29,2 s de 44k a 98k | 16,1–18,9 s | 1,0–20,2 s |
+| Réplicas | 1 de cada | 1 de cada | reservation 1→2→1, backend 1→3 | reservation e backend 1→2 |
+
+- **Sem autoescala, o modo de alta carga deixa o sistema estável acima do X.** De 50k a 98k o efetivo fica igual ao alvo, sem 5xx e sem
+  descartes, e o p95 de janela fica em 0,30–0,77 s. A Rodada R colapsava para ~42k efetivos logo depois de 56k.
+- **O preço do modo de alta carga** é a espera até admitir (p95 de 15 a 29 s acima de 44k) e o `429` por usuário, que chega a 72% das
+  respostas em 98k (limite de 5 em espera por usuário com 1000 usuários; a fila nunca encheu).
+- **Abaixo do X a R4 é mais lenta que a R.** O contador de 200 ms vê rajadas acima do RPM oferecido e liga a fila já em 20k–44k. A fila e o
+  caminho síncrono disputam a mesma linha do `eventcap`, e cada reserva ganha o salto ao `admission`.
+- **Com autoescala, neste host, o sistema não fica estável acima do X.** O health check do HAProxy (`GET /actuator/health`) divide as 300
+  threads do Tomcat do gateway com o tráfego e estoura os 2 s com o gateway saturado. O `lb` então tira a réplica do ar com milhares de
+  sessões ativas, e os 503 são do próprio `lb` (`econ` = `hrsp_5xx` no `show stat`; os servidores têm 0 5xx próprios). Calibrar as
+  capacidades do scaler pelo bloco 1 (bloco 3) corrigiu o começo, com p50 de 7,7 ms a 20k, mas não a ejeção. Follow-up #207; a oscilação do
+  sinal `adm:hot` do scaler é a #206. Réplicas extras também não ganham capacidade aqui: o host é um só, e a linha quente do `eventcap`
+  é a mesma (X(1) = X(2) no dry-run da #178).
+
+**Ameaças.**
+- Uma escada por bloco, sem repetição.
+- Imagens slim e 1000 usuários, contra as imagens originais e os 200 usuários da R.
+- Matriz não rodada nesta rodada; o CAS foi conferido no banco por bloco.
+- Sem telemetria do gerador no modo direto: a saturação do gerador sai só de `iteracoes_descartadas`/`rpm_efetivo`.
+- Um host compartilhado entre todos os serviços e réplicas.
 
 ### Resultados preliminares (fora do protocolo)
 

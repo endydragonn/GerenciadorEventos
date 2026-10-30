@@ -145,6 +145,10 @@ public class BffSeedController {
                     eventWalletService.addLink(enrollment, null);
                     eventWalletService.confirm(enrollment.getUserId(), enrollment.getEventId());
                     enrollmentsCreated++;
+                } catch (ReservaEnfileiradaException e) {
+                    // evento em modo fila (#43): a reserva ficou na fila do admission (o seed não a confirma)
+                    warnings.add("Inscrição (user:" + enrollment.getUserId() + ", event:" + enrollment.getEventId()
+                            + "): enfileirada pelo admission (evento em modo fila); não confirmada pelo seed");
                 } catch (IllegalArgumentException e) {
                     warnings.add("Inscrição (user:" + enrollment.getUserId() +
                                ", event:" + enrollment.getEventId() + "): " + e.getMessage());

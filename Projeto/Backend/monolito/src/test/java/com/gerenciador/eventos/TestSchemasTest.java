@@ -60,7 +60,7 @@ public class TestSchemasTest {
         try (Connection c = databaseConnection.getConnection()) {
             List<String> tabelas = TestSchemas.tabelas(c, TestSchemas.parse(TestSchemas.DEFAULT));
             assertTrue(tabelas.contains("notification.processed_event"), "tabelas: " + tabelas);
-            assertTrue(tabelas.containsAll(List.of("reservation.eventcap", "reservation.walletevent",
+            assertTrue(tabelas.containsAll(List.of("reservation.walletevent",
                     "reservation.event_availability", "reservation.idempotency_key", "reservation.event_store")),
                     "tabelas: " + tabelas);
             assertTrue(tabelas.containsAll(List.of("catalog.event", "catalog.eventpresenter", "catalog.event_store")),

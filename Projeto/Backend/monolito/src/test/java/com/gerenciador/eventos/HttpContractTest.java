@@ -38,6 +38,7 @@ import com.gerenciador.eventos.identityclient.api.MyWallet;
 import com.gerenciador.eventos.identityclient.api.User;
 import com.gerenciador.eventos.identityclient.api.RecaptchaResponse;
 import com.gerenciador.eventos.identityclient.api.UserApi;
+import com.gerenciador.eventos.TestSupport.FakeAdmissionServer;
 import com.gerenciador.eventos.TestSupport.FakeIdentityServer;
 import com.gerenciador.eventos.TestSupport.FakeCatalogServer;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
@@ -205,9 +206,10 @@ public class HttpContractTest {
         assertEquals(HttpStatus.OK, byEmail.getStatusCode());
         assertEquals(created.getId(), byEmail.getBody().getId());
 
-        ResponseEntity<String> notFound = restTemplate.exchange(
+        // Issue #166: id que não é o do token é 403 mesmo quando não existe (a negação não revela se o outro usuário existe)
+        ResponseEntity<String> outroId = restTemplate.exchange(
                 url("/bff/users/999999999"), HttpMethod.GET, authed, String.class);
-        assertEquals(HttpStatus.NOT_FOUND, notFound.getStatusCode());
+        assertEquals(HttpStatus.FORBIDDEN, outroId.getStatusCode());
     }
 
     @Test
@@ -222,6 +224,32 @@ public class HttpContractTest {
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertEquals("Nome Atualizado", resp.getBody().getName());
+    }
+
+    /**
+     * Mudança de contrato na #171: o corpo do {@code PUT /bff/users/{id}} continua aceitando {@code password} (200, sem 400), mas o campo é
+     * IGNORADO: a senha só muda por {@code /password} e {@code /password-with-mfa}. A resposta não devolve senha nem hash.
+     */
+    @Test
+    public void updateUser_passwordNoCorpoEIgnoradoELoginAntigoSegueValendo() {
+        User created = createUser("update-ignora-senha");
+        String token = loginAndGetToken(created.getEmail(), "senha123");
+        created.setName("Nome Sem Trocar Senha");
+        created.setPassword("senhaNovaNoPut1");
+
+        ResponseEntity<User> resp = restTemplate.exchange(
+                url("/bff/users/" + created.getId()), HttpMethod.PUT, new HttpEntity<>(created, authHeaders(token)), User.class);
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals("Nome Sem Trocar Senha", resp.getBody().getName(), "o resto do PUT vale");
+        assertNull(resp.getBody().getPassword(), "a resposta não devolve a senha enviada nem o hash");
+        assertNotNull(loginAndGetToken(created.getEmail(), "senha123"), "a senha antiga segue valendo");
+        Map<String, String> creds = new HashMap<>();
+        creds.put("email", created.getEmail());
+        creds.put("password", "senhaNovaNoPut1");
+        assertEquals(HttpStatus.UNAUTHORIZED,
+                restTemplate.postForEntity(url("/bff/users/login"), creds, String.class).getStatusCode(),
+                "a senha enviada no PUT não vira a senha da conta");
     }
 
     @Test
@@ -1108,6 +1136,93 @@ public class HttpContractTest {
         assertEquals(user.getId(), ensured.getBody().getUserId());
     }
 
+    // ======================= IDOR em /bff/users/{id} e /bff/my-wallets/{userId} (issue #166) =======================
+
+    private static final String NEGADO_BODY = "Acesso negado: o usuário informado não é o usuário autenticado";
+
+    private ResponseEntity<String> chamar(HttpMethod metodo, String caminho, String token, Object corpo) {
+        return restTemplate.exchange(url(caminho), metodo, new HttpEntity<>(corpo, authHeaders(token)), String.class);
+    }
+
+    /**
+     * O token de A não lê nem altera nada de B em NENHUMA rota com id de usuário no path: 403 com o mesmo corpo da #57, a negação
+     * vem ANTES de qualquer chamada ao identity (nenhuma chamada interna com o id de B) e o estado de B fica intacto. A própria
+     * conta segue funcionando nas mesmas rotas.
+     */
+    @Test
+    public void usuarioA_naoLeNemAlteraNadaDoUsuarioB_emUsersEMyWallets() {
+        User a = createUser("idor-a");
+        User b = createUser("idor-b");
+        String tokenA = loginAndGetToken(a.getEmail(), "senha123");
+        String tokenB = loginAndGetToken(b.getEmail(), "senha123");
+        String ub = "/bff/users/" + b.getId();
+        String idB = String.valueOf(b.getId());
+
+        User alterado = copiaSemSenha(b);
+        alterado.setName("Invasor altera");
+        Map<String, String> senha = Map.of("oldPassword", "senha123", "newPassword", "invasora99");
+        Map<String, String> mfaCodigo = Map.of("mfaCode", "123456");
+        Map<String, String> mfaSenha = Map.of("mfaCode", "123456", "newPassword", "invasora99");
+
+        record Rota(HttpMethod metodo, String caminho, Object corpo) { }
+        List<Rota> rotas = List.of(
+                new Rota(HttpMethod.GET, ub, null),
+                new Rota(HttpMethod.PUT, ub, alterado),
+                new Rota(HttpMethod.PUT, ub + "/password", senha),
+                new Rota(HttpMethod.DELETE, ub, null),
+                new Rota(HttpMethod.POST, ub + "/request-password-reset-mfa", null),
+                new Rota(HttpMethod.POST, ub + "/verify-password-reset-mfa", mfaCodigo),
+                new Rota(HttpMethod.PUT, ub + "/password-with-mfa", mfaSenha),
+                new Rota(HttpMethod.GET, "/bff/my-wallets/" + idB, null),
+                new Rota(HttpMethod.POST, "/bff/my-wallets/ensure/" + idB, null));
+        int antes = identity().chamadas().size();
+        for (Rota r : rotas) {
+            ResponseEntity<String> resp = chamar(r.metodo(), r.caminho(), tokenA, r.corpo());
+            assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode(), r.metodo() + " " + r.caminho());
+            assertEquals(NEGADO_BODY, resp.getBody(), r.metodo() + " " + r.caminho());
+        }
+        assertEquals(antes, identity().chamadas().size(), "a negação vem antes de qualquer chamada ao identity");
+
+        // B intacto: nome igual, ativo (o login do B continua valendo, com a senha antiga) e a senha não mudou
+        ResponseEntity<User> deB = restTemplate.exchange(url(ub), HttpMethod.GET, new HttpEntity<>(authHeaders(tokenB)), User.class);
+        assertEquals(HttpStatus.OK, deB.getStatusCode());
+        assertEquals(b.getName(), deB.getBody().getName());
+        assertEquals(HttpStatus.OK, restTemplate.postForEntity(url("/bff/users/login"),
+                Map.of("email", b.getEmail(), "password", "senha123"), String.class).getStatusCode());
+
+        // o próprio A segue funcionando nas rotas com id (só as que não mudam estado que outros testes cobrem)
+        String ua = "/bff/users/" + a.getId();
+        assertEquals(HttpStatus.OK, chamar(HttpMethod.GET, ua, tokenA, null).getStatusCode());
+        assertEquals(HttpStatus.OK, chamar(HttpMethod.GET, "/bff/my-wallets/" + a.getId(), tokenA, null).getStatusCode());
+        assertEquals(HttpStatus.OK, chamar(HttpMethod.POST, "/bff/my-wallets/ensure/" + a.getId(), tokenA, null).getStatusCode());
+    }
+
+    private User copiaSemSenha(User origem) {
+        User c = new User();
+        c.setName(origem.getName());
+        c.setEmail(origem.getEmail());
+        c.setFone(origem.getFone());
+        c.setBirthDate(origem.getBirthDate());
+        return c;
+    }
+
+    /** {@code PUT /bff/users/{id}} com e-mail de outra conta: 400 sem diferenciar maiúsculas (a regra real é do identity). */
+    @Test
+    public void putUsuario_emailDeOutraConta_returns400() {
+        User a = createUser("dup-a");
+        User b = createUser("dup-b");
+        String tokenB = loginAndGetToken(b.getEmail(), "senha123");
+
+        User alterado = copiaSemSenha(b);
+        alterado.setEmail(a.getEmail().toUpperCase());
+        ResponseEntity<String> resp = chamar(HttpMethod.PUT, "/bff/users/" + b.getId(), tokenB, alterado);
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+
+        alterado.setEmail(b.getEmail().toUpperCase());
+        assertEquals(HttpStatus.OK, chamar(HttpMethod.PUT, "/bff/users/" + b.getId(), tokenB, alterado).getStatusCode(),
+                "o próprio e-mail, com outra caixa, segue");
+    }
+
     // ======================= /bff/seed =======================
 
     @Test
@@ -1341,5 +1456,120 @@ public class HttpContractTest {
 
         assertEquals(HttpStatus.CREATED, reserva.getStatusCode());
         assertEquals(uidFantasma, reserva.getBody().getUserId());
+    }
+
+    // ======================= modo fila (issue #43): mudança ADITIVA do contrato =======================
+
+    /**
+     * Issue #43: com o evento em modo fila (aqui o {@code FakeAdmissionServer} devolve {@code queued}), {@code POST /bff/event-wallets} responde
+     * {@code 202} com o header {@code Idempotency-Key} (a recebida, ou a gerada), {@code Retry-After: 1} e o corpo de estado; nenhuma reserva
+     * foi feita ainda. Os casos de 201 do resto do arquivo seguem SEM mudança de expectativa (o admission falso responde {@code sync} por padrão).
+     */
+    @Test
+    public void eventWalletAddLink_modoFila_returns202ComChaveRetryAfterEEstado() {
+        User host = createHostUser("fila-202-host");
+        String hostToken = loginAndGetToken(host.getEmail(), "senha123");
+        User ana = createUser("fila-202-ana");
+        String token = loginAndGetToken(ana.getEmail(), "senha123");
+        Event event = createEvent(host.getId(), "Evento fila 202 " + System.nanoTime(), 5, hostToken);
+        FakeAdmissionServer.get().reset();
+        FakeAdmissionServer.get().modoFila(true);
+        try {
+            HttpHeaders h = authHeaders(token);
+            h.set("Idempotency-Key", "fila-chave-cliente");
+            ResponseEntity<String> r = restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                    new HttpEntity<>(Map.of("eventId", event.getEvent_id()), h), String.class);
+
+            assertEquals(HttpStatus.ACCEPTED, r.getStatusCode());
+            assertEquals("fila-chave-cliente", r.getHeaders().getFirst("Idempotency-Key"));
+            assertEquals("1", r.getHeaders().getFirst("Retry-After"));
+            assertEquals("{\"status\":\"queued\",\"eventId\":" + event.getEvent_id() + ",\"idempotencyKey\":\"fila-chave-cliente\"}",
+                    r.getBody(), "corpo de estado, sem dado pessoal");
+
+            // sem a chave na requisição: o gateway gera e devolve a mesma no header e no corpo
+            ResponseEntity<String> semChave = restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST,
+                    new HttpEntity<>(Map.of("eventId", event.getEvent_id()), authHeaders(token)), String.class);
+            assertEquals(HttpStatus.ACCEPTED, semChave.getStatusCode());
+            String gerada = semChave.getHeaders().getFirst("Idempotency-Key");
+            assertNotNull(gerada);
+            assertTrue(semChave.getBody().contains("\"idempotencyKey\":\"" + gerada + "\""), semChave.getBody());
+            assertEquals(List.of(), userReservations(token, ana.getId()), "202: nenhuma reserva foi feita pelo gateway");
+        } finally {
+            FakeAdmissionServer.get().reset();
+        }
+    }
+
+    /** Issue #43: 422 e 429 do admission (chave de outro evento; limite por usuário e fila cheia) são repassados com o texto dele. */
+    @Test
+    public void eventWalletAddLink_recusaDoAdmission_422e429SaoRepassados() {
+        User host = createHostUser("fila-429-host");
+        String hostToken = loginAndGetToken(host.getEmail(), "senha123");
+        User ana = createUser("fila-429-ana");
+        String token = loginAndGetToken(ana.getEmail(), "senha123");
+        Event event = createEvent(host.getId(), "Evento fila 429 " + System.nanoTime(), 5, hostToken);
+        HttpEntity<Map<String, Object>> req = new HttpEntity<>(Map.of("eventId", event.getEvent_id()), authHeaders(token));
+        try {
+            FakeAdmissionServer.get().falhar(429, "Muitas reservas na fila para este usuário");
+            ResponseEntity<String> muitas = restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST, req, String.class);
+            assertEquals(HttpStatus.TOO_MANY_REQUESTS, muitas.getStatusCode());
+            assertEquals("Muitas reservas na fila para este usuário", muitas.getBody());
+
+            FakeAdmissionServer.get().falhar(422, "Idempotency-Key já usada em outra requisição (evento diferente)");
+            ResponseEntity<String> conflito = restTemplate.exchange(url("/bff/event-wallets"), HttpMethod.POST, req, String.class);
+            assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, conflito.getStatusCode());
+            assertEquals("Idempotency-Key já usada em outra requisição (evento diferente)", conflito.getBody());
+        } finally {
+            FakeAdmissionServer.get().reset();
+        }
+    }
+
+    /**
+     * Issue #43: {@code GET /bff/event-wallets/admission?idempotencyKey=}: 200 com o estado do usuário DO TOKEN (o {@code userId} nunca vem do
+     * cliente), 400 sem a chave, 401 sem token, 404 igual para chave inexistente e para chave de outro usuário, 503 com o admission fora.
+     */
+    @Test
+    public void eventWalletAdmission_estadoDaFila_200_400_401_404_503() {
+        User ana = createUser("fila-get-ana");
+        User beto = createUser("fila-get-beto");
+        String tokenAna = loginAndGetToken(ana.getEmail(), "senha123");
+        String tokenBeto = loginAndGetToken(beto.getEmail(), "senha123");
+        FakeAdmissionServer admission = FakeAdmissionServer.get();
+        admission.reset();
+        admission.estado(ana.getId(), "chave a/b+c", "{\"status\":\"pending\",\"eventId\":7,\"expiresAt\":\"2026-10-28T12:00:00\"}");
+        String consulta = "/bff/event-wallets/admission?idempotencyKey=chave%20a%2Fb%2Bc";
+        try {
+            ResponseEntity<String> ok = restTemplate.exchange(java.net.URI.create(url(consulta)), HttpMethod.GET, new HttpEntity<>(authHeaders(tokenAna)), String.class);
+            assertEquals(HttpStatus.OK, ok.getStatusCode());
+            assertEquals("{\"status\":\"pending\",\"eventId\":7,\"idempotencyKey\":\"chave a/b+c\",\"expiresAt\":\"2026-10-28T12:00:00\"}",
+                    ok.getBody());
+            assertEquals(List.of(ana.getId() + "|chave a/b+c"), admission.consultas(), "userId do token e a chave decodificada chegam ao admission");
+
+            assertEquals(HttpStatus.BAD_REQUEST, restTemplate.exchange(url("/bff/event-wallets/admission"), HttpMethod.GET,
+                    new HttpEntity<>(authHeaders(tokenAna)), String.class).getStatusCode(), "sem a chave");
+            assertEquals(HttpStatus.BAD_REQUEST, restTemplate.exchange(url("/bff/event-wallets/admission?idempotencyKey="), HttpMethod.GET,
+                    new HttpEntity<>(authHeaders(tokenAna)), String.class).getStatusCode(), "chave vazia");
+            assertEquals(HttpStatus.UNAUTHORIZED, restTemplate.exchange(java.net.URI.create(url(consulta)), HttpMethod.GET, HttpEntity.EMPTY, String.class)
+                    .getStatusCode(), "sem token");
+
+            ResponseEntity<String> deOutro = restTemplate.exchange(java.net.URI.create(url(consulta)), HttpMethod.GET, new HttpEntity<>(authHeaders(tokenBeto)), String.class);
+            ResponseEntity<String> inexistente = restTemplate.exchange(url("/bff/event-wallets/admission?idempotencyKey=nao-existe"),
+                    HttpMethod.GET, new HttpEntity<>(authHeaders(tokenBeto)), String.class);
+            assertEquals(HttpStatus.NOT_FOUND, deOutro.getStatusCode(), "a chave de outro usuário");
+            assertEquals(HttpStatus.NOT_FOUND, inexistente.getStatusCode(), "chave que não existe");
+            assertEquals(inexistente.getBody(), deOutro.getBody(), "as duas respostas são iguais: nada revela que a chave existe");
+
+            admission.falhar(503);
+            ResponseEntity<String> fora = restTemplate.exchange(java.net.URI.create(url(consulta)), HttpMethod.GET, new HttpEntity<>(authHeaders(tokenAna)), String.class);
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, fora.getStatusCode());
+            assertEquals("Serviço de admissão indisponível no momento. Tente novamente em instantes.", fora.getBody(), "503 genérico, sem URL interna");
+        } finally {
+            admission.reset();
+        }
+    }
+
+    /** As reservas do usuário pelo {@code GET /bff/event-wallets/user/{id}} (o que o gateway de fato gravou no reservation). */
+    private List<?> userReservations(String token, Long userId) {
+        return restTemplate.exchange(url("/bff/event-wallets/user/" + userId), HttpMethod.GET, new HttpEntity<>(authHeaders(token)), List.class)
+                .getBody();
     }
 }

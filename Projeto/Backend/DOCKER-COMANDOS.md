@@ -252,14 +252,14 @@ docker compose exec db psql -h localhost -U admin -d meu_banco \
   -c "SELECT user_id, user_name, email FROM identity.users;"
 
 # Limpar todas as tabelas (CUIDADO!). Pare antes backend, catalog, reservation e identity (relays/consumers). Uma ÚNICA instrução:
-# catalog.event e reservation.eventcap andam juntos (id de evento reciclado não herda eventcap/reservas), e os event stores
+# catalog.event e stock.eventcap andam juntos (id de evento reciclado não herda eventcap/reservas), e os event stores
 # vão junto (senão o EventCreated/SlotReserved de um id reciclado bate no UNIQUE do stream antigo). Depois mova os consumer
 # groups para o fim dos tópicos (ver o fim do run-tests.sh), senão a reconciliação recria eventcap de evento apagado. O RESTART IDENTITY
 # recicla o user_id (identity.users): para nenhum token antigo valer como o usuário novo que ganhar o mesmo uid, apague também a chave
 # do identity (docker run --rm -v gerenciador-eventos_identity-keys:/k eclipse-temurin:25-jre-jammy rm -f /k/jwt-signing-key.json) com o
 # identity parado e suba identity e backend de novo (o backend guarda o JWKS em cache por até 24 h; reiniciado, ele busca o novo).
 docker compose exec db psql -h localhost -U admin -d meu_banco \
-  -c "TRUNCATE identity.users, identity.mywallet, identity.pending_verifications, identity.event_store, identity.event_outbox, identity.event_snapshot, identity.projection_checkpoint, event_store, event_outbox, event_snapshot, projection_checkpoint, catalog.event, catalog.eventpresenter, catalog.event_store, catalog.event_outbox, catalog.event_snapshot, catalog.projection_checkpoint, reservation.eventcap, reservation.walletevent, reservation.event_availability, reservation.idempotency_key, reservation.event_store, reservation.event_outbox, reservation.event_snapshot, reservation.projection_checkpoint RESTART IDENTITY CASCADE;"
+  -c "TRUNCATE identity.users, identity.mywallet, identity.pending_verifications, identity.event_store, identity.event_outbox, identity.event_snapshot, identity.projection_checkpoint, event_store, event_outbox, event_snapshot, projection_checkpoint, catalog.event, catalog.eventpresenter, catalog.event_store, catalog.event_outbox, catalog.event_snapshot, catalog.projection_checkpoint, stock.eventcap, stock.hold, reservation.walletevent, reservation.event_availability, reservation.idempotency_key, reservation.event_store, reservation.event_outbox, reservation.event_snapshot, reservation.projection_checkpoint RESTART IDENTITY CASCADE;"
 ```
 
 ---

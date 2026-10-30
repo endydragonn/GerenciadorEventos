@@ -4,7 +4,7 @@ Lib (jar simples, sem repackage) com o **contrato HTTP** do serviço `identity` 
 `RecaptchaResponse`, as interfaces `UserApi`, `EmailVerificationApi`, `MyWalletApi` e `RecaptchaApi`, as exceções
 `IdentityUnavailableException` e `IdentityNaoEncontradoException` e o `IdentityClient`.
 
-- **Quem usa:** o gateway (monólito) monta o `IdentityClient` pelo `IdentityClientConfig` (desde o cutover, fatia 3) e o injeta como
+- **Quem usa:** o gateway (monólito) monta o `IdentityClient` pelo `IdentityClientConfig` e o injeta como
   `UserApi`/`EmailVerificationApi`/`MyWalletApi`/`RecaptchaApi`; o serviço `identity` implementa os mesmos endpoints e NÃO escaneia o
   pacote `identityclient` (só usa os tipos do contrato e o cliente nos testes ponta a ponta).
 - **`IdentityClient`:** uma chamada HTTP por método, header `X-Internal-Token` em TODA chamada (sem token a construção falha). Apache
@@ -13,9 +13,9 @@ Lib (jar simples, sem repackage) com o **contrato HTTP** do serviço `identity` 
 - **`MyWalletApi.walletExists`** (não `exists`): o `IdentityClient` implementa `UserApi` e `MyWalletApi` na mesma classe e as duas tinham
   `boolean exists(Long)`.
 
-## Contrato `/internal/**` (o que o serviço da fatia 2 implementa)
+## Contrato `/internal/**` (o que o serviço `identity` implementa)
 
-Tudo exige `X-Internal-Token` (401 sem/errado, SEM o marcador de credenciais), menos `GET /.well-known/jwks.json` (fatia 2). Corpo de
+Tudo exige `X-Internal-Token` (401 sem/errado, SEM o marcador de credenciais), menos `GET /.well-known/jwks.json`. Corpo de
 erro = texto puro com a mensagem. JSON dos DTOs como o `/bff` de hoje (`User`: `user_id`, `name`, `email`, `fone`, `password`,
 `birthdate`, `isAdmin`, `isHost`, `isActive`, `created_at`, `updatedAt`).
 
@@ -24,7 +24,7 @@ erro = texto puro com a mensagem. JSON dos DTOs como o `/bff` de hoje (`User`: `
 | `UserApi.createUser` | `POST /internal/users` corpo `User` (**`host` NÃO é gravado**; `admin` é gravado como sempre foi: nenhum código autoriza por `admin`) | 201 `User` | 400 regra |
 | `UserApi.findById` | `GET /internal/users/{id}` | 200 `User` | 404 + `X-Identity-Nao-Encontrado` |
 | `UserApi.findByEmail` | `GET /internal/users/by-email?email=` (query: `@`/`.`/`+` não cabem bem em path) | 200 `User` | 404 + marcador |
-| `UserApi.updateUser` | `PUT /internal/users/{id}` corpo `User` (o `id` do path vale; **`host` NÃO é gravado**, `admin` como sempre; a resposta é a linha como ficou no banco) | 200 `User` | 400 regra |
+| `UserApi.updateUser` | `PUT /internal/users/{id}` corpo `User` (o `id` do path vale; **`host` NÃO é gravado**, `admin` como sempre; **`password` é IGNORADO** (#171: a senha só muda por `/password` e `/password-with-mfa`); a resposta é a linha como ficou no banco, com `password` nulo) | 200 `User` | 400 regra (inclui e-mail que já é de OUTRA conta, sem diferenciar maiúsculas) |
 | `UserApi.deactivateUser` | `DELETE /internal/users/{id}` | 204 | |
 | `UserApi.getValidationErrors` | `POST /internal/users/validate` corpo `User` | 200 texto (`""` = válido) | |
 | `UserApi.login` | `POST /internal/users/login` corpo `{email, password}` | 200 `{user, token}` (RS256, `uid`, `isHost` do banco) | **401 + `X-Identity-Credenciais-Invalidas`** => `null` (senha errada, e-mail inexistente, e-mail ou senha nulos) |

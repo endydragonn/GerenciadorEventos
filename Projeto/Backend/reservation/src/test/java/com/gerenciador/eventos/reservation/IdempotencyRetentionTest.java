@@ -17,7 +17,6 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.context.TestPropertySource;
 
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
-import com.gerenciador.eventos.reservation.EventCapRepository;
 import com.gerenciador.eventos.reservation.EventWalletService;
 import com.gerenciador.eventos.reservation.IdempotencyKeyRepository;
 import com.gerenciador.eventos.reservation.IdempotencyKeyRetentionService;
@@ -36,7 +35,6 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 @TestPropertySource(properties = "idempotency.retention.scan.ms=3600000")
 public class IdempotencyRetentionTest extends ReservationTestSupport {
     @Autowired private EventWalletService eventWalletService;
-    @Autowired private EventCapRepository eventCapRepository;
     @Autowired private IdempotencyKeyRetentionService retentionService;
     @Autowired private IdempotencyKeyRepository idempotencyKeyRepository;
     @Autowired private DatabaseConnection databaseConnection;
@@ -82,17 +80,17 @@ public class IdempotencyRetentionTest extends ReservationTestSupport {
 
         EventWallet repetida = eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()), chave);
         assertEquals(primeira.getExpiresAt(), repetida.getExpiresAt(), "mesmo resultado da primeira");
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "um único decremento");
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant(), "um único decremento");
         assertEquals(1, contarChave(chave));
     }
 
     /** 2500 chaves velhas (> 2 lotes de 1000): o laço apaga tudo e a recente sobrevive. */
     @Test
     public void apagaEmLotesAteEsvaziarAsVencidas() throws Exception {
-        exec("INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at, created_at) "
-                + "SELECT 'lote-' || g, g, 1, now(), now() - interval '48 hours' FROM generate_series(1, 2500) g");
-        exec("INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at) "
-                + "VALUES ('lote-recente', 1, 1, now())");
+        exec("INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at, created_at, saga_status) "
+                + "SELECT 'lote-' || g, g, 1, now(), now() - interval '48 hours', 'reserved' FROM generate_series(1, 2500) g");
+        exec("INSERT INTO reservation.idempotency_key (idempotency_key, user_id, event_id, expires_at, saga_status) "
+                + "VALUES ('lote-recente', 1, 1, now(), 'reserved')");
 
         // um lote devolve EXATAMENTE o LIMIT (prova o LIMIT); o job apaga o resto no laço
         assertEquals(1000, idempotencyKeyRepository.deleteOlderThan(24, 1000));

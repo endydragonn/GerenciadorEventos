@@ -119,6 +119,7 @@ class _HomeScreenState extends State<HomeScreen> {
         Uri.parse('${AppConfig.apiBaseUrl}/bff/users/me'),
         headers: ApiAuth.jsonHeaders(),
       );
+      if (!mounted) return;
       
       
       if (response.statusCode == 200) {
@@ -127,7 +128,7 @@ class _HomeScreenState extends State<HomeScreen> {
         Provider.of<HomePageData>(context, listen: false).setUser(userData);
       } 
     } catch (e) {
-      print('DEBUG: Error loading user data: $e');
+      debugPrint('DEBUG: Error loading user data: $e');
       // Usuário não autenticado
     }
   }
@@ -137,6 +138,7 @@ class _HomeScreenState extends State<HomeScreen> {
     Uri.parse('${AppConfig.apiBaseUrl}/bff/events/search?term='),
     headers: ApiAuth.jsonHeaders(),
   );
+    if (!mounted) return;
     if (response.statusCode == 200) {
       final eventsData = jsonDecode(response.body) as List;
       Provider.of<HomePageData>(context, listen: false).setEvents(eventsData.map((e) => e as Map<String, dynamic>).toList());
@@ -171,7 +173,7 @@ class _TopNavigationBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Verificar se há usuário logado
-    final bool isLoggedIn = homePageData.user != null && homePageData.user.isNotEmpty;
+    final bool isLoggedIn = homePageData.user.isNotEmpty;
     
     return SafeArea(
       child: Padding(

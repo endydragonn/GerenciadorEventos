@@ -7,7 +7,7 @@ created: 2026-09-02
 status: decided-not-implemented
 ---
 
-> **Vendorizado de:** `D:\Claude\Brain\01-Projects\Event-Management-System\Architecture-Decision-Microservices-Split.md`
+> **Vendorizado de:** documentação externa do projeto, `Architecture-Decision-Microservices-Split.md`
 > **Sincronizado em:** 2026-09-03 · sincronização manual (ver `README.md`)
 
 # Decisão de Arquitetura — Decomposição do Back-end em Microsserviços

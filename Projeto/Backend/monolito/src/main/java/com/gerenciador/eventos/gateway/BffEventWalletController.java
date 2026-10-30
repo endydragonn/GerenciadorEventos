@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.gerenciador.eventos.admissionclient.api.AdmissionRecusadaException;
 import com.gerenciador.eventos.catalogclient.api.CatalogUnavailableException;
 import com.gerenciador.eventos.gateway.security.HostAuthorizationApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
@@ -34,19 +35,21 @@ import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictExceptio
  * corpo/query/path. Nesses três lugares ele é opcional: ausente vale o do token, igual segue e <b>diferente é 403</b>,
  * antes de qualquer validação ou chamada ao reservation (a negação não revela se o outro usuário existe). Vale para
  * addLink, confirm, validate, removeLink e listByUser. Desde a #36 o {@code userId} é o claim {@code uid} do JWT do identity (sem consulta
- * ao banco): um {@code uid} sem usuário não dá mais 401 aqui. O mesmo IDOR em {@code BffMyWalletController} é outra issue.</p>
+ * ao banco): um {@code uid} sem usuário não dá mais 401 aqui. O mesmo IDOR em {@code BffMyWalletController} e em {@code BffUserController} foi fechado na #166 ({@link AcessoNegado}).</p>
  *
  * <p>Desde a #33 a reserva é do serviço {@code reservation}: o {@link EventWalletGateway} confere o evento e chama
  * a API interna dele por HTTP; o contrato deste controller não mudou.</p>
+ *
+ * <p>Issue #43 (aditivo): em modo fila (evento acima de 80% de X) o {@code POST} responde {@code 202} com o header {@code Idempotency-Key},
+ * {@code Retry-After: 1} e o corpo {@link EstadoDaReserva} ({@code queued}); 422/429 do admission são repassados; e
+ * {@code GET /bff/event-wallets/admission?idempotencyKey=} devolve o estado ({@code queued}, {@code pending}, {@code rejected},
+ * {@code timed_out}) do usuário do token. Abaixo do gatilho nada muda (201, corpo e headers de antes).</p>
  */
 @RestController
 @RequestMapping("/bff/event-wallets")
 public class BffEventWalletController {
 
     private static final Logger log = LoggerFactory.getLogger(BffEventWalletController.class);
-
-    private static final ResponseEntity<String> NEGADO = ResponseEntity.status(HttpStatus.FORBIDDEN)
-            .body("Acesso negado: o usuário informado não é o usuário autenticado");
 
     private final EventWalletGateway eventWalletService;
     private final HostAuthorizationApi authorizationUtil;
@@ -72,16 +75,42 @@ public class BffEventWalletController {
             // header aditivo: sem a chave na requisição, é a gerada pelo servidor (corpo JSON não muda)
             return ResponseEntity.status(HttpStatus.CREATED)
                     .header("Idempotency-Key", saved.getIdempotencyKey()).body(saved);
+        } catch (ReservaEnfileiradaException ex) {
+            // modo fila (#43): aceita, ainda sem reserva; Retry-After sugere o intervalo da consulta de estado
+            return ResponseEntity.status(HttpStatus.ACCEPTED).header("Idempotency-Key", ex.estado().idempotencyKey())
+                    .header("Retry-After", "1").body(ex.estado());
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(ex.getMessage());
         } catch (IdempotencyConflictException ex) {
             return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(ex.getMessage());
+        } catch (AdmissionRecusadaException ex) {
+            // 422 (chave de outro evento) e 429 (limite por usuário, fila cheia) do admission, com o texto dele
+            return ResponseEntity.status(ex.status()).body(ex.getMessage());
         } catch (CatalogUnavailableException ex) {
             throw ex; // a conferência do evento (exists) falhou: 503 genérico, nunca "Evento não encontrado"
         } catch (RuntimeException ex) {
             log.error("Erro ao reservar userId={} eventId={}", ew.getUserId(), ew.getEventId(), ex);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ErroInterno.MENSAGEM);
         }
+    }
+
+    /**
+     * Estado de uma reserva enfileirada (issue #43, modo fila): {@code ?idempotencyKey=} é a do {@code 202}. O usuário é o do token (nunca um
+     * parâmetro): chave inexistente e chave de outro usuário dão o MESMO 404 (a resposta não revela se existe). Admission fora = 503.
+     */
+    @GetMapping("/admission")
+    public ResponseEntity<?> admissionState(@RequestParam(required = false) String idempotencyKey) {
+        Long doToken;
+        try {
+            doToken = authorizationUtil.currentUserId();
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Usuário autenticado não encontrado");
+        }
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return ResponseEntity.badRequest().body("idempotencyKey é obrigatório");
+        }
+        return eventWalletService.estadoDaAdmissao(doToken, idempotencyKey).<ResponseEntity<?>>map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @PostMapping("/confirm")
@@ -155,7 +184,7 @@ public class BffEventWalletController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Usuário autenticado não encontrado");
         }
         if (ew.getUserId() != null && !ew.getUserId().equals(doToken)) {
-            return NEGADO;
+            return AcessoNegado.NEGADO;
         }
         ew.setUserId(doToken);
         return null;

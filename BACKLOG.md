@@ -1,6 +1,6 @@
 # Backlog — Decomposição do Sistema em Issues Iterativas
 
-Gerado a partir da documentação do vault (`D:\Claude\Brain\01-Projects\Event-Management-System\`).
+Gerado a partir da documentação de arquitetura do projeto (cópia versionada em `docs/adr/`).
 Cada issue é uma fronteira de iteração: **após o merge, `docker compose up` + a suíte de
 testes continuam verdes e o contrato servido ao Flutter não muda.** Numa extração de serviço,
 "verde" = o `gateway` ainda serve o mesmo contrato externo, não só que a suíte compila.
@@ -15,8 +15,8 @@ ADRs de referência (a vendorizar em `docs/adr/` — issue #2):
 
 - Back-end decomposto em microsserviços, Opção B (`gateway`, `identity`, `catalog`,
   `reservation`, `notification`, `admission`).
-- `reservation` = Capacity + Wallet no mesmo serviço (híbrido CAS + ES); split com saga é
-  rodada futura (#46).
+- `reservation` = Capacity + Wallet no mesmo serviço (híbrido CAS + ES) até a #47, que o
+  dividiu em `stock` (capacidade, CAS) + `reservation` (wallet, ES) com saga orquestrada.
 - **CQRS + Event Sourcing no escopo.** ES em `catalog` e no lado wallet de `reservation`;
   `eventcap`/CAS fica relacional; `identity` CRUD; `notification` consumidor. Backbone
   **Kafka-compatível** (Kafka ou Redpanda); RabbitMQ para admissão; Redis para sinal de carga.
@@ -34,7 +34,7 @@ Labels sugeridas: `fase/0`…`fase/11`, `area/backend`, `area/banco`, `area/infr
 
 ---
 
-## Estado (2026-10-28)
+## Estado (2026-10-29)
 
 Snapshot do GitHub (`gh issue list` / `gh pr list`). A definição de cada item continua sendo o
 texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
@@ -52,7 +52,7 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 9 | #10 | fechada | #75 |
 | 10 | #11 | fechada — o kit `Projeto/carga` virou o runner oficial (matriz, lag coletado do gerador, CSV + gráfico), na `Fase_2` | #82, #104 |
 | 11–13 | #12–#14 | fechadas — rodadas oficiais na `Fase_2`: matriz CAS × ingênuo (#12, #13) e escada de carga/limiar X (#14); resultados pré-pooler em `Projeto/carga/results/02-hikari/` | #114, #115 |
-| 14 | #15 | aberta — rascunho da seção do artigo preenchido com a Fase 2; revisão com o orientador pendente | — |
+| 14 | #15 | fechada no Batch 2 — seção da Fase 2 no artigo com as 5 figuras em `docs/artigo/graficos/` | #186 |
 | 15 | #16 | aberta, **pulada pelo usuário** (2026-10-16): os segredos ficam como estão até o fim do TCC | — |
 | 16 | #17 | fechada | #116 |
 | 17 | #18 | fechada | #118 |
@@ -78,8 +78,15 @@ texto abaixo; esta seção só diz onde ele está. Item N = issue #(N+1).
 | 37 | #38 | fechada na `Batch_1` — harness definitivo: cenário de leitura no `test-rpm`, `coleta-host.sh` (lags, outbox, conexões, `pg_stat_statements`) | #168 |
 | 38 | #39 | fechada na `Batch_1` — comparação das 3 configurações (tabela + gráficos em `docs/artigo/graficos/`) em `docs/artigo/experimento-monolito.md` | #174 |
 | 39 | #40 | fechada na `Batch_1` — X definitivo = 56k RPM por evento (Rodada R, `Projeto/carga/results/06-batch1-final`; intercalado ≈ 86k = teto do host) | #173 |
-| 40–46 | #41–#47 | abertas | — |
-| 47–48 | #111–#112 | abertas (adicionadas em 2026-10-15, fora do import 1–46) | — |
+| 40 | #41 | fechada no Batch 2 — serviço `admission` com o contador de RPM por evento no Redis | #190 |
+| 41 | #42 | fechada no Batch 2 — fila de admissão no RabbitMQ + worker pool | #193 |
+| 42 | #43 | fechada no Batch 2 — gatilho 80/70 com histerese, `202` e consulta de estado (`GET /bff/event-wallets/admission`) | #194 |
+| 43 | #44 | fechada no Batch 2 — UI de reserva `pending` no Flutter | #196 |
+| 44 | #45 | aberta, fora do Batch 2 por decisão do usuário (material do artigo) | — |
+| 45 | #46 | fechada no Batch 2 — READMEs | #211 |
+| 46 | #47 | fechada no Batch 2 — `reservation` dividido em `stock` + wallet com saga (migração `20261029`) | #202 |
+| 47 | #111 | fechada no Batch 2 — autoescala de `gateway` e `reservation`, opção A (override + HAProxy `lb` + scaler no host) | #199 |
+| 48 | #112 | fechada no Batch 2 — autoescala de `identity`, `catalog`, `admission` e `notification` | #200 |
 
 Branch de integração da Fase 2: `Fase_2` (a #11 entrou pelo PR #104; as #12–#15 foram
 desenvolvidas direto nela; entrou em `main` pelos PRs #114 e #115). Branch de integração da Fase 4: `Fase_4`
@@ -90,20 +97,44 @@ experimento em `CONTEXT.md`.
 
 Fora do backlog (follow-ups): #56–#61 fechadas no Batch 1 (`updatePolicy` PR #163, IDOR em `/bff/event-wallets` PR #167,
 endurecer schema PR #159, cobertura PR #162, transações do `updateEvent` PR #160, N+1/expiração em lote PR #161), junto com
-#89 (PR #164), #133 (PR #165), #113 (PR #158) e #81 (fechada sem PR: o `SEED_ENABLED` da #35 já cobria o aceite); abertas do
-Batch 1: #166 (IDOR pré-existente), #170 e #171; #78 (BFF única + JWT
+#89 (PR #164), #133 (PR #165), #113 (PR #158) e #81 (fechada sem PR: o `SEED_ENABLED` da #35 já cobria o aceite); os abertos do
+Batch 1 fecharam no Batch 2: #166 (IDOR pré-existente, PR #184), #170 (PR #185) e #171 (PR #192), junto com a #84 (`flutter_lints`, PR #187); #78 (BFF única + JWT
 deny-by-default, PR #79), #83 (quality gates, PR #85), #86 (PR #88), #92 (`/actuator/health`,
-PR #93) e #67 fechadas; #81, #84, #89 abertas. Da Fase 5: #129 (PK da idempotência por usuário, PR #137), #130 (retenção
+PR #93) e #67 fechadas. Da Fase 5: #129 (PK da idempotência por usuário, PR #137), #130 (retenção
 da `idempotency_key`, PR #139), #131 (`run-tests.sh` limpa `surefire-reports`, PR #135) e #136 (`verify-20260901` com o init-script 10, PR #140)
-fechadas na `Fase_6`; #133 (CORS `*` com credenciais) aberta. #146 (consumer da projeção de disponibilidade aplica em lote, PR #147) e #149 (GUID do plano Alto desempenho nos scripts de setup, PR #150) fechadas, follow-ups da Rodada 2 (#31). PR #90 adicionou os scripts de teste de carga
+fechadas na `Fase_6`; #133 (CORS `*` com credenciais) fechada no Batch 1. #146 (consumer da projeção de disponibilidade aplica em lote, PR #147) e #149 (GUID do plano Alto desempenho nos scripts de setup, PR #150) fechadas, follow-ups da Rodada 2 (#31). PR #90 adicionou os scripts de teste de carga
 (disputa de vagas e taxa fixa/RPM) em `Projeto/carga/`.
 
 Caminho crítico (issues): #2 → #5 → #7 → #10 → #11 → #12 → #13 feitas (marco de banca atingido); Fase 4: #17 → #18
 → #19/#20/#21 → #22 feitas (ponto 1 da série; PR #122); Fase 5: #23 → #24/#25 feitas (PR #134); Fase 6: #26 → #27 → #28/#29 → #30 feitas (na `Fase_6`);
 Rodada 2 (#31, ponto 2 da série) feita em 2026-10-19 (PR #148). Fase 7: #32 → #33 feitas em 2026-10-21 na branch de integração
 `Fase_7` (PRs #152 e #153; PR final #156 `Fase_7` → `main`, mergeado em 2026-10-25); a #34 (Rodada 3) foi feita em 2026-10-24 com o gerador (resultados em `Projeto/carga/results/05-distribuido`) e fechada em 2026-10-26; a #35 (`catalog`) fechou em 2026-10-25 (PR #157). Batch 1 (2026-10-26 a 2026-10-28, branch de integração `Batch_1`): #36 →
-#37 → #38 → Rodada R (`Projeto/carga/results/06-batch1-final`) → #40 → #39, mais os follow-ups acima; PR final `Batch_1` → `main`
-aguarda o merge do usuário. Próximo: #41–#43 (`admission`).
+#37 → #38 → Rodada R (`Projeto/carga/results/06-batch1-final`) → #40 → #39, mais os follow-ups acima; PR final #175 `Batch_1` → `main`
+mergeado. Batch 2 (2026-10-28 a 2026-10-29, branch de integração `Batch_2`): #166 ‖ (#170 → #171), #84 ‖ #15, #41 → #42 → #43 → #44, #177,
+#111 → #112, #178 → Rodada 4 (#179) → #47 → #204 → Rodada 5 (#180) e #46, todas feitas; PR final `Batch_2` → `main` aguardando o merge.
+
+Issues do Batch 2 fora do import 1–46: #177 (imagens slim, PR #189), #178 (harness da Rodada 4, PR #201), #179 (Rodada 4,
+`Projeto/carga/results/07-rodada4-admission`, PR #208) #204 (harness da Rodada 5, PR #209) e #180 (Rodada 5, `Projeto/carga/results/08-rodada5-saga`, PR #218), fechadas.
+
+Follow-ups abertos (2026-10-30):
+
+| Issue | Assunto |
+|---|---|
+| #181 | `GET /bff/users/email/{email}` expõe qualquer conta e as respostas de usuário trazem o hash da senha |
+| #182 | e-mail único sem diferenciar maiúsculas por índice em `lower(email)` (corrida do check da #166) |
+| #183 | PUT de usuário grava `admin` a partir do corpo |
+| #188 | frontend: não exibir o corpo cru da resposta de erro nos SnackBars |
+| #195 | reserva `pending` vencida ainda bloqueia nova reserva até a varredura do job |
+| #197 | autoescala em Kubernetes com HPA/KEDA (opção D da ADR de autoescala) |
+| #198 | Flutter: gerar a `Idempotency-Key` no cliente para retomar resposta perdida |
+| #203 | `notification-seek` falha se `identity.notification` ainda não existe |
+| #205 | `stock` escalável (até 3 réplicas) junto com a #197 |
+| #206 | scaler: suavizar o sinal `adm:hot` antes de decidir subir ou descer réplica |
+| #207 | `lb`: o health check do gateway não pode tirar do ar réplica saturada (5xx do braço C na R4) |
+| #210 | `gerar-imagens-slim.sh`: a sonda do `admission` cria o `eventcap` no `reservation` (404 desde a #47) |
+| #212 | `seed-data.sql` e a migração `20261022` ainda procuram o `eventcap` em `reservation`/`public` |
+
+Também abertas, fora do Batch 2 por decisão do usuário: #16 (`.env`, até o fim do TCC) e #45 (material do artigo).
 
 ## Fase 0 — Desbloqueio de ambiente
 
@@ -112,7 +143,7 @@ aguarda o merge do usuário. Próximo: #41–#43 (`admission`).
 - **Aceite:** `docker compose -f Projeto/docker-compose.yml up -d --build` sobe; `Projeto/Backend/run-tests.sh` roda e o resultado fica registrado. Sem mudança de código.
 - **Depende de:** —
 
-### 2. Vendorizar as ADRs do vault em `docs/adr/`
+### 2. Vendorizar as ADRs em `docs/adr/`
 `fase/0` `area/infra`
 - **Aceite:** os 8 `.md` em `docs/adr/`, links como caminhos relativos, índice em `docs/adr/README.md`.
 - **Depende de:** —

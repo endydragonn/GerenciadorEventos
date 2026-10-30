@@ -138,7 +138,7 @@ limpar() {
         # identity.notification e catalog.event ficam no event store (log imutavel; a identity de user_id/event_id nunca
         # recicla o id, entao o stream orfao e inofensivo).
         psql_db "DELETE FROM reservation.walletevent WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name LIKE 'Smoke36 $SUFIXO %');
-                 DELETE FROM reservation.eventcap WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name LIKE 'Smoke36 $SUFIXO %');
+                 DELETE FROM stock.eventcap WHERE event_id IN (SELECT event_id FROM catalog.event WHERE event_name LIKE 'Smoke36 $SUFIXO %');
                  DELETE FROM catalog.event WHERE event_name LIKE 'Smoke36 $SUFIXO %';
                  DELETE FROM identity.pending_verifications WHERE email LIKE 'smoke36-$SUFIXO-%@example.com';
                  DELETE FROM identity.users WHERE email LIKE 'smoke36-$SUFIXO-%@example.com';" >/dev/null 2>&1 || true

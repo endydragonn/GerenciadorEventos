@@ -1,0 +1,13 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    # Monólito legado de referência (CLAUDE.md): não é compilado, não entra na análise.
+    - blocoInteiro.dart
+
+linter:
+  rules:
+    # Os arquivos de tela são camelCase (telaLogin.dart, telaHomePage.dart...), convenção já
+    # estabelecida no projeto. Reavaliada na #44 e mantida desligada: renomear as 11 telas e todos os
+    # imports é churn fora do escopo do aceite. Arquivos novos fora de telas/ são snake_case.
+    file_names: false

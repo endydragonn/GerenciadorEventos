@@ -1,14 +1,14 @@
--- Schema: reservation  |  eventcap, walletevent, event_availability, idempotency_key + infra de event sourcing
+-- Schema: reservation  |  walletevent, event_availability, idempotency_key (log da saga) + infra de event sourcing
 -- Segunda extração de microsserviço (issue #33, Fase 7): o serviço reservation tem schema PRÓPRIO e é o único que lê e
 -- escreve estas tabelas. Os agregados que moravam em public (04-eventcap, 07-walletevent, 09-event-availability e
 -- 10-idempotency-key, removidos) vieram para cá; o histórico de cada tabela está nesses arquivos no git.
 --
 -- SEM FK PARA public.event / public.users (fronteira de serviço; nenhuma FK cross-schema). Consequências, todas tratadas
 -- na aplicação e documentadas no Backend/CLAUDE.md ("Serviço reservation"):
---   * eventcap NÃO cai em cascata quando o evento é apagado: o catalog chama o reservation (DELETE /internal/eventcaps/{id}),
---     que recusa (409) se há walletevent do evento, como o antigo ON DELETE RESTRICT fazia;
+--   * o eventcap (capacidade) saiu daqui na #47: é do schema stock (16-stock.sql), com o ledger de holds; o reservation é o lado
+--     wallet e ORQUESTRA a saga stock + wallet (a linha de idempotency_key é o log da saga);
 --   * walletevent não valida user_id/event_id: o gateway confere a carteira e o evento antes de reservar, e a existência
---     do eventcap faz o papel de "evento existe" dentro do serviço;
+--     do eventcap (no stock) faz o papel de "evento existe";
 --   * mywallet NÃO veio: é uma extensão 1:1 de users (criada por trigger), continua em public e é do identity.
 --
 -- Event store próprio (event_store, event_outbox, event_snapshot, projection_checkpoint): mesmo desenho do 11-event-store.sql,
@@ -23,49 +23,9 @@ SET client_encoding = 'UTF8';
 CREATE SCHEMA IF NOT EXISTS reservation;
 ALTER SCHEMA reservation OWNER to admin;
 
--- ===== eventcap =====
--- Agregado ISOLADO de capacidade/vagas de um evento (fronteira de consistência forte).
---   capacity = -1 => SEM LIMITE (quant também -1, a reserva não passa pelo CAS).
---   capacity >= 1 => limitado (0 é recusado pelo CHECK: um evento sem vaga alguma não faz sentido);
---     invariante 0 <= quant <= capacity (CHECK) e reserva por UPDATE condicional atômico:
---     UPDATE reservation.eventcap SET quant = quant - 1 WHERE event_id = ? AND capacity <> -1 AND quant >= 1;
---     rowcount = 0 => sem vaga. Liberação: quant + 1 ... WHERE capacity <> -1 AND quant < capacity.
---   Nasce por chamada síncrona do catalog (PUT /internal/eventcaps/{id}, idempotente por event_id) e é reconciliada pelo
---   EventCreated do tópico catalog.event.
-DROP TABLE IF EXISTS reservation.eventcap CASCADE;
-
-CREATE TABLE IF NOT EXISTS reservation.eventcap
-(
-    event_id integer NOT NULL,
-    capacity integer NOT NULL,
-    quant integer NOT NULL,
-    buy_time_limit timestamptz,
-    max_time_in_line integer NOT NULL DEFAULT 120,
-    created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT eventcap_pkey PRIMARY KEY (event_id),
-    -- -1 = ilimitado; caso contrário capacity >= 1 (mesma regra do catalog: lot_quantity >= 1 ou -1)
-    CONSTRAINT eventcap_capacity_valid CHECK (capacity = -1 OR capacity >= 1),
-    -- invariante só vale para eventos limitados
-    CONSTRAINT eventcap_quant_bounds
-        CHECK (capacity = -1 OR (quant >= 0 AND quant <= capacity)),
-    CONSTRAINT eventcap_max_time_in_line_positive CHECK (max_time_in_line > 0)
-)
-
-TABLESPACE pg_default;
-
-ALTER TABLE IF EXISTS reservation.eventcap
-    OWNER to admin;
-
-COMMENT ON TABLE reservation.eventcap IS
-    'Capacidade/vagas isoladas do evento. capacity = -1 => sem limite de vendas (quant = -1). '
-    'Caso contrário quant = vagas disponíveis e capacity = total. '
-    'buy_time_limit = até quando aceita compra. max_time_in_line = segundos que uma reserva '
-    'fica em walletevent.status = pending antes de expirar e devolver a vaga.';
-
 -- ===== walletevent =====
--- Inscrição/reserva (user_id, event_id). Máquina de estados: pending -> confirmed / expired / cancelled; a vaga de
--- eventcap é debitada ANTES da linha nascer (mesma transação). Projeção INLINE do stream reservation.wallet: cada
+-- Inscrição/reserva (user_id, event_id). Máquina de estados: pending -> confirmed / expired / cancelled; a vaga é segurada no
+-- stock (hold) ANTES da linha nascer, e hold_id liga a reserva corrente ao hold (revivê-la grava o hold novo). Projeção INLINE do stream reservation.wallet: cada
 -- transição é um UPDATE condicional com "SET version = version + 1 ... RETURNING version" e o evento só é appendado
 -- quando afeta 1 linha, na mesma transação. version = 0: linha anterior ao event sourcing.
 DROP TABLE IF EXISTS reservation.walletevent CASCADE;
@@ -79,6 +39,7 @@ CREATE TABLE IF NOT EXISTS reservation.walletevent
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     version integer NOT NULL DEFAULT 0,
+    hold_id uuid,
     CONSTRAINT "WalletEvent_pkey" PRIMARY KEY (user_id, event_id),
     CONSTRAINT walletevent_status_check
         CHECK (status IN ('confirmed', 'pending', 'expired', 'cancelled'))
@@ -121,8 +82,10 @@ COMMENT ON TABLE reservation.event_availability IS
     'A disponibilidade é calculada na leitura (eventcap LEFT JOIN esta tabela). Não é fonte de verdade.';
 
 -- ===== idempotency_key =====
--- Chaves de idempotência do POST /bff/event-wallets (#24), escopo por usuário (#129), retenção por job (#130). Uma linha
--- por reserva BEM-SUCEDIDA, na mesma transação do CAS + walletevent.
+-- Chaves de idempotência do POST /bff/event-wallets (#24), escopo por usuário (#129), retenção por job (#130). Desde a #47 a linha é
+-- também o LOG DA SAGA stock + wallet: a reivindicação da chave é o início da saga (tx1), e toda transição é um UPDATE condicional
+-- por (PK, hold_id, status esperado). reserving (hold pedido ao stock, sem resposta ainda) -> reserved (tx2 comitou) | compensating
+-- (desfazendo: libera o hold no stock) -> compensated. Linhas anteriores à #47 ficam reserved.
 DROP TABLE IF EXISTS reservation.idempotency_key CASCADE;
 
 CREATE TABLE IF NOT EXISTS reservation.idempotency_key
@@ -130,9 +93,18 @@ CREATE TABLE IF NOT EXISTS reservation.idempotency_key
     idempotency_key text        NOT NULL,
     user_id         integer     NOT NULL,
     event_id        integer     NOT NULL,
-    expires_at      timestamptz NOT NULL,
+    expires_at      timestamptz,
     created_at      timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT idempotency_key_pkey PRIMARY KEY (user_id, idempotency_key)
+    hold_id         uuid,
+    saga_status     text        NOT NULL,
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    resolved_at     timestamptz,
+    resolved_by     text,
+    CONSTRAINT idempotency_key_pkey PRIMARY KEY (user_id, idempotency_key),
+    CONSTRAINT idempotency_key_saga_status_check
+        CHECK (saga_status IN ('reserving', 'reserved', 'compensating', 'compensated')),
+    CONSTRAINT idempotency_key_resolved_by_check
+        CHECK (resolved_by IN ('inline', 'reaper'))
 )
 TABLESPACE pg_default;
 
@@ -140,11 +112,15 @@ TABLESPACE pg_default;
 -- cada rodada faria seq scan da tabela inteira. Migração a quente: migrations/20261020-...sql.
 CREATE INDEX IF NOT EXISTS idx_idempotency_key_created_at ON reservation.idempotency_key (created_at);
 
+-- Reaper de sagas órfãs (#47): só as não terminais, por antiguidade.
+CREATE INDEX IF NOT EXISTS idx_idempotency_key_saga_pendente ON reservation.idempotency_key (updated_at)
+    WHERE saga_status IN ('reserving', 'compensating');
+
 ALTER TABLE IF EXISTS reservation.idempotency_key OWNER to admin;
 
 COMMENT ON TABLE reservation.idempotency_key IS
-    'Chaves de idempotência do POST /bff/event-wallets. Uma linha por reserva bem-sucedida, gravada na '
-    'mesma transação do CAS em eventcap. Sem FK (fronteira de módulo). expires_at = expires_at da reserva.';
+    'Chaves de idempotência do POST /bff/event-wallets e log da saga stock + wallet (#47). Sem FK (fronteira de módulo). '
+    'expires_at = expires_at da reserva, gravado na tx2 (nulo enquanto reserving).';
 
 -- ===== infra de event sourcing do serviço (mesmo desenho do 11-event-store.sql) =====
 DROP TABLE IF EXISTS reservation.event_store CASCADE;

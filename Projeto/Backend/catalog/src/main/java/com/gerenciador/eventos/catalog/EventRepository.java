@@ -19,8 +19,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.gerenciador.eventos.catalogclient.api.Event;
 import com.gerenciador.eventos.catalogclient.api.EventoNaoEncontradoException;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
-import com.gerenciador.eventos.reservationclient.api.EventCapacityApi;
+import com.gerenciador.eventos.stockclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCapacityApi;
 import com.gerenciador.eventos.shared.DatabaseConnection;
 
 /**

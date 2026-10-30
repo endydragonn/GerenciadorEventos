@@ -16,9 +16,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
-import com.gerenciador.eventos.reservationclient.api.EventCap;
+import com.gerenciador.eventos.stockclient.api.EventCap;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
-import com.gerenciador.eventos.reservation.EventCapRepository;
 import com.gerenciador.eventos.reservation.EventWalletRepository;
 import com.gerenciador.eventos.reservation.EventWalletService;
 import com.gerenciador.eventos.TestSupport.GlobalDbTruncator;
@@ -29,7 +28,6 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 @Import(GlobalDbTruncator.class)
 public class EventWalletTest extends ReservationTestSupport {
     @Autowired private EventWalletService eventWalletService;
-    @Autowired private EventCapRepository eventCapRepository;
     @Autowired private EventWalletRepository eventWalletRepository;
     @Autowired private DatabaseConnection databaseConnection;
 
@@ -43,7 +41,7 @@ public class EventWalletTest extends ReservationTestSupport {
         assertEquals("pending", reserved.getStatus());
         assertNotNull(reserved.getExpiresAt());
         assertEquals("pending", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "reserva deve debitar 1 vaga");
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant(), "reserva deve debitar 1 vaga");
     }
 
     @Test
@@ -56,7 +54,7 @@ public class EventWalletTest extends ReservationTestSupport {
 
         assertEquals("confirmed", confirmed.getStatus());
         assertEquals("confirmed", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "confirmar não debita de novo");
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant(), "confirmar não debita de novo");
     }
 
     @Test
@@ -70,7 +68,7 @@ public class EventWalletTest extends ReservationTestSupport {
                 () -> eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id())));
 
         assertEquals("Vínculo já existente", ex.getMessage());
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "a duplicada não debita vaga");
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant(), "a duplicada não debita vaga");
     }
 
     /** Reserva depois do {@code buy_time_limit}: 400 (IllegalArgumentException), sem vaga debitada, sem linha, sem evento. */
@@ -83,7 +81,7 @@ public class EventWalletTest extends ReservationTestSupport {
                 () -> eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id())));
 
         assertEquals("Janela de compra encerrada para este evento", ex.getMessage());
-        assertEquals(5, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(), "eventcap intocado");
+        assertEquals(5, capacidade(e.getEvent_id()).getQuant(), "eventcap intocado");
         assertNull(eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()), "nenhuma walletevent");
         assertEquals(0, eventosNoStream(u.getId(), e.getEvent_id()), "nenhum evento no event_store");
     }
@@ -96,7 +94,7 @@ public class EventWalletTest extends ReservationTestSupport {
         EventWallet r = eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
 
         assertEquals("pending", r.getStatus());
-        assertEquals(4, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(4, capacidade(e.getEvent_id()).getQuant());
     }
 
     @Test
@@ -113,7 +111,7 @@ public class EventWalletTest extends ReservationTestSupport {
                 () -> eventWalletService.addLink(new EventWallet(u2.getId(), e.getEvent_id())));
         assertTrue(ex.getMessage().toLowerCase().contains("lotado"));
 
-        assertEquals(0, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(0, capacidade(e.getEvent_id()).getQuant());
     }
 
     @Test
@@ -121,7 +119,7 @@ public class EventWalletTest extends ReservationTestSupport {
         Usuario creator = novoUsuario("ilim-creator@example.com");
         Evento e = novoEvento(creator.getId(), "Evento Ilimitado", -1); // -1 = sem limite
 
-        EventCap cap = eventCapRepository.findByEventId(e.getEvent_id());
+        EventCap cap = capacidade(e.getEvent_id());
         assertEquals(-1, cap.getCapacity());
         assertTrue(cap.isUnlimited());
 
@@ -132,7 +130,7 @@ public class EventWalletTest extends ReservationTestSupport {
             assertEquals("pending", r.getStatus());
             eventWalletService.confirm(u.getId(), e.getEvent_id());
         }
-        assertEquals(-1, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(-1, capacidade(e.getEvent_id()).getQuant(),
                 "quant do evento ilimitado não muda");
     }
 
@@ -144,10 +142,10 @@ public class EventWalletTest extends ReservationTestSupport {
 
         eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
         eventWalletService.confirm(u.getId(), e.getEvent_id());
-        assertEquals(1, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(1, capacidade(e.getEvent_id()).getQuant());
 
         eventWalletService.removeLink(u.getId(), e.getEvent_id());
-        assertEquals(2, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(2, capacidade(e.getEvent_id()).getQuant(),
                 "cancelamento devolve a vaga");
     }
 
@@ -159,16 +157,16 @@ public class EventWalletTest extends ReservationTestSupport {
 
         eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
         eventWalletService.confirm(u.getId(), e.getEvent_id());
-        assertEquals(0, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(0, capacidade(e.getEvent_id()).getQuant());
 
         eventWalletService.removeLink(u.getId(), e.getEvent_id());
-        assertEquals(1, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(1, capacidade(e.getEvent_id()).getQuant(),
                 "primeiro cancelamento devolve a vaga");
 
         // 2ª chamada (retry de rede / clique repetido): a reserva já está cancelled,
         // não pode devolver vaga de novo
         eventWalletService.removeLink(u.getId(), e.getEvent_id());
-        assertEquals(1, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(1, capacidade(e.getEvent_id()).getQuant(),
                 "cancelamento repetido não devolve vaga de novo");
     }
 
@@ -185,7 +183,7 @@ public class EventWalletTest extends ReservationTestSupport {
             eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
             eventWalletService.confirm(u.getId(), e.getEvent_id());
         }
-        assertEquals(0, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(0, capacidade(e.getEvent_id()).getQuant());
 
         // duas remoções concorrentes do MESMO vínculo (dois cliques / abas)
         final Long userId = a.getId();
@@ -206,7 +204,7 @@ public class EventWalletTest extends ReservationTestSupport {
         t1.join();
         t2.join();
 
-        assertEquals(1, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(1, capacidade(e.getEvent_id()).getQuant(),
                 "cancelar o mesmo vínculo 2x devolve no máximo 1 vaga (sem overselling)");
         assertEquals("cancelled",
                 eventWalletRepository.currentStatus(a.getId(), e.getEvent_id()));

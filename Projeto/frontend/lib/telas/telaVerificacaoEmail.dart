@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:convert';
-import 'telaLogin.dart';
 import 'telaPrincipal.dart';
 import 'auth.dart';
 import '../config/app_config.dart';
@@ -13,10 +12,10 @@ class VerificacaoEmailModal extends StatefulWidget {
   final VoidCallback? onSuccess;
 
   const VerificacaoEmailModal({
-    Key? key,
+    super.key,
     required this.email,
     this.onSuccess,
-  }) : super(key: key);
+  });
 
   @override
   State<VerificacaoEmailModal> createState() => _VerificacaoEmailModalState();
@@ -28,8 +27,6 @@ class _VerificacaoEmailModalState extends State<VerificacaoEmailModal> {
   String? _errorMessage;
   int _remainingSeconds = 300; // 5 minutos
   late Timer _timer;
-  bool _canResend = false;
-  int _resendCooldown = 0;
 
   @override
   void initState() {
@@ -44,7 +41,6 @@ class _VerificacaoEmailModalState extends State<VerificacaoEmailModal> {
         if (_remainingSeconds <= 0) {
           _timer.cancel();
           _errorMessage = "Código expirado. Solicite um novo.";
-          _canResend = true;
         }
       });
     });
@@ -107,7 +103,7 @@ class _VerificacaoEmailModalState extends State<VerificacaoEmailModal> {
             await ApiAuth.setToken(token);
           }
         } catch (e) {
-          print('Erro ao extrair token: $e');
+          debugPrint('Erro ao extrair token: $e');
         }
 
         if (mounted) {
@@ -123,7 +119,7 @@ class _VerificacaoEmailModalState extends State<VerificacaoEmailModal> {
           await Future.delayed(const Duration(seconds: 2));
           
           if (mounted) {
-            print('Redirecionando para MainScreen...');
+            debugPrint('Redirecionando para MainScreen...');
             Navigator.of(context).pushAndRemoveUntil(
               MaterialPageRoute(builder: (context) => const MainScreen()),
               (route) => false,
@@ -176,7 +172,6 @@ class _VerificacaoEmailModalState extends State<VerificacaoEmailModal> {
       if (response.statusCode == 200) {
         setState(() {
           _remainingSeconds = 300;
-          _canResend = false;
           _codeController.clear();
           _errorMessage = null;
         });
@@ -431,7 +426,7 @@ class _VerificacaoEmailModalState extends State<VerificacaoEmailModal> {
 class TelaVerificacaoEmail extends StatefulWidget {
   final String email;
 
-  const TelaVerificacaoEmail({Key? key, required this.email}) : super(key: key);
+  const TelaVerificacaoEmail({super.key, required this.email});
 
   @override
   State<TelaVerificacaoEmail> createState() => _TelaVerificacaoEmailState();
@@ -443,8 +438,6 @@ class _TelaVerificacaoEmailState extends State<TelaVerificacaoEmail> {
   String? _errorMessage;
   int _remainingSeconds = 300; // 5 minutos
   late Timer _timer;
-  bool _canResend = false;
-  int _resendCooldown = 0;
 
   @override
   void initState() {
@@ -459,7 +452,6 @@ class _TelaVerificacaoEmailState extends State<TelaVerificacaoEmail> {
         if (_remainingSeconds <= 0) {
           _timer.cancel();
           _errorMessage = "Código expirado. Solicite um novo.";
-          _canResend = true;
         }
       });
     });
@@ -522,7 +514,7 @@ class _TelaVerificacaoEmailState extends State<TelaVerificacaoEmail> {
             await ApiAuth.setToken(token);
           }
         } catch (e) {
-          print('Erro ao extrair token: $e');
+          debugPrint('Erro ao extrair token: $e');
         }
 
         if (mounted) {
@@ -538,7 +530,7 @@ class _TelaVerificacaoEmailState extends State<TelaVerificacaoEmail> {
           await Future.delayed(const Duration(seconds: 2));
           
           if (mounted) {
-            print('Redirecionando para MainScreen...');
+            debugPrint('Redirecionando para MainScreen...');
             Navigator.of(context).pushAndRemoveUntil(
               MaterialPageRoute(builder: (context) => const MainScreen()),
               (route) => false,
@@ -591,7 +583,6 @@ class _TelaVerificacaoEmailState extends State<TelaVerificacaoEmail> {
       if (response.statusCode == 200) {
         setState(() {
           _remainingSeconds = 300;
-          _canResend = false;
           _codeController.clear();
           _errorMessage = null;
         });

@@ -3,8 +3,6 @@ package com.gerenciador.eventos.reservationclient;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.LocalDateTime;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,16 +27,13 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.gerenciador.eventos.reservationclient.api.EventCap;
-import com.gerenciador.eventos.reservationclient.api.EventCapacityApi;
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
 import com.gerenciador.eventos.reservationclient.api.EventWalletApi;
 import com.gerenciador.eventos.reservationclient.api.IdempotencyConflictException;
-import com.gerenciador.eventos.reservationclient.api.ReservationConflictException;
 
 /**
  * Cliente HTTP da API interna do serviço reservation (issue #33, Fase 7): é o salto de rede {@code gateway -> reservation}
- * que a Rodada 3 mede. Cada método de {@link EventWalletApi}/{@link EventCapacityApi} é uma (ou, no braço naive, duas)
+ * que a Rodada 3 mede. Cada método de {@link EventWalletApi} é uma (ou, no braço naive, duas)
  * chamada(s) síncrona(s); nada é cacheado nem repetido.
  *
  * <p><b>Pool de conexões</b> (Apache HttpClient 5, keep-alive): {@code maxConnections} no total E por rota (há uma só
@@ -53,11 +48,10 @@ import com.gerenciador.eventos.reservationclient.api.ReservationConflictExceptio
  * às cegas é decisão do chamador (a {@code Idempotency-Key} existe para isso).</p>
  *
  * <p><b>Erros</b> (o corpo da resposta de erro é a mensagem, texto puro): 400 => {@link IllegalArgumentException},
- * 422 => {@link IdempotencyConflictException}, 409 => {@link ReservationConflictException} (uma {@link IllegalStateException}),
- * 404 => depende do método,
+ * 422 => {@link IdempotencyConflictException}, 404 => depende do método,
  * qualquer outro => {@link RuntimeException}.</p>
  */
-public class ReservationClient implements EventWalletApi, EventCapacityApi {
+public class ReservationClient implements EventWalletApi {
 
     private static final MediaType JSON = MediaType.APPLICATION_JSON;
 
@@ -169,12 +163,20 @@ public class ReservationClient implements EventWalletApi, EventCapacityApi {
         }
     }
 
-    /** Resultado salvo da reserva com a chave (200), ou {@code null}; chave de outro evento => 422. */
-    private EventWallet replay(EventWallet ew, String idempotencyKey) {
+    /**
+     * (A chave vai como VARIÁVEL de URI, não como valor literal de {@code queryParam}: o literal deixa o {@code +} (comum em base64) sem
+     * codificar, e o servidor o leria como espaço, e trata {@code {...}} como variável de template.)
+     *
+     * <p>Resultado salvo da reserva com a chave (200), ou {@code null} (404: nenhuma reserva com a chave); chave de outro evento => 422
+     * ({@link IdempotencyConflictException}). Público desde a #42: o worker pool do admission reconcilia com ele as mensagens que
+     * venceram na fila ({@code GET /internal/reservations/replay}, só leitura; o contrato HTTP não mudou). {@code ew} só carrega o
+     * {@code userId} e o {@code eventId}.
+     */
+    public EventWallet replay(EventWallet ew, String idempotencyKey) {
         try {
             return http.get()
-                    .uri(b -> b.path("/internal/reservations/replay").queryParam("userId", ew.getUserId())
-                            .queryParam("eventId", ew.getEventId()).queryParam("idempotencyKey", idempotencyKey).build())
+                    .uri(b -> b.path("/internal/reservations/replay").queryParam("userId", "{u}").queryParam("eventId", "{e}")
+                            .queryParam("idempotencyKey", "{k}").build(ew.getUserId(), ew.getEventId(), idempotencyKey))
                     .retrieve().body(EventWallet.class);
         } catch (NaoEncontrado ex) {
             return null;
@@ -206,59 +208,6 @@ public class ReservationClient implements EventWalletApi, EventCapacityApi {
         return Boolean.TRUE.equals(ativa);
     }
 
-    // ===================== EventCapacityApi =====================
-
-    @Override
-    public void create(EventCap cap) {
-        http.put().uri("/internal/eventcaps/{id}", cap.getEventId()).contentType(JSON).body(cap)
-                .retrieve().toBodilessEntity();
-    }
-
-    @Override
-    public EventCap findByEventId(Long eventId) {
-        try {
-            return http.get().uri("/internal/eventcaps/{id}", eventId).retrieve().body(EventCap.class);
-        } catch (NaoEncontrado ex) {
-            return null;
-        }
-    }
-
-    @Override
-    public Map<Long, EventCap> findByEventIds(Collection<Long> eventIds) {
-        Map<Long, EventCap> out = new HashMap<>();
-        if (eventIds == null || eventIds.isEmpty()) {
-            return out;
-        }
-        // ids no CORPO (POST): a busca de eventos hidrata a lista inteira (milhares de ids) e a query string estouraria o
-        // limite de header do Tomcat do reservation
-        List<EventCap> caps = http.post().uri("/internal/eventcaps/batch").contentType(JSON).body(List.copyOf(eventIds))
-                .retrieve().body(new ParameterizedTypeReference<List<EventCap>>() { });
-        if (caps != null) {
-            caps.forEach(c -> out.put(c.getEventId(), c));
-        }
-        return out;
-    }
-
-    @Override
-    public boolean updatePolicy(Long eventId, Integer newCapacity, LocalDateTime buyTimeLimit) {
-        EventCap politica = new EventCap();
-        politica.setEventId(eventId);
-        politica.setCapacity(newCapacity);
-        politica.setBuyTimeLimit(buyTimeLimit);
-        try {
-            http.patch().uri("/internal/eventcaps/{id}/policy", eventId).contentType(JSON).body(politica)
-                    .retrieve().toBodilessEntity();
-            return true;
-        } catch (NaoEncontrado ex) {
-            return false;
-        }
-    }
-
-    @Override
-    public void delete(Long eventId) {
-        http.delete().uri("/internal/eventcaps/{id}", eventId).retrieve().toBodilessEntity();
-    }
-
     // ===================== erros =====================
 
     private static Map<String, Long> corpo(Long userId, Long eventId) {
@@ -272,7 +221,6 @@ public class ReservationClient implements EventWalletApi, EventCapacityApi {
         return switch (status) {
             case 400 -> new IllegalArgumentException(mensagem);
             case 404 -> new NaoEncontrado(mensagem);
-            case 409 -> new ReservationConflictException(mensagem);
             case 422 -> new IdempotencyConflictException(mensagem);
             default -> new RuntimeException("Serviço reservation respondeu HTTP " + status + ": " + mensagem);
         };

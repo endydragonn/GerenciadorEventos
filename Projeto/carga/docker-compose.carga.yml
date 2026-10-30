@@ -6,7 +6,7 @@
 #
 # - backend (monolito/gateway): RESERVATION_READPATH decide o fluxo: cas (default, 1 chamada ao reservation, nunca oversella)
 #   ou naive (braco de controle, 2 chamadas: GET da disponibilidade + POST da reserva). Lido na subida do backend.
-#   Hikari 10 (desde a #36 o gateway nao toca em tabela de dominio: so health; soma no Supavisor = 1213 <= 1500) e Tomcat 300
+#   Hikari 10 (desde a #36 o gateway nao toca em tabela de dominio: so health; soma no Supavisor = 1213 sem o stock, 1463 com os 250 dele (#47) <= 1500) e Tomcat 300
 #   (compose/application.properties). O identity (JWT RS256, login, cadastro) e outro servico: ver o compose normal.
 # - reservation: o CAMINHO QUENTE. Hikari 1000, Tomcat 300 e virtual threads desligadas, como o monolito no ponto 2
 #   (SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE / _MINIMUM_IDLE chegam aqui, issue #96). Relay e consumer ligados no compose.
@@ -34,3 +34,7 @@ services:
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-1000}
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-5}
       # LOGGING_LEVEL_EVENTS_LAG: "DEBUG"
+      # Latencia dos passos da saga (tx1_ms / stock_ms / tx2_ms / total_ms) no logger saga.timing do RESERVATION (Rodada 5, issue #204): DESLIGADO por padrao
+      # (um log por reserva aceita, como o events.lag acima, infla a latencia medida). Descomente SO no bloco que mede a latencia dos passos; o
+      # coleta-host.sh le por `docker logs --since` de todas as replicas e imprime p50/p95/max no resumo-saga-*.txt.
+      # LOGGING_LEVEL_SAGA_TIMING: "DEBUG"

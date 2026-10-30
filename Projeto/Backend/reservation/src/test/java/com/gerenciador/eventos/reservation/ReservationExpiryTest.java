@@ -16,7 +16,6 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 
 import com.gerenciador.eventos.reservationclient.api.EventWallet;
-import com.gerenciador.eventos.reservation.EventCapRepository;
 import com.gerenciador.eventos.reservation.EventWalletRepository;
 import com.gerenciador.eventos.reservation.EventWalletService;
 import com.gerenciador.eventos.reservation.ReservationExpiryService;
@@ -33,7 +32,6 @@ import com.gerenciador.eventos.shared.DatabaseConnection;
 @TestPropertySource(properties = "reservation.expiry.scan.ms=3600000")
 public class ReservationExpiryTest extends ReservationTestSupport {
     @Autowired private EventWalletService eventWalletService;
-    @Autowired private EventCapRepository eventCapRepository;
     @Autowired private EventWalletRepository eventWalletRepository;
     @Autowired private ReservationExpiryService reservationExpiryService;
     @Autowired private DatabaseConnection databaseConnection;
@@ -45,7 +43,7 @@ public class ReservationExpiryTest extends ReservationTestSupport {
         Evento e = novoEvento(null, "evento", 3);
 
         eventWalletService.addLink(new EventWallet(u.getId(), e.getEvent_id()));
-        assertEquals(2, eventCapRepository.findByEventId(e.getEvent_id()).getQuant());
+        assertEquals(2, capacidade(e.getEvent_id()).getQuant());
 
         // força expires_at para o passado
         try (Connection conn = databaseConnection.getConnection();
@@ -60,7 +58,7 @@ public class ReservationExpiryTest extends ReservationTestSupport {
         reservationExpiryService.expireStaleReservations();
 
         assertEquals("expired", eventWalletRepository.currentStatus(u.getId(), e.getEvent_id()));
-        assertEquals(3, eventCapRepository.findByEventId(e.getEvent_id()).getQuant(),
+        assertEquals(3, capacidade(e.getEvent_id()).getQuant(),
                 "vaga deve voltar após expiração");
     }
 
@@ -81,7 +79,7 @@ public class ReservationExpiryTest extends ReservationTestSupport {
         long eventId = e.getEvent_id();
 
         eventWalletService.addLink(new EventWallet(userId, eventId));
-        assertEquals(4, eventCapRepository.findByEventId(eventId).getQuant(),
+        assertEquals(4, capacidade(eventId).getQuant(),
                 "reserva pending deve debitar 1 vaga (capacity - 1)");
 
         // força expires_at para o passado (mesma UPDATE parametrizada do teste happy-path)
@@ -102,13 +100,13 @@ public class ReservationExpiryTest extends ReservationTestSupport {
         // só então o job age sobre a linha capturada
         reservationExpiryService.expireStaleReservations();
         try (Connection conn = databaseConnection.getConnection()) {
-            assertEquals(0, eventWalletRepository.expireIfStale(conn, userId, eventId),
+            assertEquals(0, eventWalletRepository.expireIfStale(conn, userId, eventId).versao(),
                     "expireIfStale não pode expirar uma reserva já confirmada");
         }
 
         assertEquals("confirmed", eventWalletRepository.currentStatus(userId, eventId),
                 "a confirmação concorrente deve permanecer intacta");
-        assertEquals(4, eventCapRepository.findByEventId(eventId).getQuant(),
+        assertEquals(4, capacidade(eventId).getQuant(),
                 "nenhuma devolução de vaga: quant continua capacity - 1");
     }
 
@@ -128,7 +126,7 @@ public class ReservationExpiryTest extends ReservationTestSupport {
 
         eventWalletService.addLink(new EventWallet(userId, eventId));
         eventWalletService.confirm(userId, eventId);
-        assertEquals(4, eventCapRepository.findByEventId(eventId).getQuant());
+        assertEquals(4, capacidade(eventId).getQuant());
 
         // expires_at no passado numa linha JÁ confirmed
         forcarExpiresAtNoPassado(userId, eventId);
@@ -140,7 +138,7 @@ public class ReservationExpiryTest extends ReservationTestSupport {
         reservationExpiryService.expireStaleReservations();
 
         assertEquals("confirmed", eventWalletRepository.currentStatus(userId, eventId));
-        assertEquals(4, eventCapRepository.findByEventId(eventId).getQuant(),
+        assertEquals(4, capacidade(eventId).getQuant(),
                 "vaga não é devolvida para reserva confirmada");
     }
 

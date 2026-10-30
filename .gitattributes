@@ -3,3 +3,6 @@
 
 # Supabase vendorizado: montado em container Linux, nunca CRLF
 Projeto/supabase/** text eol=lf
+
+# HAProxy da autoescala (#111): montado em container Linux, nunca CRLF
+Projeto/autoescala/haproxy.cfg text eol=lf
