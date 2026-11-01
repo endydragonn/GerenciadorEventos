@@ -132,3 +132,19 @@ Tempos em ms.
 - **Fila:** a fração de 202 do B1 (13,8%) ficou em 0,55× a do B0, dentro da faixa de 0,5× a 2×, mas perto da borda. Já as 429 subiram de 5,5%
   para 23,5%: respostas baratas do `admission` que mudam o caminho. O registro fica aqui para a interface julgar se isso é uma segunda
   variável.
+
+## Leitura final e ressalvas
+
+**HB confirmada em parte.** Espalhar as conexões do k6 entre 3 pods tira a fila do gateway, mas ela desce para o reservation e o stock, que
+estão no teto, e o p95 melhora pouco.
+
+Ressalvas:
+- **As 429 subiram de 5,5% (B0) para 23,5% (B1).** São respostas baratas do `admission`, que mudam o caminho, e por isso uma segunda variável
+  possível entre as rodadas. As 202 ficaram em 0,55× as do B0, dentro da faixa combinada, mas perto da borda.
+- **No B1, a fila acompanhada teve 21 `timed_out` e 178 `sem_estado`** (0 e 0 no B0): reservas enfileiradas sem resposta dentro do teto de
+  consulta de 35 s.
+- **A `telemetria-host` não gravou no B1.** A CPU do host dessa rodada não tem dado; no B0 a média foi de 110,7%.
+- **As duas réplicas novas do gateway ficaram ~6 min ociosas antes do B1:** JVM no ar, mas sem aquecimento por tráfego.
+
+Estado deixado no cluster, até o usuário decidir se desfaz: o B1 (backend com `minReplicaCount` 3), o teste A (stock em Hikari 250 e
+`maxReplicaCount` 1) e a instrumentação. O desfazer de cada um está no README da pasta acima, em `teste-A/` e no começo deste arquivo.
