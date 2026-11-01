@@ -2,7 +2,7 @@
 
 Repete o bloco 1 da R5 (`degraus-59713`, etapa 08) com uma diferença: o container `db` (Supabase Postgres 17) sai do host e vai para um Dell
 dedicado. É a opção A da #227: o Supavisor e todos os serviços seguem no host, e só a conexão pooler → db atravessa a rede. Um bloco, em
-2026-11-01, com o k6 das 05:04:08Z às 05:29:49Z (02:04 às 02:29, horário local).
+2026-11-01, com o k6 das 05:04:08Z às ~05:29:46Z (02:04 às 02:29, horário local; `duracao_s` de 1.537,8 s no resumo do k6).
 
 ## O que estava implementado
 
@@ -49,7 +49,7 @@ dedicado. É a opção A da #227: o Supavisor e todos os serviços seguem no hos
   | | Host (R5) | Dell (R5-db-remoto) |
   |---|---|---|
   | CPU do banco | Ryzen 7 7700X, dividido com o resto da stack | i5-1135G7, só o banco |
-  | `pg_test_fsync`, fdatasync | 0,378–0,405 ms por operação (`08-rodada5-saga/host-telemetria/pg_test_fsync-r5*.txt`) | ~0,79 ms por operação (medição da sessão do Dell, #227); `f_await` sob carga ~0,52 ms (`dell/iostat-nvme0n1.txt`) |
+  | `pg_test_fsync`, fdatasync | 0,378–0,421 ms por operação, seção de uma escrita de 8kB (`08-rodada5-saga/host-telemetria/pg_test_fsync-r5*.txt`) | ~0,79 ms por operação (informado pela sessão do Dell, #227; não versionado); `f_await` sob carga ~0,52 ms (`dell/iostat-nvme0n1.txt`) |
   | Rede pooler → db | rede bridge do Docker, no mesmo host | NAT do Docker Desktop → Ethernet 1 Gb → Dell |
 
 - **RTT host → Dell** (`banco/rtt.txt`, com a stack ociosa, depois do seed):
@@ -90,7 +90,8 @@ $env:CARGA_DB='gerenciador-db-remoto'; ./rpm/subir-host-rpm.ps1 -Verificar -Pref
 ```
 
 Gerador: `git checkout 850d38ed0b07e1c4694f95e6c1d0a1a89a8fb67f`, depois a linha `k6 run` (`linha_k6` do plano, trocando o checkout), o
-`git add -f` do resumo e `git push origin HEAD:refs/heads/R5DB-gerador-01` (`56e337e`).
+`git add -f` do resumo e `git push origin HEAD:refs/heads/R5DB-gerador-01` (`56e337e`). O ref era temporário e já foi removido do
+remoto; o conteúdo está em `gerador/summary-degraus-283330.json`, com o mesmo blob do commit `56e337e`.
 
 ## Bloco (`degraus-283330`)
 
@@ -160,8 +161,9 @@ A escada, os parâmetros do k6, o código e as imagens são os mesmos. A regra d
 | Fila `admission.requests` (máx.) / dead-letter | 4.418 / 0 | 4.412 / 0 |
 | Pooler: conexões ativas (máx.) / esperando lock (máx.) | 242 / 235 | 242 / 237 |
 | CPU do host, contador na coleta inteira (média / máx.) | 78,8 / 114 | 84,6 / 113 |
-| CPU do host na janela de carga (média) | 85,5 | 93,0 |
-| RAM livre do host (mínimo) | 3,5 GB | 32,7 GB |
+| CPU do host do início do 1º ao fim do 14º degrau (média) | 85,7 | 93,2 |
+| CPU do host por degrau (média) | 95 a 20k e 26k; 103–111 de 32k a 98k | 105–106 a 20k e 26k; 108–112 de 32k a 98k |
+| RAM livre do host: início da coleta → mínimo (consumo) | 10,5 → 3,5 GB (~7,0 GB) | 37,5 → 32,7 GB (~4,9 GB) |
 | Lag do consumer da projeção (`lag_reservation`, máx.) | 169.662 | 434.392 |
 | Overselling no CAS | 0 | 0 |
 
@@ -170,23 +172,31 @@ Leitura:
   e 0 órfãs.
 - **Entre 26k e 38k ficou pior.** O p95 de 26k foi de 100 para 343 ms, o primeiro degrau degradado veio um passo antes (32k contra 38k), e a
   fila ligou mais cedo: 6.285 respostas 202 em 32k contra 106, e 429 já em 38k.
-  - Cada transação passa a pagar o RTT (~0,45 ms por ida) e um fdatasync perto do dobro do do host (~0,79 contra ~0,4 ms). O lock da linha
-    quente do `eventcap` fica mais tempo travado por commit, e o contador do `admission` vê mais rajadas acima de 0,8 X.
-  - Essa leitura é uma hipótese: com uma escada só, não dá para separar a rede do disco.
-- **Acima de 74k ficou melhor:** p95 de janela de 0,27–0,47 s contra 0,41–0,87 s, e o tempo até admitir ficou em 11–14 s contra 19–24 s.
-  - Com a fila já ligada desde o começo, o worker pool (32) drena num ritmo estável.
-  - A hipótese é que tirar o Postgres do host liberou CPU e memória para o pooler, os serviços e o gateway nos degraus altos: a RAM livre
-    mínima foi de 3,5 para 32,7 GB. A média de CPU do host subiu mesmo sem o banco, provavelmente porque o host processou mais 202 (310 mil contra 269 mil).
-  - Também não está medido separadamente.
+  - Hipótese: cada transação passa a pagar o RTT (~0,45 ms de ida e volta, p50 do `select 1`) e o flush do WAL no disco do Dell
+    (`f_await` ~0,52 ms sob carga). O lock da linha quente do `eventcap` fica mais tempo travado por commit, e o contador do `admission`
+    vê mais rajadas acima de 0,8 X.
+  - Explicação concorrente: o host já estava no teto de CPU a 20k e 26k (105–106 contra 95 na R5; ver "Gargalo"), o que também
+    deixaria o caminho síncrono mais lento nesses degraus.
+  - Com uma escada só, não dá para separar a rede, o disco e a CPU do host.
+- **A partir de 74k ficou melhor:** p95 de janela de 0,27–0,47 s contra 0,41–0,87 s, e o tempo até admitir p95 ficou em 12,1–14,1 s
+  contra 19,1–24,2 s.
+  - Hipótese: com a fila já ligada desde 32k, o worker pool (32) drena num ritmo estável.
+  - Não foi CPU liberada: a CPU do host foi maior em todos os degraus (105–112 contra 95–111).
+  - A RAM não serve de evidência. O consumo no bloco foi menor (~4,9 contra ~7,0 GB, do início da coleta ao mínimo), mas o estado
+    inicial difere: 37,5 GB livres no início contra 10,5 GB na R5, provavelmente pelo restart do Docker Desktop antes do preparo (ver
+    "Anomalias e desvios").
+  - A causa não está medida.
 - **A devolução assíncrona da vaga ficou mais lenta** (p95 de 640 contra 448 ms), mas sem acumular: `lag_stock` no máximo 117, devolução
   pendente 0 ao fim.
 - **A projeção de disponibilidade (braço `naive`, fora do caminho `cas`) ficou bem mais atrasada:** 434 mil mensagens de lag contra 170 mil, e
-  ainda ~428 mil no fim da coleta. O consumer aplica um evento por vez, e cada um paga o RTT até o Dell.
+  ainda ~428 mil no fim da coleta. O `EventAvailabilityConsumer` é em lote desde a #146 (`max.poll.records` 500, um commit por lote), mas
+  dentro do lote os statements saem por evento. A hipótese é que cada um paga o RTT até o Dell; o custo por evento não foi medido.
 
 ## Dell (coleta da máquina do banco)
 
-O coletor da sessão do Dell gravou de 05:03:57Z a 05:33:00Z, a cada 1 s, e cobre o k6 inteiro. Arquivos em `dell/` (ref `R5DB-dell-01`,
-`coleta-227.tar.gz` com sha256 `81271167…44c63`):
+O coletor da sessão do Dell gravou de 05:03:57Z a 05:33:00Z, a cada 1 s, e cobre o k6 inteiro. Arquivos em `dell/`, vindos do
+`coleta-227.tar.gz` (sha256 `81271167…44c63`, informado pela coleta; não verificável pelo repo, porque o tar não foi versionado). O ref
+`R5DB-dell-01` que o trouxe era temporário e já foi removido; o conteúdo está nesta pasta:
 - `mpstat.txt` e `vmstat.txt`;
 - `iostat-nvme0n1.txt`: o iostat filtrado no disco do banco (timestamps, `avg-cpu` e a linha `nvme0n1`);
 - `psi.txt`: `/proc/pressure` de cpu, io e memória;
@@ -202,43 +212,50 @@ Janelas por degrau em UTC: o degrau k começa em 05:05:38Z + k × 106 s (o `SETU
 
 | RPM alvo | CPU Dell % (méd/máx) | iowait % | `nvme0n1` util % | w/s | flush/s | f_await (ms) | w_await (ms) | PSI cpu some % | PSI io some / full % | `active` no Postgres (méd/máx) | CPU do host (méd/máx) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 20k | 19,1 / 39,0 | 2,9 | 49,6 | 1.505 | 748 | 0,52 | 0,36 | 1,1 | 6,7 / 6,1 | 19 / 132 | 105 / 113 |
-| 26k | 23,7 / 36,2 | 2,7 | 63,9 | 1.887 | 935 | 0,52 | 0,38 | 0,9 | 8,1 / 7,3 | 23 / 100 | 106 / 113 |
-| 32k | 42,7 / 65,0 | 8,1 | 64,8 | 1.904 | 943 | 0,51 | 0,38 | 6,2 | 8,1 / 5,8 | 176 / 243 | 108 / 113 |
-| 38k | 40,8 / 59,6 | 7,5 | 64,0 | 1.783 | 883 | 0,71 | 0,56 | 7,5 | 9,4 / 7,1 | 184 / 240 | 111 / 113 |
-| 44k | 30,5 / 59,3 | 5,4 | 66,6 | 1.924 | 946 | 0,53 | 0,38 | 3,1 | 8,7 / 6,9 | 61 / 203 | 110 / 113 |
-| 50k | 23,7 / 29,6 | 3,5 | 62,5 | 1.842 | 910 | 0,53 | 0,37 | 1,6 | 8,2 / 7,1 | 38 / 99 | 112 / 113 |
-| 56k | 27,7 / 38,2 | 3,9 | 66,6 | 1.946 | 959 | 0,53 | 0,37 | 2,3 | 8,7 / 7,4 | 49 / 105 | 110 / 113 |
-| 62k | 30,4 / 45,3 | 4,1 | 69,4 | 2.030 | 985 | 0,54 | 0,45 | 2,9 | 9,3 / 7,7 | 41 / 105 | 110 / 113 |
-| 68k | 29,1 / 36,9 | 4,3 | 72,5 | 2.117 | 1.019 | 0,55 | 0,47 | 2,3 | 9,6 / 8,1 | 49 / 119 | 111 / 113 |
-| 74k | 29,9 / 40,0 | 4,6 | 74,2 | 2.189 | 1.052 | 0,53 | 0,40 | 2,5 | 9,7 / 8,0 | 41 / 115 | 111 / 113 |
-| 80k | 31,1 / 40,5 | 4,5 | 74,3 | 2.233 | 1.051 | 0,52 | 0,38 | 2,6 | 9,7 / 8,0 | 43 / 106 | 111 / 113 |
-| 86k | 38,0 / 51,0 | 5,4 | 72,9 | 2.199 | 1.025 | 0,55 | 0,38 | 4,9 | 9,4 / 7,3 | 62 / 135 | 110 / 113 |
-| 92k | 38,0 / 49,5 | 5,4 | 72,8 | 2.180 | 1.028 | 0,54 | 0,82 | 5,1 | 9,7 / 7,5 | 64 / 122 | 110 / 113 |
-| 98k | 32,8 / 39,0 | 5,2 | 72,5 | 2.192 | 1.014 | 0,54 | 0,85 | 3,4 | 9,6 / 7,7 | 69 / 132 | 110 / 113 |
+| 20k | 19,1 / 39,0 | 5,7 | 49,6 | 1.505 | 748 | 0,52 | 0,36 | 1,1 | 6,7 / 6,1 | 19 / 132 | 105 / 113 |
+| 26k | 23,7 / 36,2 | 7,1 | 63,9 | 1.887 | 935 | 0,52 | 0,38 | 0,9 | 8,1 / 7,3 | 23 / 100 | 106 / 113 |
+| 32k | 42,7 / 65,0 | 5,7 | 64,8 | 1.904 | 943 | 0,51 | 0,38 | 6,2 | 8,1 / 5,8 | 176 / 243 | 108 / 113 |
+| 38k | 40,8 / 59,6 | 5,8 | 64,0 | 1.783 | 883 | 0,71 | 0,56 | 7,5 | 9,4 / 7,1 | 184 / 240 | 111 / 113 |
+| 44k | 30,5 / 59,3 | 6,5 | 66,6 | 1.924 | 946 | 0,53 | 0,38 | 3,1 | 8,7 / 6,9 | 61 / 203 | 110 / 113 |
+| 50k | 23,7 / 29,6 | 6,7 | 62,5 | 1.842 | 910 | 0,53 | 0,37 | 1,6 | 8,2 / 7,1 | 38 / 99 | 112 / 113 |
+| 56k | 27,7 / 38,2 | 7,1 | 66,6 | 1.946 | 959 | 0,53 | 0,37 | 2,3 | 8,7 / 7,4 | 49 / 105 | 110 / 113 |
+| 62k | 30,4 / 45,3 | 7,2 | 69,4 | 2.030 | 985 | 0,54 | 0,45 | 2,9 | 9,3 / 7,7 | 41 / 105 | 110 / 113 |
+| 68k | 29,1 / 36,9 | 7,6 | 72,5 | 2.117 | 1.019 | 0,55 | 0,47 | 2,3 | 9,6 / 8,1 | 49 / 119 | 111 / 113 |
+| 74k | 29,9 / 40,0 | 7,7 | 74,2 | 2.189 | 1.052 | 0,53 | 0,40 | 2,5 | 9,7 / 8,0 | 41 / 115 | 111 / 113 |
+| 80k | 31,1 / 40,5 | 7,6 | 74,3 | 2.233 | 1.051 | 0,52 | 0,38 | 2,6 | 9,7 / 8,0 | 43 / 106 | 111 / 113 |
+| 86k | 38,0 / 51,0 | 7,0 | 72,9 | 2.199 | 1.025 | 0,55 | 0,38 | 4,9 | 9,4 / 7,3 | 62 / 135 | 110 / 113 |
+| 92k | 38,0 / 49,5 | 7,0 | 72,8 | 2.180 | 1.028 | 0,54 | 0,82 | 5,1 | 9,7 / 7,5 | 64 / 122 | 110 / 113 |
+| 98k | 32,8 / 39,0 | 7,3 | 72,5 | 2.192 | 1.014 | 0,54 | 0,85 | 3,4 | 9,6 / 7,7 | 69 / 132 | 110 / 113 |
 
-O PSI vem da diferença do contador `total` na janela, e não do `avg10`. O `active` é a contagem `state = active` do `pg_activity.csv`. A CPU do host
-é o contador da `telemetria-host` (utilidade do processador, que passa de 100 com turbo; o máximo observado é ~113–114). Com a stack ociosa, a
-CPU do Dell ficou em 3%.
+O PSI vem da diferença do contador `total` na janela, e não do `avg10`. O `active` é a contagem `state = active` do `pg_activity.csv`. O iowait
+é o `%iowait` do `mpstat` (igual no `sar`, no `vmstat` e no `avg-cpu` do `iostat`). A CPU do host
+é o contador da `telemetria-host` (utilidade do processador, que passa de 100 com turbo; o máximo observado é ~113–114). Com a stack ociosa, nos
+~10 s antes do k6, a CPU do Dell ficou em ~3–7% (média ~5%; fora a 1ª amostra, do arranque do coletor).
 
-Gargalo:
+Gargalo (leitura com hipóteses; nada aqui foi isolado por experimento):
 - **O Dell não saturou em nenhum degrau.**
   - A CPU média ficou entre 19% e 43%, com pico de 65%, e o PSI de CPU ficou abaixo de 8%.
-  - O disco fez ~750–1.050 flushes/s com ~0,52 ms cada (`f_await`), perto do `pg_test_fsync` de ~0,79 ms. O PSI de io ficou em ~7–10%
-    (`some`) e o `%util` em 50–74%. Num NVMe, `%util` não indica saturação, porque há várias filas.
-  - Do lado do Dell, o custo é a latência de cada commit (flush do WAL mais o RTT), não falta de capacidade.
+  - O disco fez ~750–1.050 flushes/s com ~0,52 ms cada (`f_await`; 0,71 ms em 38k). O PSI de io ficou em ~7–10% (`some`) e o `%util` em
+    50–74%. Num NVMe, `%util` não indica saturação, porque há várias filas.
+  - Hipótese: do lado do Dell, o custo é a latência de cada commit (flush do WAL mais o RTT), não falta de capacidade.
 - **O host ficou no teto de CPU desde o 1º degrau:** 105–112 de média contra o máximo de ~113. Na R5 o host ficou em 95 a 20k e 26k e só
   encostou no teto a partir de 32k–38k (103–111).
+  - Não é volume de 202: a 20k e 26k os 202 são quase iguais (1.571 contra 1.654), e a CPU já foi 105–106 contra 95.
   - A hipótese é a rede do Docker Desktop no Windows: o tráfego container → LAN passa pela pilha de rede dele, e ela come CPU do host. Isso
     não está medido separadamente.
-- **O pico de 32k–38k é a linha quente do `eventcap`.** O `active` no Postgres sobe para 176–184 de média (240 de máximo) e a coleta do host vê
-  125–127 conexões esperando lock. A CPU e o disco do Dell sobem pouco: 41–43% e o mesmo `f_await`.
-  - Cada commit dura mais (flush ~0,5 ms mais RTT ~0,45 ms), o lock da linha fica mais tempo preso, e a fila de lock se forma um degrau antes
-    da R5. Isso fecha com o 1º degrau degradado em 32k.
-- **Resumo:** na faixa até 44k, o limite é o lock da linha quente, esticado pela latência de commit do banco remoto. Acima dela, com a fila
-  do `admission` ligada, o limite é a CPU do host. O Dell sobra nos dois casos.
-- **`pg_test_fsync` do Dell:** não veio no pacote da coleta. O ~0,79 ms por operação vem da medição da sessão do Dell citada na #227, e o
-  `f_await` medido sob carga (~0,52 ms) é coerente com ele.
+- **Em 32k–38k aparece a fila de lock na linha quente do `eventcap`.** O `active` no Postgres sobe para 176–184 de média (243 de máximo) e a
+  coleta do host vê 125–127 conexões esperando lock em média.
+  - No Dell, a CPU sobe de 23,7% (26k) para 42,7% (32k), puxada por `%usr` e `%sys` (`%sys` de 2,7 para 8,1). O disco é que fica estável:
+    iowait de 7,1 para 5,7–5,8%, w/s e flush/s quase iguais, `f_await` 0,51 ms em 32k e 0,71 ms em 38k.
+  - Hipótese: cada commit dura mais (flush ~0,5 ms mais RTT ~0,45 ms), o lock da linha fica mais tempo preso, e a fila de lock se forma um
+    degrau antes da R5, o que seria compatível com o 1º degrau degradado em 32k.
+  - Explicação concorrente: o host já estava no teto de CPU a 20k e 26k (105–106 contra 95 na R5), o que também atrasaria o caminho síncrono
+    e a liberação do lock.
+- **Resumo (hipótese):** na faixa até 44k, o candidato principal é o lock da linha quente, esticado pela latência de commit do banco remoto,
+  com a CPU do host no teto como explicação concorrente. Acima dela, com a fila do `admission` ligada, o candidato é a CPU do host. O Dell
+  não saturou em nenhum dos dois casos. Uma escada só não separa rede, disco e CPU do host.
+- **`pg_test_fsync` do Dell:** não veio no pacote da coleta. O ~0,79 ms por operação foi informado pela sessão do Dell citada na #227 e não
+  está em nenhum arquivo versionado. A evidência versionada do disco é o `f_await` sob carga (~0,52 ms, `dell/iostat-nvme0n1.txt`).
 
 ## Aceite (#227)
 
@@ -249,7 +266,7 @@ Gargalo:
 - Smoke pelo pooler antes da escada: **cumprido**.
 - Escada com os parâmetros do `Deg-59713`, só `SUFIXO`/`RUN_ID` novos, rodada no gerador: **cumprido**.
 - `verificar-rpm` sem código 3 nem 4 e overselling 0 no CAS: **cumprido** (RC 0).
-- Coleta do host (36 colunas e telemetria), RTT e coleta do Dell (CPU, disco, conexões, PSI, com horário UTC): **cumprido**. O `pg_test_fsync` do Dell não veio no pacote; o valor (~0,79 ms) é o da sessão do Dell, citado na #227.
+- Coleta do host (36 colunas e telemetria), RTT e coleta do Dell (CPU, disco, conexões, PSI, com horário UTC): **cumprido**. O `pg_test_fsync` do Dell não veio no pacote; o valor (~0,79 ms) foi informado pela sessão do Dell, citado na #227, e não está versionado.
 - Resultados em `09-…`, com README, tabela R5 × R5-db-remoto e linha no `results/README.md`: **cumprido**. Nada em `docs/artigo/`.
 
 ## Anomalias e desvios
@@ -270,7 +287,7 @@ Gargalo:
 
 - `degraus-283330.csv` e `degraus-283330.html`: uma linha por degrau e o relatório.
 - `plano-degraus-283330.json`: o plano e a linha do k6.
-- `gerador/summary-degraus-283330.json`: o resumo do k6 (ref `R5DB-gerador-01`, `56e337e`).
+- `gerador/summary-degraus-283330.json`: o resumo do k6 (veio do ref temporário `R5DB-gerador-01`, `56e337e`, já removido; mesmo blob).
 - `host-telemetria/`:
   - `telemetria-host-r5db-*.csv`, `coleta-host-r5db-*.csv` (36 colunas), `eventos-r5db-*.csv`, `pgss-r5db-*.csv` e `registro-r5db-*.txt`;
   - `saga-r5db-*.csv` e `resumo-saga-r5db-*.txt`;

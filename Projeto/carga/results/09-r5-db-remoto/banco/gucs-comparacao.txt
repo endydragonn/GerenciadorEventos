@@ -19,4 +19,6 @@ full_page_writes          on          on (default)
 random_page_cost          4           4 (default)
 effective_io_concurrency  1           1 (default)
 jit                       on          on (default)
-Diferenca: nenhuma nas GUCs. Diferem disco (fdatasync ~0,79 ms Dell x ~0,4 ms host) e CPU.
+Diferenca: nenhuma nas GUCs. Diferem disco e CPU. Disco: f_await sob carga no Dell ~0,52 ms (dell/iostat-nvme0n1.txt);
+pg_test_fsync fdatasync do host 0,378-0,421 ms (08-rodada5-saga, uma escrita de 8kB); medidas diferentes, nao comparaveis direto.
+pg_test_fsync do Dell (~0,79 ms): informado pela sessao do Dell, nao versionado.
