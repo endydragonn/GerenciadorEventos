@@ -4,6 +4,10 @@
 # container_name: chamam-se <project>-<servico>-<n>. O kit (docker exec) nao pode mais presumir gerenciador-<servico>: acha por label
 # (com.docker.compose.project + com.docker.compose.service). db, redpanda, redis e rabbitmq seguem com o nome fixo (nao escalam).
 # O project padrao e gerenciador-eventos (name: do compose); CARGA_PROJETO muda (dry-run em project isolado).
+#
+# MODO CLUSTER (issue #228): com CARGA_K8S=<contexto kubectl> (ex.: kind-gerenciador) o -Verificar do subir-host-rpm.ps1 fala com o cluster Kubernetes (Projeto/k8s) no lugar do compose:
+# o "container" de um servico vira deploy/<servico>, `docker exec` vira `kubectl --context <ctx> -n gerenciador exec <alvo> --` (Invoke-ExecAlvo), o psql roda pelo MESMO bash
+# do cluster.sh (k8s/lib-db-cliente.sh: sts/db ou o pod cliente db-cliente, senha lida DENTRO do pod; Invoke-PsqlDb). Todo kubectl leva --context (nunca o current-context). Sem a variavel, igual a antes.
 
 # Container do Postgres e URL da entrada do gateway no HOST: nomes fixos da stack real; CARGA_DB / CARGA_HOST_URL mudam (dry-run em project isolado,
 # onde nada e publicado no host e o db nao tem container_name)
@@ -28,9 +32,58 @@ function Get-ContainersDoServico {
 # Primeiro container do servico ($null se nao ha nenhum no ar)
 function Get-ContainerDoServico {
     param([Parameter(Mandatory)][string]$Servico, [string]$Projeto = (Get-ProjetoCompose))
+    if (Get-ContextoK8s) { return "deploy/$Servico" }   # cluster (#228): o alvo do kubectl exec
     $c = @(Get-ContainersDoServico -Servico $Servico -Projeto $Projeto)
     if ($c.Count -eq 0) { return $null }
     $c[0]
+}
+
+# ---- Modo cluster (#228) ----
+
+# Contexto do kubectl (CARGA_K8S) ou $null no modo compose
+function Get-ContextoK8s { if ($env:CARGA_K8S) { return $env:CARGA_K8S }; $null }
+
+# Pura: argumentos do kubectl, SEMPRE com --context (nunca o current-context) e o namespace gerenciador
+function Get-ArgsKubectl {
+    param([Parameter(Mandatory)][string]$Contexto, [string[]]$Resto = @())
+    @('--context', $Contexto, '-n', 'gerenciador') + $Resto
+}
+
+# `docker exec <container> cmd...` no compose; em cluster `kubectl --context .. -n gerenciador exec <deploy/x | sts/x> -- cmd...`. A saida e o $LASTEXITCODE sao os do comando.
+function Invoke-ExecAlvo {
+    param([Parameter(Mandatory)][string]$Alvo, [Parameter(ValueFromRemainingArguments)][string[]]$Comando)
+    $ctx = Get-ContextoK8s
+    if ($ctx) { $k = Get-ArgsKubectl -Contexto $ctx -Resto (@('exec', $Alvo, '--') + $Comando); & kubectl @k }
+    else { & docker exec $Alvo @Comando }
+}
+
+# bash que roda a lib do cluster: o Git Bash. Sem ele ABORTA (nunca cai para o `bash` do PATH: no Windows costuma ser o do WSL, que nao enxerga o kubectl nem os paths do host); CARGA_BASH muda (selftest)
+function Get-BashExe {
+    if ($env:CARGA_BASH) { return $env:CARGA_BASH }
+    $g = Join-Path $env:ProgramW6432 'Git\bin\bash.exe'
+    if (Test-Path $g) { return $g }
+    throw "Git Bash nao encontrado em '$g': instale o Git for Windows (o modo cluster do kit roda a lib bash do cluster por ele) ou aponte CARGA_BASH para um bash que ache o kubectl."
+}
+
+# psql como o usuario do app, com o SQL por stdin (pipeline): no compose `docker exec -i <db> sh -c "psql <flags> -U $POSTGRES_USER -d $POSTGRES_DB"`; em cluster, o db_psql da lib
+# k8s/lib-db-cliente.sh (db no cluster = exec no sts/db; db remoto = pod db-cliente). -Flags = flags do psql sem espaco dentro de cada um (sem aspas duplas: o PowerShell 5.1 as tira de argumento de .exe).
+function Invoke-PsqlDb {
+    param([Parameter(Mandatory)][string]$Flags, [Parameter(ValueFromPipeline)]$Sql)
+    begin { $buf = New-Object System.Collections.ArrayList }
+    process { [void]$buf.Add($Sql) }
+    end {
+        $ctx = Get-ContextoK8s
+        if ($ctx) {
+            $lib = (Join-Path (Split-Path $PSScriptRoot -Parent) 'k8s\lib-db-cliente.sh') -replace '\\', '/'
+            $msys = $env:MSYS_NO_PATHCONV; $msys2 = $env:MSYS2_ARG_CONV_EXCL
+            $env:MSYS_NO_PATHCONV = '1'; $env:MSYS2_ARG_CONV_EXCL = '*'
+            $flagsPsql = @($Flags -split ' ')
+            # as aspas duplas vao com a barra (\"): o PowerShell 5.1 entrega a um .exe o argumento SEM escapar as aspas internas, e sem a barra um caminho com espaco quebraria o `. $1`
+            try { $buf | & (Get-BashExe) -c '. \"$1\"; c=$2; shift 2; db_psql_preparar \"$c\" && db_psql \"$c\" app \"$@\"' bash $lib $ctx @flagsPsql }
+            finally { $env:MSYS_NO_PATHCONV = $msys; $env:MSYS2_ARG_CONV_EXCL = $msys2 }
+        }
+        else { $buf | & docker exec -i (Get-ContainerDb) sh -c "psql $Flags -U `$POSTGRES_USER -d `$POSTGRES_DB" }
+    }
 }
 
 # Pura: lista de -f do braco. Ordem: base, carga, [rpm], extras na ordem dada (completa e autoescala mexem em chaves disjuntas: a ordem entre elas nao importa). Os extras
@@ -98,13 +151,13 @@ function Get-MensagensDaFila {
 # Espera a fila admission.requests esvaziar (mensagens que ainda viram reserva depois do fim do bloco falseariam a contagem de overselling).
 # Devolve o que restou ($null = nao deu para ler a fila: sem rabbitmq/admission; 0 = drenada). O TTL da fila e 30 s: o teto padrao cobre uma rodada.
 function Wait-FilaDeAdmissao {
-    param([int]$TetoS = 90, [string]$Container = $(if ($env:CARGA_RABBITMQ) { $env:CARGA_RABBITMQ } else { 'gerenciador-rabbitmq' }))
+    param([int]$TetoS = 90, [string]$Container = $(if ($env:CARGA_RABBITMQ) { $env:CARGA_RABBITMQ } elseif (Get-ContextoK8s) { 'deploy/rabbitmq' } else { 'gerenciador-rabbitmq' }))
     # PS 5.1 + EAP=Stop (topo do subir-host-rpm.ps1): `2>$null` num exe que escreve em stderr LANCA NativeCommandError; aqui o erro tem que virar $null (sem leitura)
     $ErrorActionPreference = 'Continue'
     $fim = (Get-Date).AddSeconds($TetoS)
     $n = $null
     do {
-        $saida = & docker exec $Container rabbitmqctl -q list_queues name messages_ready messages_unacknowledged 2>$null
+        $saida = Invoke-ExecAlvo $Container rabbitmqctl -q list_queues name messages_ready messages_unacknowledged 2>$null
         if ($LASTEXITCODE -ne 0) { return $null }
         $n = Get-MensagensDaFila -Saida @($saida) -Fila 'admission.requests'
         if ($null -eq $n -or $n -eq 0) { return $n }
@@ -154,12 +207,12 @@ function Get-TotalLag {
 # Espera o lag do group chegar a 0 (devolucao da vaga: o StockReleaseConsumer do stock consome ReservationCancelled/Expired do bloco que acabou; devolucao
 # ainda no topico seria falsa "devolucao pendente"). Devolve o lag que restou ($null = nao deu para ler: sem redpanda/group; 0 = drenado). Teto curto.
 function Wait-LagDoGroup {
-    param([string]$Group = 'stock', [int]$TetoS = 30, [string]$Container = $(if ($env:CARGA_REDPANDA) { $env:CARGA_REDPANDA } else { 'gerenciador-redpanda' }))
+    param([string]$Group = 'stock', [int]$TetoS = 30, [string]$Container = $(if ($env:CARGA_REDPANDA) { $env:CARGA_REDPANDA } elseif (Get-ContextoK8s) { 'sts/redpanda' } else { 'gerenciador-redpanda' }))
     $ErrorActionPreference = 'Continue'   # ver Wait-FilaDeAdmissao: stderr do docker/rpk nao pode lancar
     $fim = (Get-Date).AddSeconds($TetoS)
     $n = $null
     do {
-        $saida = & docker exec $Container rpk group describe $Group 2>$null
+        $saida = Invoke-ExecAlvo $Container rpk group describe $Group 2>$null
         if ($LASTEXITCODE -ne 0) { return $null }
         $n = Get-TotalLag -Saida @($saida)
         if ($null -eq $n -or $n -eq 0) { return $n }

@@ -72,7 +72,7 @@ compose usam a montagem de sempre. Ver `Projeto/Backend/client-lb/README.md` e o
 **Prova de balanceamento (passo 7 do e2e):** com GETs sequenciais passando pelo gateway, o `catalog` sobe a 2 réplicas e o e2e mede as conexões ESTABLISHED na porta 8083 **dentro do pod novo** (lidas do nó):
 `b1` e `c` precisam ter pelo menos 1; `nenhuma` precisa ter 0 em 45 s (o controle mostra o problema). A etapa 4 repete isso com a autoescala e mede o custo de CPU por trilha.
 
-**Variáveis:** `K8S_NOME` (`gerenciador` ou `gerenciador-e2e*`), `K8S_OVERLAY` (`base` | `e2e` | `completa` | `carga`), `K8S_ESPERA` (900 s por espera), `K8S_PERMITIR_LATEST` (1 = aceita `SLIM_TAG=latest`; só depois da R5) e as da autoescala
+**Variáveis:** `K8S_NOME` (`gerenciador` ou `gerenciador-e2e*`), `K8S_OVERLAY` (`base` | `e2e` | `completa` | `carga` | `rodada`), `K8S_DB_REMOTO` (`<ip>:<porta>`, db fora do cluster) e `K8S_POOLS` (`r5`) da rodada com o db remoto (#228, abaixo), `K8S_ESPERA` (900 s por espera), `K8S_PERMITIR_LATEST` (1 = aceita `SLIM_TAG=latest`; só depois da R5) e as da autoescala
 (abaixo: `K8S_<SVC>_MIN`/`_MAX`, `K8S_DESCE_SEG`, `K8S_CPU_ALVO`, `AUTOESCALA_NOTIFICATION_LAG`). **Overlays:** `base` (Secrets REAIS, só no cluster `gerenciador`), `e2e` (Mailpit, credenciais efêmeras, sem NodePort), `completa` (as imagens completas
 `gerenciador-eventos-<serviço>:latest`, que o compose constrói com `-f docker-compose.completa.yml build`, no lugar das `*.slim`: para depurar; Secrets REAIS, só em `gerenciador`; `SLIM_TAG` não vale) e `carga` (= `e2e` + `SEED_ENABLED=true` no gateway, para o
 dry-run semear por `POST /bff/seed`; Secrets do override do e2e, **nunca o SMTP real**, e `cluster.sh guarda` os confere antes do apply). Segredos reais só vão para `base`/`completa` e nunca para um cluster `gerenciador-e2e*`. **Guarda de trilha:** o namespace leva o label
@@ -89,7 +89,8 @@ dry-run semear por `POST /bff/seed`; Secrets do override do e2e, **nunca o SMTP 
 | `helm/` | valores dos charts do KEDA (`2.21.0`) e do metrics-server (`3.14.0`) |
 | `overlays/trilha-c/`, `overlays/trilha-b1/` | componentes kustomize das trilhas de balanceamento (somados ao `base` ou ao `e2e` pelo `cluster.sh`); `istio/istiod-values.yaml` = valores do chart do Istio da `b1` |
 | `seccomp-extras.txt` | syscalls somadas aos perfis do Slim ao copiá-los para o nó |
-| `cluster.sh` | `up`, `guarda --trilha ...`, `carregar`, `imagem`, `psql`, `rpk`, `redis-cli`, `status` (inclui ScaledObjects e HPAs), `down` |
+| `cluster.sh` | `up`, `guarda --trilha ...`, `renderizar --trilha ...`, `carregar`, `imagem`, `psql`, `rpk`, `redis-cli`, `db-teste` (db remoto), `status` (inclui ScaledObjects e HPAs), `down` |
+| `overlays/rodada/`, `overlays/db-remoto/`, `overlays/pools-r5/`, `db-cliente.yaml`, `lib-db-cliente.sh`, `cluster.selftest.sh` | a rodada com o db remoto (#228): overlay da medição, componentes do banco fora do cluster e dos pools de réplica única, o pod cliente do banco (criado sob demanda) e o selftest do `cluster.sh` sem Docker nem cluster. Ver "Rodada com o db remoto" |
 | `dry-run.sh`, `dry-run/`, `registrar-replicas.sh` | o dry-run de carga com autoescala (etapa 4b): roteiro, gerador k6 (`carga.js`, `semear.js`), análise dos critérios (`dry-run-analise.py`) e o registro de réplicas em CSV; saída em `saida/` (gitignored) |
 
 - **Ambiente dos pods:** um Secret `env-<componente>` por componente, gerado do `docker compose config` (o mesmo ambiente que o compose entrega a cada container),
@@ -271,6 +272,85 @@ SLIM_TAG=k8s Projeto/k8s/dry-run.sh --trilha nenhuma     # (ou b1 | c); o `stock
 Critério do aceite da #205, ambos automáticos no `dry-run-analise.py` (código de saída 0 só com todos ok): **`stock` chega a 2+ réplicas** (`stock sobe (max N) e desce por CPU na mesma rajada`, N ≥ 2) e **overselling 0 no CAS** (com o evento esgotado: reservas ativas == capacidade, `eventcap.quant` coerente com os holds `held` debitados; `resumo.txt`, arquivos `overselling*.txt` e `quant-incoerente.txt`).
 A prova de que o consumo de `reservation.wallet` com 2+ réplicas não devolve a vaga duas vezes é o teste de `StockReleaseConsumerTest` (infra real, sem cluster): o roteiro do dry-run não cancela nem expira reservas (o evento quente tem `max_time_in_line` de 3600 s), então ele não exerce a devolução; `quant-incoerente.txt` = 0 só confere a invariante do CAS.
 Precedente: no dry-run da #197 (tabela acima) o `stock` chegou a **3** réplicas nas três trilhas, com overselling 0 (30 ativas para capacidade 30, `quant` 0).
+
+## Rodada com o db remoto (issue #228)
+
+Repete no cluster a rodada da #227 (configuração da R5 com o Postgres numa máquina dedicada): o banco sai do host também no Kubernetes, para medir o efeito. Esta seção é o **harness**; os
+resultados entram por outro PR (`Projeto/carga/results/10-k8s-db-remoto/`). Banco remoto: Dell (Ubuntu, `supabase/postgres:17.6.1.136`, `max_connections` 300) em **`192.168.68.50:5433`**, rede de 1 Gb; o
+firewall dele aceita a 5433 **só** da origem `192.168.68.64` (o host: o tráfego dos pods do kind sai com NAT pelo host). O pooler (Supavisor) e os serviços ficam no cluster.
+
+**Peças** (nada disto muda o cluster sem as variáveis novas):
+
+| Peça | O que faz |
+|---|---|
+| `overlays/db-remoto/` (componente) | com `K8S_DB_REMOTO=<ip>:<porta>` (IPv4, sem default): remove o StatefulSet `db` (e o PVC dele; o `cluster.sh` não cria os ConfigMaps `db-sql` e `db-app-init`) e troca o Service `db` por um **Service sem selector** (porta 5432) com uma **EndpointSlice** `db-remoto` para o IP e a porta dados. O Supavisor (`POSTGRES_HOST=db`, `POSTGRES_PORT=5432`), o `espera` dele (`nc db 5432`) e os Secrets não mudam |
+| `overlays/rodada/` | a base (Secrets **reais**, NodePort 30081/30088 -> host 8081/8088, o gerador da rede local chega no gateway) + `SEED_ENABLED=true` no gateway + **pool real do Supavisor 245** + (db no cluster) `max_connections=300`. `K8S_OVERLAY=rodada`; o `cluster.sh` recusa no cluster `gerenciador-e2e*` |
+| `overlays/pools-r5/` (componente) | `K8S_POOLS=r5`: Hikari e workers de **réplica única** da R5 (tabela abaixo). Só com a autoescala travada em 1: `K8S_<SVC>_MAX` passa a valer 1 por padrão e um valor maior **aborta** (a conta do Supavisor só fecha com 1 réplica de cada) |
+| `db-cliente.yaml` + `lib-db-cliente.sh` | pod cliente `db-cliente` (mesma imagem do `db`, `sleep infinity`, `sidecar.istio.io/inject: "false"`), criado **sob demanda** (não está no kustomize; some com o `down`). As senhas vêm dos Secrets `env-db`/`env-supabase-pooler` **chave a chave** (`secretKeyRef`, só `APP_DB_USER`, `APP_DB_PASSWORD`, `POSTGRES_PASSWORD`, `POSTGRES_DB` e `POOLER_TENANT_ID`: nunca o Secret inteiro) como variáveis de ambiente **do pod** e são lidas dentro do `sh -c` do `kubectl exec`: nunca em argumento nem em log. A lib decide local × remoto **uma vez por processo** (`db_psql_preparar`: `get sts/db --ignore-not-found`; erro ao perguntar **aborta**, nunca vira "remoto") e garante o pod uma vez; depois cada psql é 1 `kubectl exec` |
+| `cluster.sh psql` | db no cluster: o `exec` no `sts/db` de sempre; db remoto: o pod `db-cliente` |
+| `cluster.sh db-teste` | conectividade antes da carga (abaixo) |
+| `cluster.sh guarda` / `renderizar --trilha X` | `guarda` lê o render e imprime o que será aplicado (Hikari, workers, `maxReplicaCount`, pool real, `max_connections`, NodePort, `SEED_ENABLED`; com o db remoto aborta se o render não tem a EndpointSlice do IP; o resto do render, sem StatefulSet `db` e com o Service sem selector, o `cluster.selftest.sh` confere); `renderizar` imprime os manifests do `up` (kustomize, sem a tag das slim) |
+
+`K8S_DB_REMOTO` só vale com overlay de Secrets reais (`base`, `completa`, `rodada`): os overlays `e2e`/`carga` têm credenciais efêmeras que o banco remoto não conhece. O `up` guarda o modo no label
+`db-remoto` do namespace e aborta se um cluster existente subiu no outro modo (o `apply` não poda: ficariam o StatefulSet `db` e a EndpointSlice juntos): trocar de modo = `down` + `up`.
+
+### Os três blocos (nessa ordem: K1, K2, K0, cada um num cluster novo)
+
+Todos com `K8S_OVERLAY=rodada`, `SLIM_TAG=k8s` (até a R5 terminar), `ADMISSION_X_RPM` 56000 (o do compose, pelo Secret) e a escada do `Deg-59713` rodada pelo gerador (EnzoAMD) contra
+**`192.168.68.64:8081`**.
+
+| | **K1** | **K2** | **K0** (controle) |
+|---|---|---|---|
+| Trilha | `nenhuma` | `b1` | `nenhuma` |
+| Banco | Dell `192.168.68.50:5433` | Dell | StatefulSet `db` no cluster |
+| Autoescala | travada em 1 (`K8S_<SVC>_MAX=1`) | 1 a 3 | travada em 1 |
+| `K8S_DB_REMOTO` | `192.168.68.50:5433` | `192.168.68.50:5433` | (vazio) |
+| `K8S_POOLS` | `r5` | (vazio) | `r5` |
+| `max_connections` | 300 (o Dell já roda assim) | 300 (Dell) | 300 (o overlay `rodada` põe no `db` do cluster) |
+| Pool real do Supavisor (`POOLER_DEFAULT_POOL_SIZE`) | 245 | 245 | 245 |
+| Hikari reservation / stock / identity / catalog / backend / notification | 1000 / 250 / 100 / 100 / 10 / 3 | 200 / 60 / 50 / 50 / 10 / 3 | 1000 / 250 / 100 / 100 / 10 / 3 |
+| Workers do admission (`ADMISSION_WORKER_CONCURRENCY`) | 32 | 32 por réplica (do Secret, sem override) | 32 |
+| Soma no Supavisor (limite 1500) | 1463 | 1492 (3 réplicas + 1 em término por serviço; conta da seção "Pool do Supavisor") | 1463 |
+
+K1 e K0 têm a configuração e os pools do **bloco 1 da R5 / #227** (`carga/rpm/docker-compose.rpm.yml`: `max_connections` 300, pool real 245; Hikari e workers do `docker-compose.yml`), então só o lugar do banco
+os separa (K1 x K0 = efeito do db remoto no cluster). O K2 mantém os pools do cluster (os da conta de 1492) com o pool real em 245.
+
+### Comandos, por bloco (no host; `Projeto/.env` e `Projeto/supabase/.env` presentes, nada deles é impresso)
+
+```bash
+# K1 (db no Dell, 1 réplica por serviço, pools da R5)
+K8S_OVERLAY=rodada SLIM_TAG=k8s K8S_POOLS=r5 K8S_DB_REMOTO=192.168.68.50:5433 Projeto/k8s/cluster.sh up --trilha nenhuma
+# K2 (db no Dell, trilha b1, autoescala 1..3, pools do cluster)
+K8S_OVERLAY=rodada SLIM_TAG=k8s K8S_DB_REMOTO=192.168.68.50:5433 Projeto/k8s/cluster.sh up --trilha b1
+# K0 (db dentro do cluster, 1 réplica por serviço, pools da R5)
+K8S_OVERLAY=rodada SLIM_TAG=k8s K8S_POOLS=r5 Projeto/k8s/cluster.sh up --trilha nenhuma
+
+Projeto/k8s/cluster.sh guarda --trilha nenhuma      # (com as mesmas variáveis do up) mostra o que será aplicado, antes de criar qualquer coisa
+```
+
+**Ordem de cada bloco:**
+
+1. `cluster.sh down` do bloco anterior (um cluster novo por bloco; **antes de qualquer medição no host**, o cluster disputa CPU e RAM) e o `up` acima.
+2. **Só nos blocos com o Dell:** `Projeto/k8s/cluster.sh db-teste` (abaixo). Código diferente de 0 = não rode a carga.
+3. **Limpeza do Dell entre blocos:** o cluster novo nasce com Redpanda, Redis e RabbitMQ vazios, mas o banco do Dell guarda as linhas do bloco anterior. Com `CARGA_K8S=kind-gerenciador`, `make limpar-banco`
+   (`Projeto/carga/README.md`, "Modo cluster") dá o `TRUNCATE ... RESTART IDENTITY` nos 5 schemas pelo pod `db-cliente`, apaga a chave do JWT do PVC `identity-keys` (a do cluster novo também: ids reciclados),
+   zera Redis e filas e prova o JWKS. Rode-a depois do `up` e antes da escada; no K0 o banco já nasce vazio (a limpeza é só a sonda e o estado do broker).
+4. No host, em paralelo ao gerador: `CARGA_K8S=kind-gerenciador make coleta-host ROTULO=<bloco>`; ao fim da escada, `CARGA_K8S=kind-gerenciador make verificar-rpm PREFIXO=Deg-59713` (overselling e órfãs).
+5. No gerador: a escada do `Deg-59713` contra `192.168.68.64:8081` (kit do gerador, sem mudança).
+
+### Teste de conectividade (`cluster.sh db-teste`)
+
+Roda **antes da carga**, só com o db remoto (lê o IP:porta da EndpointSlice aplicada). Um pod do cluster (o `db-cliente`) faz **o TCP até `<ip>:<porta>`** (firewall/NAT) e **um `SELECT 1` pelo Supavisor**
+(`supabase-pooler:6543`, usuário `<app>.<tenant>`, o caminho dos serviços). Códigos de saída: **0** ok | **10** o pod não abre TCP até o banco (firewall aceita só a origem `192.168.68.64`? NAT?) | **11** TCP ok, o
+`SELECT 1` pelo Supavisor falhou (`kubectl --context kind-gerenciador -n gerenciador logs deploy/supabase-pooler`) | **12** não deu para rodar o teste (cluster sem db remoto, pod que não sobe).
+
+### Limites
+
+- Validado só offline (`cluster.selftest.sh`, render do kustomize, selftests do kit com `kubectl` falso): nada disto subiu num cluster ainda. A primeira execução real é a do bloco K1.
+- O `db-cliente` e o pod `limpar-chave` do `limpar-banco.sh` usam `supabase/postgres:17.6.1.136` e `busybox:1.37.0` (o `up` carrega a do `db-cliente` no nó; a do `busybox` já vem com o `espera`).
+- O worker pool do `admission` no cluster vem do Secret `env-admission` (o default do compose base, 32 **por réplica**): no K2, com 3 réplicas, são 96 workers contra o teto de 32 holds simultâneos que a conta do compose
+  supõe (no compose com autoescala cada réplica ganha 10). Não foi mudado aqui; quem ler o K2 deve saber disso.
+- A latência dos passos da saga (`saga.timing`) só cobre os pods que ainda existem no fim do bloco (`kubectl logs`): no K2 o pod que a autoescala removeu leva os logs junto.
 
 ## Pendências anotadas (etapa 4b)
 

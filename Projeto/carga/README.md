@@ -470,6 +470,31 @@ Fila, Redis, réplicas, `pg_stat_statements`, lag dos groups antigos, pooler e a
 `PROJETO`, `CONTAINER_DB` e `CONTAINER_RPK` apontam o kit para o project; o limiar reduzido vai no **container `reservation`** do project, por override de `RESERVATION_SAGA_ORPHAN_MS` /
 `RESERVATION_SAGA_REAPER_SCAN_MS`: a coleta e o `verificar-rpm` leem de lá. `ORPHAN_MS` / `ORFA_LIMITE_S` exportados ficam só como escape e precisam bater com o container).
 
+## Modo cluster (issue #228): o kit contra o Kubernetes
+
+Com **`CARGA_K8S=<contexto kubectl>`** (ex.: `kind-gerenciador`) o kit do **host** fala com o cluster de `Projeto/k8s` no lugar do compose, sem Docker: `limpar-banco.sh`, `coleta-host.sh` e `make verificar-rpm`.
+**Sem a variável nada muda** (o compose e os selftests de antes seguem iguais; nada do modo cluster é carregado). Todo `kubectl` leva `--context $CARGA_K8S` e `-n gerenciador` (nunca o `current-context`). O gerador
+(`rodar-degraus.ps1` etc.) não muda: bate no gateway pelo NodePort (host `:8081`), que o overlay `rodada` do cluster publica (`Projeto/k8s/README.md`, "Rodada com o db remoto").
+
+```powershell
+$env:CARGA_K8S = 'kind-gerenciador'      # ANTES do make/bash, no shell do host
+make limpar-banco                        # entre blocos
+make coleta-host ROTULO=k1               # durante a escada
+make verificar-rpm PREFIXO=Deg-59713     # ao fim de cada bloco (codigos 3 e 4 como antes)
+```
+
+**Banco do cluster ou remoto:** o kit decide pelo estado do cluster, **uma vez por processo** (`db_psql_preparar`: `get sts/db --ignore-not-found`; um erro ao perguntar aborta, nunca vira "remoto"): com o `StatefulSet db`, o `psql` roda por `kubectl exec` nele; sem ele (db remoto, componente `db-remoto`), roda no pod cliente `db-cliente` (criado e esperado Ready uma vez, mesma imagem do `db`), que fala com o Service `db` -> EndpointSlice do banco remoto. Depois da decisão cada psql é **1 `kubectl` (o exec)**: a coleta faz um por amostra. A senha vem do Secret (`secretKeyRef` só das chaves lidas) como variável **do pod** e é lida dentro do `sh -c`: nunca em argumento nem em log (`Projeto/k8s/lib-db-cliente.sh`, a mesma lib do `cluster.sh psql`).
+
+| Script | O que faz no cluster (equivalente do compose) |
+|---|---|
+| `limpar-banco.sh` | **recusa** (código != 0, sem parar nada) se um ScaledObject já tem `autoscaling.keda.sh/paused-replicas` ou se algum Deployment tem a anotação `carga.gerenciador/replicas-antes` (uma limpeza anterior abortou: rodar de novo "daria certo" com o cluster parado) e imprime os comandos de recuperação (`kubectl --context <ctx> -n gerenciador annotate scaledobject --all autoscaling.keda.sh/paused-replicas-`, `scale deploy/<svc> --replicas=<n>` com as réplicas anotadas, `annotate deploy --all carga.gerenciador/replicas-antes-`). Depois: **anota as réplicas de antes em cada Deployment**, pausa o ScaledObject (`paused-replicas=0`: sem isso o KEDA sobe o pod de volta) e zera os 7 Deployments (backend, admission, catalog, reservation, stock, identity, notification); apaga a chave do JWT do PVC `identity-keys` com um pod descartável (`limpar-chave`; se não apagar, **nada é religado** e a mensagem traz os comandos de recuperação com as réplicas); `rpk group seek` dos groups (`kubectl exec sts/redpanda`); o mesmo `TRUNCATE ... RESTART IDENTITY` nos 5 schemas; `FLUSHDB` no Redis e `purge_queue` das filas `admission.*` (`kubectl exec`); religa: **primeiro tira a pausa e faz o `scale` de todos** os que parou, **depois** espera `readyReplicas` na ordem identity, stock, reservation + catalog, admission, backend, notification (uma espera estourada não deixa os seguintes pausados) e apaga as anotações; sonda de login pela `BASE_URL` (o NodePort `localhost:8081`); backend que estava em 0 réplicas = a sonda não roda e a limpeza **falha** (JWKS não provado). Sem o `lb` e sem o `scaler.sh` (a autoescala é o KEDA). Aborto antes de religar religa o que parou (inclusive o Deployment em que o `annotate` deu certo e o `scale` falhou); se o religar também falhar, imprime a recuperação |
+| `coleta-host.sh` | as **mesmas 36 colunas**, todas com equivalente: `psql` pelo `sts/db` ou pelo `db-cliente` (como `supabase_admin`, senha do pod); `rpk`, `redis-cli` e `rabbitmqctl` por `kubectl exec` (`sts/redpanda`, `deploy/redis`, `deploy/rabbitmq`) sob `timeout`; `repl_*` = `readyReplicas` de cada Deployment; `redis_replicas` = a chave `adm:replicas`, que no cluster o próprio `admission` grava (`ADMISSION_K8S_REPLICAS_ENABLED`); `ORPHAN_MS` e o registro da rodada lidos do Deployment `reservation`; `saga.timing` por `kubectl logs -l app=reservation --since-time` |
+| `make verificar-rpm` | o `-Verificar` do `subir-host-rpm.ps1` (overselling, código 3; órfãs da saga, código 4): `psql` pelo mesmo caminho (via o Git Bash do host, `Invoke-PsqlDb` em `lib-servicos.ps1`), `printenv` do `reservation`/`backend` por `kubectl exec deploy/...`, lag do group `stock` por `sts/redpanda` e a fila por `deploy/rabbitmq` |
+
+**Limites do modo cluster:** a latência dos passos da saga só cobre os pods que ainda existem ao fim do bloco (o `kubectl logs` não lê pod removido pela autoescala); o `/actuator/health` do gateway na 8081 não serve
+no cluster (a 8090 não é exposta), então o `limpar-banco.sh` loga as réplicas prontas em vez do health; só o `-Verificar` do `subir-host-rpm.ps1` e o `coleta-host.sh`/`limpar-banco.sh` têm modo cluster (subir a stack é
+`Projeto/k8s/cluster.sh`). Selftests sem Docker nem cluster (`kubectl` falso): `make selftests` (inclui `Projeto/k8s/cluster.selftest.sh`). Nada disto foi executado contra um cluster real ainda.
+
 ## Matriz do experimento (runner oficial)
 
 Para **um** braço por vez, roda a disputa de vagas (teste 1, `PCT_CONFIRMA=100`) para
@@ -1008,7 +1033,7 @@ naquela etapa; a raiz de `results/` é a área de trabalho da rodada corrente.**
 | `rpm/*` | ambos | teste 2 |
 | `degraus/*` | gerador | escada de carga (limiar X preliminar): `carga-degraus.js`, `rodar-degraus.ps1`, `lib-degraus.ps1` (plano, p95 em janelas de 30 s, linha do CSV; `lib-degraus.selftest.ps1` testa), `lib-mapeamento.js` (mapeamento iteração → par usuário/evento, `sequencial`/`intercalado`; `lib-mapeamento.selftest.mjs` testa com `node`), `lib-admissao.js` (202, acompanhamento do estado, parada; `lib-admissao.selftest.mjs`) e `carga-degraus.selftest.mjs` (o script inteiro contra um k6 de mentira) |
 | `lib-servicos.ps1` | host | containers por label do compose, lista de `-f` do braço e Hikari esperado (`lib-servicos.selftest.ps1`) |
-| `limpar-banco.sh` | host | limpeza entre blocos, ciente de réplicas (`limpar-banco.selftest.sh`; `make limpar-banco`) |
+| `limpar-banco.sh` | host | limpeza entre blocos, ciente de réplicas (`limpar-banco.selftest.sh`; `make limpar-banco`); com `CARGA_K8S`, contra o cluster Kubernetes (#228, "Modo cluster") |
 | `coleta-host.sh` | host | lags, outbox, pooler, `pg_stat_statements` e, desde a #178, fila, Redis por evento e réplicas × tempo (`coleta-host.selftest.sh`) |
 | `../../docs/carga/harness/report-degraus.sh` | gerador | `make report-degraus`: `results\degraus-<id>.csv` → curva × carga + degrau X (SVG, bash+awk; `report-degraus-selftest.sh` testa) |
 | `aleatorio/*` | gerador | teste 3 |

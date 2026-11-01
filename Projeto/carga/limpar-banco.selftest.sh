@@ -179,5 +179,115 @@ confere "purge_queue falhou: aborta (codigo != 0)" "$([ "$rc" -ne 0 ] && echo si
 confere "purge_queue falhou: religa o que parou" "$(grep -c 'docker start' "$LOG" | awk '{print ($1>=1)?"sim":"nao"}')" "sim"
 PURGE_FALHA=0
 
+# --- MODO CLUSTER (#228): CARGA_K8S=<contexto>; um `kubectl` FUNCAO registra as chamadas (nenhum Docker). Confere: --context em todo kubectl, nenhuma chamada ao docker, a senha
+# fora dos argumentos, a escolha local x remoto do psql (decidida UMA vez), a ordem (parar tudo -> chave -> TRUNCATE -> FLUSHDB -> religar), o KEDA pausado e liberado, a falha da chave
+# (nada religa), a recuperacao (aborto no meio, pausa deixada por uma limpeza anterior, sonda pulada).
+K8S_LIB="$(cd "$(dirname "$0")" && pwd)/../k8s/lib-db-cliente.sh"
+. "$K8S_LIB"
+LOGK="$(mktemp)"
+FAKE_DB_REMOTO=0; FAKE_DB_ERRO=0; FAKE_FASE_CHAVE=Succeeded; FAKE_FLUSH=OK; FAKE_PAUSADOS=""; FAKE_ANTES=""; FAKE_SCALE_FALHA=""; FAKE_NAO_PRONTO=""
+declare -A FAKE_REPL=( [backend]=2 [admission]=1 [catalog]=1 [reservation]=1 [stock]=1 [identity]=1 [notification]=1 )
+kubectl() {
+    echo "kubectl $(printf '%s ' "$@" | tr '\n' ' ')" >> "$LOGK"
+    local d todos="$*"
+    case "$todos" in
+        *"get sts/db"*) [ "$FAKE_DB_ERRO" = 1 ] && return 1; [ "$FAKE_DB_REMOTO" = 1 ] && return 0; echo "statefulset.apps/db" ;;
+        *"get deploy/identity -o name"*) echo "deployment.apps/identity" ;;
+        *"get pvc/identity-keys"*) echo "persistentvolumeclaim/identity-keys" ;;
+        *"get scaledobject -o jsonpath"*) printf '%b' "$FAKE_PAUSADOS" ;;
+        *"get deploy -o jsonpath"*) printf '%b' "$FAKE_ANTES" ;;
+        *"get pod/limpar-chave"*) echo "$FAKE_FASE_CHAVE" ;;
+        *"get deploy/"*"{.status.readyReplicas}"*) d="${todos#*get deploy/}"; d="${d%% *}"; if [ "$d" = "$FAKE_NAO_PRONTO" ]; then echo "0 ${FAKE_REPL[$d]}"; else echo "${FAKE_REPL[$d]} ${FAKE_REPL[$d]}"; fi ;;
+        *"get deploy/"*"{.spec.replicas}"*) d="${todos#*get deploy/}"; d="${d%% *}"; echo "${FAKE_REPL[$d]}" ;;
+        *"get pods -l app="*) ;;
+        *"apply -f -"*) cat > /dev/null ;;
+        *"scale deploy/${FAKE_SCALE_FALHA:-nenhum} --replicas=0"*) return 1 ;;
+        *FLUSHDB*) echo "$FAKE_FLUSH" ;;
+        *"list_queues name"*) printf 'admission.requests\nadmission.timed_out\nother\n' ;;
+    esac
+    return 0
+}
+CARGA_K8S=kind-gerenciador
+SEGREDOS_K8S=(APP_DB_PASSWORD=CANARIO-APP POSTGRES_PASSWORD=CANARIO-PG REDIS_PASSWORD=CANARIO-REDIS)
+SAIDAK="$(mktemp)"
+roda_k8s() { : > "$LOGK"; : > "$LOG"; : > "$LOG.seq"; ( export "${SEGREDOS_K8S[@]}"; unset DB_PSQL_ALVO DB_PSQL_HOST; principal_k8s ) > "$SAIDAK" 2>&1; }
+plinha() { grep -n -- "$1" "$LOGK" | head -1 | cut -d: -f1; }
+ultima() { grep -n -- "$1" "$LOGK" | tail -1 | cut -d: -f1; }
+
+roda_k8s; rc=$?
+confere "k8s: fluxo completo com o db no cluster: codigo 0" "$rc" "0"
+confere "k8s: nenhuma chamada ao docker (nem o curl da sonda foi para outro lugar)" "$(grep -c '^docker ' "$LOG")" "0"
+confere "k8s: todo kubectl leva --context kind-gerenciador -n gerenciador (e o log nao esta vazio)" "$([ -s "$LOGK" ] && grep -vc '^kubectl --context kind-gerenciador -n gerenciador ' "$LOGK")" "0"
+confere "k8s: a senha do ambiente do shell nunca vira argumento" "$(grep -c 'CANARIO' "$LOGK")" "0"
+confere "k8s: db no cluster: o TRUNCATE vai ao sts/db (localhost), sem pod cliente" "$(grep -c 'exec -i sts/db.*TRUNCATE' "$LOGK")$(grep -c 'db-cliente' "$LOGK")" "10"
+confere "k8s: local x remoto decidido UMA vez (1 get sts/db em toda a limpeza, que faz 2 psql)" "$(grep -c 'get sts/db' "$LOGK")$(grep -c 'exec -i sts/db' "$LOGK")" "12"
+confere "k8s: guarda as replicas de antes numa anotacao de cada Deployment (backend=2), ANTES de pausar e zerar" "$(grep -c 'annotate deploy/[a-z]* carga.gerenciador/replicas-antes=' "$LOGK")|$(grep -c 'annotate deploy/backend carga.gerenciador/replicas-antes=2' "$LOGK")|$([ "$(plinha 'annotate deploy/backend carga.gerenciador/replicas-antes=2')" -lt "$(plinha 'annotate scaledobject/backend autoscaling.keda.sh/paused-replicas=0')" ] && [ "$(plinha 'annotate scaledobject/backend autoscaling.keda.sh/paused-replicas=0')" -lt "$(plinha 'scale deploy/backend --replicas=0')" ] && echo sim || echo nao)" "7|1|sim"
+confere "k8s: pausa o KEDA e zera cada um dos 7 deploys; depois libera, religa e apaga a anotacao das replicas" "$(grep -c 'annotate scaledobject/[a-z]* autoscaling.keda.sh/paused-replicas=0' "$LOGK")$(grep -c 'scale deploy/[a-z]* --replicas=0' "$LOGK")$(grep -c 'annotate scaledobject/[a-z]* autoscaling.keda.sh/paused-replicas- ' "$LOGK")$(grep -c 'annotate deploy/[a-z]* carga.gerenciador/replicas-antes- ' "$LOGK")" "7777"
+confere "k8s: religa com as replicas de ANTES (backend 2)" "$(grep -c 'scale deploy/backend --replicas=2' "$LOGK")$(grep -c 'scale deploy/identity --replicas=1' "$LOGK")" "11"
+k_back="$(plinha 'scale deploy/backend --replicas=0')"; k_id="$(plinha 'scale deploy/identity --replicas=0')"; k_nt="$(plinha 'scale deploy/notification --replicas=0')"
+k_key="$(plinha 'apply -f -')"; k_trunc="$(plinha 'TRUNCATE')"; k_flush="$(plinha 'FLUSHDB')"; k_purge="$(plinha 'purge_queue admission.requests')"
+r_id="$(plinha 'scale deploy/identity --replicas=1')"; r_st="$(plinha 'scale deploy/stock --replicas=1')"; r_rs="$(plinha 'scale deploy/reservation --replicas=1')"; r_ad="$(plinha 'scale deploy/admission --replicas=1')"
+r_gw="$(plinha 'scale deploy/backend --replicas=2')"; r_nt="$(plinha 'scale deploy/notification --replicas=1')"
+confere "k8s: parada: backend antes do identity; todos antes de apagar a chave" "$([ "$k_back" -lt "$k_id" ] && [ "$k_nt" -lt "$k_key" ] && [ "$k_id" -lt "$k_key" ] && echo sim || echo nao)" "sim"
+confere "k8s: a chave (pod descartavel no PVC identity-keys) e apagada ANTES do TRUNCATE" "$([ "$k_key" -lt "$k_trunc" ] && echo sim || echo nao)" "sim"
+confere "k8s: FLUSHDB e purge das filas admission.* depois do TRUNCATE e antes de religar" "$([ "$k_trunc" -lt "$k_flush" ] && [ "$k_flush" -lt "$r_id" ] && [ "$k_purge" -lt "$r_id" ] && echo sim || echo nao)" "sim"
+confere "k8s: so purga filas admission.*" "$(grep -c 'purge_queue other' "$LOGK")" "0"
+confere "k8s: religa: identity, stock, reservation, admission, backend, notification" "$([ "$r_id" -lt "$r_st" ] && [ "$r_st" -lt "$r_rs" ] && [ "$r_rs" -lt "$r_ad" ] && [ "$r_ad" -lt "$r_gw" ] && [ "$r_gw" -lt "$r_nt" ] && echo sim || echo nao)" "sim"
+confere "k8s: religar tira a pausa e faz o scale de TODOS antes de esperar o primeiro (uma espera estourada nao deixa os seguintes pausados)" "$([ "$(ultima 'scale deploy/[a-z]* --replicas=[1-9]')" -lt "$(plinha '{.status.readyReplicas}')" ] && echo sim || echo nao)" "sim"
+confere "k8s: sonda do JWKS pela entrada do gateway (curl, nao kubectl)" "$(grep -c 'event-wallets/admission' "$LOG" | awk '{print ($1>=6)?"sim":"nao"}')" "sim"
+confere "k8s: move os groups stock e stock-catalog para o fim (rpk por kubectl exec no sts/redpanda)" "$(grep -c 'exec sts/redpanda -- rpk group seek stock --to end --topics reservation.wallet' "$LOGK")$(grep -c 'exec sts/redpanda -- rpk group seek stock-catalog --to end --topics catalog.event' "$LOGK")" "11"
+
+# um ScaledObject ja pausado (limpeza anterior abortada): recusa ANTES de parar qualquer coisa e diz como recuperar
+FAKE_PAUSADOS='backend 0\nidentity 0\n'; FAKE_ANTES='backend 2\nidentity 1\n'; roda_k8s; rc=$?
+confere "k8s: ScaledObject ja pausado: recusa (codigo != 0)" "$([ "$rc" -ne 0 ] && echo sim || echo nao)" "sim"
+confere "k8s: ScaledObject ja pausado: nada foi parado, anotado nem apagado" "$(grep -c 'scale deploy\|annotate\|apply -f -\|TRUNCATE' "$LOGK")" "0"
+confere "k8s: a recusa imprime os comandos exatos de recuperacao (tirar a pausa, scale com as replicas anotadas)" "$(grep -c 'kubectl --context kind-gerenciador -n gerenciador annotate scaledobject --all autoscaling.keda.sh/paused-replicas-$' "$SAIDAK")$(grep -c 'kubectl --context kind-gerenciador -n gerenciador scale deploy/backend --replicas=2$' "$SAIDAK")$(grep -c 'kubectl --context kind-gerenciador -n gerenciador scale deploy/identity --replicas=1$' "$SAIDAK")$(grep -c 'annotate deploy --all carga.gerenciador/replicas-antes-$' "$SAIDAK")" "1111"
+# so a anotacao de replicas (sem pausa): tambem e uma limpeza que nao terminou
+FAKE_PAUSADOS=""; FAKE_ANTES='stock 1\n'; roda_k8s; rc=$?
+confere "k8s: anotacao de replicas deixada por uma limpeza anterior: recusa sem parar nada" "$([ "$rc" -ne 0 ] && echo sim || echo nao)$(grep -c 'scale deploy' "$LOGK")" "sim0"
+FAKE_ANTES=""
+
+FAKE_DB_REMOTO=1; roda_k8s; rc=$?
+confere "k8s: db remoto: codigo 0" "$rc" "0"
+confere "k8s: db remoto: o TRUNCATE vai ao pod db-cliente (aplicado e Ready UMA vez), nunca ao sts/db" "$(grep -c 'exec -i pod/db-cliente.*TRUNCATE' "$LOGK")$(grep -c 'exec -i sts/db' "$LOGK")$(grep -c 'wait --for=condition=Ready pod/db-cliente' "$LOGK")$(grep -c 'apply -f - $' "$LOGK" | awk '{print ($1>=1)?"sim":"nao"}')" "101sim"
+confere "k8s: db remoto: 1 get sts/db so, mesmo com 2 psql" "$(grep -c 'get sts/db' "$LOGK")" "1"
+confere "k8s: db remoto: a senha so e lida dentro do pod (PGPASSWORD=\"\$APP_DB_PASSWORD\" no sh -c) e nao vaza" "$(grep -c 'PGPASSWORD="\$APP_DB_PASSWORD"' "$LOGK" | awk '{print ($1>=1)?"sim":"nao"}')$(grep -c 'CANARIO' "$LOGK")" "sim0"
+confere "k8s: db remoto: todo kubectl leva --context" "$(grep -vc '^kubectl --context kind-gerenciador ' "$LOGK")" "0"
+FAKE_DB_REMOTO=0
+
+# erro ao perguntar pelo sts/db (nao e "nao existe"): aborta antes de parar qualquer coisa; nunca cai para "remoto"
+FAKE_DB_ERRO=1; roda_k8s; rc=$?
+confere "k8s: erro no get sts/db: aborta sem parar nada e sem criar o pod cliente" "$([ "$rc" -ne 0 ] && echo sim || echo nao)$(grep -c 'scale deploy\|db-cliente\|annotate' "$LOGK")" "sim0"
+FAKE_DB_ERRO=0
+
+FAKE_FASE_CHAVE=Failed; roda_k8s; rc=$?
+confere "k8s: chave nao apagada: aborta (codigo != 0)" "$([ "$rc" -ne 0 ] && echo sim || echo nao)" "sim"
+confere "k8s: chave nao apagada: NAO religa nada (os tokens antigos valeriam) e o TRUNCATE nao roda" "$(grep -c 'scale deploy/[a-z]* --replicas=[1-9]' "$LOGK")$(grep -c 'TRUNCATE' "$LOGK")" "00"
+confere "k8s: chave nao apagada: a mensagem imprime os comandos de recuperacao com as replicas de antes" "$(grep -c 'scale deploy/backend --replicas=2$' "$SAIDAK")$(grep -c 'annotate scaledobject --all autoscaling.keda.sh/paused-replicas-$' "$SAIDAK")" "11"
+FAKE_FASE_CHAVE=Succeeded
+
+FAKE_FLUSH="NOAUTH Authentication required."; roda_k8s; rc=$?
+confere "k8s: FLUSHDB sem OK: aborta e RELIGA o que parou" "$([ "$rc" -ne 0 ] && echo sim || echo nao)$(grep -c 'scale deploy/[a-z]* --replicas=[1-9]' "$LOGK")" "sim7"
+FAKE_FLUSH=OK
+
+# o scale a 0 falha DEPOIS do annotate: o trap tem de religar tambem esse (a pausa ja estava posta)
+FAKE_SCALE_FALHA=reservation; roda_k8s; rc=$?
+confere "k8s: scale a 0 falhou depois do annotate: aborta e religa os parados, inclusive o que falhou (pausa tirada e scale de volta)" "$([ "$rc" -ne 0 ] && echo sim || echo nao)|$(grep -c 'scale deploy/reservation --replicas=1' "$LOGK")|$(grep -c 'annotate scaledobject/reservation autoscaling.keda.sh/paused-replicas- ' "$LOGK")|$(grep -c 'scale deploy/identity' "$LOGK")" "sim|1|1|0"
+FAKE_SCALE_FALHA=""
+
+# uma espera estoura (identity nao fica pronto): todos ja foram religados, o aborto imprime a recuperacao e as anotacoes ficam
+FAKE_NAO_PRONTO=identity; ESPERA_HEALTHY_S=1; roda_k8s; rc=$?; ESPERA_HEALTHY_S=1
+confere "k8s: espera estourada: aborta, mas tirou a pausa e fez o scale dos 7 (nenhum fica pausado)" "$([ "$rc" -ne 0 ] && echo sim || echo nao)|$(grep -c 'annotate scaledobject/[a-z]* autoscaling.keda.sh/paused-replicas- ' "$LOGK")|$(grep -c 'scale deploy/[a-z]* --replicas=[1-9]' "$LOGK")" "sim|7|7"
+confere "k8s: espera estourada: as anotacoes de replicas ficam e a recuperacao e impressa" "$(grep -c 'annotate deploy/[a-z]* carga.gerenciador/replicas-antes- ' "$LOGK")|$(grep -c 'scale deploy/backend --replicas=2$' "$SAIDAK")" "0|1"
+FAKE_NAO_PRONTO=""
+
+# backend em 0 antes: a sonda do JWKS NAO foi feita e isso e falha, nunca um return 0 silencioso
+FAKE_REPL[backend]=0; roda_k8s; rc=$?
+confere "k8s: backend ja em 0 replicas (sonda pulada): saida != 0 com a mensagem" "$([ "$rc" -ne 0 ] && echo sim || echo nao)$(grep -c 'JWKS' "$SAIDAK" | awk '{print ($1>=1)?"sim":"nao"}')" "simsim"
+FAKE_REPL[backend]=2
+unset CARGA_K8S
+rm -f "$LOGK" "$SAIDAK"
+
+
 rm -f "$LOG" "$LOG.seq"
 [ "$falhas" -eq 0 ] && echo "selftest limpar-banco: OK" || { echo "selftest limpar-banco: $falhas falha(s)"; exit 1; }

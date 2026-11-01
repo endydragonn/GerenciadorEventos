@@ -20,14 +20,24 @@
 #    guarda --trilha ...                só confere o isolamento do overlay e2e/carga (Secrets e NodePort) com a trilha somada; não cria nada
 #    imagem <img...>                    carrega imagens avulsas no nó (o e2e usa para o pod auxiliar)
 #    carregar <svc...>                  recarrega as imagens dadas (slim ou frontend) no nó e reinicia os Deployments (ciclo de desenvolvimento)
-#    psql | rpk | redis-cli [args]      atalhos de `kubectl exec` (a senha vai pelo ambiente do pod, nunca no argv)
+#    renderizar --trilha ...            imprime os manifests que o `up` aplicaria (kustomize, sem a tag das slim aplicada); não cria nada
+#    db-teste                           (só com o db remoto, #228) conectividade do cluster ao banco: um pod faz o TCP até <ip>:<porta> e um SELECT 1 pelo Supavisor.
+#                                       Códigos de saída: 0 ok | 10 TCP falhou (firewall/rota/NAT) | 11 TCP ok e o SELECT 1 pelo Supavisor falhou | 12 não consegui rodar o teste
+#    psql | rpk | redis-cli [args]      atalhos de `kubectl exec` (a senha vai pelo ambiente do pod, nunca no argv). Com o db remoto o `psql` roda num pod cliente
+#                                       efêmero (`db-cliente`, criado sob demanda e apagado com o `down`), com a senha do Secret lida DENTRO do pod
 #    status                             nós, pods e serviços
 #    down                               `kind delete cluster` (antes de qualquer medição no host: o cluster disputa CPU e RAM)
 #
-#  Variáveis: K8S_NOME (gerenciador | gerenciador-e2e*), K8S_OVERLAY (base | e2e | completa | carga), K8S_ESPERA (900, segundos de cada espera), SLIM_TAG (a das *.slim; resolvida
+#  Variáveis: K8S_NOME (gerenciador | gerenciador-e2e*), K8S_OVERLAY (base | e2e | completa | carga | rodada), K8S_ESPERA (900, segundos de cada espera), SLIM_TAG (a das *.slim; resolvida
 #  pelo compose como nos outros scripts: shell > Projeto/.env > latest).
 #  Overlays: base (Secrets REAIS, só no cluster `gerenciador`), e2e (Mailpit, credenciais efêmeras, sem NodePort), completa (imagens completas gerenciador-eventos-<svc>:latest no lugar das slim;
 #  Secrets REAIS, só em `gerenciador`; SLIM_TAG não vale; exige K8S_PERMITIR_LATEST=1), carga (= e2e + SEED_ENABLED=true no gateway, para o dry-run; Secrets do override do e2e, nunca o SMTP real).
+#  rodada (#228) = base (Secrets REAIS, NodePort 30081/30088) + SEED_ENABLED=true no gateway, para a medição com o gerador da rede local; só em `gerenciador`.
+#  K8S_DB_REMOTO=<ip>:<porta> (#228, sem default, IPv4): o Postgres fica numa máquina dedicada (componente k8s/overlays/db-remoto: sem StatefulSet db nem PVC nem ConfigMaps de init;
+#  Service db sem selector + EndpointSlice para o IP e a porta dados). Só com overlay de Secrets reais (base | completa | rodada). Sem a variável, nada muda. Trocar de modo = `down` + `up`.
+#  O overlay rodada também leva o pool real do Supavisor em 245 e, com o db no cluster, max_connections=300 (os do bloco 1 da R5 no compose). K8S_POOLS=r5 (#228) soma o componente
+#  pools-r5: os Hikari e os workers de RÉPLICA ÚNICA da R5 (reservation 1000, stock 250, identity/catalog 100, backend 10, notification 3, workers do admission 32); só com a autoescala
+#  travada em 1: o default de K8S_<SVC>_MAX vira 1 e um valor maior ABORTA (a conta do Supavisor, 1463 <= 1500, só fecha com 1 réplica de cada). Sem K8S_POOLS ficam os pools do cluster.
 #  SLIM_TAG=latest ABORTA (as :latest da R5 não têm o actuator): use SLIM_TAG=k8s até a R5 terminar; K8S_PERMITIR_LATEST=1 só depois que as :latest forem regeradas.
 #  CONTEXTO EXPLÍCITO (E4): todo kubectl daqui passa --context kind-<nome>; nunca depende do current-context (o `kind create` o troca).
 #  Segredos: os Secrets saem do `docker compose config` (o ambiente que o compose entrega a cada container) para arquivos temporários (mktemp, chmod 700,
@@ -41,6 +51,9 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJETO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJETO_DIR" || exit 1
+
+# shellcheck source=lib-db-cliente.sh
+. "$SCRIPT_DIR/lib-db-cliente.sh"
 
 NOME="${K8S_NOME:-gerenciador}"
 OVERLAY="${K8S_OVERLAY:-base}"
@@ -83,7 +96,27 @@ case "$OVERLAY" in
           OVERLAY_DIR="k8s/overlays/completa"; COMPOSE_E2E=0; IMG_COMPLETA=1 ;;
     e2e)  OVERLAY_DIR="k8s/overlays/e2e"; COMPOSE_E2E=1 ;;
     carga) OVERLAY_DIR="k8s/overlays/carga"; COMPOSE_E2E=1 ;; # e2e + SEED_ENABLED: Secrets do override do e2e (Mailpit, credenciais efêmeras), nunca o SMTP real (P2)
-    *)    abortar "K8S_OVERLAY='$OVERLAY' inválido (base | e2e | completa | carga)." ;;
+    rodada) case "$NOME" in gerenciador-e2e*) abortar "overlay 'rodada' leva os Secrets REAIS (Projeto/.env): não vai para o cluster '$NOME' (use K8S_OVERLAY=e2e)." ;; esac
+          OVERLAY_DIR="k8s/overlays/rodada"; COMPOSE_E2E=0 ;; # base + SEED_ENABLED, NodePort como no base (#228)
+    *)    abortar "K8S_OVERLAY='$OVERLAY' inválido (base | e2e | completa | carga | rodada)." ;;
+esac
+# db remoto (#228): K8S_DB_REMOTO=<ip>:<porta>, IPv4, sem default. Validado aqui, antes de qualquer outra coisa.
+DB_REMOTO="${K8S_DB_REMOTO:-}"; DB_IP=""; DB_PORTA=""
+if [ -n "$DB_REMOTO" ]; then
+    if [[ "$DB_REMOTO" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3}):([0-9]{1,5})$ ]]; then
+        DB_IP="$((10#${BASH_REMATCH[1]})).$((10#${BASH_REMATCH[2]})).$((10#${BASH_REMATCH[3]})).$((10#${BASH_REMATCH[4]}))"; DB_PORTA="${BASH_REMATCH[5]}"
+        for _o in "${BASH_REMATCH[@]:1:4}"; do [ "$((10#$_o))" -le 255 ] || DB_IP=""; done
+        { [ "$((10#$DB_PORTA))" -ge 1 ] && [ "$((10#$DB_PORTA))" -le 65535 ]; } || DB_PORTA=""
+    fi
+    [ -n "$DB_IP" ] && [ -n "$DB_PORTA" ] || abortar "K8S_DB_REMOTO='$DB_REMOTO' inválido: use <ip>:<porta> com IPv4 e porta de 1 a 65535 (ex.: 192.168.68.50:5433)."
+    [ "$COMPOSE_E2E" = 0 ] || abortar "K8S_DB_REMOTO exige o overlay com Secrets reais (base | completa | rodada): o '$OVERLAY' usa credenciais efêmeras, que o banco remoto não conhece."
+    DB_PORTA=$((10#$DB_PORTA))
+fi
+# pools da R5 (#228): K8S_POOLS=r5 ou vazio
+POOLS="${K8S_POOLS:-}"
+case "$POOLS" in
+    ""|r5) ;;
+    *) abortar "K8S_POOLS='$POOLS' inválido (r5, ou vazio = os pools do cluster)." ;;
 esac
 KIND_CFG="k8s/kind.yaml"; case "$NOME" in gerenciador-e2e*) KIND_CFG="k8s/kind-e2e.yaml" ;; esac
 
@@ -135,7 +168,7 @@ inteiro_entre() { # nome valor min max
 }
 
 # Monta, num kustomization TEMPORÁRIO (o kustomize não lê fora da própria pasta: copia base e overlays, só manifests, poucos KB), a seleção que o `up` aplica:
-# o overlay (base | e2e | completa | carga) + o componente da trilha (b1 | c) + o PATCH GERADO da autoescala (K8S_<SVC>_MIN/_MAX, K8S_DESCE_SEG, K8S_CPU_ALVO, o alvo do
+# o overlay (base | e2e | completa | carga | rodada) + o componente da trilha (b1 | c) + o componente db-remoto (#228, com K8S_DB_REMOTO) + o PATCH GERADO da autoescala (K8S_<SVC>_MIN/_MAX, K8S_DESCE_SEG, K8S_CPU_ALVO, o alvo do
 # reservation e o lagThreshold do notification). Sempre montado (também em --trilha nenhuma): o `guardar` renderiza exatamente o que será aplicado.
 montar_selecao() {
     local s S vmin vmax min max desce cpu lag lagalvo alvo resmax=3 patches="" componentes=""
@@ -150,10 +183,12 @@ montar_selecao() {
     alvo="$(tr -d '[:space:]' <"$TMP/adm-alvo")"
     for s in $AUTOESCALADOS; do
         S="$(echo "$s" | tr 'a-z' 'A-Z')"; vmin="K8S_${S}_MIN"; vmax="K8S_${S}_MAX"
-        min="${!vmin:-1}"; max="${!vmax:-3}"
+        min="${!vmin:-1}"; max="${!vmax:-$([ "$POOLS" = r5 ] && echo 1 || echo 3)}"
         # teto 3: a conta do Supavisor (1492 <= 1500, spec "stock escalável") supõe no máximo 3 réplicas por serviço + 1 em término; acima disso, refazer a conta
         inteiro_entre "$vmin" "$min" 1 3; inteiro_entre "$vmax" "$max" 1 3
         [ "$min" -le "$max" ] || abortar "$vmin ($min) maior que $vmax ($max)."
+        [ "$POOLS" != r5 ] || [ "$max" -le 1 ] \
+            || abortar "K8S_POOLS=r5 (Hikari de réplica única: 1000 + 250 + 100 + 100 + 10 + 3 = 1463 no Supavisor) exige a autoescala travada em 1: $vmax=$max estouraria o pool de 1500 com réplicas. Use $vmax=1, ou tire K8S_POOLS (K2: pools do cluster)."
         [ "$s" = reservation ] && resmax="$max"
         patches+="  - target: {kind: ScaledObject, name: $s}
     patch: |-
@@ -184,9 +219,24 @@ montar_selecao() {
                 env:
                   - {name: K8S_RESERVATION_MAX, value: \"$resmax\"}
 "
-    [ "$TRILHA" = nenhuma ] || componentes="components:
-  - ../overlays/trilha-$TRILHA
+    [ "$TRILHA" = nenhuma ] || componentes="  - ../overlays/trilha-$TRILHA
 "
+    if [ -n "$DB_REMOTO" ]; then # db fora do cluster (#228): o componente tira o StatefulSet db e troca o Service; o IP e a porta da EndpointSlice (placeholders no componente) vêm daqui
+        componentes+="  - ../overlays/db-remoto
+"
+        patches+="  - target: {kind: EndpointSlice, name: db-remoto}
+    patch: |-
+      - {op: replace, path: /endpoints/0/addresses/0, value: \"$DB_IP\"}
+      - {op: replace, path: /ports/0/port, value: $DB_PORTA}
+  - target: {kind: Service, name: db}
+    patch: |-
+      - {op: replace, path: /spec/ports/0/targetPort, value: $DB_PORTA}
+"
+    fi
+    [ "$POOLS" != r5 ] || componentes+="  - ../overlays/pools-r5
+"
+    [ -z "$componentes" ] || componentes="components:
+$componentes"
     mkdir -p "$TMP/k8s/sel" && cp -r "$SCRIPT_DIR/base" "$SCRIPT_DIR/overlays" "$TMP/k8s/" || abortar "montar o kustomization temporário da seleção falhou."
     cat > "$TMP/k8s/sel/kustomization.yaml" <<EOF
 namespace: $NS
@@ -267,8 +317,17 @@ sys.exit(1 if erros else 0)
 ' "$TMPW" "$COMPOSE_E2E" "$COMPONENTES"
 }
 
+# valores_env <render> <VAR>: "<deploy>=<valor>" de cada Deployment do render que tem a env VAR (o kustomize imprime kind e metadata.name antes do spec, e as chaves em ordem)
+valores_env() {
+    printf '%s\n' "$1" | awk -v var="$2" '
+        /^---$/ { cur = ""; kind = "" }
+        /^kind: / { kind = $2 }
+        /^  name: / && cur == "" { cur = $2 }
+        kind == "Deployment" && $0 ~ ("- name: " var "$") { getline; v = $0; sub(/^ *value: */, "", v); gsub(/"/, "", v); print cur "=" v }'
+}
+
 guardar() { # isolamento do overlay e2e: Secrets (gerar_env) e NodePort; qualquer falha aborta antes de criar/aplicar qualquer coisa
-    local viol
+    local viol rd
     viol="$(gerar_env 2>&1)" || { echo "$viol"; abortar "o isolamento NÃO pode ser garantido (Secrets): nada foi criado."; }
     if [ "$COMPOSE_E2E" = 1 ]; then
         if kubectl kustomize "$OVERLAY_DIR" | grep -qiE 'nodePort|type: NodePort|type: LoadBalancer'; then
@@ -276,9 +335,37 @@ guardar() { # isolamento do overlay e2e: Secrets (gerar_env) e NodePort; qualque
         fi
         ok "Secrets do overlay e2e: notification -> mailpit:1025 sem auth/senha, credenciais efêmeras no admission, X baixo; manifests sem NodePort"
     fi
+    if [ "$POOLS" = r5 ] || [ "$OVERLAY" = rodada ] || [ -n "$DB_REMOTO" ]; then # o que vai ser aplicado, lido do render (nada de valor fixo aqui)
+        rd="$(kubectl kustomize "$OVERLAY_DIR" | tr -d '\r')" || abortar "o kustomize do overlay falhou: nada foi criado."
+    fi
+    if [ "$POOLS" = r5 ]; then
+        local hk="" sv w n soma
+        for sv in reservation stock identity catalog backend notification; do hk+="$(valores_env "$rd" SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE | grep "^$sv=") "; done
+        w="$(valores_env "$rd" ADMISSION_WORKER_CONCURRENCY | grep '^admission=' | sed 's/.*=//')"
+        n="$(printf '%s\n' "$rd" | grep -c 'maxReplicaCount: 1$')"
+        soma="$(printf '%s\n' "$hk" | tr ' ' '\n' | sed -n 's/.*=//p' | awk '{s += $1} END {print s + 0}')"
+        ok "pools R5 (réplica única, lidos do render): ${hk}| workers=${w:-?} | maxReplicaCount=1 x$n (soma dos Hikari no Supavisor $soma, limite 1500)"
+    fi
+    if [ "$OVERLAY" = rodada ]; then
+        local pr mc np sd
+        pr="$(valores_env "$rd" POOLER_DEFAULT_POOL_SIZE | sed 's/.*=//')"
+        mc="$(printf '%s\n' "$rd" | grep -o 'max_connections=[0-9]*' | head -1)"
+        np="$(printf '%s\n' "$rd" | sed -n 's/^ *nodePort: //p' | paste -sd' ' -)"
+        sd="$(valores_env "$rd" SEED_ENABLED | grep '^backend=' | sed 's/.*=//')"
+        ok "overlay rodada (lido do render): pool real=${pr:-?}${mc:+, $mc (db do cluster)}, nodePort ${np:-nenhum}, SEED_ENABLED=${sd:-?}"
+    fi
+    if [ -n "$DB_REMOTO" ]; then # db remoto (#228): o render TEM de trazer a EndpointSlice do IP dado (que o StatefulSet db saiu e o Service ficou sem selector, o selftest confere)
+        { printf '%s\n' "$rd" | grep -q '^kind: EndpointSlice$' && printf '%s\n' "$rd" | grep -q -- "- $DB_IP\$"; } \
+            || abortar "o componente db-remoto não está aplicado: o render não tem a EndpointSlice com $DB_IP (nada foi criado)."
+        ok "db remoto: o render tem a EndpointSlice db-remoto $DB_IP:$DB_PORTA (Service db sem selector e StatefulSet db fora, conferidos no cluster.selftest.sh; o Supavisor e os Secrets não mudam)"
+    fi
 }
 
-imagens_do_cluster() { render | sed -n 's/^ *\(- \)\{0,1\}image: *//p' | tr -d '"' | sort -u; }
+imagens_do_cluster() {
+    render | sed -n 's/^ *\(- \)\{0,1\}image: *//p' | tr -d '"' | sort -u
+    # db remoto: a imagem do `db` sai do render, mas o pod cliente (db-cliente.yaml) usa a mesma: carrega no nó junto com as outras
+    [ -z "$DB_REMOTO" ] || sed -n 's/^ *image: *//p' "$SCRIPT_DIR/db-cliente.yaml" | tr -d '"\r'
+}
 
 carregar_no_no() { # imagem: no Docker Desktop (image store containerd) `kind load` falha ("content digest ... not found") com imagem de registro multi-plataforma
     local img="$1" arch
@@ -382,8 +469,14 @@ guardar_trilha() { # logo depois do cluster existir: o namespace leva a trilha d
         [ -n "$atual" ] || abortar "o namespace $NS do cluster $NOME existe SEM o label trilha-balanceamento (cluster criado fora do cluster.sh ou antes da guarda): faça 'cluster.sh down' e suba de novo com --trilha $TRILHA."
         [ "$atual" = "$TRILHA" ] \
             || abortar "o cluster $NOME já subiu com a trilha '$atual' (kubectl --context $CTX get ns $NS --show-labels): misturar trilhas invalida a comparação. Faça 'cluster.sh down' e suba de novo com --trilha $TRILHA."
+        # db remoto (#228): o apply não poda; um `up` com o modo trocado deixaria o StatefulSet db (ou a EndpointSlice) vivo ao lado do outro. Sem o label = db no cluster (clusters de antes).
+        local db_atual modo_db=nao; [ -z "$DB_REMOTO" ] || modo_db=sim
+        db_atual="$(k get namespace "$NS" -o jsonpath="{.metadata.labels['db-remoto']}")"
+        [ "${db_atual:-nao}" = "$modo_db" ] \
+            || abortar "o cluster $NOME já subiu com db-remoto='${db_atual:-nao}' e este 'up' é db-remoto='$modo_db': misturar os modos deixaria o StatefulSet db e a EndpointSlice juntos. Faça 'cluster.sh down' e suba de novo."
     else
         k create namespace "$NS" >/dev/null && k label namespace "$NS" "trilha-balanceamento=$TRILHA" >/dev/null || abortar "criar o namespace $NS com o label da trilha falhou."
+        [ -z "$DB_REMOTO" ] || k label namespace "$NS" "db-remoto=sim" >/dev/null || abortar "label db-remoto no namespace $NS falhou."
     fi
 }
 
@@ -418,11 +511,13 @@ json.dump(d, open(saida, "w"))
 configmaps_e_segredos() {
     k create namespace "$NS" --dry-run=client -o yaml | k apply -f - >/dev/null || abortar "namespace $NS."
     # arquivos montados pelo compose, dos MESMOS arquivos do repo (o kustomize não lê fora da própria pasta)
-    kn create configmap db-sql --dry-run=client -o yaml \
-        --from-file=functions-role.sql=supabase/volumes/db/functions-role.sql --from-file=_supabase.sql=supabase/volumes/db/_supabase.sql \
-        --from-file=pooler.sql=supabase/volumes/db/pooler.sql --from-file=roles.sql=supabase/volumes/db/roles.sql \
-        --from-file=supabase-app-init.sql=Backend/db/supabase-app-init.sql | kn apply -f - >/dev/null || abortar "configmap db-sql."
-    kn create configmap db-app-init --from-file=Backend/db/init-scripts --dry-run=client -o yaml | kn apply -f - >/dev/null || abortar "configmap db-app-init."
+    if [ -z "$DB_REMOTO" ]; then # db remoto (#228): o banco já existe lá fora, sem init do cluster
+        kn create configmap db-sql --dry-run=client -o yaml \
+            --from-file=functions-role.sql=supabase/volumes/db/functions-role.sql --from-file=_supabase.sql=supabase/volumes/db/_supabase.sql \
+            --from-file=pooler.sql=supabase/volumes/db/pooler.sql --from-file=roles.sql=supabase/volumes/db/roles.sql \
+            --from-file=supabase-app-init.sql=Backend/db/supabase-app-init.sql | kn apply -f - >/dev/null || abortar "configmap db-sql."
+        kn create configmap db-app-init --from-file=Backend/db/init-scripts --dry-run=client -o yaml | kn apply -f - >/dev/null || abortar "configmap db-app-init."
+    fi
     kn create configmap pooler-exs --from-file=pooler-upsert.exs=supabase/volumes/pooler/pooler-upsert.exs --dry-run=client -o yaml | kn apply -f - >/dev/null || abortar "configmap pooler-exs."
     gerar_env || abortar "gerar os env-files falhou."
     local c n
@@ -442,7 +537,7 @@ esperar() { # [app]: sem argumento espera tudo
         done
         abortar "app '$alvo' não encontrado."
     fi
-    for r in sts/db sts/redpanda deploy/supabase-pooler deploy/redis deploy/rabbitmq deploy/identity deploy/catalog deploy/stock deploy/reservation deploy/admission deploy/backend deploy/notification deploy/frontend; do
+    for r in $([ -n "$DB_REMOTO" ] || echo sts/db) sts/redpanda deploy/supabase-pooler deploy/redis deploy/rabbitmq deploy/identity deploy/catalog deploy/stock deploy/reservation deploy/admission deploy/backend deploy/notification deploy/frontend; do
         kn rollout status "$r" --timeout="$t" || { kn get pods; abortar "$r não ficou pronto em $t (kubectl --context $CTX -n $NS describe/logs)."; }
     done
     kn get deploy mailpit >/dev/null 2>&1 && { kn rollout status deploy/mailpit --timeout="$t" || abortar "mailpit não ficou pronto."; }
@@ -499,13 +594,45 @@ cmd_carregar() {
     for s in "$@"; do kn rollout status "deploy/$s" --timeout="${ESPERA}s" || abortar "deploy/$s não ficou pronto."; done
 }
 
+# db-teste (#228): conectividade do cluster ao banco REMOTO, antes da carga. O IP:porta vêm da EndpointSlice aplicada (o que o cluster realmente usa). Um pod faz o TCP até
+# <ip>:<porta> (firewall/NAT) e um SELECT 1 pelo Supavisor (o caminho dos serviços: usuário <app>.<tenant>, senha do Secret lida DENTRO do pod). Saída: 0 | 10 | 11 | 12 (ver o cabeçalho).
+cmd_db_teste() {
+    local alvo ip porta rc
+    alvo="$(kn get endpointslice db-remoto -o jsonpath='{.endpoints[0].addresses[0]}:{.ports[0].port}' 2>/dev/null)"
+    [[ "$alvo" =~ ^([0-9.]+):([0-9]+)$ ]] || { echo "   [ERRO]  o cluster $NOME não tem a EndpointSlice db-remoto (subiu sem K8S_DB_REMOTO?): db-teste só vale com o db remoto." >&2; return 12; }
+    ip="${BASH_REMATCH[1]}"; porta="${BASH_REMATCH[2]}"
+    db_cliente_garantir "$CTX" || return 12
+    echo "==> db-teste: cluster $NOME (contexto $CTX) -> $ip:$porta"
+    kn exec pod/db-cliente -- bash -c '
+ip="$1"; porta="$2"
+if timeout 5 bash -c "exec 3<>/dev/tcp/\$0/\$1" "$ip" "$porta" 2>/dev/null; then echo "   [ok]    TCP $ip:$porta"; else echo "   [FALHOU] TCP $ip:$porta (firewall, rota ou NAT?)"; exit 10; fi
+if out="$(PGPASSWORD="$APP_DB_PASSWORD" PGCONNECT_TIMEOUT=5 psql -h supabase-pooler -p 6543 -U "$APP_DB_USER.$POOLER_TENANT_ID" -d "$POSTGRES_DB" -Atc "select 1" 2>&1)" && [ "$out" = 1 ]; then
+    echo "   [ok]    SELECT 1 pelo Supavisor (supabase-pooler:6543)"
+else
+    echo "   [FALHOU] SELECT 1 pelo Supavisor: $out"; exit 11
+fi' bash "$ip" "$porta"
+    rc=$?
+    case "$rc" in
+        0) ok "o cluster chega ao banco remoto $ip:$porta e o Supavisor responde"; return 0 ;;
+        10) echo "   [ERRO]  código 10: o pod não abre TCP até $ip:$porta (o firewall do banco aceita só a origem do host; o tráfego do kind sai com NAT pelo host)." >&2; return 10 ;;
+        11) echo "   [ERRO]  código 11: TCP ok, mas o SELECT 1 pelo Supavisor falhou (kubectl --context $CTX -n $NS logs deploy/supabase-pooler)." >&2; return 11 ;;
+        *) echo "   [ERRO]  código 12: não consegui rodar o teste no cluster (kubectl exec saiu com $rc)." >&2; return 12 ;;
+    esac
+}
+
+[ "${CLUSTER_LIB:-0}" = 1 ] && return 0 2>/dev/null # selftest: carrega as funções sem rodar um subcomando
 cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "$cmd" in
     up) cmd_up "$@" ;;
     guarda) [ "${1:-}" = --trilha ] || abortar "uso: cluster.sh guarda --trilha b1|c|nenhuma"; validar_trilha "${2:-}"; ferramentas; montar_selecao; guardar ;;
     carregar) cmd_carregar "$@" ;;
     imagem) ferramentas; carregar_imagens "$@" ;; # imagens avulsas (o e2e carrega a do pod auxiliar de curl)
-    psql) kn exec -i sts/db -- sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$POSTGRES_DB" "$@"' sh "$@" ;;
+    psql) # db no cluster: o exec no sts/db de sempre; db remoto (#228): pod cliente efêmero, senha do Secret lida dentro do pod
+          db_psql_preparar "$CTX" || exit 1   # local x remoto decidido UMA vez; erro ao ler o sts/db aborta (nunca vira "remoto")
+          if [ "$DB_PSQL_ALVO" = pod/db-cliente ]; then db_psql "$CTX" app "$@"
+          else kn exec -i sts/db -- sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$POSTGRES_DB" "$@"' sh "$@"; fi ;;
+    db-teste) cmd_db_teste; exit $? ;;
+    renderizar) [ "${1:-}" = --trilha ] || abortar "uso: cluster.sh renderizar --trilha b1|c|nenhuma"; validar_trilha "${2:-}"; ferramentas; montar_selecao; kubectl kustomize "$OVERLAY_DIR" ;;
     rpk) kn exec -i sts/redpanda -- rpk "$@" ;;
     redis-cli) kn exec -i deploy/redis -- sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli "$@"' sh "$@" ;;
     status) k get nodes; kn get pods,svc,pvc -o wide; kn get scaledobject,hpa ;;
