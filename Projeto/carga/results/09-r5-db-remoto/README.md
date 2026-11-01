@@ -49,7 +49,7 @@ dedicado. É a opção A da #227: o Supavisor e todos os serviços seguem no hos
   | | Host (R5) | Dell (R5-db-remoto) |
   |---|---|---|
   | CPU do banco | Ryzen 7 7700X, dividido com o resto da stack | i5-1135G7, só o banco |
-  | `pg_test_fsync`, fdatasync | 0,378–0,405 ms por operação (`08-rodada5-saga/host-telemetria/pg_test_fsync-r5*.txt`) | ~0,79 ms por operação (pendente: arquivo da sessão do Dell) |
+  | `pg_test_fsync`, fdatasync | 0,378–0,405 ms por operação (`08-rodada5-saga/host-telemetria/pg_test_fsync-r5*.txt`) | ~0,79 ms por operação (medição da sessão do Dell, #227); `f_await` sob carga ~0,52 ms (`dell/iostat-nvme0n1.txt`) |
   | Rede pooler → db | rede bridge do Docker, no mesmo host | NAT do Docker Desktop → Ethernet 1 Gb → Dell |
 
 - **RTT host → Dell** (`banco/rtt.txt`, com a stack ociosa, depois do seed):
@@ -185,8 +185,60 @@ Leitura:
 
 ## Dell (coleta da máquina do banco)
 
-**Pendente:** os arquivos da sessão do Dell (sysstat e PSI com horário UTC, `pg_test_fsync`) ainda não chegaram. O coletor rodou desde as
-05:03:57Z, cobrindo o k6 (05:04:08Z a 05:29:49Z). A seção é preenchida quando os arquivos chegarem (`dell/`).
+O coletor da sessão do Dell gravou de 05:03:57Z a 05:33:00Z, a cada 1 s, e cobre o k6 inteiro. Arquivos em `dell/` (ref `R5DB-dell-01`,
+`coleta-227.tar.gz` com sha256 `81271167…44c63`):
+- `mpstat.txt` e `vmstat.txt`;
+- `iostat-nvme0n1.txt`: o iostat filtrado no disco do banco (timestamps, `avg-cpu` e a linha `nvme0n1`);
+- `psi.txt`: `/proc/pressure` de cpu, io e memória;
+- `pg_activity.csv`: contagem por `state` do `pg_stat_activity`, a cada 5 s;
+- `inicio.txt` e `fim.txt`;
+- `sar-filtrado.csv`.
+
+O `sar.csv` original tinha 27,9 MB. Dele ficaram só as seções de CPU (todas as CPUs), memória, `runq`/load, disco `nvme0n1`, interface
+`enp44s0` (Ethernet) e PSI. O `sar.bin` (44 MB) não entrou.
+
+Janelas por degrau em UTC: o degrau k começa em 05:05:38Z + k × 106 s (o `SETUP_S` de 90 s depois do início do k6, às 05:04:08Z, com
+60 s de degrau e 46 s de espaço) e dura 60 s. Valores são médias na janela, com o máximo depois da barra.
+
+| RPM alvo | CPU Dell % (méd/máx) | iowait % | `nvme0n1` util % | w/s | flush/s | f_await (ms) | w_await (ms) | PSI cpu some % | PSI io some / full % | `active` no Postgres (méd/máx) | CPU do host (méd/máx) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 20k | 19,1 / 39,0 | 2,9 | 49,6 | 1.505 | 748 | 0,52 | 0,36 | 1,1 | 6,7 / 6,1 | 19 / 132 | 105 / 113 |
+| 26k | 23,7 / 36,2 | 2,7 | 63,9 | 1.887 | 935 | 0,52 | 0,38 | 0,9 | 8,1 / 7,3 | 23 / 100 | 106 / 113 |
+| 32k | 42,7 / 65,0 | 8,1 | 64,8 | 1.904 | 943 | 0,51 | 0,38 | 6,2 | 8,1 / 5,8 | 176 / 243 | 108 / 113 |
+| 38k | 40,8 / 59,6 | 7,5 | 64,0 | 1.783 | 883 | 0,71 | 0,56 | 7,5 | 9,4 / 7,1 | 184 / 240 | 111 / 113 |
+| 44k | 30,5 / 59,3 | 5,4 | 66,6 | 1.924 | 946 | 0,53 | 0,38 | 3,1 | 8,7 / 6,9 | 61 / 203 | 110 / 113 |
+| 50k | 23,7 / 29,6 | 3,5 | 62,5 | 1.842 | 910 | 0,53 | 0,37 | 1,6 | 8,2 / 7,1 | 38 / 99 | 112 / 113 |
+| 56k | 27,7 / 38,2 | 3,9 | 66,6 | 1.946 | 959 | 0,53 | 0,37 | 2,3 | 8,7 / 7,4 | 49 / 105 | 110 / 113 |
+| 62k | 30,4 / 45,3 | 4,1 | 69,4 | 2.030 | 985 | 0,54 | 0,45 | 2,9 | 9,3 / 7,7 | 41 / 105 | 110 / 113 |
+| 68k | 29,1 / 36,9 | 4,3 | 72,5 | 2.117 | 1.019 | 0,55 | 0,47 | 2,3 | 9,6 / 8,1 | 49 / 119 | 111 / 113 |
+| 74k | 29,9 / 40,0 | 4,6 | 74,2 | 2.189 | 1.052 | 0,53 | 0,40 | 2,5 | 9,7 / 8,0 | 41 / 115 | 111 / 113 |
+| 80k | 31,1 / 40,5 | 4,5 | 74,3 | 2.233 | 1.051 | 0,52 | 0,38 | 2,6 | 9,7 / 8,0 | 43 / 106 | 111 / 113 |
+| 86k | 38,0 / 51,0 | 5,4 | 72,9 | 2.199 | 1.025 | 0,55 | 0,38 | 4,9 | 9,4 / 7,3 | 62 / 135 | 110 / 113 |
+| 92k | 38,0 / 49,5 | 5,4 | 72,8 | 2.180 | 1.028 | 0,54 | 0,82 | 5,1 | 9,7 / 7,5 | 64 / 122 | 110 / 113 |
+| 98k | 32,8 / 39,0 | 5,2 | 72,5 | 2.192 | 1.014 | 0,54 | 0,85 | 3,4 | 9,6 / 7,7 | 69 / 132 | 110 / 113 |
+
+O PSI vem da diferença do contador `total` na janela, e não do `avg10`. O `active` é a contagem `state = active` do `pg_activity.csv`. A CPU do host
+é o contador da `telemetria-host` (utilidade do processador, que passa de 100 com turbo; o máximo observado é ~113–114). Com a stack ociosa, a
+CPU do Dell ficou em 3%.
+
+Gargalo:
+- **O Dell não saturou em nenhum degrau.**
+  - A CPU média ficou entre 19% e 43%, com pico de 65%, e o PSI de CPU ficou abaixo de 8%.
+  - O disco fez ~750–1.050 flushes/s com ~0,52 ms cada (`f_await`), perto do `pg_test_fsync` de ~0,79 ms. O PSI de io ficou em ~7–10%
+    (`some`) e o `%util` em 50–74%. Num NVMe, `%util` não indica saturação, porque há várias filas.
+  - Do lado do Dell, o custo é a latência de cada commit (flush do WAL mais o RTT), não falta de capacidade.
+- **O host ficou no teto de CPU desde o 1º degrau:** 105–112 de média contra o máximo de ~113. Na R5 o host ficou em 95 a 20k e 26k e só
+  encostou no teto a partir de 32k–38k (103–111).
+  - A hipótese é a rede do Docker Desktop no Windows: o tráfego container → LAN passa pela pilha de rede dele, e ela come CPU do host. Isso
+    não está medido separadamente.
+- **O pico de 32k–38k é a linha quente do `eventcap`.** O `active` no Postgres sobe para 176–184 de média (240 de máximo) e a coleta do host vê
+  125–127 conexões esperando lock. A CPU e o disco do Dell sobem pouco: 41–43% e o mesmo `f_await`.
+  - Cada commit dura mais (flush ~0,5 ms mais RTT ~0,45 ms), o lock da linha fica mais tempo preso, e a fila de lock se forma um degrau antes
+    da R5. Isso fecha com o 1º degrau degradado em 32k.
+- **Resumo:** na faixa até 44k, o limite é o lock da linha quente, esticado pela latência de commit do banco remoto. Acima dela, com a fila
+  do `admission` ligada, o limite é a CPU do host. O Dell sobra nos dois casos.
+- **`pg_test_fsync` do Dell:** não veio no pacote da coleta. O ~0,79 ms por operação vem da medição da sessão do Dell citada na #227, e o
+  `f_await` medido sob carga (~0,52 ms) é coerente com ele.
 
 ## Aceite (#227)
 
@@ -197,7 +249,7 @@ Leitura:
 - Smoke pelo pooler antes da escada: **cumprido**.
 - Escada com os parâmetros do `Deg-59713`, só `SUFIXO`/`RUN_ID` novos, rodada no gerador: **cumprido**.
 - `verificar-rpm` sem código 3 nem 4 e overselling 0 no CAS: **cumprido** (RC 0).
-- Coleta do host (36 colunas e telemetria) e RTT: **cumprido**. Coleta do Dell e `pg_test_fsync` do Dell: **pendentes** (ver "Dell").
+- Coleta do host (36 colunas e telemetria), RTT e coleta do Dell (CPU, disco, conexões, PSI, com horário UTC): **cumprido**. O `pg_test_fsync` do Dell não veio no pacote; o valor (~0,79 ms) é o da sessão do Dell, citado na #227.
 - Resultados em `09-…`, com README, tabela R5 × R5-db-remoto e linha no `results/README.md`: **cumprido**. Nada em `docs/artigo/`.
 
 ## Anomalias e desvios
@@ -224,4 +276,4 @@ Leitura:
   - `saga-r5db-*.csv` e `resumo-saga-r5db-*.txt`;
   - `verificacoes-r5db.log`.
 - `banco/`: `rtt.txt` (com os brutos `rtt-psql-*.txt`), `gucs-dell.txt` e `gucs-comparacao.txt`.
-- `dell/`: pendente.
+- `dell/`: coleta do Dell (ver "Dell"): `mpstat.txt`, `vmstat.txt`, `iostat-nvme0n1.txt`, `psi.txt`, `pg_activity.csv`, `sar-filtrado.csv`, `inicio.txt` e `fim.txt`.
