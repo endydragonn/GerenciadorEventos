@@ -1,0 +1,15 @@
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+     868 |           10001 |           434000 |                       0 |                 0
+(1 row)
+
+  status   | count 
+-----------+-------
+ confirmed |  9309
+ pending   |   692
+(2 rows)
+
+
+[ ok ] overselling 0.
+[info] sagas: esperando as invariantes convergirem (limite 45s; origem: ORPHAN_MS + 3 x SCAN_MS lidos do container reservation)...
+[ ok ] sagas convergidas (velhas 0, hold held com saga compensated 0, devolucao pendente 0, orfa inversa 0, quant divergente 0).

@@ -249,11 +249,109 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
   - `iostat-nvme0n1.txt` e `sar-filtrado.csv`, com o mesmo recorte da #227. O `sar.csv` original (38,7 MB) e o `sar.bin` (61,7 MB) não
     entraram.
 
-## K2
+## K2 (`Deg-331542`), 2026-11-01
 
-Pendente. Roda num cluster novo, com a trilha `b1` e a autoescala 1..3, depois da limpeza 2 do Dell.
+### Configuração
 
-- **Versão do harness:**
-  - K0: #228 em a826c8d, com as correções de `-c` e da variável `ReadPath` aplicadas só no `verificar` final.
-  - K1: 67c0ef8.
-  - K2: o commit vai na seção dele.
+- **Cluster:** o mesmo host do K0 e do K1, num cluster novo. Branch `Issue-228` em **e4f862f** (o harness é o do K1; desde 67c0ef8 só mudou
+  `results/`).
+  - `K8S_OVERLAY=rodada SLIM_TAG=k8s K8S_DB_REMOTO=192.168.68.50:5433 Projeto/k8s/cluster.sh up --trilha b1`, depois `cluster.sh db-teste`
+    com rc 0.
+  - Sem `K8S_POOLS`: valem os pools do cluster (soma 1492) e o pool real de 245 do Supavisor. Os 7 ScaledObjects têm mínimo 1 e máximo 3, e o
+    Istio põe um sidecar em cada pod dos serviços.
+- **Primeira tentativa abortada:** o gerador ficou sem RAM e o usuário decidiu abortar e repetir. Os brutos estão em `K2-abortado/`, fora
+  da análise.
+- **Limpeza antes da repetição:** `CARGA_K8S=kind-gerenciador limpar-banco.sh`, com rc 0. Foi liberada pelo usuário direto na sessão.
+  - Os mesmos zeros do K1, com 1 linha em `identity.users` (a sonda).
+  - Seed novo, com outro sufixo.
+- **Seed e escada:** os mesmos do K0 e do K1. 1000 usuários e 868 eventos com capacidade 500, mesma escada e mesmos parâmetros do k6.
+- **Réplicas no início (ressalva):** o seed tem 1000 cadastros com bcrypt e fez o KEDA subir o `identity` para 3 e o `stock` para 2.
+  - Às 18:24:00Z, já no setup do k6, o `stock` tinha voltado a 1 e o `identity` estava em 2. O resto estava em 1.
+  - Os 1000 logins do setup levaram o `identity` a 3 de novo antes do 1º degrau.
+  - O braço C da R4 e da R5 parte de tudo em 1. Aqui não deu para esperar o cooldown: o k6 já tinha arrancado.
+- **Gerador:** clone em 850d38e, como no K0 e no K1, com o jogo e o Steam fechados.
+  - RAM livre de 9,93 GB antes (no K1, 9,92 GB), mínima de 3,08 GB às 18:26:14Z e 9,90 GB no fim.
+  - O k6 chegou a 7,0 GB: com p50 de ~3 s, as VUs ficam presas. CPU do gerador no máximo em 56%.
+- **k6:** de 18:23:47Z a 18:26:20Z, com código de saída **99** (parada por p95). Os 1000 logins do setup levaram 15,8 s; a carga começou às
+  ~18:25:19Z.
+- **Coleta no Dell:** sessão DB, `~/coleta-227.sh` com saída `coleta-k8s-K2`, de 18:23:36Z a 18:27:04Z, com o vigia ligado.
+
+### Resultado
+
+| RPM alvo | efetivo | p50 | p95 | p99 | p95 pior janela 30 s | 202 | 429 | 5xx | descartes |
+|---|---|---|---|---|---|---|---|---|---|
+| 20k | 18.773 | 2.943,5 | **5.019,6** | 6.388,0 | 5.567,3 | 2.025 | 0 | 0 | 0 |
+
+As latências estão em ms. A tabela sai de `degraus-331542.csv`, e o gráfico está em `degraus-331542.html`.
+
+- **Parada no 1º degrau:** p95 de 5.020 ms na janela de 60 s, **20 ms acima do limite de 5.000 ms** (`PARADA_P95_MS`).
+  - Os degraus de 26k a 98k não rodaram.
+  - É a regra de parada de todos os blocos e foi mantida: o K2 não se repete até passar.
+  - No K0 e no K1 o 20k (a frio) deu p95 de 1,8 s e o 26k já tinha se recuperado. Aqui o 20k a frio passou do limite.
+- **5xx:** 0, nas reservas e nas confirmações. Nenhum "outros", descarte, EOF ou "Insufficient VUs".
+- **Overselling:** 0.
+  - 868 eventos e capacidade total de 434.000.
+  - 10.001 ativas: 9.309 confirmed + 692 pending.
+  - Nenhum evento com overselling.
+- **Sagas** (`verificar-rpm`, rc 0): convergidas.
+  - Pelo `verificar-rpm`: 0 velhas, 0 hold `held` com saga compensated, 0 devolução pendente, 0 órfã inversa, 0 `quant` divergente.
+  - No fim do bloco (`resumo-saga`): 0 compensações, 0 `reserving` e 0 `compensating`. Não houve cancelamento nem expiração na janela, então
+    não há amostra do lag de devolução.
+- **Fila (202):** das 66 reservas acompanhadas, as 66 deram `rejected`. No K1, no mesmo degrau, foram 18 acompanhadas: 2 admitidas e 16
+  rejeitadas.
+  - **Motivo:** contei todos os resultados da fila no Redis (`adm:res:*`): 2.061, sendo 1.846 `rejected` e 215 `pending`, 0 `timed_out`. Todos
+    os 1.846 `rejected` têm o motivo **"Evento lotado"**.
+  - É o 400 de negócio que o `reservation` devolve ao worker do `admission` quando o CAS no `stock` acha o evento cheio.
+  - **É esperado:** no mapeamento sequencial a carga se concentra num evento por vez. A fila liga quando o evento fica quente, e o worker
+    processa a mensagem depois que as 500 vagas dele já foram tomadas pelo caminho síncrono.
+  - No K2 a fila drena mais devagar (host saturado), por isso a fração rejeitada é maior que no K1 (89,6% de todos os resultados).
+  - Nenhum `rejected` veio de timeout ou erro do worker: esses casos voltam à fila com backoff e, vencido o prazo, viram `timed_out`, e houve
+    0.
+- **Réplicas no 20k** (`coleta-host`; backend/reservation/identity/catalog/admission/notification):
+  - 18:25:19Z, a carga começando: 2/1/3/1/1/1;
+  - 18:26:04Z: 2/1/3/1/2/1;
+  - 18:26:07Z: 3/1/3/1/2/1;
+  - 18:26:16Z: 3/1/2/1/2/1;
+  - 18:26:19Z: 3/1/2/1/3/1.
+  - Fim: o `stock` (fora das colunas da coleta) estava em 3 pelo `kubectl` às 18:26:56Z. O `reservation` ficou em 1: ele escala pelo
+    `adm:hot`, que não passou do gatilho.
+- **CPU do host no 20k** (`telemetria-host`, janela da carga): K2 com média de **110%** e máxima de 113%. No K1, no mesmo degrau a frio, média
+  de 93% e máxima de 112%. RAM livre mínima de 19,8 GB.
+- **Dell, pela coleta da sessão DB:** não saturou.
+  - Conexões: pico de 262 de 300 (às 18:26:53Z, com o pool cheio e ocioso depois do k6), pico de 161 active às 18:26:18Z e pico de 30 idle in
+    transaction às 18:25:32Z.
+  - CPU us+sy com pico de 33% e média de 7%. NVMe com %util máximo de 60% e médio de 13%.
+  - Vigia: nenhum evento.
+- **Espera de lock no Postgres** (`coleta-host`, `pg_espera_lock`): máximo de 153 no 20k. No K1, 124 no mesmo degrau.
+
+**Leitura: o gargalo do K2 foi a CPU do host.**
+- No nó único do kind, cada pod dos serviços carrega um sidecar do Istio (b1). A autoescala, por sua vez, subiu JVMs novas (backend,
+  admission, stock) que disputam os mesmos núcleos.
+- O host já estava em 93% no K1; no K2 passou de 100% durante o degrau inteiro, e a fila na linha quente do `eventcap` cresceu.
+- O Dell e o gerador ficaram longe do limite. A ressalva das réplicas no início não explica o resultado: o `identity` voltou a 3 nos logins
+  de qualquer jeito, e quem escalou na carga partiu de 1.
+- Escalar horizontalmente num nó só não adiciona CPU; só a divide. Com o Istio, o custo por requisição sobe.
+
+### Notas de método
+
+- **Coleta em modo cluster:** 148 amostras do início da coleta (18:23:31Z) ao SIGINT (18:27:27Z), parada assim que as sagas zeraram. A
+  telemetria foi parada junto.
+- **`verificar-rpm`:** rodou depois da escada, sem carga no Dell. Saída em `host-telemetria/verificacoes-k2.log`.
+- **A contagem dos motivos no Redis** foi feita depois do `verificar`, por `kubectl exec` no pod do Redis, com a senha só dentro do pod
+  (como no `limpar-banco`).
+
+### Arquivos
+
+- `degraus-331542.csv`, `degraus-331542.html`, `plano-degraus-331542.json`
+- `gerador/summary-degraus-331542.json`: resumo do k6, do ref temporário `K8S-gerador-K2` (ea6cb24)
+- `host-telemetria/`: `coleta-host-*`, `eventos-*`, `pgss-*`, `registro-*`, `resumo-saga-*`, `saga-*`, `telemetria-host-*` e
+  `verificacoes-k2.log`
+- `dell/`: coleta do Dell pela sessão DB (pacote do ref temporário `K8sDB-dell-K2`, 5c0491e, sha256 `687c2812…f453a` conferido):
+  - `mpstat.txt`, `vmstat.txt`, `psi.txt`, `pg_activity.csv`, `inicio.txt` e `fim.txt`;
+  - `iostat-nvme0n1.txt` e `sar-filtrado.csv`, com o mesmo recorte do K1.
+
+## Versão do harness por bloco
+
+- K0: #228 em a826c8d, com as correções de `-c` e da variável `ReadPath` aplicadas só no `verificar` final.
+- K1: 67c0ef8.
+- K2: e4f862f (o código k6 do gerador, em 850d38e, é idêntico nos três).
