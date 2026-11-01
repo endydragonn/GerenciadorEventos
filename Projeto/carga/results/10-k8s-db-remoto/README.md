@@ -123,6 +123,12 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
 
   - O que vem por `envFrom` sai do `docker compose config` resolvido, com as mesmas regras da R5, e não aparece no spec. Os literais
     batem com o que foi conferido no Deployment ao vivo durante a validação.
+  - **Gatilho do `admission`** (`ADMISSION_X_RPM`, `ADMISSION_RESERVATION_REPLICAS`, `ADMISSION_QUEUE_ON`, `ADMISSION_SYNC_BELOW`):
+    - No K0 e no K1, as quatro variáveis vêm do **Secret** `env-admission` (`envFrom.secretRef`; não há ConfigMap). Não há literal no
+      spec, e o `admission` não registra esses valores no log.
+    - O Secret não foi lido, então os valores efetivos **não estão confirmados nesta etapa**.
+    - O Secret é gerado pelo `cluster.sh` a partir do `docker compose config`, o mesmo de onde o compose da R5 e da #227 tira os
+      valores. Os defaults do compose são 56000 / 1 / 0,8 / 0,7.
 - **`verificar-rpm`:** a 1ª execução abortou depois das tabelas, por dois defeitos do harness em modo cluster, corrigidos na #228:
   - o stderr "Defaulted container" do kubectl virava erro no PS 5.1;
   - uma variável local colidia com o parâmetro `ValidateSet` `$ReadPath`.
