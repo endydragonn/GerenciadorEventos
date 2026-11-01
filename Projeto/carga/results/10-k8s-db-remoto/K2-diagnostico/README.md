@@ -106,6 +106,52 @@ Tempos em ms. Cada linha é o proxy que registra o salto; na entrada, a duraçã
 - Throttling por períodos de CFS: rabbitmq 8%, os outros até 5%.
 - O `istio-proxy` não tem limite de CPU e roda com concurrency 16.
 
+## Causa-raiz da parada do K2 (confirmada pelo teste A)
+
+**O Hikari do `stock` em 60 por pod.** O valor vem da regra de pools do cluster para a autoescala da #205, que deixa o `stock` subir até 3
+réplicas: 60 por réplica para a soma caber nos 1500 clientes do Supavisor (`Projeto/k8s/README.md`, "Pool do Supavisor"). No K1 o `stock`
+tinha 250, com 1 réplica.
+
+A cadeia, medida no diagnóstico 1:
+1. o pool do stock esgota (60 de 60, pending médio de 142,6);
+2. o hold leva ~730 ms no p50;
+3. o salto gateway → reservation chega a ~1 s, e o Tomcat do reservation fica em 300 de 300;
+4. cada requisição prende uma thread do Tomcat do gateway por ~1 s;
+5. todo o k6 está num pod só do gateway, então 300 threads ÷ ~1 s ≈ 300 req/s, abaixo dos ~333 req/s do 20k;
+6. a fila cresce dentro do gateway (~4,6 s no p50 antes de ele chamar alguém), até a parada por p95.
+
+A prova é o teste A (`teste-A/`), que muda só o `stock` (Hikari 250 e 1 réplica, igual ao K1):
+
+| Medida, p50 / p95 em ms | Diagnóstico 1 (stock 60 × 3) | Teste A (stock 250 × 1) |
+|---|---|---|
+| Hikari pending do stock (média / máx.) | 142,6 / 237 | 9,9 / 238 (o máximo só no arranque) |
+| Entrada do stock | 729 / 2.208 | 64 / 1.642 |
+| Gateway → reservation | 982 / 2.458 | 138 / 1.760 |
+| Tempo interno do gateway, no p50 | ~4.600 | ~19 |
+| Entrada do gateway | 5.647 / 9.930, com parada | 160 / 2.164, sem parada |
+| Reservas do degrau de 20k | 15.468 em ~60 s, 2.946 descartes | 60.001 em 180 s, 0 descartes |
+
+## O que segue sem explicação
+
+- **O p95 de ~2 s** na entrada do gateway (2.164 ms no teste A), que o Hikari 250 não resolveu.
+  - O CAS do `eventcap` segue em ~290 ms de média (286 ms no diagnóstico 1, 296 ms no teste A, pelo `pgss`): é a espera pelo lock da linha
+    quente.
+  - O pool real do Supavisor é 245 conexões ao banco, abaixo do Hikari 250 do stock. Acima disso a espera passa para o Supavisor (`pg_conexoes`
+    chegou a 247 no teste A).
+  - Não isolado.
+- **Os 67 5xx na reserva (e 1 na confirmação) do K2-repeticao, no 26k.** Não têm origem: o k6 não registra o código, nenhum serviço logou
+  ERROR e aquele bloco rodou sem access log do Envoy. Nos dois diagnósticos, com access log, não houve 5xx.
+
+## Achado ainda não testado: a entrada L4 presa no pod original do gateway
+
+- O k6 entra pelo NodePort, e o kube-proxy balanceia por conexão. As 3.006 conexões keep-alive abertas no começo da carga ficam no pod
+  original do gateway.
+- As réplicas que o KEDA sobe (cpu 50% do request de 500m) recebem 0 conexões e 0 POSTs, nos dois diagnósticos, e só gastam CPU de JVM
+  subindo.
+- Com o salto reservation em ~140 ms (teste A), isso não derruba o degrau. Passa a derrubar quando o salto passa de ~0,9 s (300 threads ÷
+  333 req/s).
+- Será o teste B, a decidir pelo usuário.
+
 ## Arquivos
 
 - `degraus-337214.csv`, `degraus-337214.html`, `plano-degraus-337214.json`
