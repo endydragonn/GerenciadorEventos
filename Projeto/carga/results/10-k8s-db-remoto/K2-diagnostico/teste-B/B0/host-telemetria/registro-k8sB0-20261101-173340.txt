@@ -1,0 +1,30 @@
+coleta k8sB0 iniciada em 2026-11-01T20:33:40Z (project gerenciador-eventos)
+containers backend: backend-77c7768bdf-bq5xg 
+containers reservation: reservation-68fb9f75d7-t7klc 
+containers identity: identity-747c8b88c7-8lgzv identity-747c8b88c7-gz2tv identity-747c8b88c7-z5s7w 
+containers catalog: catalog-55bc7bb4b7-trhsk 
+containers admission: admission-7d68bbfb48-7jxs2 
+containers notification: notification-865765cb88-486zt 
+containers lb: 
+saga: ORPHAN_MS=30000 (limiar de saga_orfas desta coleta; lido do RESERVATION_SAGA_ORPHAN_MS do reservation ou 30000)
+ambiente deste shell (AUTOESCALA_*, ADMISSION_*; exporte aqui os do scaler/up):
+backend (container deploy/backend):
+  RESERVATION_READPATH=
+reservation (container deploy/reservation):
+  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=200
+  SERVER_TOMCAT_THREADS_MAX=
+  RESERVATION_SAGA_ORPHAN_MS=
+  RESERVATION_SAGA_REAPER_SCAN_MS=
+stock (container deploy/stock):
+  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=250
+admission (container deploy/admission):
+  ADMISSION_X_RPM=
+  ADMISSION_RESERVATION_REPLICAS=
+  ADMISSION_QUEUE_ON=
+  ADMISSION_SYNC_BELOW=
+  ADMISSION_WORKER_CONCURRENCY=
+  ADMISSION_QUEUE_TTL_MS=
+  ADMISSION_QUEUE_MAX_LENGTH=
+  ADMISSION_MAX_WAITING_PER_USER=
+  ADMISSION_WINDOW_MS=
+  ADMISSION_BUCKET_MS=

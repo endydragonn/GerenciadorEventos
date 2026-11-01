@@ -64,3 +64,71 @@ O teste A (stock em 250 × 1) e a instrumentação continuam aplicados; o desfaz
 - **5xx no access log:** 23 respostas 503 da app do `admission` (com fail-open) e 20 no polling `GET /bff/event-wallets/admission`. Não houve
   `UF`, `UO` nem `URX`.
 - **Host:** CPU média de 110,7%. **Dell:** active 240, idle-in-tx 66 e o vigia sem nada.
+- **Arquivos do B0:** `B0/` (`degraus-339462.*`, `gerador/` do ref `K8S-gerador-K2-diagB0` 69a767d, `accesslog/` com gzip, `pods/`,
+  `host-telemetria/` e `dell/` do ref `K8sDB-dell-K2-diagB0` 7b2689f, sha256 `fd939e25…29cdb1` conferido).
+
+## B1 (`Deg-340211`), backend com 3 réplicas fixas
+
+- **Preparo:** `minReplicaCount` 3 no ScaledObject `backend` às 20:43:16Z; seed às 20:46:03Z. Às 20:49:31Z estavam o backend em 3/3 e o resto
+  em 1/1, sem pod em término. O k6 saiu às 20:50:36Z.
+  - As duas réplicas novas do gateway subiram ~6 min antes da carga e ficaram ociosas: JVM no ar, mas sem tráfego de aquecimento.
+- **k6:** até 20:53:38Z, com exit 99 (parado por p95 na janela de 90 s).
+  - p50 3.358, p95 8.872, p99 10.521 ms; 37.961 reservas, **20.136 descartes** ("Insufficient VUs" 7 s depois de a carga começar).
+  - 0 5xx, overselling 0, sagas convergidas.
+  - No acompanhamento da fila apareceram 21 `timed_out` e 178 `sem_estado` (no B0, 0 e 0).
+- **Códigos na entrada do gateway** (access log):
+
+  | Código | n | % | p50 (ms) | p95 (ms) |
+  |---|---|---|---|---|
+  | 201 | 13.803 | 34,6% | 5.487 | 8.625 |
+  | 202 | 5.490 | **13,8%** | 1.368 | 3.636 |
+  | 400 (negócio) | 9.306 | 23,3% | — | — |
+  | 429 | 9.363 | **23,5%** | — | — |
+  | 0 (DC) | 1.903 | 4,8% | — | — |
+
+- **Conexões do k6:** 3.006, divididas em ~1/3 por pod desde o início: `bq5xg` 1.004, `blkd7` 1.013 e `242ns` 989. Os POSTs também se dividiram
+  em ~1/3 por pod em cada intervalo de 10 s.
+- **CPU, no cgroup:** gateway com app de 0,37 a 0,73 núcleo e `istio-proxy` de 0,37 a 0,38 por pod. Reservation: 1,01 núcleo no pod novo e 0,47
+  no original. Stock: 0,39. rabbitmq com throttling em 10% dos períodos. Soma dos containers (`top`): média de 7,9 núcleos.
+  - A CPU do host não foi medida: a `telemetria-host` não gravou nesta rodada.
+- **Gargalo de baixo:**
+  - Tomcat do reservation em 300 de 300 nos dois pods (média de 289 e 276); o reservation escalou a 2 às 20:52:38Z.
+  - Hikari do reservation com pending médio de 19,6, chegando a 171, no pod novo.
+  - Hikari do stock com ativo médio de 208 de 250 e pending médio de 55,3, chegando a 243.
+- **5xx no access log:** 8 respostas 503 da app do `admission` e 3 no polling. Não houve `UF`, `UO` nem `URX`.
+- **Dell:** active 242, idle-in-tx 43 e o vigia sem nada. Pacote `B1/dell/` (ref `K8sDB-dell-K2-diagB1` 314ba0b, sha256 `4612e4ad…cd8ea2`,
+  conferido).
+
+## B0 × B1
+
+| Campo | B0 (conexões presas) | B1 (3 pods desde o início) |
+|---|---|---|
+| Conexões do k6 por pod do gateway | 3.006 / 0 / 0 | 1.004 / 1.013 / 989 |
+| Entrada do gateway, p50 / p95 | 4.396 / 10.124 | 3.314 / 8.793 |
+| Gateway → reservation, p50 / p95 | 578 / 2.977 | **2.199 / 4.731** |
+| **Tempo interno do gateway**, p50 | **~3.800** | **~1.100** (3.314 − 2.199 − 17) |
+| Entrada do reservation, p50 | 444 | 2.114 |
+| **Tempo interno do reservation**, p50 | ~253 (444 − 191) | **~1.040** (2.114 − 1.071) |
+| Entrada do stock, p50 / p95 | 188 / 2.450 | **1.068 / 3.574** |
+| Tomcat do reservation (média / máx. de 300) | 235 / 300 | 289 e 276 / 300 |
+| Hikari pending do stock (média / máx.) | 17,5 / 191 | 55,3 / 243 |
+| k6 p50 / p95 / p99 | 4.521 / 10.167 / 12.418 | 3.358 / 8.872 / 10.521 |
+| Reservas e descartes | 34.467 e 23.714 | 37.961 e 20.136 |
+| 202 (% do total) | 24,9% | 13,8% (0,55× o B0) |
+| 429 (% do total) | 5,5% | 23,5% |
+| 5xx no k6 | 0 | 0 |
+| Overselling | 0 | 0 |
+
+Tempos em ms.
+
+**Leitura, contra as previsões registradas antes:**
+- **Previsão 1 (HB) bateu em parte.** As conexões ficaram ~1/3 por pod, e o tempo interno do gateway caiu de ~3,8 s para ~1,1 s. Não caiu para
+  dezenas de ms.
+- **Previsão 2 bateu.** A fila desceu um andar:
+  - o tempo interno do reservation foi de ~250 ms para ~1 s, com o Tomcat dele no teto nos dois pods;
+  - a entrada do stock foi de 188 ms para 1.068 ms no p50, com o pending do Hikari dele subindo de 17,5 para 55,3 em média;
+  - o p95 do k6 melhorou pouco (10,2 s → 8,9 s) e a rodada parou de novo.
+  - Pela regra combinada, vale como "espalhar o gateway não basta enquanto reservation e stock estão no teto", não como refutação de HB.
+- **Fila:** a fração de 202 do B1 (13,8%) ficou em 0,55× a do B0, dentro da faixa de 0,5× a 2×, mas perto da borda. Já as 429 subiram de 5,5%
+  para 23,5%: respostas baratas do `admission` que mudam o caminho. O registro fica aqui para a interface julgar se isso é uma segunda
+  variável.
