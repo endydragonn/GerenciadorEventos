@@ -56,8 +56,9 @@ function Warn($m) { Write-Host "[aviso] $m" -ForegroundColor Yellow }
 function Fail($m) { Write-Host "[erro] $m" -ForegroundColor Red; exit 1 }
 
 if ($ParadaP95Ms -gt 0 -and ($ParadaJanelaS -lt 30 -or $ParadaJanelaS % 30 -ne 0 -or $Duracao % $ParadaJanelaS -ne 0)) { Fail "-ParadaJanelaS $ParadaJanelaS invalido: multiplo de 30 e divisor de -Duracao ($Duracao)." }
+# alcance, nao saude: QUALQUER resposta HTTP conta (no cluster o /actuator/health da 8081 responde 401: as probes estao na porta de management 8090); so falha de conexao ou timeout aborta
 try { Invoke-WebRequest -Uri "$SeedUrl/actuator/health" -UseBasicParsing -TimeoutSec 5 | Out-Null }
-catch { Fail "Gateway inacessivel em $SeedUrl (o seed roda no host)." }
+catch { if (-not $_.Exception.Response) { Fail "Gateway inacessivel em $SeedUrl (o seed roda no host)." } }
 
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib-seed.ps1')
 . (Join-Path $PSScriptRoot 'lib-degraus.ps1')
