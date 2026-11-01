@@ -12,8 +12,8 @@ A #227 (etapa 09) mediu o efeito de tirar o Postgres do host no compose. Esta et
 O K0 é o controle: separa o efeito do db remoto do efeito do Kubernetes.
 
 **Ordem:** o plano era K1, K2, K0. **O K0 rodou primeiro.** A limpeza do banco do Dell antes do K1, um `TRUNCATE ... RESTART IDENTITY` pelo
-`limpar-banco.sh` em modo cluster, foi negada pelo classificador de permissões da sessão que roda a rodada. Ela espera a liberação do
-usuário. O K0 não depende dela: ele sobe com o banco dentro do cluster, num PVC novo e vazio, e não toca o Dell.
+`limpar-banco.sh` em modo cluster, foi negada pelo classificador de permissões da sessão que roda a rodada até o usuário liberá-la. O K0
+não depende dela: ele sobe com o banco dentro do cluster, num PVC novo e vazio, e não toca o Dell. Depois vieram o K1 e o K2.
 
 Parâmetros por bloco e comandos: `Projeto/k8s/README.md`, "Rodada com o db remoto".
 
@@ -147,11 +147,113 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
 - `host-telemetria/`: `coleta-host-*`, `eventos-*`, `pgss-*`, `registro-*`, `resumo-saga-*`, `saga-*`, `telemetria-host-*` e
   `verificacoes-k0.log`
 
-## K1 e K2
+## K1 (`Deg-308164`), 2026-11-01
 
-Pendentes: esperam a limpeza do banco do Dell, que depende do usuário. O cluster do K1 já está no ar (`db-teste` rc 0).
+### Configuração
+
+- **Cluster:** o mesmo host do K0, num cluster novo. Branch `Issue-228` em **67c0ef8**: o harness já lê o env pelo spec do Deployment
+  (volta 5).
+  - `K8S_OVERLAY=rodada SLIM_TAG=k8s K8S_POOLS=r5 K8S_DB_REMOTO=192.168.68.50:5433 Projeto/k8s/cluster.sh up --trilha nenhuma`, depois
+    `cluster.sh db-teste` com rc 0 (TCP e `SELECT 1` pelo Supavisor).
+  - A stack é a do K0 (mesmos Hikari, 32 workers, ScaledObjects em 1, NodePort 30081). Só o banco muda: o Postgres do Dell, com
+    `max_connections` 300, pelo Service sem seletor do componente `db-remoto`.
+- **Limpeza antes do bloco:** `CARGA_K8S=kind-gerenciador limpar-banco.sh`, com rc 0. Foi liberada pelo usuário direto na sessão.
+  - Depois dela: `event`, `walletevent`, `eventcap` e o `event_store` do reservation zerados.
+  - Em `identity.users` fica 1 linha: o usuário que a sonda do próprio `limpar-banco` cria para conferir o JWKS. Por isso o host do seed é
+    o `user_id=2`.
+  - Também: FLUSHDB do Redis, purge de `admission.requests` e `admission.timed_out`, e a chave do JWT apagada.
+- **Seed e escada:** os mesmos do K0. 1000 usuários e 868 eventos com capacidade 500, mesma escada e mesmos parâmetros do k6.
+- **Gerador:** clone em 850d38e, como no K0. O código k6 é idêntico ao de 67c0ef8 (`git diff` vazio em `carga-degraus.js` e
+  `Projeto/carga/k6`). RAM livre: 9,92 GB antes e 10,19 GB no fim.
+- **k6:** de 11:54:00Z a 12:19:41Z, com código de saída 0 e sem parada por p95. Os 1000 logins do setup levaram 28,2 s.
+- **Coleta no Dell:** sessão DB, `~/coleta-227.sh` com saída `coleta-k8s-K1`, de 11:53:54Z a 12:34:14Z, com o vigia ligado.
+
+### Resultado
+
+| RPM alvo | p50 | p95 | p99 | p95 pior janela 30 s | 202 | 429 | admitir p95 (ms) | ponta a ponta p95 (ms) |
+|---|---|---|---|---|---|---|---|---|
+| 20k | 25,1 | 1.795,6 | 2.356,0 | 2.059,6 | 431 | 0 | 1.251 | 3.021 |
+| 26k | 24,7 | 293,9 | 569,9 | 298,6 | 0 | 0 | — | — |
+| 32k | 122,7 | 1.073,6 | 1.517,1 | 1.118,0 | 3.472 | 0 | 1.021 | 941 |
+| 38k | 325,9 | 1.504,5 | 2.050,9 | 1.525,2 | 18.120 | 0 | 2.559 | 2.334 |
+| 44k | 64,6 | 1.275,6 | 1.914,1 | 1.310,9 | 25.857 | 3.916 | 11.793 | 8.857 |
+| 50k | 6,5 | 321,8 | 526,4 | 340,0 | 30.406 | 12.747 | 10.051 | 10.049 |
+| 56k | 5,7 | 296,2 | 507,7 | 307,7 | 30.627 | 18.069 | 11.046 | 10.066 |
+| 62k | 4,8 | 308,5 | 496,8 | 323,7 | 29.381 | 24.557 | 12.033 | 11.044 |
+| 68k | 4,2 | 298,5 | 502,2 | 315,1 | 28.919 | 30.210 | 12.074 | 11.058 |
+| 74k | 4,7 | 1.001,9 | 1.756,2 | 1.585,6 | 26.274 | 36.854 | 14.045 | 12.057 |
+| 80k | 4,3 | 335,2 | 525,0 | 349,1 | 26.173 | 42.896 | 14.051 | 12.057 |
+| 86k | 4,3 | 386,7 | 621,2 | 445,8 | 24.212 | 50.532 | 14.105 | 13.056 |
+| 92k | 4,1 | 344,9 | 601,9 | 348,2 | 24.200 | 55.837 | 16.108 | 12.097 |
+| 98k | 4,6 | 341,5 | 543,3 | 341,8 | 24.380 | 60.895 | 15.065 | 13.058 |
+
+As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de `degraus-308164.csv`, e o gráfico está em `degraus-308164.html`.
+
+- **5xx:** 0 em todos os degraus, nas reservas e nas confirmações. Nenhum "outros" nem EOF.
+- **Descartes:** só no 74k.
+  - O k6 chegou aos 3000 VUs às 12:11:40Z ("Insufficient VUs") e descartou 229 iterações: o efetivo foi 73.772 para um alvo de 74.000.
+  - O p95 desse degrau (1.001,9 ms) carrega essa saturação do gerador.
+  - No 80k, voltou a 0 descartes e p95 de 335 ms.
+- **1º degrau degradado (p95 ≥ 1 s), sem contar o 20k a frio:** **32k**. O 74k também passa de 1 s, pela saturação do gerador.
+  - No K0 o primeiro foi 26k, na #227 foi 32k e na R5, 38k.
+- **Overselling:** 0.
+  - 868 eventos e capacidade total de 434.000.
+  - 178.356 ativas: 158.690 confirmed + 19.666 pending, que batem na mesma leitura.
+  - Nenhum evento com overselling.
+- **Sagas** (`verificar-rpm`, rc 0): convergidas.
+  - Pelo `verificar-rpm`: 0 velhas, 0 hold `held` com saga compensated, 0 devolução pendente, 0 órfã inversa, 0 `quant` divergente.
+  - No fim do bloco (`resumo-saga`): 0 compensações, `devolucao_pendente` 0, `orfa_inversa` 0, 0 sagas `reserving` e 0 `compensating`.
+  - Lag de devolução da vaga (n 186.750): p50 220 ms, p95 622 ms, máximo 1.494 ms. No K0 o p95 foi 338 ms e na R5, 448 ms.
+- **Dell, pela coleta da sessão DB:**
+  - **Conexões** (`pg_stat_activity` a cada 5 s):
+    - Pico de 263 de 300, a primeira vez às 11:55:55Z, com platô em 262–263.
+    - Ficou em 250 ou mais de 11:55:50Z a 12:24:26Z: o pool do Supavisor (245) ficou cheio a escada inteira.
+    - Pico de 243 active às 11:59:48Z.
+  - **CPU** (vmstat): us+sy com pico de 62% às 12:01:10Z e média de 12,4%.
+  - **PSI avg10:** cpu some com máximo de 9,87 e io some com máximo de 9,95.
+  - **NVMe:** %util médio de 27%, com só 5 de 2.421 amostras em 90% ou mais.
+  - **Vigia:** nenhum evento. Sem restart, sem mudança de health, sem falha de psql, sem passar de 270 conexões e sem "too many clients",
+    FATAL ou PANIC.
+- **CPU do host durante o k6** (`telemetria-host`): média de 86,2%. RAM livre mínima de 23,3 GB.
+
+**K0 × K1, o efeito do db remoto no cluster:**
+- A fase lenta encolheu: o p50 passa de 100 ms só em 32k–38k. No K0 isso ia de 26k a 44k, com o p50 chegando a 753 ms.
+- Os 429 começam em 44k (3.916). No K0 começavam em 38k (5.715).
+- De 50k para cima: admitir p95 de 10 a 16 s (K0: 17–21 s) e ponta a ponta p95 de 10 a 13 s (K0: 14–17 s).
+- Com o db fora do nó do kind, o host não divide mais a CPU com o Postgres e a admissão fica mais rápida.
+
+**K1 × #227, o efeito do Kubernetes com o db remoto:**
+- O 1º degrau degradado é o mesmo (32k).
+- Acima de 50k, a admissão fica perto da da #227 (admitir 11–14 s, ponta a ponta 10–12 s).
+- No cluster, o lag de devolução da vaga é maior (p95 622 ms).
+
+### Notas de método
+
+- **Coleta em modo cluster:** 1273 amostras em 2400 s, `duracao_amostra_ms` com p50 1.249 e p95 4.804. A finalização foi normal (o
+  script não foi editado durante a coleta).
+- **`registro-*.txt`:** o env agora sai do spec do Deployment.
+  - Os literais aparecem: Hikari 1000/250 e 32 workers.
+  - O que vem por `envFrom` sai vazio, como já documentado no K0: o gatilho do `admission` e o Tomcat e a saga do `reservation`. Os
+    valores são os mesmos do K0, 56000 / 1 / 0,8 / 0,7.
+- **O `pgss` inclui as consultas do `verificar-rpm`.** Ele rodou às ~12:21Z, antes de a coleta fechar (12:33Z), como no K0.
+- **`verificar-rpm`:** rodou depois da escada, sem carga no Dell. Saída em `host-telemetria/verificacoes-k1.log`.
+
+### Arquivos
+
+- `degraus-308164.csv`, `degraus-308164.html`, `plano-degraus-308164.json`
+- `gerador/summary-degraus-308164.json`: resumo do k6, do ref temporário `K8S-gerador-K1` (2271066)
+- `host-telemetria/`: `coleta-host-*`, `eventos-*`, `pgss-*`, `registro-*`, `resumo-saga-*`, `saga-*`, `telemetria-host-*` e
+  `verificacoes-k1.log`
+- `dell/`: coleta do Dell pela sessão DB (pacote do ref temporário `K8sDB-dell-K1`, d67101f, sha256 conferido):
+  - `mpstat.txt`, `vmstat.txt`, `psi.txt`, `pg_activity.csv`, `inicio.txt` e `fim.txt`;
+  - `iostat-nvme0n1.txt` e `sar-filtrado.csv`, com o mesmo recorte da #227. O `sar.csv` original (38,7 MB) e o `sar.bin` (61,7 MB) não
+    entraram.
+
+## K2
+
+Pendente. Roda num cluster novo, com a trilha `b1` e a autoescala 1..3, depois da limpeza 2 do Dell.
 
 - **Versão do harness:**
-  - **K0:** rodou com a #228 em a826c8d, com as correções de `-c` e da variável `ReadPath` aplicadas só no `verificar` final.
-  - **K1 e K2:** rodam com a versão que inclui a leitura do env pelo spec do Deployment (volta 5). O commit exato vai na seção de cada
-    bloco.
+  - K0: #228 em a826c8d, com as correções de `-c` e da variável `ReadPath` aplicadas só no `verificar` final.
+  - K1: 67c0ef8.
+  - K2: o commit vai na seção dele.
