@@ -294,7 +294,7 @@ firewall dele aceita a 5433 **só** da origem `192.168.68.64` (o host: o tráfeg
 `K8S_DB_REMOTO` só vale com overlay de Secrets reais (`base`, `completa`, `rodada`): os overlays `e2e`/`carga` têm credenciais efêmeras que o banco remoto não conhece. O `up` guarda o modo no label
 `db-remoto` do namespace e aborta se um cluster existente subiu no outro modo (o `apply` não poda: ficariam o StatefulSet `db` e a EndpointSlice juntos): trocar de modo = `down` + `up`.
 
-### Os três blocos (nessa ordem: K1, K2, K0, cada um num cluster novo)
+### Os três blocos (planejados como K1, K2, K0; rodaram K0, K1, K2, cada um num cluster novo)
 
 Todos com `K8S_OVERLAY=rodada`, `SLIM_TAG=k8s` (até a R5 terminar), `ADMISSION_X_RPM` 56000 (o do compose, pelo Secret) e a escada do `Deg-59713` rodada pelo gerador (EnzoAMD) contra
 **`192.168.68.64:8081`**.

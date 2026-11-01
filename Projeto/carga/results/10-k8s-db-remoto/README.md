@@ -33,12 +33,14 @@ Parâmetros por bloco e comandos: `Projeto/k8s/README.md`, "Rodada com o db remo
   - O 1º preparo abortou depois do seed, por um redirecionamento `2>&1` do operador no PowerShell.
   - O cluster foi recriado para o seed começar num banco vazio, sem TRUNCATE.
 - **Gerador:** EnzoAMD, k6 2.2.0, clone em 850d38e. O k6 é idêntico ao do commit do plano (`git diff` vazio em `carga-degraus.js`,
-  `lib-admissao.js`, `lib-mapeamento.js` e `docs/carga/harness`). RAM livre: 7,68 GB depois do disparo e 10,05 GB no fim.
+  `lib-admissao.js`, `lib-mapeamento.js` e `docs/carga/harness`). RAM livre: 7,68 GB depois do disparo e 10,05 GB no fim (relato da sessão
+  do gerador, sem fonte versionada).
 - **Escada:** a mesma da #227. Sequencial de 20k a 98k RPM, passo de 6k, 14 degraus de 60 s.
   - `USUARIOS` 1000, `PCT_CONFIRMA` 100, `MAX_VUS` 3000;
   - `PCT_ACOMPANHA` 5, `CONSULTA_MS` 1000, `TETO_CONSULTA_S` 35;
   - `PARADA_P95_MS` 5000, `PARADA_JANELA_S` 60, `SETUP_S` 90.
-- **k6:** de 08:37:03Z a 09:02:48Z, código de saída 0. Os 1000 logins do setup levaram 28,4 s, contra ~12 s no compose.
+- **k6:** de 08:37:03Z a 09:02:48Z, código de saída 0. Os 1000 logins do setup levaram 28,4 s, contra ~12 s no compose (log do gerador,
+  sem fonte versionada).
 
 ### Resultado
 
@@ -63,26 +65,23 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
 
 - **5xx:** 0 em todos os degraus, nas reservas e nas confirmações. Efetivo = alvo, 0 descartes, sem parada.
 - **1º degrau degradado (p95 ≥ 1 s), sem contar o 20k a frio:** **26k**. Na #227 (compose, db no Dell) foi 32k e na R5 (compose, db local), 38k.
-- **Overselling:** 0.
-  - No total: 868 eventos, 157.497 ativas, capacidade 434.000.
-  - **Por evento:** 0 eventos com ativas acima da capacidade; o máximo é 500 ativas por evento, igual à capacidade; e `capacity − quant` do
-    `stock.eventcap` = ativas em todos os 868 eventos.
+  Aqui a regra usa o p95 do degrau inteiro; a etapa 09 usou o p95 da pior janela de 30 s, então a comparação com ela é aproximada.
+- **Overselling:** 0 (`host-telemetria/verificacoes-k0.log`).
+  - Na execução final (linhas 28 e 33–34): 868 eventos, capacidade 434.000, 144.942 ativas (todas confirmed) e 164.450 expired;
+    `eventos_com_overselling` 0.
+  - Na 1ª execução, enquanto o job de expiração ainda varria as pending (linhas 6 e 11–13): 156.245 ativas = 144.942 confirmed + 11.303
+    pending, mais 153.147 expired, soma de 309.392 (a mesma soma da final).
 - **Sagas** (`verificar-rpm`, rc 0): 0 velhas, 0 hold `held` com saga compensated, 0 devolução pendente, 0 órfã inversa, 0 `quant`
-  divergente.
+  divergente (`capacity − quant` do `stock.eventcap` contra as ativas).
   - No fim do bloco (`resumo-saga`): 0 compensações, `devolucao_pendente` 0, `orfa_inversa` 0, 0 sagas `reserving` e 0 `compensating`.
   - Lag de devolução da vaga (n 164.450): p50 111 ms, p95 338 ms, máximo 1.945 ms. Na R5 o p95 foi 448 ms.
-- **CPU do host durante o k6** (`telemetria-host`): média 83,5%. RAM livre mínima de 21,8 GB.
-
-**As 100 de diferença no `verificar`:**
-- A 1ª execução mostrou 157.497 ativas, mas 144.942 confirmed + 12.455 pending = 157.397. As duas consultas rodaram em instantes diferentes
-  enquanto o job de expiração varria as pending: no 1º instante havia 12.555 pending, e 100 expiraram antes da 2ª consulta.
-- O total de `walletevent` do prefixo é 309.392 nas duas leituras.
-- Releitura depois da varredura: 0 pending, 164.450 expired (151.995 + 12.455) e 144.942 confirmed.
+- **CPU do host durante o k6** (`telemetria-host`): média 83,5%, incluindo o setup e as pausas; só nos degraus de carga, 85,3%. RAM livre
+  mínima de 21,8 GB.
 
 **Ruído:**
-- **17 respostas "outros" no degrau de 26k**, todas às 08:40:28Z: o POST `/bff/event-wallets` recebeu EOF. A conexão foi fechada do lado do
-  servidor, no caminho NodePort (kube-proxy) → pod do gateway.
-- Não houve 5xx nem restart de pod. É uma rajada única, num instante só, e não se repetiu.
+- **17 respostas "outros" no degrau de 26k** (CSV): o POST `/bff/event-wallets` recebeu EOF, numa rajada às 08:40:28Z (hora do log do
+  gerador, sem fonte versionada). A conexão foi fechada do lado do servidor, no caminho NodePort (kube-proxy) → pod do gateway.
+- Não houve 5xx. Sem restart de pod pelo `kubectl get pods` da sessão (sem fonte versionada).
 
 **Leitura contra a #227** (compose, db no Dell):
 - No K0 a fase lenta é mais longa: de 26k a 44k, com p50 entre 170 e 753 ms.
@@ -164,8 +163,9 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
   - Também: FLUSHDB do Redis, purge de `admission.requests` e `admission.timed_out`, e a chave do JWT apagada.
 - **Seed e escada:** os mesmos do K0. 1000 usuários e 868 eventos com capacidade 500, mesma escada e mesmos parâmetros do k6.
 - **Gerador:** clone em 850d38e, como no K0. O código k6 é idêntico ao de 67c0ef8 (`git diff` vazio em `carga-degraus.js` e
-  `Projeto/carga/k6`). RAM livre: 9,92 GB antes e 10,19 GB no fim.
-- **k6:** de 11:54:00Z a 12:19:41Z, com código de saída 0 e sem parada por p95. Os 1000 logins do setup levaram 28,2 s.
+  `Projeto/carga/k6`). RAM livre: 9,92 GB antes e 10,19 GB no fim (relato da sessão do gerador, sem fonte versionada).
+- **k6:** de 11:54:00Z a 12:19:41Z, com código de saída 0 e sem parada por p95. Os 1000 logins do setup levaram 28,2 s (log do gerador, sem
+  fonte versionada).
 - **Coleta no Dell:** sessão DB, `~/coleta-227.sh` com saída `coleta-k8s-K1`, de 11:53:54Z a 12:34:14Z, com o vigia ligado.
 
 ### Resultado
@@ -173,7 +173,7 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
 | RPM alvo | p50 | p95 | p99 | p95 pior janela 30 s | 202 | 429 | admitir p95 (ms) | ponta a ponta p95 (ms) |
 |---|---|---|---|---|---|---|---|---|
 | 20k | 25,1 | 1.795,6 | 2.356,0 | 2.059,6 | 431 | 0 | 1.251 | 3.021 |
-| 26k | 24,7 | 293,9 | 569,9 | 298,6 | 0 | 0 | — | — |
+| 26k | 24,7 | 293,9 | 569,9 | 298,6 | 0 | 0 | — | 303 |
 | 32k | 122,7 | 1.073,6 | 1.517,1 | 1.118,0 | 3.472 | 0 | 1.021 | 941 |
 | 38k | 325,9 | 1.504,5 | 2.050,9 | 1.525,2 | 18.120 | 0 | 2.559 | 2.334 |
 | 44k | 64,6 | 1.275,6 | 1.914,1 | 1.310,9 | 25.857 | 3.916 | 11.793 | 8.857 |
@@ -190,11 +190,15 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
 As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de `degraus-308164.csv`, e o gráfico está em `degraus-308164.html`.
 
 - **5xx:** 0 em todos os degraus, nas reservas e nas confirmações. Nenhum "outros" nem EOF.
-- **Descartes:** só no 74k.
-  - O k6 chegou aos 3000 VUs às 12:11:40Z ("Insufficient VUs") e descartou 229 iterações: o efetivo foi 73.772 para um alvo de 74.000.
-  - O p95 desse degrau (1.001,9 ms) carrega essa saturação do gerador.
-  - No 80k, voltou a 0 descartes e p95 de 335 ms.
-- **1º degrau degradado (p95 ≥ 1 s), sem contar o 20k a frio:** **32k**. O 74k também passa de 1 s, pela saturação do gerador.
+- **Descartes:** só no 74k. O k6 descartou 229 iterações (efetivo de 73.772 para um alvo de 74.000) e avisou "Insufficient VUs" às 12:11:40Z
+  (hora do log do gerador, sem fonte versionada).
+- **O p95 de 1.001,9 ms do 74k tem duas explicações possíveis, sem isolar qual pesou:**
+  - **Hipótese 1, o gerador:** chegou aos 3000 VUs e descartou iterações.
+  - **Hipótese 2, o servidor:** às 12:11:39Z o pool do Supavisor reabre (`pg_conexoes` 182 → 247 na `coleta-host`) com `pg_espera_lock` em 200.
+    O aviso de VUs vem 1 s depois. A pior janela de 30 s do degrau (a 1ª) tem p95 de 1.585 ms e a seguinte, 286 ms. De 80k a 98k, com o mesmo
+    `MAX_VUS`, não houve descarte.
+  - No 80k o p95 voltou a 335 ms.
+- **1º degrau degradado (p95 ≥ 1 s), sem contar o 20k a frio:** **32k**. O 74k também passa de 1 s (ver acima).
   - No K0 o primeiro foi 26k, na #227 foi 32k e na R5, 38k.
 - **Overselling:** 0.
   - 868 eventos e capacidade total de 434.000.
@@ -207,25 +211,30 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
 - **Dell, pela coleta da sessão DB:**
   - **Conexões** (`pg_stat_activity` a cada 5 s):
     - Pico de 263 de 300, a primeira vez às 11:55:55Z, com platô em 262–263.
-    - Ficou em 250 ou mais de 11:55:50Z a 12:24:26Z: o pool do Supavisor (245) ficou cheio a escada inteira.
+    - Ficou em 250 ou mais de 11:55:50Z a 12:24:26Z, com uma queda para 192–198 entre 12:08:40Z e 12:11:37Z (62k–68k), que a `coleta-host`
+      também mostra (`pg_conexoes` 247 → 177 → 247). Fora dessa queda, o pool do Supavisor (245) ficou cheio.
     - Pico de 243 active às 11:59:48Z.
-  - **CPU** (vmstat): us+sy com pico de 62% às 12:01:10Z e média de 12,4%.
-  - **PSI avg10:** cpu some com máximo de 9,87 e io some com máximo de 9,95.
-  - **NVMe:** %util médio de 27%, com só 5 de 2.421 amostras em 90% ou mais.
+  - **CPU** (vmstat): us+sy com pico de 62% às 12:01:10Z. Média de 18,1% na janela da carga (12,4% na coleta inteira).
+  - **PSI avg10** (`dell/psi.txt`): cpu some com máximo de 12,02 (12:01:44Z) e io some com máximo de 13,95 (12:09:00Z).
+  - **NVMe:** %util médio de 44,9% na janela da carga (27% na coleta inteira), com só 5 de 2.421 amostras em 90% ou mais.
   - **Vigia:** nenhum evento. Sem restart, sem mudança de health, sem falha de psql, sem passar de 270 conexões e sem "too many clients",
     FATAL ou PANIC.
-- **CPU do host durante o k6** (`telemetria-host`): média de 86,2%. RAM livre mínima de 23,3 GB.
+- **CPU do host durante o k6** (`telemetria-host`): média de 86,2%, incluindo o setup e as pausas; só nos degraus de carga, 88,4%. RAM livre
+  mínima de 23,3 GB. O `cpu_pct` passa de 100 porque é a `PercentProcessorUtility`, na escala da frequência
+  (`lib-telemetria.ps1`, linha 4): com o turbo, o uso passa da frequência base.
 
 **K0 × K1, o efeito do db remoto no cluster:**
 - A fase lenta encolheu: o p50 passa de 100 ms só em 32k–38k. No K0 isso ia de 26k a 44k, com o p50 chegando a 753 ms.
 - Os 429 começam em 44k (3.916). No K0 começavam em 38k (5.715).
 - De 50k para cima: admitir p95 de 10 a 16 s (K0: 17–21 s) e ponta a ponta p95 de 10 a 13 s (K0: 14–17 s).
-- Com o db fora do nó do kind, o host não divide mais a CPU com o Postgres e a admissão fica mais rápida.
+- **O porquê não está isolado.** A hipótese de que o host deixa de dividir a CPU com o Postgres **não é sustentada pelos dados**: a CPU do host
+  foi maior no K1 (86,2%) que no K0 (83,5%), e por degrau o K1 fica igual ou acima (99–105% contra 95–103%). Além do banco, K0 e K1 diferem na
+  ordem (o K0 rodou primeiro), no horário e no harness (a826c8d × 67c0ef8).
 
 **K1 × #227, o efeito do Kubernetes com o db remoto:**
 - O 1º degrau degradado é o mesmo (32k).
 - Acima de 50k, a admissão fica perto da da #227 (admitir 11–14 s, ponta a ponta 10–12 s).
-- No cluster, o lag de devolução da vaga é maior (p95 622 ms).
+- O lag de devolução da vaga é parecido: p95 de 622 ms no K1 contra 640 ms na #227 (README da etapa 09).
 
 ### Notas de método
 
@@ -244,7 +253,8 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
 - `gerador/summary-degraus-308164.json`: resumo do k6, do ref temporário `K8S-gerador-K1` (2271066)
 - `host-telemetria/`: `coleta-host-*`, `eventos-*`, `pgss-*`, `registro-*`, `resumo-saga-*`, `saga-*`, `telemetria-host-*` e
   `verificacoes-k1.log`
-- `dell/`: coleta do Dell pela sessão DB (pacote do ref temporário `K8sDB-dell-K1`, d67101f, sha256 conferido):
+- `dell/`: coleta do Dell pela sessão DB (pacote do ref temporário `K8sDB-dell-K1`, d67101f, sha256 `1fb86b77…cf440`, 5.922.538 bytes,
+  conferido):
   - `mpstat.txt`, `vmstat.txt`, `psi.txt`, `pg_activity.csv`, `inicio.txt` e `fim.txt`;
   - `iostat-nvme0n1.txt` e `sar-filtrado.csv`, com o mesmo recorte da #227. O `sar.csv` original (38,7 MB) e o `sar.bin` (61,7 MB) não
     entraram.
@@ -265,15 +275,17 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
   - Os mesmos zeros do K1, com 1 linha em `identity.users` (a sonda).
   - Seed novo, com outro sufixo.
 - **Seed e escada:** os mesmos do K0 e do K1. 1000 usuários e 868 eventos com capacidade 500, mesma escada e mesmos parâmetros do k6.
-- **Réplicas no início (ressalva):** o seed tem 1000 cadastros com bcrypt e fez o KEDA subir o `identity` para 3 e o `stock` para 2.
+- **Réplicas no início (ressalva):** o seed tem 1000 cadastros com bcrypt e fez o KEDA subir o `identity` para 3 e o `stock` para 2 (pelo
+  `kubectl` da sessão, sem fonte versionada).
   - Às 18:24:00Z, já no setup do k6, o `stock` tinha voltado a 1 e o `identity` estava em 2. O resto estava em 1.
-  - Os 1000 logins do setup levaram o `identity` a 3 de novo antes do 1º degrau.
+  - Ainda no setup, o `backend` foi a 2 às ~18:24:14Z e o `identity` voltou a 3 (`coleta-host`). Os dois entraram na carga escalados: backend 2 e
+    identity 3.
   - O braço C da R4 e da R5 parte de tudo em 1. Aqui não deu para esperar o cooldown: o k6 já tinha arrancado.
-- **Gerador:** clone em 850d38e, como no K0 e no K1, com o jogo e o Steam fechados.
+- **Gerador:** clone em 850d38e, como no K0 e no K1, com o jogo e o Steam fechados. Relato da sessão do gerador, sem fonte versionada:
   - RAM livre de 9,93 GB antes (no K1, 9,92 GB), mínima de 3,08 GB às 18:26:14Z e 9,90 GB no fim.
   - O k6 chegou a 7,0 GB: com p50 de ~3 s, as VUs ficam presas. CPU do gerador no máximo em 56%.
-- **k6:** de 18:23:47Z a 18:26:20Z, com código de saída **99** (parada por p95). Os 1000 logins do setup levaram 15,8 s; a carga começou às
-  ~18:25:19Z.
+- **k6:** de 18:23:47Z a 18:26:20Z, com código de saída **99** (parada por p95). Os 1000 logins do setup levaram 15,8 s (log do gerador, sem
+  fonte versionada). A carga começou às ~18:25:19Z (1º insert na `coleta-host`).
 - **Coleta no Dell:** sessão DB, `~/coleta-227.sh` com saída `coleta-k8s-K2`, de 18:23:36Z a 18:27:04Z, com o vigia ligado.
 
 ### Resultado
@@ -287,7 +299,7 @@ As latências estão em ms. A tabela sai de `degraus-331542.csv`, e o gráfico e
 - **Parada no 1º degrau:** p95 de 5.020 ms na janela de 60 s, **20 ms acima do limite de 5.000 ms** (`PARADA_P95_MS`).
   - Os degraus de 26k a 98k não rodaram.
   - É a regra de parada de todos os blocos e foi mantida: o K2 não se repete até passar.
-  - No K0 e no K1 o 20k (a frio) deu p95 de 1,8 s e o 26k já tinha se recuperado. Aqui o 20k a frio passou do limite.
+  - O 20k (a frio) deu p95 de 0,91 s no K0 e 1,8 s no K1. Aqui ele passou do limite.
 - **5xx:** 0, nas reservas e nas confirmações. Nenhum "outros", descarte, EOF ou "Insufficient VUs".
 - **Overselling:** 0.
   - 868 eventos e capacidade total de 434.000.
@@ -299,12 +311,17 @@ As latências estão em ms. A tabela sai de `degraus-331542.csv`, e o gráfico e
     não há amostra do lag de devolução.
 - **Fila (202):** das 66 reservas acompanhadas, as 66 deram `rejected`. No K1, no mesmo degrau, foram 18 acompanhadas: 2 admitidas e 16
   rejeitadas.
-  - **Motivo:** contei todos os resultados da fila no Redis (`adm:res:*`): 2.061, sendo 1.846 `rejected` e 215 `pending`, 0 `timed_out`. Todos
-    os 1.846 `rejected` têm o motivo **"Evento lotado"**.
+  - **Motivo:** contei todos os resultados da fila no Redis (`adm:res:*`, consulta avulsa, sem fonte versionada): 2.061, sendo 1.846
+    `rejected` e 215 `pending`, 0 `timed_out`. Todos os 1.846 `rejected` têm o motivo **"Evento lotado"**.
+  - Os 2.061 resultados passam em 36 as 2.025 respostas 202 do CSV. A explicação provável são as tentativas em voo quando o k6 parou: o
+    gateway enfileirou, mas a resposta 202 não chegou a ser contada.
   - É o 400 de negócio que o `reservation` devolve ao worker do `admission` quando o CAS no `stock` acha o evento cheio.
   - **É esperado:** no mapeamento sequencial a carga se concentra num evento por vez. A fila liga quando o evento fica quente, e o worker
     processa a mensagem depois que as 500 vagas dele já foram tomadas pelo caminho síncrono.
-  - No K2 a fila drena mais devagar (host saturado), por isso a fração rejeitada é maior que no K1 (89,6% de todos os resultados).
+  - A fração rejeitada é praticamente igual à do K1: 89,6% de todos os resultados no K2, contra 88,9% (16 de 18) na amostra do K1.
+  - A amostra acompanhada parece enviesada no tempo: 0 das 66 em `pending`, contra 10,4% de `pending` no total.
+  - No K2 a fila durou mais: ficou com mensagens por ~1 min (18:25:19Z a 18:26:19Z), com pico de 842 em `admission.requests`. No 20k do K1 foram
+    ~6 s, com pico de 538 (`coleta-host`, `rabbit_requests`).
   - Nenhum `rejected` veio de timeout ou erro do worker: esses casos voltam à fila com backoff e, vencido o prazo, viram `timed_out`, e houve
     0.
 - **Réplicas no 20k** (`coleta-host`; backend/reservation/identity/catalog/admission/notification):
@@ -313,24 +330,32 @@ As latências estão em ms. A tabela sai de `degraus-331542.csv`, e o gráfico e
   - 18:26:07Z: 3/1/3/1/2/1;
   - 18:26:16Z: 3/1/2/1/2/1;
   - 18:26:19Z: 3/1/2/1/3/1.
-  - Fim: o `stock` (fora das colunas da coleta) estava em 3 pelo `kubectl` às 18:26:56Z. O `reservation` ficou em 1: ele escala pelo
-    `adm:hot`, que não passou do gatilho.
-- **CPU do host no 20k** (`telemetria-host`, janela da carga): K2 com média de **110%** e máxima de 113%. No K1, no mesmo degrau a frio, média
-  de 93% e máxima de 112%. RAM livre mínima de 19,8 GB.
+  - Fim: o `stock` (fora das colunas da coleta) estava em 3 pelo `kubectl` às 18:26:56Z (sem fonte versionada). O `reservation` ficou em 1:
+    ele escala pelo `adm:hot`, que não passou do gatilho.
+- **CPU do host no 20k** (`telemetria-host`, na mesma janela nos dois blocos: os primeiros 60 s de carga, a partir do 1º insert na `coleta-host`):
+  - K2: média de **109,5%** e máxima de 113%;
+  - K1: média de 97,5% e máxima de 112%;
+  - K0: média de 95,7%.
+  - RAM livre mínima do host no K2: 19,9 GB.
 - **Dell, pela coleta da sessão DB:** não saturou.
-  - Conexões: pico de 262 de 300 (às 18:26:53Z, com o pool cheio e ocioso depois do k6), pico de 161 active às 18:26:18Z e pico de 30 idle in
-    transaction às 18:25:32Z.
-  - CPU us+sy com pico de 33% e média de 7%. NVMe com %util máximo de 60% e médio de 13%.
+  - Conexões: pico de 262 de 300 (primeiro às 18:26:23Z; o pool ficou cheio e ocioso depois do k6), pico de 161 active às 18:26:18Z e pico de
+    30 idle in transaction às 18:25:32Z.
+  - CPU us+sy com pico de 33%; média de 13,4% na janela da carga (7% na coleta inteira).
+  - NVMe com %util máximo de 60,9% e médio de 41,1% na janela da carga (13% na coleta inteira).
   - Vigia: nenhum evento.
 - **Espera de lock no Postgres** (`coleta-host`, `pg_espera_lock`): máximo de 153 no 20k. No K1, 124 no mesmo degrau.
 
-**Leitura: o gargalo do K2 foi a CPU do host.**
-- No nó único do kind, cada pod dos serviços carrega um sidecar do Istio (b1). A autoescala, por sua vez, subiu JVMs novas (backend,
-  admission, stock) que disputam os mesmos núcleos.
-- O host já estava em 93% no K1; no K2 passou de 100% durante o degrau inteiro, e a fila na linha quente do `eventcap` cresceu.
-- O Dell e o gerador ficaram longe do limite. A ressalva das réplicas no início não explica o resultado: o `identity` voltou a 3 nos logins
-  de qualquer jeito, e quem escalou na carga partiu de 1.
-- Escalar horizontalmente num nó só não adiciona CPU; só a divide. Com o Istio, o custo por requisição sobe.
+**Leitura (hipótese, não isolada): CPU do host.**
+- O host passou de 100% durante o degrau, e o Dell e o gerador ficaram longe do limite. A hipótese é que, no nó único do kind, os sidecars do
+  Istio (b1) e as JVMs novas da autoescala disputam os mesmos núcleos. Escalar num nó só não adiciona CPU, só a divide.
+- **Nem a CPU como gargalo nem o custo do Istio foram isolados.** Do K1 para o K2 mudam vários fatores ao mesmo tempo:
+  - o Istio, com um sidecar por pod;
+  - a autoescala 1..3;
+  - os Hikari: o `registro` do K2 dá reservation 200 e stock 60, contra 1000 e 250 no K1;
+  - os workers do `admission`: 32 por réplica, até 96 consumidores com 3 réplicas;
+  - as réplicas que já começaram escaladas (backend 2, identity 3);
+  - um degrau só, a frio.
+- O `pool_hikari` 1000 do CSV e do plano do K2 é o rótulo do `preparar` (o parâmetro `-PoolHikari`), não o pool real do reservation (200).
 
 ### Notas de método
 
@@ -338,7 +363,7 @@ As latências estão em ms. A tabela sai de `degraus-331542.csv`, e o gráfico e
   telemetria foi parada junto.
 - **`verificar-rpm`:** rodou depois da escada, sem carga no Dell. Saída em `host-telemetria/verificacoes-k2.log`.
 - **A contagem dos motivos no Redis** foi feita depois do `verificar`, por `kubectl exec` no pod do Redis, com a senha só dentro do pod
-  (como no `limpar-banco`).
+  (como no `limpar-banco`). A saída não foi versionada; o cluster já foi apagado.
 
 ### Arquivos
 

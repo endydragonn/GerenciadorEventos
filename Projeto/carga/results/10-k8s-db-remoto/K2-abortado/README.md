@@ -31,6 +31,8 @@ O k6 foi morto sem parada graciosa (exit -1), então o `summary-degraus-330681.j
 ## Arquivos
 
 - `plano-degraus-330681.json`.
-- `host-telemetria/`: o que a `coleta-host` e a `telemetria-host` gravaram até a parada.
+- `host-telemetria/`: o que a `coleta-host` e a `telemetria-host` gravaram até a parada. O `resumo-saga` termina com `sagas_reserving 296`:
+  a coleta parou durante a carga, com sagas ainda em voo. Esse número não é uma órfã medida: o `verificar` não rodou neste bloco, e o banco foi
+  truncado antes da repetição.
 - `dell/`: pacote da sessão DB (ref temporária `K8sDB-dell-K2-abortado`, commit 24f04a7). O sha256 do tar foi conferido
   (`875acb98…2c5f9b`, 260.797 bytes). O sar e o iostat foram filtrados com o mesmo recorte do K1. Pico de 132 conexões na janela.
