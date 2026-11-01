@@ -53,7 +53,14 @@ function Get-ArgsKubectl {
 function Invoke-ExecAlvo {
     param([Parameter(Mandatory)][string]$Alvo, [Parameter(ValueFromRemainingArguments)][string[]]$Comando)
     $ctx = Get-ContextoK8s
-    if ($ctx) { $k = Get-ArgsKubectl -Contexto $ctx -Resto (@('exec', $Alvo, '--') + $Comando); & kubectl @k }
+    if ($ctx) {
+        # o stderr do kubectl ("Defaulted container ...", de um pod com init container) NAO pode derrubar o chamador: no PS 5.1 `2>$null` num .exe com EAP=Stop lanca NativeCommandError
+        # (e um printenv de variavel que nao existe sai com 1 e tem de virar valor vazio, como no compose). EAP local, nao vaza; a saida e o $LASTEXITCODE continuam os do comando.
+        $ErrorActionPreference = 'Continue'
+        $c = ($Alvo -split '/')[-1]   # deploy/x | sts/x -> o container tem o nome do alvo; -c tira o "Defaulted container"
+        $k = Get-ArgsKubectl -Contexto $ctx -Resto (@('exec', $Alvo, '-c', $c, '--') + $Comando)
+        & kubectl @k
+    }
     else { & docker exec $Alvo @Comando }
 }
 
@@ -74,6 +81,7 @@ function Invoke-PsqlDb {
     end {
         $ctx = Get-ContextoK8s
         if ($ctx) {
+            $ErrorActionPreference = 'Continue'   # stderr do kubectl dentro do bash nao derruba o chamador (o codigo de saida segue sendo o do psql)
             $lib = (Join-Path (Split-Path $PSScriptRoot -Parent) 'k8s\lib-db-cliente.sh') -replace '\\', '/'
             $msys = $env:MSYS_NO_PATHCONV; $msys2 = $env:MSYS2_ARG_CONV_EXCL
             $env:MSYS_NO_PATHCONV = '1'; $env:MSYS2_ARG_CONV_EXCL = '*'

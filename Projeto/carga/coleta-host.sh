@@ -216,7 +216,7 @@ if [ -n "${CARGA_K8S:-}" ]; then # modo cluster (#228): redefine o que fala com 
         shift # "exec"
         local i=(); [ "${1:-}" = -i ] && { i=(-i); shift; }
         local alvo="$1"; shift
-        K8S_ARGV=(kubectl --context "$CARGA_K8S" -n gerenciador exec ${i[@]+"${i[@]}"} "$alvo" -- "$@")
+        K8S_ARGV=(kubectl --context "$CARGA_K8S" -n gerenciador exec ${i[@]+"${i[@]}"} "$alvo" -c "${alvo#*/}" -- "$@") # -c <container> = o nome do alvo (sem "Defaulted container" no stderr)
     }
     # traduz o subconjunto de verbos do docker que a coleta usa: exec e ps (so por label do servico: -q/-aq -> deploy/<svc>; --format {{.Names}} -> os pods)
     dexec() {
@@ -239,7 +239,7 @@ if [ -n "${CARGA_K8S:-}" ]; then # modo cluster (#228): redefine o que fala com 
         timeout "$TIMEOUT_S" kubectl --context "$CARGA_K8S" -n gerenciador get deploy -o jsonpath='{range .items[*]}{.metadata.name} {.status.readyReplicas}{"\n"}{end}' 2>/dev/null \
             | awk 'NF>=1 { if ($2+0 > 0) for (i = 0; i < $2; i++) print $1 " Up"; else print $1 " Down" }'
     }
-    logs_saga() { kubectl --context "$CARGA_K8S" -n gerenciador logs -l app=reservation --since-time "$INICIO_ISO" --tail=-1 --max-log-requests=10 2>&1; }
+    logs_saga() { kubectl --context "$CARGA_K8S" -n gerenciador logs -l app=reservation --since-time "$INICIO_ISO" --tail=-1 --max-log-requests=10 -c reservation 2>&1; }   # -c: sem "Defaulted container" misturado (2>&1) no que o percentis_timing le
     # local x remoto decidido UMA vez e o pod cliente garantido UMA vez, AQUI no processo principal (os psql abaixo rodam em $(...) e herdam as variaveis): depois disso cada psql e 1 kubectl (o exec).
     # Erro ao ler o sts/db aborta a coleta antes do 1o CSV.
     db_psql_preparar "$CARGA_K8S" || exit 1

@@ -127,7 +127,7 @@ Confere 'com CARGA_K8S: o contexto' (Get-ContextoK8s) 'kind-gerenciador'
 Confere 'argumentos do kubectl: --context primeiro, namespace gerenciador' ((Get-ArgsKubectl -Contexto 'kind-x' -Resto @('get', 'pods')) -join ' ') '--context kind-x -n gerenciador get pods'
 Confere 'o servico vira deploy/<servico> (sem docker ps)' ((Get-ContainerDoServico -Servico reservation) + '|' + $script:dockerChamado) 'deploy/reservation|0'
 Invoke-ExecAlvo 'deploy/reservation' printenv RESERVATION_SAGA_ORPHAN_MS
-Confere 'Invoke-ExecAlvo em cluster: kubectl --context .. -n gerenciador exec <alvo> -- cmd; docker intocado' (($script:kArgs -join ' ') + '|' + $script:dockerChamado) '--context kind-gerenciador -n gerenciador exec deploy/reservation -- printenv RESERVATION_SAGA_ORPHAN_MS|0'
+Confere 'Invoke-ExecAlvo em cluster: kubectl --context .. -n gerenciador exec <alvo> -- cmd; docker intocado' (($script:kArgs -join ' ') + '|' + $script:dockerChamado) '--context kind-gerenciador -n gerenciador exec deploy/reservation -c reservation -- printenv RESERVATION_SAGA_ORPHAN_MS|0'
 $env:CARGA_BASH = 'fakebash'; $env:APP_DB_PASSWORD = 'CANARIO-APP'; $env:POSTGRES_PASSWORD = 'CANARIO-PG'
 'SELECT 1;' | Invoke-PsqlDb -Flags '-v ON_ERROR_STOP=1 -At'
 Confere 'psql em cluster: o SQL vai por stdin' ($script:bStdin -join '|') 'SELECT 1;'
@@ -139,11 +139,29 @@ Confere 'psql em cluster: decide e prepara o pod UMA vez (db_psql_preparar) e so
 Confere 'psql em cluster: nao chama o docker' $script:dockerChamado 0
 $script:dockerChamado = 0
 $null = Wait-LagDoGroup -Group stock -TetoS 1
-Confere 'lag do group em cluster: kubectl exec sts/redpanda -- rpk group describe stock' (($script:kArgs -join ' ') + '|' + $script:dockerChamado) '--context kind-gerenciador -n gerenciador exec sts/redpanda -- rpk group describe stock|0'
+Confere 'lag do group em cluster: kubectl exec sts/redpanda -- rpk group describe stock' (($script:kArgs -join ' ') + '|' + $script:dockerChamado) '--context kind-gerenciador -n gerenciador exec sts/redpanda -c redpanda -- rpk group describe stock|0'
 $null = Wait-FilaDeAdmissao -TetoS 1
-Confere 'fila de admissao em cluster: kubectl exec deploy/rabbitmq -- rabbitmqctl' (($script:kArgs -join ' ') + '|' + $script:dockerChamado) '--context kind-gerenciador -n gerenciador exec deploy/rabbitmq -- rabbitmqctl -q list_queues name messages_ready messages_unacknowledged|0'
+Confere 'fila de admissao em cluster: kubectl exec deploy/rabbitmq -- rabbitmqctl' (($script:kArgs -join ' ') + '|' + $script:dockerChamado) '--context kind-gerenciador -n gerenciador exec deploy/rabbitmq -c rabbitmq -- rabbitmqctl -q list_queues name messages_ready messages_unacknowledged|0'
 $env:CARGA_K8S = ''; $env:CARGA_BASH = ''; $env:APP_DB_PASSWORD = ''; $env:POSTGRES_PASSWORD = ''
 Remove-Item function:docker, function:kubectl, function:fakebash
+
+# kubectl REAL que escreve em stderr ("Defaulted container ...": pod com init container) e/ou sai com 1 (printenv de variavel que nao existe): NAO derruba o chamador (PS 5.1 + EAP=Stop + `2>$null`
+# num .exe lanca NativeCommandError), a saida e o $LASTEXITCODE sao os do comando. kubectl.cmd falso no PATH (nao e o kubectl).
+$dirK = Join-Path ([IO.Path]::GetTempPath()) ('fake-kubectl-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $dirK | Out-Null
+[IO.File]::WriteAllText((Join-Path $dirK 'kubectl.cmd'), "@echo off`r`necho Defaulted container backend out of: backend, espera (init) 1>&2`r`nif defined FAKE_SAIDA echo %FAKE_SAIDA%`r`nexit /b %FAKE_RC%`r`n")
+$pathAntesK = $env:PATH; $env:PATH = "$dirK;$env:PATH"; $env:CARGA_K8S = 'kind-gerenciador'
+try {
+    $env:FAKE_RC = '1'; $env:FAKE_SAIDA = ''
+    $r = 'nao-lancou'; $saida = $null
+    try { $saida = Invoke-ExecAlvo 'deploy/backend' printenv RESERVATION_READPATH 2>$null; $r = "rc=$LASTEXITCODE" } catch { $r = "lancou: $($_.Exception.Message)" }
+    Confere 'kubectl que escreve em stderr e sai com 1 (variavel inexistente): o script segue, sem excecao, com o codigo 1' $r 'rc=1'
+    Confere 'kubectl que escreve em stderr e sai com 1: a saida e vazia (valor vazio, como no compose)' ((@($saida) -join '').Trim()) ''
+    $env:FAKE_RC = '0'; $env:FAKE_SAIDA = 'naive'
+    $saida = Invoke-ExecAlvo 'deploy/backend' printenv RESERVATION_READPATH 2>$null
+    Confere 'kubectl com stderr e saida: a saida do comando chega ao chamador e o codigo e 0' ((@($saida) -join '').Trim() + '|' + $LASTEXITCODE) 'naive|0'
+    Confere 'o EAP do chamador nao foi alterado pelo Invoke-ExecAlvo' $ErrorActionPreference 'Stop'
+} finally { $env:PATH = $pathAntesK; $env:CARGA_K8S = ''; $env:FAKE_RC = ''; $env:FAKE_SAIDA = ''; Remove-Item -Recurse -Force $dirK -ErrorAction SilentlyContinue }
 
 # sem Git Bash: aborta com mensagem clara (nunca cai para o `bash` do PATH, que no Windows costuma ser o do WSL)
 $pw = $env:ProgramW6432; $env:CARGA_BASH = ''
@@ -171,7 +189,7 @@ if (Test-Path $gitBash) {
         . (Join-Path $raiz 'carga\lib-servicos.ps1')
         'SELECT 1;' | Invoke-PsqlDb -Flags '-v ON_ERROR_STOP=1 -At'
         $linhas = @(Get-Content $logk -ErrorAction SilentlyContinue)
-        Confere 'Git Bash real + lib em caminho com espaco: o psql chega ao kubectl (1 get sts/db e 1 exec -i sts/db, ambos com --context)' ("$(@($linhas | Where-Object { $_ -match 'get sts/db' }).Count)|$(@($linhas | Where-Object { $_ -match '^kubectl --context kind-gerenciador -n gerenciador exec -i sts/db -- sh -c ' }).Count)") '1|1'
+        Confere 'Git Bash real + lib em caminho com espaco: o psql chega ao kubectl (1 get sts/db e 1 exec -i sts/db, ambos com --context)' ("$(@($linhas | Where-Object { $_ -match 'get sts/db' }).Count)|$(@($linhas | Where-Object { $_ -match '^kubectl --context kind-gerenciador -n gerenciador exec -i sts/db -c db -- sh -c ' }).Count)") '1|1'
         Confere 'Git Bash real + lib em caminho com espaco: o SQL chega por stdin' ((Get-Content ($logk + '.stdin') -ErrorAction SilentlyContinue) -join '|') 'SELECT 1;'
     } finally { $env:PATH = $pathAntes; $env:CARGA_K8S = ''; $env:FAKE_K_LOG = ''; Remove-Item -Recurse -Force $raiz -ErrorAction SilentlyContinue }
 } else { Write-Host '   [pulado] sem Git Bash neste host: o teste ponta a ponta do psql em cluster nao rodou' }

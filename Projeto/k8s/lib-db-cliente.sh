@@ -45,5 +45,6 @@ db_psql_preparar() {
 db_psql() {
     local ctx="$1" usuario="$2"; shift 2
     [ -n "${DB_PSQL_ALVO:-}" ] || { echo "ERRO: db_psql sem db_psql_preparar antes" >&2; return 1; }
-    _dbk "$ctx" exec -i "$DB_PSQL_ALVO" -- sh -c "$DB_PSQL_SCRIPT" sh "$usuario" "$DB_PSQL_HOST" "$@"
+    # -c <container> (o nome do alvo: sts/db -> db): sem ele, pod com init container (o db tem o copiar-config) imprime "Defaulted container ..." no stderr
+    _dbk "$ctx" exec -i "$DB_PSQL_ALVO" -c "${DB_PSQL_ALVO#*/}" -- sh -c "$DB_PSQL_SCRIPT" sh "$usuario" "$DB_PSQL_HOST" "$@"
 }

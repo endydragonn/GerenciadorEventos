@@ -334,7 +334,7 @@ SERVICOS_PARADA_K8S="backend admission catalog reservation stock identity notifi
 declare -A REPL_K8S=()   # deploy -> replicas de antes (so dos que ESTE script parou)
 
 kc() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' kubectl --context "$CARGA_K8S" -n gerenciador "$@"; }   # sem a conversao de path do Git Bash (kubectl nativo do Windows)
-kexec() { local alvo="$1"; shift; kc exec "$alvo" -- "$@"; }   # kexec <sts/x|deploy/x> cmd...   (stdin nao e repassado: sem -i)
+kexec() { local alvo="$1"; shift; kc exec "$alvo" -c "${alvo#*/}" -- "$@"; }   # kexec <sts/x|deploy/x> cmd...   (stdin nao e repassado: sem -i; -c <container> = o nome do alvo, para o kubectl nao escrever "Defaulted container" no stderr)
 
 # "<prontas> <desejadas>" do Deployment
 k8s_prontas() { kc get "deploy/$1" -o jsonpath='{.status.readyReplicas} {.spec.replicas}' 2>/dev/null | tr -d '\r'; }

@@ -79,10 +79,11 @@ SELECT coalesce(sum(n - capacity) FILTER (WHERE n > capacity), 0) FROM ativas;
 "@
     $over = ($qOver | Invoke-PsqlDb -Flags '-v ON_ERROR_STOP=1 -At' | Out-String).Trim()
     $cb = Get-ContainerDoServico backend
-    $readpath = if ($cb) { ((Invoke-ExecAlvo $cb printenv RESERVATION_READPATH 2>$null) | Out-String).Trim() } else { '' }
+    # nome proprio: $readpath colidiria com o parametro $ReadPath (ValidateSet), e o PS aborta com o valor vazio (no cluster a variavel nao existe)
+    $readpathAtual = if ($cb) { ((Invoke-ExecAlvo $cb printenv RESERVATION_READPATH 2>$null) | Out-String).Trim() } else { '' }
     if ($over -match '^\d+$' -and [int64]$over -gt 0) {
-        if ($readpath -eq 'naive') { Write-Host "[info] overselling $over no braco naive (esperado: e o que a rodada mede)." -ForegroundColor Cyan }
-        else { Write-Host "[erro] OVERSELLING $over no braco '$(if ($readpath) { $readpath } else { 'cas?' })': criterio de parada do bloco. NAO prossiga." -ForegroundColor Red; exit 3 }
+        if ($readpathAtual -eq 'naive') { Write-Host "[info] overselling $over no braco naive (esperado: e o que a rodada mede)." -ForegroundColor Cyan }
+        else { Write-Host "[erro] OVERSELLING $over no braco '$(if ($readpathAtual) { $readpathAtual } else { 'cas?' })': criterio de parada do bloco. NAO prossiga." -ForegroundColor Red; exit 3 }
     } elseif ($over -notmatch '^\d+$') { Write-Host "[erro] nao consegui ler o overselling ('$over')." -ForegroundColor Red; exit 1 }
     else { Write-Host '[ ok ] overselling 0.' -ForegroundColor Green }
     # ---- Rodada 5 (#204): saga stock + wallet. O overselling (codigo 3) tem precedencia e segue sendo SO overselling; aqui o codigo 4 = invariante da saga que nao

@@ -133,13 +133,14 @@ export FAKE_LOG="$T/kubectl.log"
 SEGREDOS=(APP_DB_PASSWORD=CANARIO-APP POSTGRES_PASSWORD=CANARIO-PG REDIS_PASSWORD=CANARIO-REDIS)
 
 : > "$FAKE_LOG"; rodar env "${SEGREDOS[@]}" bash "$SH" psql -c 'select 1' >/dev/null; rc=$?
-confere "psql com o db no cluster: exec no sts/db (o de hoje), sem pod cliente, e UM get sts/db" "$(grep -c 'exec -i sts/db' "$FAKE_LOG")$(grep -c 'db-cliente' "$FAKE_LOG")$(grep -c 'get sts/db' "$FAKE_LOG")" "101"
+confere "psql com o db no cluster: exec no sts/db (o de hoje, agora com -c db), sem pod cliente, e UM get sts/db" "$(grep -c 'exec -i sts/db -c db ' "$FAKE_LOG")$(grep -c 'db-cliente' "$FAKE_LOG")$(grep -c 'get sts/db' "$FAKE_LOG")" "101"
 : > "$FAKE_LOG"; rodar env FAKE_DB_REMOTO=1 "${SEGREDOS[@]}" bash "$SH" psql -c 'select 1' >/dev/null
 confere "psql com o db remoto: UM get sts/db, pod cliente aplicado e esperado Ready UMA vez, exec -i no pod" "$(grep -c 'get sts/db' "$FAKE_LOG")$(grep -c 'apply -f - ' "$FAKE_LOG")$(grep -c 'wait --for=condition=Ready pod/db-cliente' "$FAKE_LOG")$(grep -c 'exec -i pod/db-cliente' "$FAKE_LOG")" "1111"
 : > "$FAKE_LOG"; saida="$(rodar env FAKE_DB_ERRO=1 bash "$SH" psql -c 'select 1')"; rc=$?
 confere "psql com erro ao ler o sts/db (nao e 'nao existe'): aborta, sem criar o pod cliente nem cair para remoto" "$([ "$rc" -ne 0 ] && echo sim || echo nao)$(grep -c 'db-cliente\|apply' "$FAKE_LOG")" "sim0"
 : > "$FAKE_LOG"; rodar env FAKE_DB_REMOTO=1 "${SEGREDOS[@]}" bash "$SH" psql -c 'select 1' >/dev/null
 confere "psql remoto: a senha nunca aparece em argumento (a do ambiente do shell nao vaza)" "$(grep -c 'CANARIO' "$FAKE_LOG")" "0"
+confere "psql remoto: kubectl exec com -c db-cliente" "$(grep -c 'exec -i pod/db-cliente -c db-cliente ' "$FAKE_LOG")" "1"
 confere "psql remoto: a senha so e lida DENTRO do pod (\$APP_DB_PASSWORD num sh -c de aspas simples)" "$(grep -c 'PGPASSWORD="\$APP_DB_PASSWORD"' "$FAKE_LOG")" "1"
 confere "todo kubectl do psql leva --context kind-gerenciador" "$(grep -vc '^kubectl --context kind-gerenciador ' "$FAKE_LOG")" "0"
 : > "$FAKE_LOG"; rodar env K8S_NOME=gerenciador-e2e-x FAKE_DB_REMOTO=1 bash "$SH" psql -c 'select 1' >/dev/null
@@ -150,7 +151,7 @@ for rc_teste in 0 10 11 1; do
     esperado="$rc_teste"; [ "$rc_teste" = 1 ] && esperado=12
     confere "db-teste: o codigo do pod ($rc_teste) vira o de saida ($esperado)" "$rc" "$esperado"
 done
-confere "db-teste: lê o IP:porta da EndpointSlice e passa ao pod (192.168.68.50 5433), sem senha" "$(grep -c 'exec pod/db-cliente.*bash -c.* bash 192.168.68.50 5433' "$FAKE_LOG")$(grep -c 'CANARIO' "$FAKE_LOG")" "10"
+confere "db-teste: lê o IP:porta da EndpointSlice e passa ao pod (192.168.68.50 5433), sem senha, com -c db-cliente" "$(grep -c 'exec pod/db-cliente -c db-cliente -- bash -c.* bash 192.168.68.50 5433' "$FAKE_LOG")$(grep -c 'CANARIO' "$FAKE_LOG")" "10"
 confere "db-teste: todo kubectl leva --context" "$(grep -vc '^kubectl --context kind-gerenciador ' "$FAKE_LOG")" "0"
 : > "$FAKE_LOG"; saida="$(rodar env FAKE_SEM_SLICE=1 bash "$SH" db-teste)"; rc=$?
 confere "db-teste: cluster sem db remoto (sem EndpointSlice) recusa com codigo 12" "$rc" "12"

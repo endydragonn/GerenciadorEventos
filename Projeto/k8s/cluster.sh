@@ -603,7 +603,7 @@ cmd_db_teste() {
     ip="${BASH_REMATCH[1]}"; porta="${BASH_REMATCH[2]}"
     db_cliente_garantir "$CTX" || return 12
     echo "==> db-teste: cluster $NOME (contexto $CTX) -> $ip:$porta"
-    kn exec pod/db-cliente -- bash -c '
+    kn exec pod/db-cliente -c db-cliente -- bash -c '
 ip="$1"; porta="$2"
 if timeout 5 bash -c "exec 3<>/dev/tcp/\$0/\$1" "$ip" "$porta" 2>/dev/null; then echo "   [ok]    TCP $ip:$porta"; else echo "   [FALHOU] TCP $ip:$porta (firewall, rota ou NAT?)"; exit 10; fi
 if out="$(PGPASSWORD="$APP_DB_PASSWORD" PGCONNECT_TIMEOUT=5 psql -h supabase-pooler -p 6543 -U "$APP_DB_USER.$POOLER_TENANT_ID" -d "$POSTGRES_DB" -Atc "select 1" 2>&1)" && [ "$out" = 1 ]; then
@@ -630,11 +630,11 @@ case "$cmd" in
     psql) # db no cluster: o exec no sts/db de sempre; db remoto (#228): pod cliente efêmero, senha do Secret lida dentro do pod
           db_psql_preparar "$CTX" || exit 1   # local x remoto decidido UMA vez; erro ao ler o sts/db aborta (nunca vira "remoto")
           if [ "$DB_PSQL_ALVO" = pod/db-cliente ]; then db_psql "$CTX" app "$@"
-          else kn exec -i sts/db -- sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$POSTGRES_DB" "$@"' sh "$@"; fi ;;
+          else kn exec -i sts/db -c db -- sh -c 'psql -h localhost -U "$APP_DB_USER" -d "$POSTGRES_DB" "$@"' sh "$@"; fi ;;
     db-teste) cmd_db_teste; exit $? ;;
     renderizar) [ "${1:-}" = --trilha ] || abortar "uso: cluster.sh renderizar --trilha b1|c|nenhuma"; validar_trilha "${2:-}"; ferramentas; montar_selecao; kubectl kustomize "$OVERLAY_DIR" ;;
-    rpk) kn exec -i sts/redpanda -- rpk "$@" ;;
-    redis-cli) kn exec -i deploy/redis -- sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli "$@"' sh "$@" ;;
+    rpk) kn exec -i sts/redpanda -c redpanda -- rpk "$@" ;;
+    redis-cli) kn exec -i deploy/redis -c redis -- sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli "$@"' sh "$@" ;;
     status) k get nodes; kn get pods,svc,pvc -o wide; kn get scaledobject,hpa ;;
     down) kind get clusters 2>/dev/null | tr -d '\r' | grep -qx "$NOME" && kind delete cluster --name "$NOME" || echo "(cluster $NOME não existe)" ;;
     *) awk 'NR >= 6 && /^# =+$/ {exit} NR >= 6' "$SCRIPT_DIR/cluster.sh"; exit 1 ;;
