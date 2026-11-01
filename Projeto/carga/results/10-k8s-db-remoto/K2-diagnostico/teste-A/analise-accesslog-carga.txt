@@ -1,0 +1,41 @@
+# 1. Tempo por salto (ms): proxy, direção, destino, rota, n, duração p50/p95/p99, upstream_service_time p50/p95
+admission    in  admission    POST /internal/admissions                  n= 60001 dur p50=2 p95=21 p99=70  ust p50=1 p95=20
+backend      out admission    POST /internal/admissions                  n= 60001 dur p50=3 p95=31 p99=90  ust p50=2 p95=29
+backend      in  backend      POST /bff/event-wallets                    n= 60001 dur p50=160 p95=2164 p99=3511  ust p50=159 p95=2163
+reservation  out stock        POST /internal/holds                       n= 60001 dur p50=66 p95=1643 p99=2828  ust p50=66 p95=1643
+reservation  in  reservation  POST /internal/reservations                n= 60001 dur p50=145 p95=1725 p99=2949  ust p50=145 p95=1725
+stock        in  stock        POST /internal/holds                       n= 60001 dur p50=64 p95=1642 p99=2826  ust p50=64 p95=1642
+backend      out reservation  POST /internal/reservations                n= 56959 dur p50=138 p95=1760 p99=2978  ust p50=138 p95=1759
+backend      out reservation  POST /internal/reservations/confirm        n= 28991 dur p50=12 p95=97 p99=141  ust p50=11 p95=96
+backend      in  backend      POST /bff/event-wallets/confirm            n= 28991 dur p50=14 p95=1123 p99=1402  ust p50=14 p95=1122
+reservation  in  reservation  POST /internal/reservations/confirm        n= 28991 dur p50=11 p95=91 p99=136  ust p50=10 p95=90
+admission    out reservation  POST /internal/reservations                n=  3042 dur p50=212 p95=981 p99=1869  ust p50=212 p95=980
+backend      out catalog      GET /internal/events/{id}/exists           n=   567 dur p50=51 p95=106 p99=139  ust p50=50 p95=105
+admission    in  admission    GET /internal/admissions/result            n=   313 dur p50=3 p95=42 p99=76  ust p50=2 p95=41
+backend      out admission    GET /internal/admissions/result            n=   313 dur p50=4 p95=55 p99=94  ust p50=4 p95=54
+backend      in  backend      GET /bff/event-wallets/admission           n=   313 dur p50=23 p95=687 p99=912  ust p50=22 p95=686
+
+# 2. Códigos >= 500 e response_flags diferentes de "-" por salto
+admission    in  admission    POST /internal/admissions                  0 DC: 10
+backend      out admission    POST /internal/admissions                  0 DC: 10
+
+# 3. POST /bff/event-wallets de entrada por pod do gateway, a cada 10 s
+20:22:00 bq5xg=2655
+20:22:10 bq5xg=3335
+20:22:20 bq5xg=3333
+20:22:30 bq5xg=3332
+20:22:40 bq5xg=3334
+20:22:50 bq5xg=3334
+20:23:00 bq5xg=3334
+20:23:10 bq5xg=3333
+20:23:20 bq5xg=3334
+20:23:30 bq5xg=3333
+20:23:40 bq5xg=3333
+20:23:50 bq5xg=3333
+20:24:00 bq5xg=3334
+20:24:10 bq5xg=3333
+20:24:20 bq5xg=3333
+20:24:30 bq5xg=3334
+20:24:40 bq5xg=3332
+20:24:50 bq5xg=3335
+20:25:00 bq5xg=677
