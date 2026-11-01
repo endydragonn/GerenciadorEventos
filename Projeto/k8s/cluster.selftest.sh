@@ -89,16 +89,47 @@ r_rod_r="$(rodar env K8S_OVERLAY=rodada K8S_DB_REMOTO=192.168.68.50:5433 bash "$
 confere "rodada (db remoto, trilha b1): pool real 245 (o max_connections e do banco remoto, sem StatefulSet db)" "$(echo "$r_rod_r" | valor_env supabase-pooler POOLER_DEFAULT_POOL_SIZE)|$(echo "$r_rod_r" | docs_de | grep -c '^StatefulSet/db$')" "245|0"
 r_bas="$(rodar env K8S_OVERLAY=base bash "$SH" renderizar --trilha nenhuma)"
 confere "base: sem POOLER_DEFAULT_POOL_SIZE no manifest (45 vem do Secret) e sem max_connections" "$(echo "$r_bas" | valor_env supabase-pooler POOLER_DEFAULT_POOL_SIZE)|$(echo "$r_bas" | doc_db | grep -c 'max_connections')" "|0"
-confere "K2 (rodada sem K8S_POOLS): pools atuais do cluster (reservation 200, stock 60, identity/catalog 50) e autoescala ate 3" "$(echo "$r_rod" | valor_env reservation SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE),$(echo "$r_rod" | valor_env stock SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE),$(echo "$r_rod" | valor_env identity SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE),$(echo "$r_rod" | valor_env catalog SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE)|$(echo "$r_rod" | grep -c 'maxReplicaCount: 3')" "200,60,50,50|7"
+confere "K2 (rodada sem K8S_POOLS): pools do cluster (reservation 200, stock 245 fixo na #231, identity/catalog 50) e autoescala ate 3 nos 6 servicos escalaveis (stock fora)" "$(echo "$r_rod" | valor_env reservation SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE),$(echo "$r_rod" | valor_env stock SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE),$(echo "$r_rod" | valor_env identity SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE),$(echo "$r_rod" | valor_env catalog SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE)|$(echo "$r_rod" | grep -c 'maxReplicaCount: 3')" "200,245,50,50|6"
+# #231: o stock e UMA replica fixa (Recreate, sem ScaledObject): sem HPA e sem pod velho sobreposto ao novo
+doc_deploy() { "$PY" -c '
+import re, sys
+for d in sys.stdin.read().split("\n---\n"):
+    if re.search(r"^kind: Deployment$", d, re.M) and re.search(r"^metadata:\n(?:  .*\n)*?  name: " + sys.argv[1] + "$", d, re.M): print(d)
+' "$1"; }
+confere "stock fixo (#231): Deployment com replicas 1 e strategy Recreate, sem rollingUpdate" "$(echo "$r_rod" | doc_deploy stock | grep -c '^  replicas: 1$')$(echo "$r_rod" | doc_deploy stock | grep -c 'type: Recreate')$(echo "$r_rod" | doc_deploy stock | grep -c 'rollingUpdate')" "110"
+confere "stock fixo (#231): nenhum ScaledObject do stock (6 ScaledObjects no total)" "$(echo "$r_rod" | docs_de | grep -c '^ScaledObject/stock$')|$(echo "$r_rod" | docs_de | grep -c '^ScaledObject/')" "0|6"
+confere "os outros 6 servicos seguem sem replicas no Deployment (o KEDA e dono da contagem)" "$(for s in backend identity catalog reservation notification admission; do echo "$r_rod" | doc_deploy $s | grep -c '^  replicas:'; done | tr -d '\r' | tr '\n' ',')" "0,0,0,0,0,0,"
+# a regra de pools do cluster (#231), RECALCULADA do render: servico escalavel conta (maxReplicaCount + $1 em termino) x Hikari ($1 = 1 no K2; 0 no r5, que e replica unica com maxSurge 0); o stock, 1 x Hikari (Recreate, sem sobreposicao)
+soma_pools() { "$PY" -c '
+import re, sys
+docs = sys.stdin.read().split("\n---\n")
+def nome(d): return (re.search(r"^metadata:\n(?:  .*\n)*?  name: (\S+)", d, re.M) or [None, "?"])[1]
+mx = {nome(d): int(re.search(r"maxReplicaCount: (\d+)", d).group(1)) for d in docs if re.search(r"^kind: ScaledObject$", d, re.M)}
+tot = 0
+for d in docs:
+    if not re.search(r"^kind: Deployment$", d, re.M): continue
+    m = re.search(r"- name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE\n\s+value: \"?(\d+)", d)
+    if m: tot += int(m.group(1)) * ((mx[nome(d)] + int(sys.argv[1])) if nome(d) in mx else 1)
+print(tot)
+' "${1:-1}"; }
+confere "regra de pools do cluster (#231): 4x200 + 4x10 + 4x3 + 4x50 + 4x50 + 245 = 1497 <= 1500 clientes no Supavisor (somada do render)" "$(echo "$r_rod" | soma_pools | tr -d '\r')" "1497"
 r_r5="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 bash "$SH" renderizar --trilha nenhuma)"
 confere "K8S_POOLS=r5: Hikari do compose (reservation 1000, stock 250, identity 100, catalog 100, backend 10, notification 3)" "$(for s in reservation stock identity catalog backend notification; do echo "$r_r5" | valor_env $s SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE; done | tr -d '\r' | tr '\n' ',')" "1000,250,100,100,10,3,"
 confere "K8S_POOLS=r5: workers do admission 32 e pool real 245" "$(echo "$r_r5" | valor_env admission ADMISSION_WORKER_CONCURRENCY)|$(echo "$r_r5" | valor_env supabase-pooler POOLER_DEFAULT_POOL_SIZE)" "32|245"
-confere "K8S_POOLS=r5: autoescala travada em 1 por padrao (os 7 ScaledObjects com maxReplicaCount 1)" "$(echo "$r_r5" | grep -c 'maxReplicaCount: 1')$(echo "$r_r5" | grep -c 'maxReplicaCount: 3')" "70"
+confere "K8S_POOLS=r5: autoescala travada em 1 por padrao (os 6 ScaledObjects com maxReplicaCount 1; o stock e fixo, sem ScaledObject) e stock com Recreate" "$(echo "$r_r5" | grep -c 'maxReplicaCount: 1')$(echo "$r_r5" | grep -c 'maxReplicaCount: 3')$(echo "$r_r5" | doc_deploy stock | grep -c 'type: Recreate')" "601"
+confere "K8S_POOLS=r5: soma dos Hikari no Supavisor 1463 (1000 + 250 + 100 + 100 + 10 + 3, 1 replica de cada)" "$(echo "$r_r5" | soma_pools 0 | tr -d '\r')" "1463"
 confere "K8S_POOLS=r5 + db remoto + b1: os pools entram junto com o componente db-remoto" "$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 K8S_DB_REMOTO=192.168.68.50:5433 bash "$SH" renderizar --trilha b1 | valor_env reservation SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE)" "1000"
 saida="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 K8S_RESERVATION_MAX=2 bash "$SH" guarda --trilha nenhuma)"; rc=$?
 confere "K8S_POOLS=r5 com K8S_RESERVATION_MAX=2: recusado (estouraria o Supavisor com replicas)" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'K8S_POOLS=r5' && echo "$saida" | grep -q 'K8S_RESERVATION_MAX' && echo sim || echo nao)" "sim"
-saida="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 K8S_RESERVATION_MAX=1 K8S_STOCK_MAX=1 bash "$SH" guarda --trilha nenhuma)"; rc=$?
+saida="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 K8S_RESERVATION_MAX=1 K8S_BACKEND_MAX=1 bash "$SH" guarda --trilha nenhuma)"; rc=$?
 confere "K8S_POOLS=r5 com MAX=1 explicito: aceito, e o guarda mostra os pools" "$rc$(echo "$saida" | grep -c 'pools R5')" "01"
+# o stock saiu da autoescala (#231): K8S_STOCK_MIN/MAX nao viram mais ScaledObject, entao um valor > 1 seria ignorado em silencio; o cluster.sh recusa
+for v in K8S_STOCK_MAX=2 K8S_STOCK_MAX=3 K8S_STOCK_MIN=2; do
+    saida="$(rodar env K8S_OVERLAY=rodada "$v" bash "$SH" guarda --trilha nenhuma)"; rc=$?
+    confere "$v: recusado (o stock e fixo em 1 replica, #231)" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'K8S_STOCK' && echo sim || echo nao)" "sim"
+done
+saida="$(rodar env K8S_OVERLAY=rodada K8S_STOCK_MIN=1 K8S_STOCK_MAX=1 bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "K8S_STOCK_MIN=1 e K8S_STOCK_MAX=1 (o valor fixo): aceitos" "$rc" "0"
 saida="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r6 bash "$SH" guarda --trilha nenhuma)"; rc=$?
 confere "K8S_POOLS invalido (so r5 ou vazio)" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'K8S_POOLS' && echo sim || echo nao)" "sim"
 
@@ -112,7 +143,7 @@ saida="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 bash "$SH" guarda --trilha ne
 confere "guarda: a linha dos pools R5 mostra o valor LIDO do render (reservation=777 depois de mudar o componente na copia)" "$(echo "$saida" | grep 'pools R5' | grep -c 'reservation=777')" "1"
 sed -i 's/value: "777"/value: "1000"/' "$P/k8s/overlays/pools-r5/kustomization.yaml"
 saida="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 bash "$SH" guarda --trilha nenhuma)"
-confere "guarda: pools R5 lidos do render (Hikari, workers 32, pool real 245, ScaledObjects com max 1)" "$(echo "$saida" | grep 'pools R5' | grep -c 'reservation=1000 stock=250 identity=100 catalog=100 backend=10 notification=3.*workers=32.*maxReplicaCount=1 x7')|$(echo "$saida" | grep 'overlay rodada' | grep -c 'pool real=245')" "1|1"
+confere "guarda: pools R5 lidos do render (Hikari, workers 32, pool real 245, ScaledObjects com max 1, x6: o stock nao tem)" "$(echo "$saida" | grep 'pools R5' | grep -c 'reservation=1000 stock=250 identity=100 catalog=100 backend=10 notification=3.*workers=32.*maxReplicaCount=1 x6')|$(echo "$saida" | grep 'overlay rodada' | grep -c 'pool real=245')" "1|1"
 saida="$(rodar env K8S_OVERLAY=rodada bash "$SH" guarda --trilha nenhuma)"
 confere "guarda: rodada com o db no cluster mostra o max_connections lido do render" "$(echo "$saida" | grep 'overlay rodada' | grep -c 'max_connections=300')" "1"
 
@@ -173,6 +204,11 @@ confere "esperar, db remoto: NAO espera o sts/db; o resto segue" "$(grep -c 'sts
 confere "configmaps, db no cluster: db-sql e db-app-init criados (como hoje)" "$(grep -c 'create configmap db-sql' "$FAKE_LOG")$(grep -c 'create configmap db-app-init' "$FAKE_LOG")" "11"
 : > "$FAKE_LOG"; lib_cmd "192.168.68.50:5433" configmaps_e_segredos
 confere "configmaps, db remoto: sem db-sql nem db-app-init; pooler-exs e os Secrets seguem" "$(grep -c 'configmap db-' "$FAKE_LOG")$(grep -c 'create configmap pooler-exs' "$FAKE_LOG")$(grep -c 'create secret generic env-db ' "$FAKE_LOG")" "011"
+
+# #231: o `up` apaga o ScaledObject stock de um cluster de antes (o apply nao poda), sempre com --context e namespace
+: > "$FAKE_LOG"; lib_cmd "" podar_stock_antigo
+confere "podar_stock_antigo: delete scaledobject stock --ignore-not-found, com --context kind-gerenciador e -n gerenciador" "$(grep -c '^kubectl --context kind-gerenciador -n gerenciador delete scaledobject stock --ignore-not-found ' "$FAKE_LOG")$(grep -vc '^kubectl --context kind-gerenciador ' "$FAKE_LOG")" "10"
+confere "cmd_up chama a poda do stock antes do apply do render" "$(awk '/^cmd_up\(\)/ {d=1} d && /podar_stock_antigo$/ {p=NR} d && /render \| kn apply/ {a=NR} END {print (p && a && p < a) ? "sim" : "nao"}' "$P/k8s/cluster.sh")" "sim"
 
 # imagens a carregar no no e o guarda do modo do db no namespace (#228), pelas mesmas funcoes do cluster.sh
 lib_run() { # lib_run <K8S_DB_REMOTO> <label db-remoto do namespace> <comandos...>: imprime a saida; o codigo fica em $?

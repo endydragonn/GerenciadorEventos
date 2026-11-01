@@ -99,7 +99,8 @@ for s in SERVICOS:
     print("   %-12s maximo de prontas=%d subidas=%d descidas=%d" % (s, mx, sub, desc))
 criterio(maximo["reservation"] >= 2 and subidas["reservation"][1] >= 1, "reservation sobe (max %d) e desce (%d descidas) com a carga no cas (RPM do evento mais quente)" % (maximo["reservation"], subidas["reservation"][1]))
 criterio(maximo["reservation"] >= 3, "reservation chegou ao teto de 3 (max %d)" % maximo["reservation"])
-criterio(maximo["stock"] >= 2 and subidas["stock"][1] >= 1, "stock sobe (max %d) e desce (%d descidas) por CPU na mesma rajada" % (maximo["stock"], subidas["stock"][1]))
+# #231: o stock e UMA replica fixa (fora da autoescala, Hikari 245, Recreate): nunca sobe (o CAS na linha quente serializa as reservas) e nunca cai (queda de `prontas` = reinicio/OOM)
+criterio(maximo["stock"] == 1 and subidas["stock"][0] == 0 and subidas["stock"][1] == 0, "stock fica em 1 replica o dry-run inteiro, fora da autoescala (max %d, %d subidas, %d descidas)" % (maximo["stock"], subidas["stock"][0], subidas["stock"][1]))
 criterio(maximo["notification"] >= 3 and subidas["notification"][1] >= 1, "notification sobe ate 3 (max %d) e volta (%d descidas) pela rajada de e-mails" % (maximo["notification"], subidas["notification"][1]))
 criterio(maximo["backend"] >= 2 and subidas["backend"][1] >= 1, "backend sobe (max %d) sob a carga de leitura e volta (%d descidas)" % (maximo["backend"], subidas["backend"][1]))
 

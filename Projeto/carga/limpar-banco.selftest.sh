@@ -223,7 +223,7 @@ confere "k8s: todo kubectl exec leva -c <container> igual ao nome do alvo (sem '
 confere "k8s: db no cluster: o TRUNCATE vai ao sts/db (localhost), sem pod cliente" "$(grep -c 'exec -i sts/db.*TRUNCATE' "$LOGK")$(grep -c 'db-cliente' "$LOGK")" "10"
 confere "k8s: local x remoto decidido UMA vez (1 get sts/db em toda a limpeza, que faz 2 psql)" "$(grep -c 'get sts/db' "$LOGK")$(grep -c 'exec -i sts/db' "$LOGK")" "12"
 confere "k8s: guarda as replicas de antes numa anotacao de cada Deployment (backend=2), ANTES de pausar e zerar" "$(grep -c 'annotate deploy/[a-z]* carga.gerenciador/replicas-antes=' "$LOGK")|$(grep -c 'annotate deploy/backend carga.gerenciador/replicas-antes=2' "$LOGK")|$([ "$(plinha 'annotate deploy/backend carga.gerenciador/replicas-antes=2')" -lt "$(plinha 'annotate scaledobject/backend autoscaling.keda.sh/paused-replicas=0')" ] && [ "$(plinha 'annotate scaledobject/backend autoscaling.keda.sh/paused-replicas=0')" -lt "$(plinha 'scale deploy/backend --replicas=0')" ] && echo sim || echo nao)" "7|1|sim"
-confere "k8s: pausa o KEDA e zera cada um dos 7 deploys; depois libera, religa e apaga a anotacao das replicas" "$(grep -c 'annotate scaledobject/[a-z]* autoscaling.keda.sh/paused-replicas=0' "$LOGK")$(grep -c 'scale deploy/[a-z]* --replicas=0' "$LOGK")$(grep -c 'annotate scaledobject/[a-z]* autoscaling.keda.sh/paused-replicas- ' "$LOGK")$(grep -c 'annotate deploy/[a-z]* carga.gerenciador/replicas-antes- ' "$LOGK")" "7777"
+confere "k8s: pausa o KEDA e zera cada um dos 7 deploys (6 pausas: o stock nao tem ScaledObject); depois libera, religa e apaga a anotacao das replicas" "$(grep -c 'annotate scaledobject/[a-z]* autoscaling.keda.sh/paused-replicas=0' "$LOGK")$(grep -c 'scale deploy/[a-z]* --replicas=0' "$LOGK")$(grep -c 'annotate scaledobject/[a-z]* autoscaling.keda.sh/paused-replicas- ' "$LOGK")$(grep -c 'annotate deploy/[a-z]* carga.gerenciador/replicas-antes- ' "$LOGK")" "6767"
 confere "k8s: religa com as replicas de ANTES (backend 2)" "$(grep -c 'scale deploy/backend --replicas=2' "$LOGK")$(grep -c 'scale deploy/identity --replicas=1' "$LOGK")" "11"
 k_back="$(plinha 'scale deploy/backend --replicas=0')"; k_id="$(plinha 'scale deploy/identity --replicas=0')"; k_nt="$(plinha 'scale deploy/notification --replicas=0')"
 k_key="$(plinha 'apply -f -')"; k_trunc="$(plinha 'TRUNCATE')"; k_flush="$(plinha 'FLUSHDB')"; k_purge="$(plinha 'purge_queue admission.requests')"
@@ -278,7 +278,7 @@ FAKE_SCALE_FALHA=""
 
 # uma espera estoura (identity nao fica pronto): todos ja foram religados, o aborto imprime a recuperacao e as anotacoes ficam
 FAKE_NAO_PRONTO=identity; ESPERA_HEALTHY_S=1; roda_k8s; rc=$?; ESPERA_HEALTHY_S=1
-confere "k8s: espera estourada: aborta, mas tirou a pausa e fez o scale dos 7 (nenhum fica pausado)" "$([ "$rc" -ne 0 ] && echo sim || echo nao)|$(grep -c 'annotate scaledobject/[a-z]* autoscaling.keda.sh/paused-replicas- ' "$LOGK")|$(grep -c 'scale deploy/[a-z]* --replicas=[1-9]' "$LOGK")" "sim|7|7"
+confere "k8s: espera estourada: aborta, mas tirou a pausa e fez o scale dos 7 (nenhum fica pausado)" "$([ "$rc" -ne 0 ] && echo sim || echo nao)|$(grep -c 'annotate scaledobject/[a-z]* autoscaling.keda.sh/paused-replicas- ' "$LOGK")|$(grep -c 'scale deploy/[a-z]* --replicas=[1-9]' "$LOGK")" "sim|6|7"
 confere "k8s: espera estourada: as anotacoes de replicas ficam e a recuperacao e impressa" "$(grep -c 'annotate deploy/[a-z]* carga.gerenciador/replicas-antes- ' "$LOGK")|$(grep -c 'scale deploy/backend --replicas=2$' "$SAIDAK")" "0|1"
 FAKE_NAO_PRONTO=""
 

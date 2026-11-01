@@ -4,12 +4,14 @@ metadata:
   name: stock
   labels: {app: stock}
 spec:
-  # sem `replicas`: a autoescala (KEDA/HPA, issue #197 etapa 4) é dona da contagem; reaplicar o manifest não a volta para 1
+  # UMA réplica fixa, fora da autoescala (#231, como no K1 e no compose): sem ScaledObject, sem HPA. O CAS na linha quente do `eventcap` serializa as reservas, então réplicas
+  # extras não ajudam, e o Hikari 60 x 3 da #205 esgotava o pool (diagnóstico do K2: Projeto/carga/results/10-k8s-db-remoto/K2-diagnostico/). `Recreate`: o pod velho sai
+  # ANTES do novo subir (sem sobreposição segurando conexões), que é o que a conta do Supavisor (1497 <= 1500, Projeto/k8s/README.md, "Pool do Supavisor") pressupõe.
+  replicas: 1
   selector:
     matchLabels: {app: stock}
   strategy:
-    type: RollingUpdate
-    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
+    type: Recreate
   template:
     metadata:
       labels: {app: stock}
@@ -61,7 +63,8 @@ spec:
           envFrom:
             - secretRef: {name: env-stock}
           env:
-            - {name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE, value: "60"}
+            # 245 = o pool real do Supavisor no overlay `rodada` (POOLER_DEFAULT_POOL_SIZE; em base, e2e e carga é 45): conexão do Hikari acima disso só espera no Supavisor (teste A do K2: pg_conexoes parou em 247). O compose segue com 250
+            - {name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE, value: "245"}
             - {name: MANAGEMENT_SERVER_PORT, value: "8090"}
             - {name: MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED, value: "true"}
             - {name: MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE, value: "readinessState"}
