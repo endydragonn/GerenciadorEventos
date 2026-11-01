@@ -126,9 +126,11 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
   - **Gatilho do `admission`** (`ADMISSION_X_RPM`, `ADMISSION_RESERVATION_REPLICAS`, `ADMISSION_QUEUE_ON`, `ADMISSION_SYNC_BELOW`):
     - No K0 e no K1, as quatro variáveis vêm do **Secret** `env-admission` (`envFrom.secretRef`; não há ConfigMap). Não há literal no
       spec, e o `admission` não registra esses valores no log.
-    - O Secret não foi lido, então os valores efetivos **não estão confirmados nesta etapa**.
-    - O Secret é gerado pelo `cluster.sh` a partir do `docker compose config`, o mesmo de onde o compose da R5 e da #227 tira os
-      valores. Os defaults do compose são 56000 / 1 / 0,8 / 0,7.
+    - O Secret não foi lido. Os valores saíram da mesma fonte de que o `cluster.sh` gera o Secret: o `docker compose -f
+      docker-compose.yml config` resolvido, com o mesmo `Projeto/.env`. Um filtro que só deixa passar essas quatro chaves rodou antes do
+      stdout.
+    - Resultado: **56000 / 1 / 0,8 / 0,7**, igual à R5 e à #227. O `.env` não mudou entre o K0 e o K1, então os dois blocos usam os
+      mesmos valores.
 - **`verificar-rpm`:** a 1ª execução abortou depois das tabelas, por dois defeitos do harness em modo cluster, corrigidos na #228:
   - o stderr "Defaulted container" do kubectl virava erro no PS 5.1;
   - uma variável local colidia com o parâmetro `ValidateSet` `$ReadPath`.
