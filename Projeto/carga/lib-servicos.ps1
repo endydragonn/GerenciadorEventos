@@ -5,6 +5,8 @@
 # (com.docker.compose.project + com.docker.compose.service). db, redpanda, redis e rabbitmq seguem com o nome fixo (nao escalam).
 # O project padrao e gerenciador-eventos (name: do compose); CARGA_PROJETO muda (dry-run em project isolado).
 #
+# ATENCAO (cluster): CARGA_RABBITMQ e CARGA_REDPANDA, se definidas em modo cluster, tem de ser `deploy/x` ou `sts/x` (o `-c <container>` do kubectl exec e deduzido do alvo).
+#
 # MODO CLUSTER (issue #228): com CARGA_K8S=<contexto kubectl> (ex.: kind-gerenciador) o -Verificar do subir-host-rpm.ps1 fala com o cluster Kubernetes (Projeto/k8s) no lugar do compose:
 # o "container" de um servico vira deploy/<servico>, `docker exec` vira `kubectl --context <ctx> -n gerenciador exec <alvo> --` (Invoke-ExecAlvo), o psql roda pelo MESMO bash
 # do cluster.sh (k8s/lib-db-cliente.sh: sts/db ou o pod cliente db-cliente, senha lida DENTRO do pod; Invoke-PsqlDb). Todo kubectl leva --context (nunca o current-context). Sem a variavel, igual a antes.
@@ -62,6 +64,26 @@ function Invoke-ExecAlvo {
         & kubectl @k
     }
     else { & docker exec $Alvo @Comando }
+}
+
+# Valor de uma variavel de ambiente de um servico (-Alvo = o que Get-ContainerDoServico devolveu). Compose: `docker exec <container> printenv <VAR>`. Cluster: o literal do SPEC do Deployment
+# (as imagens slim NAO tem printenv nem sh): `kubectl get deploy/<svc> -o jsonpath` no container <svc>; valueFrom (Secret/ConfigMap) = `<de Secret/ConfigMap>` (o valor do Secret NUNCA e lido);
+# ausente do spec = vazio. O filtro usa aspas SIMPLES: o PowerShell 5.1 tira as duplas do argumento de um .exe.
+function Get-EnvServico {
+    param([Parameter(Mandatory)][string]$Alvo, [Parameter(Mandatory)][string]$Var)
+    $ctx = Get-ContextoK8s
+    if (-not $ctx) { return (& docker exec $Alvo printenv $Var) }
+    $ErrorActionPreference = 'Continue'
+    $svc = ($Alvo -split '/')[-1]
+    $f = "{.spec.template.spec.containers[?(@.name=='$svc')].env[?(@.name=='$Var')]"
+    $k = Get-ArgsKubectl -Contexto $ctx -Resto @('get', $Alvo, '-o', "jsonpath=$f.value}@@@$f.valueFrom}")
+    $saida = (& kubectl @k 2>$null | Out-String).Trim()
+    $i = $saida.IndexOf('@@@')
+    if ($i -lt 0) { return '' }
+    $v = $saida.Substring(0, $i); $vf = $saida.Substring($i + 3)
+    if ($v) { return $v }
+    if ($vf) { return '<de Secret/ConfigMap>' }
+    ''
 }
 
 # bash que roda a lib do cluster: o Git Bash. Sem ele ABORTA (nunca cai para o `bash` do PATH: no Windows costuma ser o do WSL, que nao enxerga o kubectl nem os paths do host); CARGA_BASH muda (selftest)

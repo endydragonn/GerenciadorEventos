@@ -203,6 +203,8 @@ psql_db() { dexec exec -i "$CONTAINER_DB" psql -h localhost -U "$PG_ADMIN" -d me
 psql_amostra() { dexec exec -i "$CONTAINER_DB" psql -h localhost -U "$PG_ADMIN" -d meu_banco -v ON_ERROR_STOP=1 -At -F, -c "$SQL_AMOSTRA" -c "$SQL_SAGA"; }
 # "<servico> <Status>" de cada container do project (a coleta de replicas) e as linhas do saga.timing de TODAS as replicas do reservation desde o inicio da coleta
 repl_status() { timeout "$TIMEOUT_S" docker ps --filter "label=com.docker.compose.project=$PROJETO" --format '{{.Label "com.docker.compose.service"}} {{.Status}}' 2>/dev/null; }
+# valor de uma variavel de ambiente do servico (<alvo> <VAR>): compose = `printenv` no container (de sempre); cluster (redefinida abaixo) = o literal do SPEC do Deployment
+leitura_env() { dexect exec "$1" printenv "$2" 2>/dev/null | tr -d '\r'; }
 logs_saga() {
     local c
     for c in $(dexec ps -aq --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=reservation" | tr -d '\r'); do
@@ -238,6 +240,16 @@ if [ -n "${CARGA_K8S:-}" ]; then # modo cluster (#228): redefine o que fala com 
     repl_status() {
         timeout "$TIMEOUT_S" kubectl --context "$CARGA_K8S" -n gerenciador get deploy -o jsonpath='{range .items[*]}{.metadata.name} {.status.readyReplicas}{"\n"}{end}' 2>/dev/null \
             | awk 'NF>=1 { if ($2+0 > 0) for (i = 0; i < $2; i++) print $1 " Up"; else print $1 " Down" }'
+    }
+    # As imagens slim NAO tem printenv nem sh: o env sai do spec do Deployment (o container tem o nome do Deployment). Literal = o valor; valueFrom (Secret/ConfigMap) = o marcador
+    # <de Secret/ConfigMap> (o valor do Secret NUNCA e lido); ausente do spec = vazio. O filtro usa aspas simples (sem as duplas, que o Windows mangla).
+    leitura_env() {
+        local alvo="$1" var="$2" svc out v vf f
+        svc="${alvo#*/}"
+        f="{.spec.template.spec.containers[?(@.name=='$svc')].env[?(@.name=='$var')]"
+        out="$(timeout "$((TIMEOUT_S + 2))" kubectl --context "$CARGA_K8S" -n gerenciador get "$alvo" -o jsonpath="$f.value}@@@$f.valueFrom}" 2>/dev/null | tr -d '\r')" || out=""
+        v="${out%%@@@*}"; vf="${out#*@@@}"
+        if [ -n "$v" ]; then echo "$v"; elif [ -n "$vf" ]; then echo "<de Secret/ConfigMap>"; fi
     }
     logs_saga() { kubectl --context "$CARGA_K8S" -n gerenciador logs -l app=reservation --since-time "$INICIO_ISO" --tail=-1 --max-log-requests=10 -c reservation 2>&1; }   # -c: sem "Defaulted container" misturado (2>&1) no que o percentis_timing le
     # local x remoto decidido UMA vez e o pod cliente garantido UMA vez, AQUI no processo principal (os psql abaixo rodam em $(...) e herdam as variaveis): depois disso cada psql e 1 kubectl (o exec).
@@ -277,7 +289,7 @@ descobre_orphan_ms() {
     local c v="${ORPHAN_MS:-}"
     if [ -z "$v" ]; then
         c="$(dexec ps -q --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=reservation" | head -1 | tr -d '\r')"
-        [ -n "$c" ] && v="$(dexect exec "$c" printenv RESERVATION_SAGA_ORPHAN_MS 2>/dev/null | tr -d '\r')"
+        [ -n "$c" ] && v="$(leitura_env "$c" RESERVATION_SAGA_ORPHAN_MS)"
     fi
     case "$v" in ''|*[!0-9]*) v=30000 ;; esac
     ORPHAN_MS="$v"
@@ -324,7 +336,7 @@ escreve_registro() {
             c="$(dexec ps -q --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=$svc" | head -1 | tr -d '\r')"
             [ -n "$c" ] || continue
             echo "$svc (container $c):"
-            for v in $vars; do echo "  $v=$(dexec exec "$c" printenv "$v" 2>/dev/null | tr -d '\r')"; done
+            for v in $vars; do echo "  $v=$(leitura_env "$c" "$v")"; done
         done
     } > "$REGISTRO"
 }

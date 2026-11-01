@@ -113,7 +113,7 @@ Write-Host ''
 Write-Host '==> MODO CLUSTER (#228): CARGA_K8S=<contexto>; kubectl/docker/bash simulados (funcoes do PowerShell), nenhuma chamada real'
 $script:dockerChamado = 0; $script:kArgs = $null; $script:bArgs = $null; $script:bStdin = $null
 function docker { $script:dockerChamado++; $script:dArgs = ($args -join ' '); $global:LASTEXITCODE = 0 }
-function kubectl { $script:kArgs = @($args); $global:LASTEXITCODE = 0 }
+function kubectl { $script:kArgs = @($args); $global:LASTEXITCODE = 0; if ($null -ne $script:kSaida) { $script:kSaida } }
 function fakebash { $script:bArgs = @($args); $script:bStdin = @($input); $global:LASTEXITCODE = 0 }
 $env:CARGA_K8S = ''
 Confere 'sem CARGA_K8S: modo compose (contexto nulo)' ($null -eq (Get-ContextoK8s)) $true
@@ -128,6 +128,22 @@ Confere 'argumentos do kubectl: --context primeiro, namespace gerenciador' ((Get
 Confere 'o servico vira deploy/<servico> (sem docker ps)' ((Get-ContainerDoServico -Servico reservation) + '|' + $script:dockerChamado) 'deploy/reservation|0'
 Invoke-ExecAlvo 'deploy/reservation' printenv RESERVATION_SAGA_ORPHAN_MS
 Confere 'Invoke-ExecAlvo em cluster: kubectl --context .. -n gerenciador exec <alvo> -- cmd; docker intocado' (($script:kArgs -join ' ') + '|' + $script:dockerChamado) '--context kind-gerenciador -n gerenciador exec deploy/reservation -c reservation -- printenv RESERVATION_SAGA_ORPHAN_MS|0'
+# env de um servico em cluster: do SPEC do Deployment (as imagens slim nao tem printenv nem sh); literal, valueFrom (marcador, nunca o valor do Secret) ou vazio
+$jp = "{.spec.template.spec.containers[?(@.name=='reservation')].env[?(@.name=='RESERVATION_SAGA_ORPHAN_MS')].value}@@@{.spec.template.spec.containers[?(@.name=='reservation')].env[?(@.name=='RESERVATION_SAGA_ORPHAN_MS')].valueFrom}"
+$script:dockerChamado = 0; $script:kSaida = '12345@@@'
+$v = Get-EnvServico -Alvo 'deploy/reservation' -Var RESERVATION_SAGA_ORPHAN_MS
+Confere 'Get-EnvServico em cluster: o literal vem do spec (kubectl get deploy/<svc> -o jsonpath, com --context; sem exec, sem printenv, sem docker)' "$v|$($script:kArgs -join ' ')|$($script:dockerChamado)" "12345|--context kind-gerenciador -n gerenciador get deploy/reservation -o jsonpath=$jp|0"
+$script:kSaida = '@@@{"secretKeyRef":{"key":"K","name":"env-reservation"}}'
+Confere 'Get-EnvServico em cluster: variavel de valueFrom/Secret vira <de Secret/ConfigMap> (o valor do Secret nunca e lido)' ((Get-EnvServico -Alvo 'deploy/reservation' -Var RESERVATION_SAGA_ORPHAN_MS) + '|' + [bool](($script:kArgs -join ' ') -match 'secret ')) '<de Secret/ConfigMap>|False'
+$script:kSaida = '@@@'
+Confere 'Get-EnvServico em cluster: variavel ausente do spec = valor vazio' ([string](Get-EnvServico -Alvo 'deploy/reservation' -Var RESERVATION_SAGA_ORPHAN_MS)) ''
+$script:kSaida = $null
+Confere 'Get-EnvServico em cluster: kubectl sem saida (erro) = valor vazio' ([string](Get-EnvServico -Alvo 'deploy/reservation' -Var RESERVATION_SAGA_ORPHAN_MS)) ''
+$env:CARGA_K8S = ''
+$null = Get-EnvServico -Alvo 'gerenciador-reservation' -Var RESERVATION_SAGA_ORPHAN_MS
+Confere 'sem CARGA_K8S: Get-EnvServico e o docker exec printenv de sempre' $script:dArgs 'exec gerenciador-reservation printenv RESERVATION_SAGA_ORPHAN_MS'
+$env:CARGA_K8S = 'kind-gerenciador'
+$script:dockerChamado = 0
 $env:CARGA_BASH = 'fakebash'; $env:APP_DB_PASSWORD = 'CANARIO-APP'; $env:POSTGRES_PASSWORD = 'CANARIO-PG'
 'SELECT 1;' | Invoke-PsqlDb -Flags '-v ON_ERROR_STOP=1 -At'
 Confere 'psql em cluster: o SQL vai por stdin' ($script:bStdin -join '|') 'SELECT 1;'

@@ -194,7 +194,11 @@ case "$args" in
   *"rpk group describe"*) echo "TOTAL-LAG    9" ;;
   *rabbitmqctl*) printf 'admission.requests\t5\t1\t10\nadmission.timed_out\t0\t0\t1\n' ;;
   *redis-cli*) printf 'H 41000 2 99\nS\nC adm:cnt:7:1 30\nM adm:mode:7 4\n' ;;
-  *printenv*RESERVATION_SAGA_ORPHAN_MS*) echo 12345 ;;
+  # env do spec do Deployment (as imagens slim nao tem printenv nem sh): "<literal>@@@<valueFrom>". Literal, valueFrom (Secret) e ausente.
+  *"get deploy/reservation -o jsonpath"*RESERVATION_SAGA_ORPHAN_MS*) echo '12345@@@' ;;
+  *"get deploy/"*"-o jsonpath"*SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE*) echo '1000@@@' ;;
+  *"get deploy/"*"-o jsonpath"*SERVER_TOMCAT_THREADS_MAX*) echo '@@@{"secretKeyRef":{"key":"X","name":"env-reservation"}}' ;;
+  *"get deploy/"*"-o jsonpath"*) echo '@@@' ;;
   *) exit 0 ;;
 esac
 FAKEK
@@ -220,6 +224,10 @@ confere "k8s: rabbit e redis por kubectl exec (deploy/rabbitmq e deploy/redis) s
 confere "k8s: rpk por kubectl exec no sts/redpanda" "$(grep -c 'exec sts/redpanda -c redpanda -- timeout 3 rpk group describe reservation ' "$FAKE_K_LOG" | awk '{print ($1>=1)?"sim":"nao"}')" "sim"
 rsk="$(ls "$rodk"/results/resumo-saga-k8s-*.txt 2>/dev/null | head -1)"
 confere "k8s: latencia dos passos pelo kubectl logs -l app=reservation --since-time (2 linhas)" "$(grep -E '^  tx1_ms:' "${rsk:-/dev/null}")|$(grep -c 'logs -l app=reservation --since-time 2026-10-29T12:00:00.000000Z' "$FAKE_K_LOG" | awk '{print ($1>=1)?"sim":"nao"}')" "  tx1_ms: n 2 p50 10 p95 20 max 20 (ms)|sim"
+rgk="$(ls "$rodk"/results/registro-k8s-*.txt | head -1)"
+confere "k8s: registro le o env do SPEC do Deployment (literal), sem exec/printenv (a imagem slim nao tem)" "$(grep -c 'SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=1000' "$rgk" | awk '{print ($1>=1)?"sim":"nao"}')$(grep -c 'printenv' "$FAKE_K_LOG")" "sim0"
+confere "k8s: variavel que vem de valueFrom/Secret sai como <de Secret/ConfigMap> (o valor do Secret nunca e lido: nenhum get secret)" "$(grep -c 'SERVER_TOMCAT_THREADS_MAX=<de Secret/ConfigMap>' "$rgk" | awk '{print ($1>=1)?"sim":"nao"}')$(grep -ci 'get secret' "$FAKE_K_LOG")" "sim0"
+confere "k8s: variavel ausente do spec vira valor vazio no registro" "$(grep -c '^  RESERVATION_READPATH=$' "$rgk")" "1"
 confere "k8s: registro da rodada sem segredo e com o limiar" "$(grep -c 'PASSWORD' "$(ls "$rodk"/results/registro-k8s-*.txt | head -1)")$(grep -c 'ORPHAN_MS=12345' "$(ls "$rodk"/results/registro-k8s-*.txt | head -1)" | awk '{print ($1>=1)?"sim":"nao"}')" "0sim"
 
 : > "$FAKE_K_LOG"; rodk2="$(mktemp -d)"; cp "$(dirname "$0")/coleta-host.sh" "$rodk2/"

@@ -113,9 +113,9 @@ function Fail($m) { Write-Host "[erro] $m" -ForegroundColor Red; exit 1 }
 
 if (-not (Get-Command k6 -ErrorAction SilentlyContinue)) { Fail 'k6 nao encontrado. Rode ..\setup-gerador.ps1 primeiro.' }
 if ($ParadaP95Ms -gt 0 -and ($ParadaJanelaS -lt 30 -or $ParadaJanelaS % 30 -ne 0 -or $Duracao % $ParadaJanelaS -ne 0)) { Fail "-ParadaJanelaS $ParadaJanelaS invalido: multiplo de 30 e divisor de -Duracao ($Duracao), para a parada cair no fim de uma janela." }
-# alcance, nao saude: QUALQUER resposta HTTP conta (no cluster o /actuator/health da 8081 responde 401: as probes estao na porta de management 8090); so falha de conexao ou timeout aborta
+# alcance, nao saude: qualquer resposta HTTP < 500 conta (no cluster o /actuator/health da 8081 responde 401: as probes estao na porta de management 8090); falha de conexao, timeout ou status >= 500 aborta
 try { Invoke-WebRequest -Uri "$Base/actuator/health" -UseBasicParsing -TimeoutSec 5 | Out-Null }
-catch { if (-not $_.Exception.Response) { Fail "Backend inacessivel em $Base." } }
+catch { if (-not $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ge 500) { Fail "Backend inacessivel ou com erro (>= 500) em $Base." } }
 
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib-seed.ps1')   # Invoke-Seed (seed unico: docs\carga\harness\setup.sh)
 . (Join-Path $PSScriptRoot 'lib-degraus.ps1')                      # plano da escada e linha do CSV

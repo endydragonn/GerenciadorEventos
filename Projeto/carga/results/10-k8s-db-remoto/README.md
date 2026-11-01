@@ -102,9 +102,27 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
     `pg_stat_statements`.
   - **O `pgss` inclui as consultas das duas execuções do `verificar-rpm`**, que rodaram antes da finalização. São poucas chamadas perto da
     carga, mas aparecem no top 25.
-- **`registro-*.txt`:** os valores das variáveis lidas dos containers saíram vazios. A leitura do env em modo cluster tinha o mesmo defeito
-  do "Defaulted container", corrigido depois na #228. Os valores reais estão na seção Configuração acima e foram conferidos no
-  Deployment (`kubectl get deploy -o jsonpath`).
+- **`registro-*.txt`: o env dos containers saiu vazio.** O harness lia o env por `kubectl exec <pod> -- printenv`, e as imagens slim não
+  têm `printenv` (nem `sh`). Pelo mesmo motivo, a coleta usou o `ORPHAN_MS` default de 30000, o mesmo valor do serviço.
+  - A #228 passou a ler o env do spec do Deployment (volta 5).
+  - Env do K0 reconstruído do render da mesma config (`K8S_OVERLAY=rodada K8S_POOLS=r5 cluster.sh renderizar --trilha nenhuma`, sem
+    `K8S_DB_REMOTO`):
+
+    | Serviço | Variável | Valor |
+    |---|---|---|
+    | reservation | `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` | 1000 (literal no spec) |
+    | stock | idem | 250 (literal) |
+    | identity / catalog | idem | 100 / 100 (literal) |
+    | notification | idem | 3 (literal) |
+    | admission | `ADMISSION_WORKER_CONCURRENCY` | 32 (literal) |
+    | supabase-pooler | `POOLER_DEFAULT_POOL_SIZE` | 245 (literal) |
+    | db | `max_connections` | 300 (args do StatefulSet) |
+    | admission | `ADMISSION_X_RPM`, `_RESERVATION_REPLICAS`, `_QUEUE_ON`, `_SYNC_BELOW` | via `envFrom` do Secret `env-admission`; defaults do compose 56000 / 1 / 0,8 / 0,7 |
+    | reservation | `SERVER_TOMCAT_THREADS_MAX`, `RESERVATION_SAGA_ORPHAN_MS`, `_REAPER_SCAN_MS` | via `envFrom` do Secret `env-reservation`; default do compose para o Tomcat: 300; os outros dois ficam no default do serviço |
+    | backend | `RESERVATION_READPATH` | ausente: default `cas` do `application.properties` |
+
+  - O que vem por `envFrom` sai do `docker compose config` resolvido, com as mesmas regras da R5, e não aparece no spec. Os literais
+    batem com o que foi conferido no Deployment ao vivo durante a validação.
 - **`verificar-rpm`:** a 1ª execução abortou depois das tabelas, por dois defeitos do harness em modo cluster, corrigidos na #228:
   - o stderr "Defaulted container" do kubectl virava erro no PS 5.1;
   - uma variável local colidia com o parâmetro `ValidateSet` `$ReadPath`.
@@ -123,4 +141,9 @@ As latências estão em ms e cobrem todas as respostas do POST. A tabela sai de 
 
 ## K1 e K2
 
-Pendentes: esperam a limpeza do banco do Dell, que depende do usuário.
+Pendentes: esperam a limpeza do banco do Dell, que depende do usuário. O cluster do K1 já está no ar (`db-teste` rc 0).
+
+- **Versão do harness:**
+  - **K0:** rodou com a #228 em a826c8d, com as correções de `-c` e da variável `ReadPath` aplicadas só no `verificar` final.
+  - **K1 e K2:** rodam com a versão que inclui a leitura do env pelo spec do Deployment (volta 5). O commit exato vai na seção de cada
+    bloco.

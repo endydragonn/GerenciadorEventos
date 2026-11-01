@@ -40,7 +40,7 @@ function Registrar($alvo, $saida) {
     # RESERVATION_READPATH e do backend (gateway); relay/consumer sao do servico reservation (#33)
     # containers por label (issue #178): com a autoescala as replicas nao se chamam gerenciador-<servico>
     $cb = Get-ContainerDoServico backend; $cr = Get-ContainerDoServico reservation
-    $cfg = ($(if ($cb) { Invoke-ExecAlvo $cb printenv RESERVATION_READPATH 2>$null }) + ' / ' + (@($(if ($cr) { Invoke-ExecAlvo $cr printenv EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED 2>$null })) -join ' / '))
+    $cfg = ($(if ($cb) { Get-EnvServico $cb RESERVATION_READPATH 2>$null }) + ' / ' + (@($(if ($cr) { 'EVENTS_RELAY_ENABLED', 'EVENTS_CONSUMER_ENABLED' | ForEach-Object { Get-EnvServico $cr $_ 2>$null } })) -join ' / '))
     $cab = "===== {0} | {1} | config: {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $alvo, $cfg
     Add-Content -Path (Join-Path $dir 'verificacoes.log') -Value (@($cab, $saida, '') -join "`n") -Encoding utf8
 }
@@ -80,7 +80,7 @@ SELECT coalesce(sum(n - capacity) FILTER (WHERE n > capacity), 0) FROM ativas;
     $over = ($qOver | Invoke-PsqlDb -Flags '-v ON_ERROR_STOP=1 -At' | Out-String).Trim()
     $cb = Get-ContainerDoServico backend
     # nome proprio: $readpath colidiria com o parametro $ReadPath (ValidateSet), e o PS aborta com o valor vazio (no cluster a variavel nao existe)
-    $readpathAtual = if ($cb) { ((Invoke-ExecAlvo $cb printenv RESERVATION_READPATH 2>$null) | Out-String).Trim() } else { '' }
+    $readpathAtual = if ($cb) { ((Get-EnvServico $cb RESERVATION_READPATH 2>$null) | Out-String).Trim() } else { '' }
     if ($over -match '^\d+$' -and [int64]$over -gt 0) {
         if ($readpathAtual -eq 'naive') { Write-Host "[info] overselling $over no braco naive (esperado: e o que a rodada mede)." -ForegroundColor Cyan }
         else { Write-Host "[erro] OVERSELLING $over no braco '$(if ($readpathAtual) { $readpathAtual } else { 'cas?' })': criterio de parada do bloco. NAO prossiga." -ForegroundColor Red; exit 3 }
@@ -93,8 +93,8 @@ SELECT coalesce(sum(n - capacity) FILTER (WHERE n > capacity), 0) FROM ativas;
     $origemLimite = "parametro -OrfaLimiteS (ORFA_LIMITE_S)"
     if ($limite -le 0) {
         $origemLimite = "ORPHAN_MS + 3 x SCAN_MS $(if ($cr) { 'lidos do container reservation' } else { 'padrao do servico: container reservation nao achado' })"
-        $om = if ($cr) { ((Invoke-ExecAlvo $cr printenv RESERVATION_SAGA_ORPHAN_MS 2>$null) | Out-String).Trim() } else { '' }
-        $sm = if ($cr) { ((Invoke-ExecAlvo $cr printenv RESERVATION_SAGA_REAPER_SCAN_MS 2>$null) | Out-String).Trim() } else { '' }
+        $om = if ($cr) { ((Get-EnvServico $cr RESERVATION_SAGA_ORPHAN_MS 2>$null) | Out-String).Trim() } else { '' }
+        $sm = if ($cr) { ((Get-EnvServico $cr RESERVATION_SAGA_REAPER_SCAN_MS 2>$null) | Out-String).Trim() } else { '' }
         $limite = Get-OrfaLimiteS -OrphanMs $om -ScanMs $sm
     }
     $lag = Wait-LagDoGroup -Group stock
