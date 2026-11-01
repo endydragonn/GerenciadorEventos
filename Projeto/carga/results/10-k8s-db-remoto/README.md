@@ -375,8 +375,118 @@ As latências estão em ms. A tabela sai de `degraus-331542.csv`, e o gráfico e
   - `mpstat.txt`, `vmstat.txt`, `psi.txt`, `pg_activity.csv`, `inicio.txt` e `fim.txt`;
   - `iostat-nvme0n1.txt` e `sar-filtrado.csv`, com o mesmo recorte do K1.
 
+## K2-repeticao (`Deg-335785`), 2026-11-01
+
+O usuário pediu que o K2 fosse refeito e que, se ele parasse de novo, o motivo fosse investigado. O K2 da seção anterior fica como está.
+
+### Configuração
+
+- **Cluster:** novo, com a config do K2. Branch `Issue-228` em **a7da861** (o harness é o do K2; desde e4f862f só mudou `results/` e READMEs).
+  - `K8S_OVERLAY=rodada SLIM_TAG=k8s K8S_DB_REMOTO=192.168.68.50:5433 Projeto/k8s/cluster.sh up --trilha b1`, depois `cluster.sh db-teste`
+    com rc 0.
+  - **Sem `K8S_POOLS=r5`, como no K2:** o `cluster.sh` só aceita r5 com a autoescala travada em 1. Valem os pools do cluster
+    (`host-telemetria/registro-*`): reservation 200 e stock 60. Os outros são os literais do overlay, com soma 1492 e pool real de 245.
+- **Limpeza:** `CARGA_K8S=kind-gerenciador limpar-banco.sh`, com rc 0. Liberada pelo usuário direto na sessão, com os mesmos zeros e 1 linha em
+  `identity.users`.
+- **Réplicas antes do k6:**
+  - Depois do seed, o KEDA estava em identity 3, catalog 2 e stock 2.
+  - Esperei todas voltarem a 1, o que aconteceu às 19:35:17Z, cerca de 1 min depois do seed, conferido pelo `kubectl`. Só então o k6 foi
+    disparado.
+  - O setup do k6 (1000 logins com bcrypt) levou o identity de novo a 2 e a 3 (`pods/replicas-*`, às 19:36:38Z e 19:36:53Z). Nos degraus de
+    carga ele voltou a 1. É o comportamento do braço.
+- **Gerador:** 850d38e, sem jogo aberto.
+  - RAM livre de 9,81 GB no disparo, mínima de 2,23 GB às 19:41:42Z (o k6 chegou a 8,0 GB com as VUs presas) e 9,97 GB no fim. CPU no máximo
+    em 48%.
+  - Fonte: `gerador/telemetria-gerador-k2rep-335785.csv`, o monitor de 10 s.
+- **k6:** de 19:35:57Z a 19:42:01Z, com código de saída **99** (parada por p95 no 32k). Os logins do setup levaram 28,9 s
+  (`gerador/k6-console-335785.log`).
+- **Coleta no Dell:** sessão DB, `coleta-k8s-K2-rep`, de 19:35:53Z a 19:43:08Z.
+- **Coletor por pod (novo):** `pods/coleta-pods.sh`, a cada 5 s. Grava três CSVs:
+  - `top-pods-*`: o `kubectl top pods --containers`;
+  - `cgroup-cpu-*`: `cpu.stat` e `cpu.max` do cgroup v2 de cada container no nó kind, incluindo o `istio-proxy`, que é native sidecar;
+  - `replicas-*`: as réplicas de cada Deployment.
+
+  **É carga extra no host que o K2 não tinha:** com o cluster ocioso, a CPU do host foi de 16,7% sem o coletor para 18,9% com ele, cerca de +2,2
+  pontos (60 s em cada caso, `host-telemetria/telemetria-host-ocioso-*`).
+
+### Resultado
+
+| RPM alvo | efetivo | p50 | p95 | p99 | p95 pior janela 30 s | 202 | 5xx (reserva / confirma) | descartes |
+|---|---|---|---|---|---|---|---|---|
+| 20k | 20.001 | 1.795,0 | 4.841,3 | 5.904,8 | 5.224,0 | 5.592 | 0 / 0 | 0 |
+| 26k | 26.001 | 1.550,5 | 3.222,5 | 3.992,4 | 3.278,2 | 6.798 | **67 / 1** | 0 |
+| 32k (parcial) | 25.015 | 4.453,1 | **5.940,9** | 6.689,8 | 6.050,6 | — | 0 / 0 | **5.227** |
+
+A tabela sai de `degraus-335785.csv`, e o gráfico está em `degraus-335785.html`.
+
+- **Parada no 32k:** p95 de 5.941 ms na janela de 60 s. O k6 chegou aos 3000 VUs ("Insufficient VUs", 19:41:16Z, no console do k6) e
+  descartou 5.227 iterações.
+- **Desde o 20k o p50 fica em 1,5–1,8 s.** No mesmo degrau, o K0 e o K1 ficaram em 25–27 ms. O 20k sozinho repete o do K2 (p95 de 4,8 s contra
+  5,0 s), agora partindo de 1 réplica.
+- **5xx:** 67 na reserva e 1 na confirmação, todos no 26k. É a primeira vez que aparecem na etapa 10.
+  - O k6 não registra o código, e nenhum serviço logou ERROR (gateway, reservation, stock, admission, identity e catalog, pelo `kubectl logs`).
+  - O gateway logou só 3 avisos de "admission indisponível", com fail-open.
+  - O log de acesso do Istio está desligado. A origem fica em aberto.
+  - Candidatos: um 503 do Envoy durante as trocas de réplica, já que backend, admission e stock escalaram entre 19:38:06Z e 19:38:27Z e o
+    identity desceu às 19:39:03Z; ou uma réplica nova do reservation, que subiu às 19:40:16Z e saiu às 19:43:01Z, e cujos logs se perderam.
+- **Overselling:** 0 (`host-telemetria/verificacoes-k2rep.log`): 868 eventos, 31.883 ativas (30.939 confirmed + 944 pending) e 4.617 expired.
+- **Sagas** (`verificar-rpm`, rc 0): convergidas, com 0 velhas, 0 held com saga compensated, 0 devolução pendente, 0 órfã inversa e 0 `quant`
+  divergente.
+- **Fila:** 5.592 respostas 202 no 20k. No K1 foram 431, e no K2, 2.025.
+  - Das acompanhadas, 94 de 263 foram admitidas no 20k e 141 de 334 no 26k.
+  - `admission.requests` chegou a 2.060 mensagens (`coleta-host`).
+- **Host** (`telemetria-host`): CPU média de 105,4% no 20k (máxima de 113%) e de 96,6% na janela de carga inteira. RAM livre mínima de
+  20,2 GB.
+- **Postgres** (`coleta-host`): espera de lock com máximo de 179; `pg_conexoes` com máximo de 248.
+- **Dell, pela coleta da sessão DB:** não saturou.
+  - Pico de 263 conexões às 19:39:26Z, com o pool do Supavisor cheio.
+  - Pico de 182 active às 19:41:17Z e de 39 idle in transaction às 19:39:36Z.
+  - CPU us+sy com pico de 43% e média de 12,3% na coleta inteira; NVMe com %util máximo de 74% e médio de 22% na coleta inteira.
+  - O log do Postgres roda com `log_min_messages=fatal`, então ERROR e WARNING não aparecem nele.
+
+### Investigação: o que os dados por pod mostram
+
+Janela da carga: de 19:37:28Z (fim do setup) a 19:42:01Z. Fontes: `pods/cgroup-cpu-*` e `pods/top-pods-*`.
+
+- **O RabbitMQ bateu no limite de CPU.** Média de 1,18 núcleo com limite de 2 (`cpu.max` 200000/100000), throttling em **19% dos períodos**
+  (480 de 2.584) e 29,5 s de throttling na janela.
+  - Nenhum outro container passou de 5% dos períodos.
+  - Com a fila ligada desde o 20k (5.592 respostas 202), o RabbitMQ entra no caminho de cada reserva enfileirada.
+- **O gateway não espalhou a carga.** O KEDA subiu o backend para 3 réplicas, mas uma delas (`rjmxc`) ficou com 572 m de CPU em média e as
+  duas novas com 127 m cada.
+  - A hipótese é que a entrada do k6 pelo NodePort reaproveita as conexões keep-alive já abertas no pod original, porque o balanceamento é
+    por conexão. Por isso a réplica nova não alivia o gateway.
+  - Entre gateway e reservation o Istio balanceia por requisição: as duas réplicas do reservation dividiram a CPU (0,61 e 0,73 núcleo).
+- **Sidecars:** o `istio-proxy` do gateway quente usou 0,55 núcleo, quase o mesmo que o próprio gateway (0,60), e o do reservation, 0,33. O
+  `istio-proxy` não tem limite de CPU (`cpu.max` `max`), então não sofre throttling.
+- **A CPU somada dos containers** (`top`) teve média de 7,0 núcleos e máxima de 13,7 na janela.
+- **O host não foi o único fator.** A CPU do host ficou em 96,6% na janela inteira, abaixo da do K2 (109,5% no 20k). Mesmo assim, o p50 já
+  estava em 1,8 s no 20k.
+
+**Hipóteses para o p95 do braço b1, nenhuma isolada:**
+1. **RabbitMQ com throttling** no limite de 2 núcleos, com a fila ligada desde o 20k. A fila liga muito mais que no K1 (5.592 contra 431
+   respostas 202), o que pode ser causa e efeito ao mesmo tempo: a latência alta concentra rajadas no contador do `admission`.
+2. **Entrada sem balanceamento:** o gateway escala, mas a carga fica na réplica original.
+3. **Custo do Istio:** um sidecar por pod, com quase 1:1 de CPU no gateway quente.
+4. **Pools menores** que no K1: reservation 200 contra 1000 e stock 60 contra 250.
+5. **CPU do host**, perto do teto no 20k.
+
+O cluster ficou no ar para a investigação.
+
+### Arquivos
+
+- `degraus-335785.csv`, `degraus-335785.html`, `plano-degraus-335785.json`
+- `gerador/`: `summary-degraus-335785.json`, `telemetria-gerador-k2rep-335785.csv` (o monitor de RAM e CPU) e `k6-console-335785.log`. Vêm
+  do ref temporário `K8S-gerador-K2-rep` (edbd70e).
+- `host-telemetria/`: `coleta-host-*`, `eventos-*`, `pgss-*`, `registro-*`, `resumo-saga-*`, `saga-*`, `telemetria-host-*`,
+  `telemetria-host-ocioso-*` (custo do coletor por pod) e `verificacoes-k2rep.log`
+- `pods/`: `coleta-pods.sh`, `top-pods-*`, `cgroup-cpu-*` e `replicas-*`
+- `dell/`: coleta do Dell pela sessão DB (ref temporário `K8sDB-dell-K2-rep`, 562bf5c, sha256 `f8cec76d…f27ef`, 1.091.168 bytes, conferido),
+  com o mesmo recorte do K1.
+
 ## Versão do harness por bloco
 
 - K0: #228 em a826c8d, com as correções de `-c` e da variável `ReadPath` aplicadas só no `verificar` final.
 - K1: 67c0ef8.
-- K2: e4f862f (o código k6 do gerador, em 850d38e, é idêntico nos três).
+- K2: e4f862f.
+- K2-repeticao: a7da861 (o código k6 do gerador, em 850d38e, é idêntico em todos os blocos).

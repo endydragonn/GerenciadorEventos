@@ -1,0 +1,14 @@
+﻿time="2026-11-01T16:37:28-03:00" level=info msg="setup: 1000/1000 logins ok; 868 eventos; 868000 pares unicos; 14 
+degraus usam 826014; mapeamento sequencial; acompanha 5% (consulta 1000 ms, teto 35 s); graceful 45 s; parada p95 > 
+5000 ms em janela de 60 s (SETUP_S 90; logins levaram 28.9 s)" source=console
+ 
+time="2026-11-01T16:41:16-03:00" level=warning msg="Insufficient VUs, reached 3000 active VUs and cannot initialize 
+more" executor=constant-arrival-rate scenario=degrau_32000
+
+resumo por degrau:
+  PARADA: p95_acima_de_5000ms_em_janela_de_60s_no_degrau_32000 (p95 da janela 5941 ms); degraus seguintes omitidos
+  degrau_20000: reservas=20001 5xx_reservas=0 5xx_confirma=0 outros=0 descartadas=0 p50=1795.0ms p95=4841.3ms p99=5904.8ms p95_max_janela=5224.0ms 202=5592 acomp=263 admitidas=94 rejected=169 timed_out=0 sem_estado=0 429=0 admitir_p95=13885ms fim_a_fim_p95=8553ms
+  degrau_26000: reservas=26001 5xx_reservas=67 5xx_confirma=1 outros=0 descartadas=0 p50=1550.5ms p95=3222.5ms p99=3992.4ms p95_max_janela=3278.2ms 202=6798 acomp=334 admitidas=141 rejected=193 timed_out=0 sem_estado=0 429=0 admitir_p95=6304ms fim_a_fim_p95=4469ms
+  degrau_32000 (parcial): reservas=25015 5xx_reservas=0 5xx_confirma=0 outros=0 descartadas=5227 p50=4453.1ms p95=5940.9ms p99=6689.8ms p95_max_janela=6050.6ms
+time="2026-11-01T16:42:01-03:00" level=error msg="thresholds on metrics 'reserva_duration{parada:degrau_32000_0}' were 
+crossed; at least one has abortOnFail enabled, stopping test prematurely"
