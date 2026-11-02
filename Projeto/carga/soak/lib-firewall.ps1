@@ -146,5 +146,5 @@ function Get-ProblemasDaRegra($enabled, $direction, $action, $profile, $protocol
         $e = ($esperado | ForEach-Object { "$($_[0])-$($_[1])" }) -join ';'
         if ($a -ne $e) { $erros += "RemoteAddress ($(@($remoteAddress) -join ',')) nao e exatamente o complemento de $geradorIp (esperado: todo o IPv4 menos ele: $(@(Get-FaixasComplementares $geradorIp) -join ', ')). Se o IP do gerador mudou (DHCP), rode o Criar de novo com o IP novo (como administrador): o gerador fica bloqueado ate la, a porta nao abre." }
     }
-    return , $erros
+    return $erros   # sem a virgula: os chamadores fazem @(...), e ", $erros" vazio virava UM item (array vazio)
 }

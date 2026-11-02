@@ -53,6 +53,11 @@ $bom = @('0.0.0.0-192.168.68.53', '192.168.68.55-255.255.255.255')
 function Problemas($remote = $bom, $enabled = 'True', $dir = 'Inbound', $acao = 'Block', $perfil = 'Any', $proto = 'TCP', $porta = '8025', $v6 = '::/0') { @(Get-ProblemasDaRegra $enabled $dir $acao $perfil $proto $porta (@($remote) + @($v6 | Where-Object { $_ })) $G 8025) }
 Confere 'o Criar grava o IPv6 total numa forma que o Test-Ipv6Total reconhece' (Test-Ipv6Total $Ipv6Total) $true
 Confere 'regra certa: sem problemas' (Problemas).Count 0
+# no formato EXATO dos chamadores (firewall-mailpit Status e conferir-firewall): $x = @(Get-ProblemasDaRegra ...), sem a funcao Problemas no meio (ela desembrulhava e escondia um item vazio)
+$chamador = @(Get-ProblemasDaRegra 'True' 'Inbound' 'Block' 'Any' 'TCP' '8025' (@($bom) + '::/0') $G 8025)
+Confere 'como o chamador: regra certa da 0 itens' $chamador.Count 0
+$chamador = @(Get-ProblemasDaRegra 'False' 'Outbound' 'Block' 'Any' 'TCP' '8025' (@($bom) + '::/0') $G 8025)
+Confere 'como o chamador: dois problemas dao 2 itens' $chamador.Count 2
 Confere 'regra certa com o IPv6 na forma da faixa que o Criar grava: sem problemas' (Problemas -v6 $Ipv6Total).Count 0
 Confere 'ordem invertida dos intervalos: sem problemas' (Problemas @('192.168.68.55-255.255.255.255', '0.0.0.0-192.168.68.53')).Count 0
 Confere 'o mesmo complemento em CIDRs e IPs soltos (outra notacao): sem problemas' (Problemas @('0.0.0.0/2', '64.0.0.0/3', '72.0.0.0/5', '80.0.0.0/4', '96.0.0.0/3', '104.0.0.0-192.168.68.53', '192.168.68.55-255.255.255.255')).Count 0
@@ -78,7 +83,7 @@ Write-Host '==> IPv6: o Block cobre TODO o IPv6 (o gerador tem IPv6 global) e so
 foreach ($f in '::/0', '::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', '0:0:0:0:0:0:0:0-FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF') { Confere "IPv6 total '$f' aceito" (Test-Ipv6Total $f) $true }
 foreach ($f in '::/64', '2001:db8::/32', '::1', 'fe80::1-fe80::9', '::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe', '1::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', '::-ffff::', 'Any', '192.168.68.55') { Confere "IPv6 '$f' NAO e todo o IPv6" (Test-Ipv6Total $f) $false }
 Confere 'sem item IPv6: falta o IPv6 total (1 problema)' (Problemas -v6 @()).Count 1
-Confere 'sem item IPv6: a mensagem cita o IPv6' ([bool]((Problemas -v6 @())[0] -match 'IPv6')) $true
+Confere 'sem item IPv6: a mensagem cita o IPv6' ([bool](@(Problemas -v6 @())[0] -match 'IPv6')) $true
 Confere 'IPv6 parcial (2001:db8::/32) e recusado' (Problemas -v6 '2001:db8::/32').Count 1
 Confere 'IPv6 /64 e recusado' (Problemas -v6 '::/64').Count 1
 Confere 'IPv6 total + um /64 junto: o /64 sobra e e recusado' (Problemas -v6 @('::/0', '2001:db8::/64')).Count 1
