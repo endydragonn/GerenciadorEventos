@@ -251,6 +251,16 @@ Cada coluna é um cluster novo, criado pelo `dry-run.sh`; todos os critérios au
 | overselling (evento quente, capacidade 30): ativas / `quant` | 30 / 0 | 30 / 0 | 30 / 0 |
 | `POST /bff/seed` depois do dry-run | 404 | 404 | 404 |
 
+### Dry-run da #231 (2026-11-01; stock fixo em 1 réplica)
+
+- **`c`:** passou em todos os critérios.
+- **`b1`:** passou na repetição. Na 1ª rodada a réplica nova do reservation recebeu a primeira conexão na 8082 fora da janela de 15 s; na repetição, em 12 s. Um vigia no pod novo mostrou o sidecar com conexões de entrada ~4 s depois de o pod aparecer: o critério fica na borda da janela.
+- **`nenhuma` (controle L4):** falhou nas duas rodadas, sempre no critério "0 5xx nas janelas de 60 s depois de cada descida". Em cada rodada houve 2 respostas 503 em **leitura**, ~20 s depois de cada descida do catalog (o backend desceu junto, então o critério conta em dobro).
+  - **O problema já existia antes da #231.** A mesma `nenhuma` no código anterior, com o stock escalável (`Issue-228`, 334adf4), também deu 503 em leitura nas descidas do catalog e do backend: 4 linhas `ERRO5XX`, 12 contagens nas janelas.
+  - Causa provável: o gateway chama o catalog pelo Service L4 e mantém keep-alive com o pod do catalog que está saindo. O `CatalogIndisponivelHandler` devolve então 503.
+  - Na `b1` e na `c`, que balanceiam por requisição ou no cliente, houve 0 5xx nas descidas.
+- **Nas três trilhas:** o stock ficou em 1 réplica o dry-run inteiro, com overselling 0 (30 de 30, `quant` 0) e os 15.000 e-mails chegaram sem duplicar.
+
 **CPU e RAM do nó** (`docker stats` do contêiner do kind; CPU em % de um núcleo, 100 = 1 núcleo; amostra a cada ~3 s; a **linha de base** é o que o cluster custa antes de qualquer carga):
 
 | Fase | `c` CPU média (máx.) / RAM | `b1` CPU média (máx.) / RAM | `nenhuma` |
