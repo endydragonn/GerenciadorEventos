@@ -21,6 +21,8 @@ Memoria: uma lista de duracoes por (minuto, tipo) aberto; minutos com mais de 2 
 Amostra que chega depois do fechamento do minuto NAO entra na linha normal, mas NUNCA some em silencio: vai para uma linha `atrasada=1` do mesmo (minuto, tipo) NO PROPRIO por-minuto
 (o que o criterio 3 le) e e impressa por tipo; o programa tambem sai com codigo 3 se uma delas tiver 5xx ou status 0. O k6 grava `min` POR REQUISICAO (carga-soak.js), entao
 um fluxo longo (cadastro esperando o e-mail, 202 acompanhado) nao carimba o minuto do comeco nas requisicoes do fim.
+Metrica `reserva_400` (Counter do carga-soak.js, tag `motivo` = lotado | vinculo | outro): NAO e requisicao (nao entra em reqs nem em c400, que vem de http_req_duration) e nao tem coluna
+no por-minuto; so e somada por motivo e impressa no fim (`reserva 400 por motivo: lotado=N vinculo=N outro=N`).
 Colunas do CSV do k6 lidas pelo NOME (nao pela posicao); tags proprias (tipo, fase, min) vem de `extra_tags` (k=v&k=v).
 """
 import argparse
@@ -33,6 +35,7 @@ from urllib.parse import parse_qs
 COLUNAS = ["minuto", "tipo", "taxa", "reqs", "p50_ms", "p95_ms", "p99_ms", "c2xx", "c202", "c400", "c429", "c5xx", "c0", "outros", "descartadas", "verificacoes_2xx", "inicio_s", "atrasada"]
 NOME_VERIFICACAO = "/bff/users/request-verification"
 CENARIOS = ("leitura", "reserva", "login", "cadastro", "escrita")
+MOTIVOS_400 = ("lotado", "vinculo", "outro")
 ATRASO_MIN = 2  # minutos de folga antes de fechar um balde
 
 
@@ -102,9 +105,10 @@ def abrir(caminho):
     return open(caminho, "r", encoding="utf-8", newline="")
 
 
-def agregar(entrada, saida_csv):
+def agregar(entrada, saida_csv, motivos=None):
     """Le `entrada` (arquivo do k6) e escreve as linhas em `saida_csv` (arquivo aberto para escrita). Devolve (linhas, avisos, atrasadas).
-    `atrasadas` = {tipo: {"amostras", "reqs", "c5xx", "c0"}} das amostras que chegaram com o minuto ja fechado (ficam fora das linhas normais, mas entram na linha atrasada=1 do por-minuto)."""
+    `atrasadas` = {tipo: {"amostras", "reqs", "c5xx", "c0"}} das amostras que chegaram com o minuto ja fechado (ficam fora das linhas normais, mas entram na linha atrasada=1 do por-minuto).
+    `motivos` (dict opcional) recebe a soma da metrica `reserva_400` por motivo."""
     baldes, ultimo_fechado, maior_min, t0 = {}, -1, -1, None
     n_linhas, avisos, atrasadas, late = 0, [], {}, {}
     w = csv.writer(saida_csv, lineterminator="\n")
@@ -132,6 +136,14 @@ def agregar(entrada, saida_csv):
     with abrir(entrada) as f:
         for r in csv.DictReader(f):
             metrica = r.get("metric_name")
+            if metrica == "reserva_400":
+                if motivos is not None:
+                    m = (parse_qs(r.get("extra_tags") or "").get("motivo") or ["outro"])[0]
+                    try:
+                        motivos[m if m in MOTIVOS_400 else "outro"] += int(float(r["metric_value"]))
+                    except (KeyError, ValueError):
+                        pass
+                continue
             if metrica not in ("http_req_duration", "iterations", "dropped_iterations"):
                 continue
             tags = parse_qs(r.get("extra_tags") or "", keep_blank_values=True)
@@ -179,11 +191,13 @@ def main(argv=None):
     ap.add_argument("--saida", default=None, help="padrao: soak-<id>-por-minuto.csv no diretorio atual")
     a = ap.parse_args(argv)
     saida = a.saida or "soak-%s-por-minuto.csv" % a.id
+    motivos = dict.fromkeys(MOTIVOS_400, 0)
     with open(saida, "w", encoding="utf-8", newline="") as out:
-        n, avisos, atrasadas = agregar(a.entrada, out)
+        n, avisos, atrasadas = agregar(a.entrada, out, motivos)
     for av in sorted(set(avisos)):
         print("aviso: " + av, file=sys.stderr)
     print("agregado: %d linhas (minuto x tipo) em %s" % (n, saida))
+    print("reserva 400 por motivo: " + " ".join("%s=%d" % (k, motivos[k]) for k in MOTIVOS_400))
     perdeu_erro = False
     for tipo, d in sorted(atrasadas.items()):
         print("atrasadas %-8s: %d amostras (%d requisicoes; 5xx %d, status 0 %d) na linha atrasada=1 do por-minuto" % (tipo, d["amostras"], d["reqs"], d["c5xx"], d["c0"]), file=sys.stderr)

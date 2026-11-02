@@ -162,6 +162,39 @@ class Agregar(unittest.TestCase):
         self.assertEqual(len(linhas), 2)
         self.assertEqual(linhas[1][:3] + [linhas[1][14]], ["0", "leitura", "0", "1"])
 
+    def _com_reserva_400(self, d):
+        p = os.path.join(d, "k6.csv")
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write("metric_name,timestamp,metric_value,status,name,extra_tags\n")
+            f.write("http_req_duration,100,5,400,/bff/event-wallets,tipo=reserva&fase=pico&min=0\n")
+            for m, motivo, v in ((0, "lotado", 1), (0, "lotado", 1), (1, "lotado", 1), (1, "vinculo", 1), (3, "outro", 1), (3, "outro", 1)):
+                f.write("reserva_400,%d,%d,,/bff/event-wallets,tipo=reserva&fase=pico&min=%d&motivo=%s\n" % (100 + 60 * m, v, m, motivo))
+        return p
+
+    def test_reserva_400_soma_por_motivo_e_nao_vira_requisicao_nem_altera_o_por_minuto(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._com_reserva_400(d)
+            _, _, _, linhas = rodar(p)
+            sem = os.path.join(d, "sem.csv")
+            with open(p, encoding="utf-8") as f, open(sem, "w", encoding="utf-8", newline="") as g:
+                g.writelines(l for l in f if not l.startswith("reserva_400"))
+            _, _, _, base = rodar(sem)
+            motivos = dict.fromkeys(A.MOTIVOS_400, 0)
+            A.agregar(p, io.StringIO(), motivos)
+            self.assertEqual(motivos, {"lotado": 3, "vinculo": 1, "outro": 2})
+            saida = os.path.join(d, "pm.csv")
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(A.main([p, "--id", "T", "--saida", saida]), 0)
+        self.assertEqual(linhas, base)                              # o por-minuto e identico sem as linhas reserva_400
+        self.assertEqual(linhas[0], A.COLUNAS)
+        self.assertEqual([l for l in linhas[1:] if l[1] == "reserva"], [["0", "reserva", "0", "1", "5.000", "5.000", "5.000", "0", "0", "1", "0", "0", "0", "0", "0", "0", "100", "0"]])
+        self.assertIn("reserva 400 por motivo: lotado=3 vinculo=1 outro=2", out.getvalue().splitlines())
+
+    def test_sem_reserva_400_o_resumo_sai_zerado(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            A.main([FIXTURE, "--id", "T", "--saida", os.devnull])
+        self.assertIn("reserva 400 por motivo: lotado=0 vinculo=0 outro=0", out.getvalue().splitlines())
+
     def test_cli_grava_o_arquivo(self):
         with tempfile.TemporaryDirectory() as d:
             saida = os.path.join(d, "soak-T-por-minuto.csv")

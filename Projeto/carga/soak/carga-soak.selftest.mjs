@@ -13,6 +13,7 @@ const STUBS = {
     export default { request: (m, u, b, p) => k().http(m, u, b, p), get: (u, p) => k().http('GET', u, null, p), post: (u, b, p) => k().http('POST', u, b, p),
       batch: (reqs) => reqs.map((r) => k().http(r[0], r[1], r[2], r[3])) };`,
   'k6/execution': `export default globalThis.__k6.exec;`,
+  'k6/metrics': `export class Counter { constructor(n) { this.n = n; } add(v, t) { (globalThis.__k6.metricas = globalThis.__k6.metricas || []).push({ nome: this.n, v, tags: t }); } }`,
   'k6/encoding': `export default { b64encode: (s) => Buffer.from(String(s)).toString('base64') };`,
 };
 register('data:text/javascript,' + encodeURIComponent(`
@@ -41,6 +42,7 @@ const chamadas = [];
 let mailpitNoAr = true;
 let mailpitSemMensagem = false;
 let postReserva = 201;
+let corpoReserva = '{}';    // corpo do POST /bff/event-wallets quando nao e 202
 let avancaMinuto = false;   // cada chamada ao k6 consome 1 minuto de relogio do cenario (fluxo longo que cruza a fronteira do minuto)
 let estadosFila = ['pending'];
 k6.http = (metodo, url, corpo, params) => {
@@ -56,7 +58,7 @@ k6.http = (metodo, url, corpo, params) => {
   if (url.endsWith('/bff/users/login')) return resp(200, JSON.stringify({ user: { user_id: 7 }, token: 'tok' }));
   if (url.endsWith('/bff/users/request-verification')) return resp(201, '{}');
   if (url.endsWith('/bff/users/verify-email')) return resp(201, '{}');
-  if (url.endsWith('/bff/event-wallets')) return metodo === 'DELETE' ? resp(200) : resp(postReserva, postReserva === 202 ? '{"status":"queued","idempotencyKey":"k-1"}' : '{}', postReserva === 202 ? { 'Idempotency-Key': 'k-1' } : {});
+  if (url.endsWith('/bff/event-wallets')) return metodo === 'DELETE' ? resp(200) : resp(postReserva, postReserva === 202 ? '{"status":"queued","idempotencyKey":"k-1"}' : corpoReserva, postReserva === 202 ? { 'Idempotency-Key': 'k-1' } : {});
   if (url.includes('/bff/event-wallets?userId=')) return resp(200);
   if (url.endsWith('/confirm')) return resp(200);
   if (url.includes('/bff/event-wallets/admission')) { const e = estadosFila.length > 1 ? estadosFila.shift() : estadosFila[0]; return resp(200, JSON.stringify({ status: e })); }
@@ -98,7 +100,7 @@ await confere('5 cenarios ramping-arrival-rate em paralelo, tag de cenario tipo,
 await confere('url fora das systemTags (cardinalidade); nenhuma Trend em memoria', () => {
   assert.ok(!script.options.systemTags.includes('url'));
   assert.ok(script.options.systemTags.includes('name'));
-  assert.ok(!/new Trend|new Rate|k6\/metrics/.test(readFileSync(aqui + 'carga-soak.js', 'utf8').replace(/\/\/.*$/gm, '')));
+  assert.ok(!/new Trend|new Rate/.test(readFileSync(aqui + 'carga-soak.js', 'utf8').replace(/\/\/.*$/gm, '')));
 });
 
 saida('==> setup');
@@ -212,6 +214,37 @@ await confere('reserva 429/400/5xx nao confirma nem cancela', () => {
   for (const st of [429, 400, 503]) { postReserva = st; k6.exec.scenario.iterationInTest = 5; script.reserva(d); }
   assert.equal(bff().filter((c) => c.url.endsWith('/confirm') || c.metodo === 'DELETE').length, 0);
   postReserva = 201;
+});
+await confere('motivoDo400: lotado | vinculo | outro (tolera acento, caixa, nulo e JSON)', () => {
+  const m = lib.motivoDo400;
+  assert.equal(m('Evento lotado'), 'lotado');
+  assert.equal(m('EVENTO LOTADO'), 'lotado');
+  assert.equal(m('{"error":"Evento lotado"}'), 'lotado');
+  assert.equal(m('Vínculo já existente'), 'vinculo');
+  assert.equal(m('Vinculo ja existente'), 'vinculo');
+  assert.equal(m('Vínculo já existente'.normalize('NFD')), 'vinculo');
+  assert.equal(m(null), 'outro');
+  assert.equal(m(undefined), 'outro');
+  assert.equal(m(''), 'outro');
+  assert.equal(m('userId inválido'), 'outro');
+  assert.equal(m('{"a":1}'), 'outro');
+});
+await confere('reserva 400: conta reserva_400 com a tag motivo (e as tags tipo/fase/min); 201 e 429 nao contam', () => {
+  zera(); k6.metricas = [];
+  const casos = [['Evento lotado', 'lotado'], ['Vínculo já existente', 'vinculo'], ['userId inválido', 'outro']];
+  for (const [corpo, motivo] of casos) {
+    corpoReserva = corpo; postReserva = 400; k6.exec.scenario.iterationInTest = 5; script.reserva(d);
+    const ult = k6.metricas[k6.metricas.length - 1];
+    assert.equal(ult.nome, 'reserva_400');
+    assert.equal(ult.v, 1);
+    assert.equal(ult.tags.motivo, motivo);
+    assert.equal(ult.tags.tipo, 'reserva');
+    assert.ok(ult.tags.fase && ult.tags.min !== undefined, 'mantem fase e min');
+  }
+  assert.equal(k6.metricas.length, 3);
+  for (const st of [201, 429]) { postReserva = st; script.reserva(d); }
+  assert.equal(k6.metricas.length, 3, 'so o 400 conta');
+  postReserva = 201; corpoReserva = '{}';
 });
 await confere('login usa usuario do seed; leitura cobre evento, carteira e busca', () => {
   zera(); k6.exec.scenario.name = 'login'; k6.exec.scenario.iterationInTest = 2; script.login();

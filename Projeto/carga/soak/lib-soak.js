@@ -97,3 +97,12 @@ export function termoDeBusca(prefixo, nEventos, sorteio) {
   const k = piso + 1 + Math.floor(sorteio * (nEventos - piso));
   return `${prefixo}-E${Math.min(k, nEventos)}`;
 }
+
+// Motivo do 400 da reserva, pelo corpo (texto puro do backend: "Evento lotado" do stock, "Vinculo ja existente" do reservation, o resto = id invalido etc.).
+// Tolera acento, caixa, corpo nulo ou JSON (procura o trecho no texto todo). Vira a tag `motivo` do Counter reserva_400.
+export function motivoDo400(corpo) {
+  const t = String(corpo == null ? '' : corpo).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (t.includes('lotado')) return 'lotado';
+  if (t.includes('vinculo')) return 'vinculo';
+  return 'outro';
+}

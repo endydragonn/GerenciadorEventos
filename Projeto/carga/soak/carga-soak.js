@@ -10,7 +10,7 @@
 //   escrita    1%  o host cria evento (POST /bff/events) e edita (PUT, com apresentador). O host do seed e promovido por SQL no preparar-soak.ps1
 //
 // COMO RODAR (flags): k6 run --no-thresholds --summary-mode=disabled --out csv=<arquivo>.csv.gz carga-soak.js   (k6 >= 1.3; o gerador tem a v2.2.0. `--no-summary` e K6_NO_SUMMARY foram
-// REMOVIDOS na v2.0.0). Sem thresholds nem resumo o k6 nao acumula metricas em memoria; esta script NAO cria nenhuma Trend (so o CSV bruto, que o soak/agregar.py resume por streaming,
+// REMOVIDOS na v2.0.0). Sem thresholds nem resumo o k6 nao acumula metricas em memoria; esta script NAO cria nenhuma Trend (so um Counter `reserva_400` com 3 valores de tag `motivo`, que nao pesa; e o CSV bruto, que o soak/agregar.py resume por streaming,
 // lendo o .gz). O preparar-soak.ps1 (host) semeia e imprime a linha exata do gerador.
 //
 // Variaveis (ambiente do processo ou -e; MAILPIT_AUTH SO pelo ambiente, nunca por -e/argumento):
@@ -23,11 +23,12 @@
 import http from 'k6/http';
 import { sleep } from 'k6';
 import encoding from 'k6/encoding';
+import { Counter } from 'k6/metrics';
 import exec from 'k6/execution';
 import { acompanhar, classificarReserva, gracefulS, idsDeEventos, usuariosDoSufixo } from '../degraus/lib-admissao.js';
 import { erroMapeamento, parDe } from '../degraus/lib-mapeamento.js';
 import { sorteio100 } from '../lib-sorteio.js';
-import { alvoDaReserva, cenarios, destinoDaReserva, enderecoDoCadastro, erroParametros, extrairCodigo, faseEm, foneDoCadastro, hostDoSufixo, minutoEm, termoDeBusca } from './lib-soak.js';
+import { alvoDaReserva, cenarios, destinoDaReserva, enderecoDoCadastro, erroParametros, extrairCodigo, faseEm, foneDoCadastro, hostDoSufixo, minutoEm, motivoDo400, termoDeBusca } from './lib-soak.js';
 
 const BASE = __ENV.BASE_URL;
 const SUFIXO = __ENV.SUFIXO || '';
@@ -60,6 +61,9 @@ export const options = {
   systemTags: ['status', 'method', 'name', 'scenario', 'error', 'error_code'],
   setupTimeout: '1800s', // logins de milhares de usuarios (bcrypt no identity)
 };
+
+// 400 da reserva por motivo (tirado do corpo): o k6 nao grava o corpo no CSV. O agregar.py soma por `motivo` (lotado | vinculo | outro).
+const reserva400 = new Counter('reserva_400');
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
@@ -184,7 +188,8 @@ export function reserva(d) {
       break;
     }
     case 'erro_5xx': avisar('reserva 5xx', res); break;
-    default: // lotado (400), 429, 422 e o resto: esperados no S2 / contados pelo codigo no CSV
+    default: // lotado (400), 429, 422 e o resto: esperados no S2 / contados pelo codigo no CSV; o 400 tambem por motivo
+      if (res.status === 400) reserva400.add(1, { ...tg(c, '/bff/event-wallets'), motivo: motivoDo400(res.body) });
   }
 }
 
