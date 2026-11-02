@@ -8,7 +8,7 @@
 #             ABORTA (codigo 1, nada de carga) se: o `notification` VIVO nao tem os seis valores do Mailpit (MAIL_HOST=mailpit ... MAIL_PASSWORD vazio: a entrada TEM de existir,
 #             sem valueFrom; a API omite `value` vazio, entao "ausente" e "vazio" sao distinguidos pelo nome) ou traz SPRING_MAIL_* / SPRING_APPLICATION_JSON / JAVA_TOOL_OPTIONS /
 #             JDK_JAVA_OPTIONS com spring.mail (no env vivo ou como CHAVE do Secret env-notification); existe ScaledObject do stock ou o Hikari do stock != 245 (a #231 nao foi
-#             aplicada); algum Deployment autoescalado tem replicas != 1 (ou nao esta pronto); 2x o total de cadastros esperado do perfil passa do MP_MAX_MESSAGES do Mailpit
+#             aplicada); algum Deployment autoescalado tem replicas != o spec.minReplicaCount do ScaledObject vivo (1 se ausente; admission 2 desde a #235) ou nao esta pronto; 2x o total de cadastros esperado do perfil passa do MP_MAX_MESSAGES do Mailpit
 #             APLICADO (o do render do overlay soak); o gatilho nao e o do bloco (decisao C: ADMISSION_X_RPM do Secret env-admission = 56000 no S1 e 4000 no S2, nenhum pod do
 #             admission anterior ao Secret, targetValue do ScaledObject do reservation = 0,5 x X); a API do Mailpit responde SEM credencial com algo diferente de 401 (auth desligada);
 #             as DUAS regras PERMANENTES de firewall da 8025 nao estao como devem (soak/conferir-firewall.ps1, pelo powershell.exe, SEM administrador: existem, habilitadas, entrada, TCP, LocalPort 8025,
@@ -21,7 +21,8 @@
 #             Rode em segundo plano durante o bloco: e a fonte dos criterios 1 (Mailpit nao reiniciou, saida do notification) e 2 (autoescala).
 #    pos      --id ID --perfil perfil-ID.json --bloco S1|S2 --sufixo SUFIXO --prefixo Soak-SUFIXO [--por-minuto soak-ID-por-minuto.csv]
 #             NESTA ORDEM: (1) espera o lag do group `notification` chegar a 0 e registra; (2) conta o Mailpit filtrado pelo sufixo; (3) confere o From de TODAS as mensagens;
-#             (4) roda o verificar-rpm (overselling e sagas; codigos 3 e 4 sobem como estao); (5) os criterios 1 a 3 pelo por-minuto, pelo perfil e pelas amostras (criterio 3 reprovado = lista os minutos com 5xx/status 0 ao lado dos pods que sairam neles; a fila, S2: 202 obrigatorio, 429 so registrado);
+#             (4) roda o verificar-rpm (overselling e sagas; codigos 3 e 4 sobem como estao); (5) os criterios 1 a 3 pelo por-minuto, pelo perfil e pelas amostras (criterio 3 reprovado = lista os minutos com 5xx/status 0 ao lado dos pods que sairam neles; a fila, S2: 202 obrigatorio, 429 so registrado;
+#             o criterio 2 le o spec.minReplicaCount de cada ScaledObject do cluster vivo e a descida espera voltar a ele; perfil de um tipo so (perfil.py --so): tipo ausente nao e cobrado, nem a fila sem reserva);
 #             (6) so entao o bloco seguinte roda o limpar-banco. Codigo: 0 ok | 1 criterio reprovado | 3 overselling | 4 saga nao convergiu.
 #  Ambiente: CARGA_K8S (contexto kubectl; padrao kind-gerenciador), MAILPIT_URL (http://localhost:8025), MAILPIT_AUTH (<usuario>:<senha>, SO do ambiente; vai ao curl por stdin
 #  (-K -), nunca em argumento nem em log), RESULTS (Projeto/carga/results), LAG_ESPERA_S (600), VERIFICAR_RPM (comando do verificar-rpm; padrao: powershell -File rpm/subir-host-rpm.ps1 -Verificar).
@@ -120,8 +121,8 @@ cmd_pre() {
     t_secret="$(kc get secret env-admission -o jsonpath='{.metadata.managedFields[*].time}' 2>/dev/null | tr ' ' '\n' | sort | tail -1)"
     while read -r t_pod; do [ -n "$t_pod" ] && [ -n "$t_secret" ] && [[ "$t_pod" < "$t_secret" ]] && antigo=1; done < <(kc get pods -l app=admission -o jsonpath='{range .items[*]}{.status.startTime}{"\n"}{end}' 2>/dev/null)
     kc get secret env-notification -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' > "$tmp/chaves-notification.txt" 2>/dev/null || abortar "nao li as chaves do Secret env-notification (cluster no ar?)"
-    if ! crit pre --lista "$tmp/lista.json" --total "$total" --bloco "$A_bloco" ${x_vivo:+--x-vivo "$x_vivo"} --admission-antigo "$antigo" --chaves-secret "$tmp/chaves-notification.txt" | tee -a "$LOG"; then abortar "pre-check reprovou: NAO rode o k6 neste cluster (e-mail real, #231 ausente, replicas != 1 ou Mailpit pequeno)."; fi
-    reg "ok: notification -> Mailpit (MAIL_HOST=mailpit, MAIL_PASSWORD vazio, sem spring.mail), sem ScaledObject do stock, Hikari do stock 245, autoescalados em 1 replica pronta, MP_MAX_MESSAGES >= 2x $total, bloco $A_bloco com ADMISSION_X_RPM=${x_vivo:-?} e alvo do KEDA = 0,5 x X"
+    if ! crit pre --lista "$tmp/lista.json" --total "$total" --bloco "$A_bloco" ${x_vivo:+--x-vivo "$x_vivo"} --admission-antigo "$antigo" --chaves-secret "$tmp/chaves-notification.txt" | tee -a "$LOG"; then abortar "pre-check reprovou: NAO rode o k6 neste cluster (e-mail real, #231 ausente, replicas != minReplicaCount ou Mailpit pequeno)."; fi
+    reg "ok: notification -> Mailpit (MAIL_HOST=mailpit, MAIL_PASSWORD vazio, sem spring.mail), sem ScaledObject do stock, Hikari do stock 245, autoescalados no minReplicaCount (1 por padrao) e prontos, MP_MAX_MESSAGES >= 2x $total, bloco $A_bloco com ADMISSION_X_RPM=${x_vivo:-?} e alvo do KEDA = 0,5 x X"
     # a regra PERMANENTE de firewall (decisao 5): criada uma vez pelo usuario como administrador; aqui so e CONFERIDA (powershell.exe le Get-NetFirewallRule/PortFilter/AddressFilter, sem administrador)
     local fw_ps1="$AQUI/conferir-firewall.ps1"; command -v cygpath >/dev/null 2>&1 && fw_ps1="$(cygpath -w "$fw_ps1")"
     "${POWERSHELL:-powershell.exe}" -NoProfile -ExecutionPolicy Bypass -File "$fw_ps1" -GeradorIp "$gip" </dev/null | tee -a "$LOG" || abortar "as regras de firewall da 8025 (Block e Allow do gerador) nao estao como devem (acima). Se o IP do gerador mudou (DHCP), falta a Allow ou a regra e outra, rode o Criar de novo com o IP novo, como administrador (o gerador fica bloqueado ate la, a porta nao abre): powershell -File soak\\firewall-mailpit.ps1 -Acao Criar -GeradorIp $gip"
@@ -157,7 +158,7 @@ cmd_pos() {
     [ -n "$ID" ] && [ -f "${A_perfil:-}" ] && bloco_valido "${A_bloco:-}" && [ -n "${A_sufixo:-}" ] && [ -n "${A_prefixo:-}" ] || { echo "uso: verificar-soak.sh pos --id ID --perfil F --bloco S1|S2 --sufixo S --prefixo P [--por-minuto F]" >&2; exit 2; }
     mkdir -p "$RESULTS"; LOG="$RESULTS/soak-$ID-verificacoes.log"
     local pm="${A_por_minuto:-$RESULTS/soak-$ID-por-minuto.csv}" rep="$RESULTS/soak-$ID-replicas.csv" pods="$RESULTS/soak-$ID-pods.csv"
-    local tmp falhas=0 lag fim esperados total pag i rc_rpm=0; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
+    local tmp falhas=0 lag fim esperados total pag i rc_rpm=0 minimos; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
     [ -f "$pm" ] || abortar "sem o por-minuto ($pm): rode agregar.py antes"
     # 1. lag do group notification ate 0 (o e-mail do ultimo cadastro so existe depois dele)
     fim=$((SECONDS + LAG_ESPERA_S)); lag="$(lag_notification)"
@@ -183,9 +184,12 @@ print(sum(int(l["verificacoes_2xx"] or 0) for l in csv.DictReader(open(sys.argv[
     [ "$rc_rpm" = 0 ] || falhas=$((falhas + 1))
     # 5. criterios 1 (Mailpit nao reiniciou), 2 (autoescala) e 3 (0 respostas 5xx)
     if [ -f "$pods" ] && crit restarts --pods "$pods" --app mailpit | tee -a "$LOG"; then :; else reg "criterio 1 (Mailpit): REPROVOU ou sem amostras de pods"; falhas=$((falhas + 1)); fi
-    if [ -f "$rep" ] && crit crit2 --replicas "$rep" --bloco "$A_bloco" | tee -a "$LOG"; then reg "criterio 2 (autoescala acompanha a carga): ok"; else reg "criterio 2: REPROVOU ou sem amostras de replicas ($rep)"; falhas=$((falhas + 1)); fi
+    # o minimo de cada servico (spec.minReplicaCount do ScaledObject VIVO: o admission sobe com 2 desde a #235): a descida do criterio 2 espera voltar a ele; sem o dado vale 1
+    minimos="$(kc get scaledobject -o jsonpath='{range .items[*]}{.spec.scaleTargetRef.name}={.spec.minReplicaCount},{end}' 2>/dev/null)" || minimos=""
+    reg "minReplicaCount dos ScaledObjects no cluster vivo: ${minimos:-nao lido (criterio 2 com minimo 1)}"
+    if [ -f "$rep" ] && crit crit2 --replicas "$rep" --bloco "$A_bloco" --minimos "$minimos" | tee -a "$LOG"; then reg "criterio 2 (autoescala acompanha a carga): ok"; else reg "criterio 2: REPROVOU ou sem amostras de replicas ($rep)"; falhas=$((falhas + 1)); fi
     if crit crit3 --por-minuto "$pm" --pods "$pods" | tee -a "$LOG"; then reg "criterio 3 (troca de replica sem erro): ok"; else reg "criterio 3: REPROVOU (5xx ou status 0 fora de tipo=mailpit; os minutos e os pods que sairam neles estao acima)"; falhas=$((falhas + 1)); fi
-    if crit fila --por-minuto "$pm" --bloco "$A_bloco" | tee -a "$LOG"; then :; else reg "fila ($A_bloco): REPROVOU (202 obrigatorio no S2)"; falhas=$((falhas + 1)); fi
+    if crit fila --por-minuto "$pm" --bloco "$A_bloco" --perfil "$A_perfil" | tee -a "$LOG"; then :; else reg "fila ($A_bloco): REPROVOU (202 obrigatorio no S2)"; falhas=$((falhas + 1)); fi
     reg "criterio 4 (gerador valido: RAM livre >= 1 GB, sem Insufficient VUs fora do S2, memoria do k6 estavel) e a verificacao do gerador: nao sai deste script; confira descartadas no por-minuto"
     if [ "$rc_rpm" = 3 ] || [ "$rc_rpm" = 4 ]; then reg "RESULTADO: bloco REPROVADO (verificar-rpm codigo $rc_rpm)"; exit "$rc_rpm"; fi
     if [ "$falhas" -gt 0 ]; then reg "RESULTADO: bloco REPROVADO ($falhas verificacao(oes))"; exit 1; fi

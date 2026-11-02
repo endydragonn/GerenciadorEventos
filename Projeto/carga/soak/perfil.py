@@ -4,6 +4,7 @@
 Uso:  python perfil.py --id S1 --semente 42 --teto 35000 [--duracao 7200] [--saida .]
       grava <saida>/perfil-<id>.json e imprime o resumo (total esperado de cadastros, MP_MAX_MESSAGES minimo).
       python perfil.py --id dryS2 --teto 20000 --fixo dry-s2   (perfil FIXO, sem semente: ver FIXOS)
+      python perfil.py --id dryMailpit --semente 257867 --teto 50000 --duracao 2400 --so cadastro   (so um tipo: ver abaixo)
 
 Cada tipo tem a fatia dele do TETO do bloco (RPM de iteracoes; soma dos tetos = teto do bloco) e um perfil proprio de fases:
   - fase de 3 a 10 min (180 a 600 s), com rampa de 30 a 60 s no inicio dela (da taxa da fase anterior ate a desta);
@@ -13,6 +14,8 @@ O arquivo e DETERMINISTICO: mesma semente/teto/duracao = mesmos bytes (so rng.ra
 timestamps). Ele e lido pelo carga-soak.js (stages por tipo e fases para a tag `fase`), pelo verificar-soak (total de cadastros) e fica no repo.
 Perfil FIXO (`--fixo NOME`, FIXOS): a mesma tabela de fases para os 5 tipos, sem sorteio e sem semente (nao existe "outra semente"); so o teto muda a taxa. Existe para o dry-run do S2, que
 precisa de subidas bruscas de vale para pico na reserva (a fila so liga na subida, antes de o reservation ganhar replica) e nao pode depender de a semente tirar uma. A gravacao e a mesma.
+Um tipo so (`--so TIPO`): o perfil traz SO esse tipo (chave `so` no JSON; os outros nao rodam no k6 nem entram no por-minuto). O tipo sai IGUAL ao do perfil completo da mesma semente/teto/duracao
+(cada tipo tem o seu rng e a sua fatia do teto), ex.: o dry longo do Mailpit (40 min) roda so o cadastro no ritmo do S2 (semente 257867, teto 50000). Sem `--so` o JSON e o de sempre, byte a byte.
 Python >= 3.8, so biblioteca padrao.
 """
 import argparse
@@ -121,9 +124,9 @@ def _fase_em(fases, t):
     return fases[-1]
 
 
-def gerar_perfil(id_, semente, teto, duracao_s):
+def gerar_perfil(id_, semente, teto, duracao_s, so=None):
     return _montar(id_, semente, teto, duracao_s,
-                   lambda i, tipo, teto_tipo: fases_do_tipo(random.Random(semente * 1009 + i), teto_tipo, duracao_s))  # semente inteira por tipo: tipos independentes
+                   lambda i, tipo, teto_tipo: fases_do_tipo(random.Random(semente * 1009 + i), teto_tipo, duracao_s), so)  # semente inteira por tipo: tipos independentes
 
 
 def gerar_perfil_fixo(id_, nome, teto):
@@ -132,7 +135,7 @@ def gerar_perfil_fixo(id_, nome, teto):
     return p
 
 
-def _montar(id_, semente, teto, duracao_s, fases_do):
+def _montar(id_, semente, teto, duracao_s, fases_do, so=None):
     if teto < 100:
         raise ValueError("teto do bloco < 100 RPM: as fatias de 1% zeram")
     if duracao_s < 60:
@@ -140,6 +143,8 @@ def _montar(id_, semente, teto, duracao_s, fases_do):
     tetos = tetos_por_tipo(teto)
     tipos, nos = {}, {}
     for i, tipo in enumerate(TIPOS):
+        if so and tipo != so:  # o indice i segue contando: o tipo escolhido sai igual ao do perfil completo
+            continue
         fases = fases_do(i, tipo, tetos[tipo])
         tipos[tipo] = {"teto_rpm": tetos[tipo], "fases": fases, "stages": stages_do_k6(fases)}
         nos[tipo] = nos_da_taxa(fases)
@@ -147,17 +152,20 @@ def _montar(id_, semente, teto, duracao_s, fases_do):
     for m in range((duracao_s + 59) // 60):
         a, b = 60 * m, min(60 * m + 60, duracao_s)
         lin = {"minuto": m}
-        for tipo in TIPOS:
+        for tipo in tipos:
             # taxa media do minuto em RPM (= iteracoes do minuto, num minuto cheio); pico = fase ativa no meio do minuto
             lin[tipo] = {"rpm": round(float(iteracoes(nos[tipo], a, b) * 60 / (b - a)), 3),
                          "pico": _fase_em(tipos[tipo]["fases"], Fraction(a + b, 2))["pico"]}
         por_minuto.append(lin)
-    return {
+    p = {
         "id": id_, "semente": semente, "teto_rpm": teto, "duracao_s": duracao_s, "fatias_pct": FATIAS,
         "tipos": tipos, "por_minuto": por_minuto,
         # 1 e-mail por cadastro (request-verification): e o que o verificar-soak compara com o MP_MAX_MESSAGES do render
-        "total_cadastros_esperado": ceil(iteracoes(nos["cadastro"], 0, duracao_s)),
+        "total_cadastros_esperado": ceil(iteracoes(nos["cadastro"], 0, duracao_s)) if "cadastro" in nos else 0,
     }
+    if so:
+        p["so"] = so
+    return p
 
 
 def serializar(perfil):
@@ -171,10 +179,13 @@ def main(argv=None):
     ap.add_argument("--teto", type=int, required=True, help="teto do bloco em RPM (soma dos picos coincidentes)")
     ap.add_argument("--duracao", type=int, default=None, help="segundos (padrao 7200 = 2 h; com --fixo e a do perfil)")
     ap.add_argument("--fixo", choices=sorted(FIXOS), help="perfil fixo e deterministico (sem semente): dry-s2 = 10 min com 3 subidas vale -> pico")
+    ap.add_argument("--so", choices=TIPOS, help="gera SO esse tipo (o dry do Mailpit: --so cadastro); o tipo sai igual ao do perfil completo; nao vale com --fixo")
     ap.add_argument("--saida", default=".", help="diretorio de saida (perfil-<id>.json)")
     a = ap.parse_args(argv)
     if not a.id or any(not (c.isalnum() or c == "-") for c in a.id):
         ap.error("--id so aceita letras, digitos e hifen")
+    if a.fixo and a.so:
+        ap.error("--so nao vale com --fixo (o perfil fixo e sempre o mesmo)")
     if a.fixo:
         if a.semente is not None or a.duracao not in (None, FIXOS[a.fixo][0]):
             ap.error("--fixo nao aceita --semente nem outra --duracao (o perfil fixo e sempre o mesmo; nao troque de semente)")
@@ -182,13 +193,15 @@ def main(argv=None):
     else:
         if a.semente is None:
             ap.error("--semente e obrigatoria (ou use --fixo)")
-        p = gerar_perfil(a.id, a.semente, a.teto, 7200 if a.duracao is None else a.duracao)
+        p = gerar_perfil(a.id, a.semente, a.teto, 7200 if a.duracao is None else a.duracao, a.so)
     os.makedirs(a.saida, exist_ok=True)
     caminho = os.path.join(a.saida, "perfil-%s.json" % a.id)
     with open(caminho, "wb") as f:  # bytes: LF em qualquer SO
         f.write(serializar(p))
     n = p["total_cadastros_esperado"]
     origem = "perfil FIXO %s" % a.fixo if a.fixo else "semente %d" % a.semente
+    if a.so:
+        origem += ", so %s" % a.so
     print("perfil %s: %s, teto %d RPM, %d s; cadastros esperados %d (MP_MAX_MESSAGES minimo %d = 2x); %s" % (a.id, origem, a.teto, p["duracao_s"], n, 2 * n, caminho))
     return 0
 

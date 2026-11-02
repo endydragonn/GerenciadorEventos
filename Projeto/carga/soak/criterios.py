@@ -6,8 +6,9 @@ Subcomandos (saida 0 = ok, 1 = reprovou; imprime o motivo, nunca segredo):
                                                                                  pre-bloco no cluster VIVO (kubectl get deploy,scaledobject -o json)
   crit3   --por-minuto <soak-ID-por-minuto.csv> [--pods <soak-ID-pods.csv>]      0 respostas 5xx E 0 status 0 (erro de transporte) fora de tipo=mailpit; se reprovar, lista os
                                                                                  minutos com erro ao lado dos pods que sairam neles
-  fila    --por-minuto <soak-ID-por-minuto.csv> --bloco S1|S2                    S2: 202 obrigatorio na reserva (429 so registrado); S1: so registra
-  crit2   --replicas <soak-ID-replicas.csv> [--max 3] [--bloco S1|S2]            a autoescala acompanha a carga (e o stock fica em 1); no S1 o reservation fica fora
+  fila    --por-minuto <soak-ID-por-minuto.csv> --bloco S1|S2 [--perfil F]        S2: 202 obrigatorio na reserva (429 so registrado); S1: so registra; perfil sem reserva (--so): nao avalia
+  crit2   --replicas <soak-ID-replicas.csv> [--max 3] [--bloco S1|S2] [--minimos svc=N,...]  a autoescala acompanha a carga (e o stock fica em 1); no S1 o reservation fica fora;
+                                                                                 a descida espera voltar ao minReplicaCount de cada servico (--minimos, do cluster vivo; padrao 1)
   emails  --paginas <pag.json...> --esperados N --sufixo S --pods <pods.csv>     e-mail perdido / duplicado / From
   restarts --pods <soak-ID-pods.csv> --app mailpit                               restartCount do Mailpit no bloco = 0
 """
@@ -113,7 +114,7 @@ def pre_checks(lista, total_cadastros, x_esperado=None, x_vivo=None, admission_a
         erros.append("o Deployment stock nao existe no cluster")
     elif senv.get("SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE", (None, ""))[0] != HIKARI_STOCK:
         erros.append("stock: Hikari %r (esperado %s da #231)" % (senv.get("SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE", ("ausente",))[0], HIKARI_STOCK))
-    # 3. todo Deployment autoescalado em 1 replica pronta (o limpar-banco religa as anotadas, nao 1)
+    # 3. todo Deployment autoescalado no MINIMO do ScaledObject VIVO (spec.minReplicaCount; 1 se ausente ou 0, o padrao do KEDA; o admission sobe com 2 desde a #235), pronto (o limpar-banco religa as anotadas, nao o minimo)
     for so in sos:
         alvo = ((so.get("spec") or {}).get("scaleTargetRef") or {}).get("name")
         d = deploys.get(alvo)
@@ -121,8 +122,9 @@ def pre_checks(lista, total_cadastros, x_esperado=None, x_vivo=None, admission_a
             erros.append("ScaledObject %s aponta para o Deployment %r, que nao existe" % (so["metadata"]["name"], alvo))
             continue
         rep, prontas = (d.get("spec") or {}).get("replicas"), (d.get("status") or {}).get("readyReplicas", 0)
-        if rep != 1 or prontas != 1:
-            erros.append("%s: replicas=%s prontas=%s (esperado 1 e 1 no inicio do bloco)" % (alvo, rep, prontas))
+        mn = max(1, (so.get("spec") or {}).get("minReplicaCount") or 1)
+        if rep != mn or prontas != mn:
+            erros.append("%s: replicas=%s prontas=%s (esperado %d e %d no inicio do bloco)" % (alvo, rep, prontas, mn, mn))
     # 4. Mailpit dimensionado: MP_MAX_MESSAGES >= 2x o total esperado (cobre o total > MP_MAX_MESSAGES)
     mp = deploys.get("mailpit")
     menv = env_literal(mp, "mailpit") if mp else None
@@ -225,10 +227,21 @@ def criterio_fila(por_minuto, bloco):
     return (bloco != "S2" or c202 > 0), c202, c429
 
 
-def criterio2(linhas, max_replicas=3, tol=0.10, subida_s=60, descida_s=300, fora=()):
+def ler_minimos(txt):
+    """`kubectl get scaledobject -o jsonpath` -> {deployment: minReplicaCount}: texto "admission=2,reservation=,..." (virgula depois de cada item). Vazio, 0 (o padrao do KEDA) ou lixo valem 1 (o padrao do criterio)."""
+    out = {}
+    for item in (txt or "").split(","):
+        nome, _, v = item.strip().partition("=")
+        if nome and v.strip().isdigit():
+            out[nome] = max(1, int(v))
+    return out
+
+
+def criterio2(linhas, max_replicas=3, tol=0.10, subida_s=60, descida_s=300, fora=(), minimos=None):
     """A autoescala acompanha a carga, por servico com metrica+alvo (HPA do KEDA). `linhas` = soak-ID-replicas.csv.
     Subida: a metrica por pod passa de alvo x (1+tol) (a tolerancia do HPA) com replicas < max -> em ate `subida_s` o servico ganha replica (spec.replicas).
-    Descida: a carga TOTAL (replicas x metrica) cabe em 1 pod no alvo -> em ate `descida_s` o servico volta a 1. So avalia o episodio que durou o prazo
+    Descida: a carga TOTAL (replicas x metrica) cabe em `min` pods no alvo -> em ate `descida_s` o servico volta a `min` (`minimos` = spec.minReplicaCount de cada ScaledObject, lido do cluster vivo;
+    padrao 1; ex.: admission 2 desde a #235). So avalia o episodio que durou o prazo
     (um que acabou antes nao e violacao nem sucesso). O stock (sem HPA) deve ficar em 1 o bloco inteiro.
     -> {servico: {"subidas": n, "descidas": n, "violacoes": [txt]}}."""
     por_srv = {}
@@ -241,6 +254,7 @@ def criterio2(linhas, max_replicas=3, tol=0.10, subida_s=60, descida_s=300, fora
         ls.sort(key=lambda x: float(x["epoch_s"]))
         amostras = [(float(x["epoch_s"]), int(x["replicas"]), float(x["metrica"]) if x["metrica"] else None, float(x["alvo"]) if x["alvo"] else None) for x in ls]
         r = {"subidas": 0, "descidas": 0, "violacoes": []}
+        mn = (minimos or {}).get(srv, 1)
         if srv == "stock":
             if max(a[1] for a in amostras) > 1:
                 r["violacoes"].append("stock chegou a %d replicas (esperado 1 fixa)" % max(a[1] for a in amostras))
@@ -270,15 +284,15 @@ def criterio2(linhas, max_replicas=3, tol=0.10, subida_s=60, descida_s=300, fora
         i = 0
         while i < n:  # descida
             t, rep, m, alvo = com_metrica[i]
-            if rep > 1 and rep * m <= alvo:
+            if rep > mn and rep * m <= alvo * mn:
                 j = i
-                while j < n and com_metrica[j][1] * com_metrica[j][2] <= com_metrica[j][3]:
+                while j < n and com_metrica[j][1] * com_metrica[j][2] <= com_metrica[j][3] * mn:
                     j += 1
                 duracao = com_metrica[j - 1][0] - t
                 if duracao >= descida_s:
                     r["descidas"] += 1
-                    if not any(a[1] == 1 for a in com_metrica[i:j] if a[0] - t <= descida_s):
-                        r["violacoes"].append("carga total %.4g <= alvo %.4g desde t=%d (replicas %d) e ainda sem voltar a 1 em %ds" % (rep * m, alvo, t, rep, descida_s))
+                    if not any(a[1] <= mn for a in com_metrica[i:j] if a[0] - t <= descida_s):
+                        r["violacoes"].append("carga total %.4g <= alvo %.4g x %d desde t=%d (replicas %d) e ainda sem voltar a %d em %ds" % (rep * m, alvo, mn, t, rep, mn, descida_s))
                 i = j
             else:
                 i += 1
@@ -346,6 +360,8 @@ def carga_entregue(por_minuto, perfil, bloco, piso=0.9):
                 "escrita": soma("escrita", ["c2xx"], 2), "reserva": soma("reserva", ["c2xx", "c202", "c400"])}
     erros = []
     for tipo, n in contagem.items():
+        if not any(tipo in m for m in perfil["por_minuto"]):
+            continue  # perfil de um tipo so (perfil.py --so): o tipo ausente nao roda, nao ha o que entregar
         esperado = perfil["total_cadastros_esperado"] if tipo == "cadastro" else math.ceil(sum(m[tipo]["rpm"] for m in perfil["por_minuto"]))
         if bloco == "S2":
             esperado -= soma(tipo, ["descartadas"])
@@ -364,8 +380,9 @@ def main(argv=None):
     p.add_argument("--admission-antigo", choices=("0", "1"), default="0"); p.add_argument("--chaves-secret", default=None)
     p = sub.add_parser("entregue"); p.add_argument("--por-minuto", required=True); p.add_argument("--perfil", required=True); p.add_argument("--bloco", required=True, choices=sorted(X_DO_BLOCO))
     p = sub.add_parser("crit3"); p.add_argument("--por-minuto", required=True); p.add_argument("--pods", default=None)
-    p = sub.add_parser("fila"); p.add_argument("--por-minuto", required=True); p.add_argument("--bloco", required=True, choices=sorted(X_DO_BLOCO))
+    p = sub.add_parser("fila"); p.add_argument("--por-minuto", required=True); p.add_argument("--bloco", required=True, choices=sorted(X_DO_BLOCO)); p.add_argument("--perfil", default=None)
     p = sub.add_parser("crit2"); p.add_argument("--replicas", required=True); p.add_argument("--max", type=int, default=3); p.add_argument("--bloco", choices=sorted(X_DO_BLOCO))
+    p.add_argument("--minimos", default=None, help="minReplicaCount de cada ScaledObject do cluster vivo: servico=N,servico=N,... (padrao 1)")
     p = sub.add_parser("emails"); p.add_argument("--paginas", nargs="+", required=True); p.add_argument("--esperados", type=int, required=True)
     p.add_argument("--sufixo", required=True); p.add_argument("--pods", required=True)
     p = sub.add_parser("restarts"); p.add_argument("--pods", required=True); p.add_argument("--app", default="mailpit")
@@ -399,6 +416,11 @@ def main(argv=None):
                 print(l)
         return 1 if c3["reprova"] else 0
     if a.cmd == "fila":
+        if a.perfil:
+            with open(a.perfil, encoding="utf-8") as f:
+                if json.load(f).get("so") not in (None, "reserva"):
+                    print("fila (%s): nao avaliada (o perfil nao roda a reserva)" % a.bloco)
+                    return 0
         ok, c202, c429 = criterio_fila(ler_csv(a.por_minuto), a.bloco)
         print("fila (%s): reserva com %d respostas 202 e %d respostas 429%s" % (a.bloco, c202, c429, "" if a.bloco == "S2" else " (S1: X=56k, a fila nao deve ligar; so registrado)"))
         if a.bloco == "S2" and not ok:
@@ -408,12 +430,13 @@ def main(argv=None):
         return 0 if ok else 1
     if a.cmd == "crit2":
         fora = ("reservation",) if a.bloco == "S1" else ()
-        res = criterio2(ler_csv(a.replicas), max_replicas=a.max, fora=fora)
+        minimos = ler_minimos(a.minimos)
+        res = criterio2(ler_csv(a.replicas), max_replicas=a.max, fora=fora, minimos=minimos)
         if fora:
             print("criterio 2 reservation: FORA do criterio no S1 (X=56k: alvo do KEDA 28k RPM, nunca alcancado de proposito; o reservation fica em 1 replica)")
         ruim = False
         for srv, r in res.items():
-            print("criterio 2 %-12s subidas avaliadas %d, descidas avaliadas %d, violacoes %d" % (srv, r["subidas"], r["descidas"], len(r["violacoes"])))
+            print("criterio 2 %-12s (minimo %d) subidas avaliadas %d, descidas avaliadas %d, violacoes %d" % (srv, minimos.get(srv, 1), r["subidas"], r["descidas"], len(r["violacoes"])))
             for v in r["violacoes"]:
                 print("   [VIOLACAO] %s: %s" % (srv, v))
                 ruim = True

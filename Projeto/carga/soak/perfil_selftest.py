@@ -205,5 +205,50 @@ class PerfilFixo(unittest.TestCase):
         self.assertLess(0.95 * vale, 0.7 * 4000)  # no vale a fila desliga (0,7 * X * R)
 
 
+class PerfilUmTipoSo(unittest.TestCase):
+    """`--so cadastro` (dry do Mailpit): so um tipo, com as mesmas fases/stages que ele tem no perfil completo da mesma semente/teto/duracao (o ritmo do S2)."""
+
+    def test_cadastro_igual_ao_do_perfil_completo(self):
+        cheio = P.gerar_perfil("S2", 257867, 50000, 7200)
+        so = P.gerar_perfil("dryMailpit", 257867, 50000, 7200, so="cadastro")
+        self.assertEqual(so["so"], "cadastro")
+        self.assertEqual(list(so["tipos"]), ["cadastro"])
+        self.assertEqual(so["tipos"]["cadastro"], cheio["tipos"]["cadastro"])
+        self.assertEqual(so["total_cadastros_esperado"], cheio["total_cadastros_esperado"])
+        self.assertEqual((so["semente"], so["teto_rpm"], so["duracao_s"]), (257867, 50000, 7200))
+        self.assertEqual(len(so["por_minuto"]), 120)
+        for s_, c_ in zip(so["por_minuto"], cheio["por_minuto"]):
+            self.assertEqual(s_, {"minuto": c_["minuto"], "cadastro": c_["cadastro"]})
+
+    def test_perfil_completo_nao_ganha_a_chave_so_e_o_s2_real_nao_muda_de_bytes(self):
+        cheio = P.gerar_perfil("S2", 257867, 50000, 7200)
+        self.assertNotIn("so", cheio)
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "perfil-S2.json"), "rb") as f:
+            self.assertEqual(P.serializar(cheio), f.read())
+
+    def test_main_so_grava_bytes_iguais_e_o_resumo_diz_o_total(self):
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            args = ["--id", "dryMailpit", "--semente", "257867", "--teto", "50000", "--duracao", "7200", "--so", "cadastro"]
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(P.main(args + ["--saida", d1]), 0)
+                self.assertEqual(P.main(args + ["--saida", d2]), 0)
+            with open(os.path.join(d1, "perfil-dryMailpit.json"), "rb") as f:
+                x = f.read()
+            with open(os.path.join(d2, "perfil-dryMailpit.json"), "rb") as f:
+                y = f.read()
+        self.assertEqual(x, y)
+        self.assertNotIn(b"\r", x)
+        self.assertIn("so cadastro", out.getvalue())
+        self.assertIn("cadastros esperados 54649", out.getvalue())
+
+    def test_so_invalido_e_so_com_fixo_sao_recusados(self):
+        with tempfile.TemporaryDirectory() as d:
+            for extra in (["--so", "nada"], ["--fixo", "dry-s2", "--so", "cadastro"]):
+                with self.assertRaises(SystemExit):
+                    P.main(["--id", "x", "--semente", "1", "--teto", "50000", "--saida", d] + extra)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

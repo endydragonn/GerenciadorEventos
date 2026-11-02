@@ -31,6 +31,8 @@ def cluster(**k):
     itens = [deploy("notification", env=k.get("notif", seis)), deploy("stock", env=hk(k.get("hikari", "245"))), deploy("mailpit", env=[{"name": "MP_MAX_MESSAGES", "value": "250000"}]),
              deploy("backend", replicas=k.get("rep", 1), prontas=k.get("rep", 1)), deploy("reservation"), so("backend"), so("reservation", k.get("alvo", "28000")), so("notification")]
     if k.get("so_stock"): itens.append(so("stock"))
+    if k.get("adm"):  # admission com minReplicaCount 2 (#235): deploy com `adm` replicas prontas
+        itens += [deploy("admission", replicas=k["adm"], prontas=k["adm"]), {"kind": "ScaledObject", "metadata": {"name": "admission"}, "spec": {"scaleTargetRef": {"name": "admission"}, "minReplicaCount": 2}}]
     return {"kind": "List", "items": itens}
 def grava(nome, obj):
     with open(os.path.join(d, nome), "w", encoding="utf-8", newline="\n") as f: json.dump(obj, f)
@@ -43,6 +45,9 @@ grava("cluster-base.json", cluster(notif=[{"name": "SPRING_DATASOURCE_HIKARI_MAX
 grava("cluster-sem231-so.json", cluster(so_stock=True))
 grava("cluster-sem231-hikari.json", cluster(hikari="60"))
 grava("cluster-replica2.json", cluster(rep=2))
+grava("cluster-adm2.json", cluster(adm=2))
+grava("cluster-adm1.json", cluster(adm=1))
+grava("cluster-adm3.json", cluster(adm=3))
 def perfil(n):  # so o cadastro tem taxa esperada; os outros tipos esperam 0 (o por-minuto de teste nem sempre tem linha deles)
     zero = {"rpm": 0.0}
     return {"total_cadastros_esperado": n, "por_minuto": [{"minuto": 0, "cadastro": {"rpm": float(n)}, "escrita": zero, "leitura": zero, "login": zero, "reserva": zero}]}
@@ -67,6 +72,12 @@ open(os.path.join(d, "por-minuto-c0.csv"), "w", encoding="utf-8", newline="\n").
 open(os.path.join(d, "pods-saida.csv"), "w", encoding="utf-8", newline="\n").write(
     "epoch_s,pod,app,pronto,restarts,terminando\n1000,mailpit-a,mailpit,1,0,0\n1185,reservation-b,reservation,1,0,0\n1190,reservation-b,reservation,1,0,1\n1195,mailpit-a,mailpit,1,0,0\n")
 open(os.path.join(d, "replicas.csv"), "w", encoding="utf-8", newline="\n").write("epoch_s,servico,metrica,alvo,replicas,prontas\n1000,stock,,,1,1\n1005,stock,,,1,1\n")
+# admission: 3 replicas (carga total 30 <= 2 x alvo 50) por 120 s e depois 2 por 300 s; com minReplicaCount 2 do cluster voltou ao minimo (ok); com o padrao 1 nao voltou a 1 (viola)
+open(os.path.join(d, "replicas-adm.csv"), "w", encoding="utf-8", newline="\n").write(
+    "epoch_s,servico,metrica,alvo,replicas,prontas\n" + "".join("%d,admission,%s,50,%d,%d\n" % (1000 + 5 * i, 10 if i < 24 else 15, 3 if i < 24 else 2, 3 if i < 24 else 2) for i in range(84)))
+# perfil e por-minuto de um tipo so (perfil.py --so cadastro): sem reserva, sem leitura
+grava("perfil-so.json", {"so": "cadastro", "tipos": {"cadastro": {}}, "total_cadastros_esperado": 3, "por_minuto": [{"minuto": 0, "cadastro": {"rpm": 3.0}}]})
+open(os.path.join(d, "por-minuto-so.csv"), "w", encoding="utf-8", newline="\n").write(CAB + "0,cadastro,3,6,10.000,20.000,30.000,6,0,0,0,0,0,0,0,3,1000\n")
 open(os.path.join(d, "pods.csv"), "w", encoding="utf-8", newline="\n").write(
     "epoch_s,pod,app,pronto,restarts,terminando\n1000,mailpit-a,mailpit,1,0,0\n1005,mailpit-a,mailpit,1,0,0\n1000,notification-a,notification,1,0,0\n")
 # JSON de `get hpa,deploy,pods` para o amostrar
@@ -81,6 +92,7 @@ echo "kubectl $*" >> "$FAKE_LOG"
 case "$*" in
     *"get deploy,scaledobject -o json"*) cat "$FX/${FAKE_CLUSTER:-cluster-soak.json}" ;;
     *"get hpa,deploy,pods -o json"*) cat "$FX/amostra.json" ;;
+    *"get scaledobject"*"minReplicaCount"*) printf '%s' "${FAKE_MINIMOS:-}" ;;
     *"get secret env-admission"*"ADMISSION_X_RPM"*) printf '%s' "${FAKE_X:-56000}" | base64 ;;
     *"get secret env-admission"*"managedFields"*) printf '%s' "${FAKE_SECRET_T:-2026-11-01T10:00:00Z}" ;;
     *"get pods -l app=admission"*) printf '%s\n' "${FAKE_POD_T:-2026-11-01T11:00:00Z}" ;;
@@ -154,6 +166,12 @@ saida="$(FAKE_CLUSTER=cluster-sem231-hikari.json rodar pre --id T --perfil "$FX/
 confere "pre: sem a #231 (Hikari do stock 60 != 245) aborta" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'Hikari' && echo sim || echo nao)" "sim"
 saida="$(FAKE_CLUSTER=cluster-replica2.json rodar pre --id T --perfil "$FX/perfil.json" --bloco S1)"; rc=$?
 confere "pre: Deployment autoescalado com replicas=2 aborta" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'backend' && echo "$saida" | grep -q 'replicas=2' && echo sim || echo nao)" "sim"
+saida="$(FAKE_CLUSTER=cluster-adm2.json rodar pre --id T --perfil "$FX/perfil.json" --bloco S1)"; rc=$?
+confere "pre: admission com minReplicaCount 2 e 2 replicas prontas passa (o minimo vem do ScaledObject vivo, nao 1)" "$rc" "0"
+saida="$(FAKE_CLUSTER=cluster-adm1.json rodar pre --id T --perfil "$FX/perfil.json" --bloco S1)"; rc=$?
+confere "pre: admission com minReplicaCount 2 e so 1 replica aborta ('esperado 2 e 2')" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'admission: replicas=1 prontas=1 (esperado 2 e 2' && echo sim || echo nao)" "sim"
+saida="$(FAKE_CLUSTER=cluster-adm3.json rodar pre --id T --perfil "$FX/perfil.json" --bloco S1)"; rc=$?
+confere "pre: admission com minReplicaCount 2 e 3 replicas aborta (exige o minimo exato)" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'admission: replicas=3' && echo sim || echo nao)" "sim"
 saida="$(rodar pre --id T --perfil "$FX/perfil-grande.json" --bloco S1)"; rc=$?
 confere "pre: total de cadastros do perfil acima do MP_MAX_MESSAGES aborta" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'MP_MAX_MESSAGES' && echo sim || echo nao)" "sim"
 saida="$(FAKE_MP_VAZIO=pag-cheia.json rodar pre --id T --perfil "$FX/perfil.json" --bloco S1)"; rc=$?
@@ -264,5 +282,18 @@ confere "pos S2 sem nenhum 202 reprova (a fila nao ligou)" "$([ "$rc" = 1 ] && e
 confere "pos: lag que nao chega a 0 no prazo reprova (codigo 1), mas o resto roda" "$([ "$rc" = 1 ] && echo "$saida" | grep -q 'FALHA: lag do group notification' && echo "$saida" | grep -q 'verificar-rpm (prefixo' && echo sim || echo nao)" "sim"
 rm -f "$T/results/soak-T-pods.csv"; printf '0\n' > "$FAKE_LAGS"; saida="$(rodar "${POS[@]}")"; rc=$?
 confere "pos: sem as amostras de pods (amostrar nao rodou) reprova" "$rc" "1"
+
+# minimo por servico (#235) e perfil de um tipo so (dry do Mailpit)
+echo "==> pos: minReplicaCount do cluster e perfil de um tipo so"
+cp "$FX/por-minuto.csv" "$T/results/soak-T-por-minuto.csv"; cp "$FX/pods.csv" "$T/results/soak-T-pods.csv"; cp "$FX/replicas-adm.csv" "$T/results/soak-T-replicas.csv"
+: > "$FAKE_LOG"; printf '0\n' > "$FAKE_LAGS"; saida="$(FAKE_MINIMOS='admission=2,reservation=,' rodar "${POS[@]}")"; rc=$?
+confere "pos: admission com minReplicaCount 2 no cluster, que desce de 3 e fica em 2, passa o criterio 2 (codigo 0)" "$rc|$(echo "$saida" | grep -c 'criterio 2 admission .*minimo 2.*violacoes 0')|$(echo "$saida" | grep -c 'APROVADO')" "0|1|1"
+confere "pos: o minReplicaCount e lido do cluster vivo (kubectl get scaledobject) e registrado" "$(grep -c 'kubectl .*get scaledobject .*minReplicaCount' "$FAKE_LOG")|$(echo "$saida" | grep -c 'admission=2')" "1|1"
+printf '0\n' > "$FAKE_LAGS"; saida="$(FAKE_MINIMOS='' rodar "${POS[@]}")"; rc=$?
+confere "pos: sem o dado do cluster o minimo e 1 e o mesmo admission (parado em 2) viola (codigo 1)" "$([ "$rc" = 1 ] && echo "$saida" | grep -q 'sem voltar a 1' && echo "$saida" | grep -q 'criterio 2: REPROVOU' && echo sim || echo nao)" "sim"
+cp "$FX/replicas.csv" "$T/results/soak-T-replicas.csv"; cp "$FX/por-minuto-so.csv" "$T/results/soak-T-por-minuto.csv"; printf '0\n' > "$FAKE_LAGS"
+saida="$(rodar pos --id T --perfil "$FX/perfil-so.json" --bloco S2 --sufixo T1 --prefixo Soak-T1)"; rc=$?
+confere "pos S2 com perfil de um tipo so (cadastro): sem reserva nao reprova a fila nem a carga entregue (codigo 0)" "$rc|$(echo "$saida" | grep -c 'fila (S2): nao avaliada')|$(echo "$saida" | grep -c 'carga entregue: ok')|$(echo "$saida" | grep -c 'APROVADO')" "0|1|1|1"
+cp "$FX/por-minuto.csv" "$T/results/soak-T-por-minuto.csv"
 
 [ "$falhas" -eq 0 ] && echo "selftest verificar-soak: OK" || { echo "selftest verificar-soak: $falhas falha(s)"; exit 1; }

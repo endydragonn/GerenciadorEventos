@@ -1,12 +1,14 @@
 // Cenario k6 do TESTE LONGO (soak, issue #232): 5 cenarios ramping-arrival-rate EM PARALELO, um por tipo de carga, cada um com o perfil proprio de picos e vales
-// sorteado por soak/perfil.py (perfil-<id>.json, lido de PERFIL_FILE). Corretude + autoescala + troca de replica sob carga de horas, no cluster Kubernetes (overlay soak).
+// sorteado por soak/perfil.py (perfil-<id>.json, lido de PERFIL_FILE; um perfil com `so` (perfil.py --so cadastro, o dry do Mailpit) roda SO esse tipo). Corretude + autoescala + troca de replica sob carga de horas, no cluster Kubernetes (overlay soak).
 //   leitura   60%  GET /bff/events/{id} | /bff/events/search?term=<nome exato de 1 evento> | /bff/event-wallets/user/{id}   (sem guardar o corpo: responseType none)
 //   reserva   30%  POST /bff/event-wallets (braco cas; 202 acompanhado em PCT_ACOMPANHA %), depois 60% confirma, 10% cancela, 30% expira sozinha.
 //                  Sem QUENTES_IDS (S1): a reserva fica ESPALHADA pelos eventos do seed (mapeamento do kit) com o 60/10/30 acima. Com QUENTES_IDS (S2 apenas, decisao 2 da spec): PCT_QUENTE % (95) das reservas miram o(s) evento(s) quente(s) (o RPM do evento mais quente liga a fila e o KEDA do reservation); nelas o par
 //                  (usuario, evento) se repete, entao TODA 202 e acompanhada e a reserva aceita e cancelada logo (o par volta a ficar livre). INSISTENTES usuarios recebem PCT_INSISTENTE % das
 //                  quentes (provocar o 429 do limite por usuario do admission, so por carga)
 //   login      7%  POST /bff/users/login (usuario do seed, bcrypt)
-//   cadastro   2%  request-verification -> codigo lido no MAILPIT (dentro do cluster) -> verify-email. Endereco SEMPRE soak-<sufixo>-<n>@example.com: nenhum e-mail real
+//   cadastro   2%  request-verification -> codigo lido no MAILPIT (dentro do cluster) -> verify-email. Endereco SEMPRE soak-<sufixo>-<n>@example.com: nenhum e-mail real.
+//                  O codigo sai das mensagens MAIS NOVAS (GET /api/v1/messages?start=&limit=100, ~3 ms constantes), NUNCA de uma busca: a /api/v1/search?query=to: varre a caixa inteira (O(n), 80 ms
+//                  com 26 mil mensagens) e saturou o Mailpit no S2. Consultas em 2, 2, 4, 4... s dentro de MAILPIT_TETO_S (30)
 //   escrita    1%  o host cria evento (POST /bff/events) e edita (PUT, com apresentador). O host do seed e promovido por SQL no preparar-soak.ps1
 //
 // COMO RODAR (flags): k6 run --no-thresholds --summary-mode=disabled --out csv=<arquivo>.csv.gz carga-soak.js   (k6 >= 1.3; o gerador tem a v2.2.0. `--no-summary` e K6_NO_SUMMARY foram
@@ -28,7 +30,7 @@ import exec from 'k6/execution';
 import { acompanhar, classificarReserva, gracefulS, idsDeEventos, usuariosDoSufixo } from '../degraus/lib-admissao.js';
 import { erroMapeamento, parDe } from '../degraus/lib-mapeamento.js';
 import { sorteio100 } from '../lib-sorteio.js';
-import { alvoDaReserva, cenarios, destinoDaReserva, enderecoDoCadastro, erroParametros, extrairCodigo, faseEm, foneDoCadastro, hostDoSufixo, minutoEm, motivoDo400, termoDeBusca } from './lib-soak.js';
+import { acharNaPagina, alvoDaReserva, cenarios, destinoDaReserva, enderecoDoCadastro, erroParametros, esperasDaBusca, extrairCodigo, faseEm, foneDoCadastro, hostDoSufixo, minutoEm, motivoDo400, termoDeBusca } from './lib-soak.js';
 
 const BASE = __ENV.BASE_URL;
 const SUFIXO = __ENV.SUFIXO || '';
@@ -202,28 +204,40 @@ export function login() {
 }
 
 // ---- cadastro (2%): request-verification -> codigo no Mailpit -> verify-email
+// O codigo sai da pagina das mensagens MAIS NOVAS (`GET /api/v1/messages?start=&limit=100`, ~3 ms constantes), nunca de uma busca: a `search?query=to:` varre a caixa inteira (O(n)) e saturou o Mailpit no S2.
+// Uma consulta le paginas ate achar o endereco; o criterio de parada (pagina vazia, mais antiga que o request-verification, teto de paginas) e o `acharNaPagina` do lib-soak.js.
+function codigoNoMailpit(c, email, desdeMs) {
+  for (let pg = 0, continua = true; continua; pg++) {
+    const lista = mailpit(c, `/api/v1/messages?start=${pg * 100}&limit=100`, '/api/v1/messages');
+    if (lista.status !== 200) return null;
+    let r;
+    try { r = acharNaPagina(lista.json().messages || [], email, desdeMs, pg); } catch (e) { return null; }
+    if (!r.msg) { continua = r.continua; continue; }
+    let codigo = extrairCodigo(r.msg.Snippet);
+    if (!codigo) { // o resumo do Mailpit e curto: se o codigo nao veio nele, le a mensagem
+      const m = mailpit(c, `/api/v1/message/${r.msg.ID}`, '/api/v1/message/{id}');
+      if (m.status === 200) { try { codigo = extrairCodigo(m.json().Text); } catch (e) { codigo = null; } }
+    }
+    return codigo;
+  }
+  return null;
+}
+
 export function cadastro() {
   const c = ctx('cadastro');
   const n = exec.scenario.iterationInTest;
   const email = enderecoDoCadastro(SUFIXO, n);
+  const desdeMs = Date.now();
   const r1 = bff(c, 'POST', '/bff/users/request-verification', {
     name: `Soak ${SUFIXO} ${n}`, email, password: 'SoakSenha#123', fone: foneDoCadastro(SUFIXO, n), birthdate: '1990-01-15',
   }, null, '/bff/users/request-verification', true);
   if (r1.status >= 500) { avisar('request-verification 5xx', r1); return; }
   if (r1.status !== 201) return; // 400 de negocio: sem e-mail para esperar
   let codigo = null;
-  for (let t = 0; t < MAILPIT_TETO_S && !codigo; t++) {
-    sleep(1);
-    const busca = mailpit(c, `/api/v1/search?query=${encodeURIComponent(`to:${email}`)}&limit=1`, '/api/v1/search');
-    if (busca.status !== 200) continue;
-    let msg = null;
-    try { msg = (busca.json().messages || [])[0] || null; } catch (e) { msg = null; }
-    if (!msg) continue;
-    codigo = extrairCodigo(msg.Snippet);
-    if (!codigo) { // o resumo do Mailpit e curto: se o codigo nao veio nele, le a mensagem
-      const m = mailpit(c, `/api/v1/message/${msg.ID}`, '/api/v1/message/{id}');
-      if (m.status === 200) { try { codigo = extrairCodigo(m.json().Text); } catch (e) { codigo = null; } }
-    }
+  for (const espera of esperasDaBusca(MAILPIT_TETO_S)) { // 2, 2, 4, 4... s: menos polling no Mailpit; o prazo total segue MAILPIT_TETO_S
+    sleep(espera);
+    codigo = codigoNoMailpit(c, email, desdeMs);
+    if (codigo) break;
   }
   if (!codigo) return; // sem e-mail no prazo: o verificar-soak confere o Mailpit no fim (perdido sempre reprova)
   const r2 = bff(c, 'POST', '/bff/users/verify-email', { email, verificationCode: codigo }, null, '/bff/users/verify-email', true);

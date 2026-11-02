@@ -86,6 +86,24 @@ class Pre(unittest.TestCase):
         c["items"][4] = deploy("reservation", replicas=1, prontas=0)
         self.assertTrue(any("reservation" in e and "prontas=0" in e for e in C.pre_checks(c, 1)))
 
+    def test_minimo_do_scaledobject_vivo_vale_no_lugar_de_1(self):
+        # #235: o admission sobe com minReplicaCount 2; o inicio do bloco espera esse minimo pronto (nao 1) e continua exigindo o exato
+        def com_admission(minimo, replicas, prontas):
+            c = cluster_soak_valido()
+            c["items"] += [deploy("admission", replicas=replicas, prontas=prontas), so("admission")]
+            if minimo is not None:
+                c["items"][-1]["spec"]["minReplicaCount"] = minimo
+            return c
+        self.assertEqual(C.pre_checks(com_admission(2, 2, 2), 1), [])
+        erros = C.pre_checks(com_admission(2, 1, 1), 1)
+        self.assertTrue(any("admission" in e and "replicas=1" in e and "esperado 2 e 2" in e for e in erros), erros)
+        self.assertTrue(any("admission" in e and "replicas=3" in e for e in C.pre_checks(com_admission(2, 3, 3), 1)))
+        self.assertTrue(any("admission" in e and "prontas=1" in e for e in C.pre_checks(com_admission(2, 2, 1), 1)))
+        # sem minReplicaCount (ou 0, o padrao do KEDA) o minimo e 1, como antes
+        self.assertEqual(C.pre_checks(com_admission(None, 1, 1), 1), [])
+        self.assertEqual(C.pre_checks(com_admission(0, 1, 1), 1), [])
+        self.assertTrue(any("admission" in e and "replicas=2" in e for e in C.pre_checks(com_admission(None, 2, 2), 1)))
+
     def test_total_de_cadastros_passa_do_mp_max_messages(self):
         c = cluster_soak_valido()
         self.assertTrue(any("MP_MAX_MESSAGES" in e for e in C.pre_checks(c, 125001)))  # x2 > 250000
@@ -266,6 +284,24 @@ class Fila(unittest.TestCase):
         self.assertEqual(C.criterio_fila(self.linhas(0, 0), "S1"), (True, 0, 0))
         self.assertEqual(C.criterio_fila(self.linhas(3, 0), "S1")[0], True)
 
+    def test_cli_perfil_de_um_tipo_so_sem_reserva_nao_avalia_a_fila(self):
+        # o dry do Mailpit (perfil.py --so cadastro) nao tem reserva: "0 respostas 202 no S2" seria reprovacao por vacuo
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as d:
+            pm, pf, pc = os.path.join(d, "pm.csv"), os.path.join(d, "so.json"), os.path.join(d, "cheio.json")
+            with open(pm, "w", encoding="utf-8", newline="") as f:
+                f.write("minuto,tipo,c202,c429\n0,cadastro,0,0\n")
+            with open(pf, "w", encoding="utf-8") as f:
+                json.dump({"so": "cadastro", "tipos": {"cadastro": {}}}, f)
+            with open(pc, "w", encoding="utf-8") as f:
+                json.dump({"tipos": {t: {} for t in ("leitura", "reserva", "login", "cadastro", "escrita")}}, f)
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(C.main(["fila", "--por-minuto", pm, "--bloco", "S2", "--perfil", pf]), 0)
+                self.assertIn("nao avaliada", out.getvalue())
+                self.assertEqual(C.main(["fila", "--por-minuto", pm, "--bloco", "S2", "--perfil", pc]), 1)   # perfil com reserva: 0 de 202 continua reprovando
+                self.assertEqual(C.main(["fila", "--por-minuto", pm, "--bloco", "S2"]), 1)
+
 
 def serie(servico, pontos, passo=5):
     """pontos: lista de (metrica, alvo, replicas) a cada `passo` s."""
@@ -335,6 +371,53 @@ class Criterio2(unittest.TestCase):
 
     def test_servico_sem_hpa_fica_fora(self):
         self.assertNotIn("frontend", C.criterio2(serie("frontend", [(None, None, 1)] * 10)))
+
+    # minimo por servico (#235: o admission sobe com minReplicaCount 2): a descida avalia quando rep > min e a carga total cabe em `min` pods no alvo, e espera voltar a `min`
+    def test_admission_com_minimo_2_que_volta_a_2_esta_ok(self):
+        pts = [(10, 50, 3)] * 24 + [(15, 50, 2)] * 60   # carga total 30 <= 2 x 50: cai 3 -> 2 em 120 s e fica em 2
+        r = C.criterio2(serie("admission", pts), minimos={"admission": 2})
+        self.assertEqual((r["admission"]["descidas"], r["admission"]["violacoes"]), (1, []))
+
+    def test_admission_com_minimo_2_que_nao_volta_a_2_viola(self):
+        pts = [(10, 50, 3)] * 80   # 400 s com a carga cabendo em 2 pods e ainda 3 replicas
+        r = C.criterio2(serie("admission", pts), minimos={"admission": 2})
+        self.assertEqual(len(r["admission"]["violacoes"]), 1)
+        self.assertIn("sem voltar a 2", r["admission"]["violacoes"][0])
+
+    def test_minimo_2_nao_exige_descida_quando_a_carga_nao_cabe_em_2_pods(self):
+        pts = [(40, 50, 3)] * 80   # total 120 > 2 x 50: o HPA fica em 3
+        r = C.criterio2(serie("admission", pts), minimos={"admission": 2})
+        self.assertEqual((r["admission"]["descidas"], r["admission"]["violacoes"]), (0, []))
+
+    def test_no_minimo_nao_ha_descida_a_avaliar(self):
+        r = C.criterio2(serie("admission", [(10, 50, 2)] * 80), minimos={"admission": 2})
+        self.assertEqual((r["admission"]["descidas"], r["admission"]["violacoes"]), (0, []))
+
+    def test_minimo_de_um_servico_nao_vale_para_outro(self):
+        pts = [(10, 50, 3)] * 80
+        r = C.criterio2(serie("admission", pts) + serie("identity", pts), minimos={"admission": 2})
+        self.assertIn("sem voltar a 2", r["admission"]["violacoes"][0])
+        self.assertIn("sem voltar a 1", r["identity"]["violacoes"][0])
+
+    def test_ler_minimos_do_cluster(self):
+        # `kubectl get scaledobject -o jsonpath`: <deployment>=<minReplicaCount>, separados por virgula; vazio/0/lixo viram o padrao (1)
+        self.assertEqual(C.ler_minimos("admission=2,reservation=,notification=0,catalog=abc,identity=1,"), {"admission": 2, "notification": 1, "identity": 1})
+        self.assertEqual(C.ler_minimos(""), {})
+        self.assertEqual(C.ler_minimos(None), {})
+
+    def test_cli_crit2_com_minimos(self):
+        import contextlib
+        import csv
+        import io
+        with tempfile.TemporaryDirectory() as d:
+            rep = os.path.join(d, "rep.csv")
+            with open(rep, "w", encoding="utf-8", newline="") as f:
+                w = csv.DictWriter(f, ["epoch_s", "servico", "metrica", "alvo", "replicas", "prontas"])
+                w.writeheader()
+                w.writerows(serie("admission", [(10, 50, 3)] * 24 + [(15, 50, 2)] * 60))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(C.main(["crit2", "--replicas", rep, "--bloco", "S1", "--minimos", "admission=2,reservation=1,"]), 0)
+                self.assertEqual(C.main(["crit2", "--replicas", rep, "--bloco", "S1"]), 1)   # sem o dado do cluster o minimo e 1: 2 replicas com a carga cabendo em 1 viola
 
 
 def msg(to, quando, de="soak@example.com", id_="x"):
@@ -412,6 +495,18 @@ class Emails(unittest.TestCase):
         self.assertEqual(len(C.carga_entregue(linhas(reserva={"c2xx": 50, "c202": 20, "c400": 19}), perfil, "S1")), 1)  # 89
         self.assertEqual(C.carga_entregue(linhas(reserva={"c2xx": 0, "c202": 90, "c400": 0}), perfil, "S1"), [])
         self.assertEqual(len(C.carga_entregue(linhas(cadastro={}, leitura={}), perfil, "S1")), 2)
+
+    def test_carga_entregue_perfil_de_um_tipo_so(self):
+        # perfil.py --so cadastro: os outros tipos nao rodam (ausentes do perfil) e nao reprovam por "entregue"; o cadastro continua com o piso de 90%
+        perfil = {"so": "cadastro", "tipos": {"cadastro": {}}, "total_cadastros_esperado": 100, "por_minuto": [{"cadastro": {"rpm": 100.0}}]}
+        self.assertEqual(C.carga_entregue(self.linhas_cem(), perfil, "S2"), [])
+        self.assertEqual(C.carga_entregue([l for l in self.linhas_cem() if l["tipo"] == "cadastro"], perfil, "S2"), [])
+        ruim = C.carga_entregue(self.linhas_cem(cadastro={"c2xx": 150, "verificacoes_2xx": 100}), perfil, "S2")
+        self.assertEqual(len(ruim), 1)
+        self.assertIn("cadastros 2xx", ruim[0])
+        # tipo presente no perfil com taxa 0 ("em zero"): nada esperado, nada reprova
+        zero = {"total_cadastros_esperado": 100, "por_minuto": [{"cadastro": {"rpm": 100.0}, "escrita": {"rpm": 0.0}, "leitura": {"rpm": 0.0}, "login": {"rpm": 0.0}, "reserva": {"rpm": 0.0}}]}
+        self.assertEqual(C.carga_entregue(self.linhas_cem(leitura={}, login={}, escrita={}, reserva={}), zero, "S1"), [])
 
     def test_carga_entregue_descartadas_so_descontam_no_s2(self):
         # o S2 tolera "Insufficient VUs" (descartadas); o S1 nao: as mesmas descartadas reprovam no S1

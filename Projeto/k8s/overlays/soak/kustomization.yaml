@@ -6,7 +6,7 @@
 #   MAIL_PASSWORD="" precisa ser o literal vazio: sem a entrada, a senha REAL do Secret vence.
 # O Mailpit do soak: basic auth (MP_UI_AUTH cobre UI e API) lida do Secret `mailpit-auth`, que o `cluster.sh up` cria a partir da variável de ambiente MAILPIT_AUTH=<usuário>:<senha>
 # (efêmera por bloco, fora do repo, nunca impressa); MP_MAX_MESSAGES com folga (>= 2x o total de cadastros do pior perfil: 2% de 50k RPM x 120 min = 120k) e memória/CPU maiores
-# (a busca `to:` é um LIKE sem índice: custa mais a cada mensagem guardada). A API sai do cluster por UMA NodePort nova (30825 -> host 8025 no kind.yaml; SMTP 1025 fica só no cluster).
+# (o gerador não busca por destinatário, que varre a caixa inteira a cada chamada; o cadastro pagina GET /api/v1/messages, ~3 ms constantes, mas o Mailpit guarda todas as mensagens do bloco). A API sai do cluster por UMA NodePort nova (30825 -> host 8025 no kind.yaml; SMTP 1025 fica só no cluster).
 # O firewall do Windows restringe a 8025 ao IP do gerador (Projeto/carga/soak/firewall-mailpit.ps1); `loadBalancerSourceRanges` não filtra no kind.
 resources:
   - ../rodada

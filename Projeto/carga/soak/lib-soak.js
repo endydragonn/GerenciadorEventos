@@ -57,10 +57,39 @@ export function alvoDaReserva(i, { quentes, pctQuente, insistentes, pctInsistent
   return { quente: true, u, e: i % quentes.length };
 }
 
+// ---- cadastro: o codigo de verificacao vem das mensagens MAIS NOVAS do Mailpit, nao de uma busca. A busca (`/api/v1/search?query=to:...`) varre a caixa inteira a cada chamada (O(n):
+// ~5 ms com 2 mil mensagens, ~80 ms com 26 mil) e saturou o Mailpit no S2 (o SMTP passou dos 5 s do JavaMail e o consumer reenviou o e-mail). `GET /api/v1/messages?start=&limit=100`
+// (mais novas primeiro) custa ~3 ms constantes. Cada consulta le paginas ate achar o endereco, ate a pagina ficar mais velha que o request-verification, ou ate MAX_PAGINAS.
+export const MAX_PAGINAS = 10;
+export const MARGEM_RELOGIO_MS = 30000;   // folga para a diferenca entre o relogio do gerador (k6) e o do Mailpit (no do cluster)
+
+// Esperas (s) antes de cada consulta ao Mailpit: 2, 2, 4, 4, 4... enquanto a soma nao passar de `tetoS` (MAILPIT_TETO_S).
+export function esperasDaBusca(tetoS) {
+  const esperas = [];
+  for (let soma = 0, e = 2; soma + e <= tetoS; soma += e, e = esperas.length >= 2 ? 4 : 2) esperas.push(e);
+  return esperas;
+}
+
+// RFC3339 do `Created` do Mailpit (ate 9 casas de fracao) -> epoch ms. Corta/completa a fracao em 3 casas (nem todo parser de Date aceita 6 ou 9); ilegivel = NaN.
+export const quandoMs = (txt) => Date.parse(String(txt).replace(/\.(\d+)/, (_, f) => `.${(f + '000').slice(0, 3)}`));
+
+// Uma pagina de `GET /api/v1/messages` (mais novas primeiro): acha a mensagem cujo `To` tem `email` (sem diferenciar caixa) ou decide se vale ler a proxima (`pagina` = indice desta, de 0).
+// Para quando a pagina veio vazia, quando a mais antiga e anterior a `desdeMs` menos a margem (o e-mail so existe depois do request-verification) ou ao chegar em MAX_PAGINAS.
+// -> { msg, continua }
+export function acharNaPagina(mensagens, email, desdeMs, pagina) {
+  const alvo = email.toLowerCase();
+  const msg = mensagens.find((m) => (m.To || []).some((t) => String(t.Address || '').toLowerCase() === alvo)) || null;
+  const maisAntiga = Math.min(...mensagens.map((m) => quandoMs(m.Created)));   // NaN (data ilegivel) nunca para: sobra o teto de paginas
+  return { msg, continua: !msg && mensagens.length > 0 && pagina + 1 < MAX_PAGINAS && !(maisAntiga < desdeMs - MARGEM_RELOGIO_MS) };
+}
+
+// Tipos que o perfil roda: os 5, ou so o de `perfil.so` (perfil.py --so, o dry do Mailpit); os ausentes nao rodam.
+export const tiposDo = (perfil) => (perfil.so ? [perfil.so] : TIPOS);
+
 // Mensagem do 1o problema nos parametros, ou null.
 export function erroParametros(p) {
   if (!p.perfil || !p.perfil.tipos) return 'PERFIL_FILE invalido: sem "tipos" (gere com soak/perfil.py).';
-  for (const t of TIPOS) {
+  for (const t of tiposDo(p.perfil)) {
     if (!p.perfil.tipos[t] || !Array.isArray(p.perfil.tipos[t].stages) || !p.perfil.tipos[t].stages.length || !Array.isArray(p.perfil.tipos[t].fases)) {
       return `PERFIL_FILE sem stages/fases do tipo ${t}.`;
     }
@@ -77,7 +106,7 @@ export function erroParametros(p) {
 // scenarios do k6: 5 ramping-arrival-rate em paralelo (timeUnit 1m: o alvo dos stages e RPM de iteracoes), cada um com a tag de cenario `tipo`.
 export function cenarios(perfil, { maxVus, gracefulStopS }) {
   const sc = {};
-  for (const t of TIPOS) {
+  for (const t of tiposDo(perfil)) {
     const max = Math.max(5, Math.round(maxVus * FATIA_VUS[t]));
     sc[t] = {
       executor: 'ramping-arrival-rate',

@@ -8,7 +8,7 @@ import { register } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
 const STUBS = {
-  'k6': `export function sleep(s) {}`,
+  'k6': `export function sleep(s) { (globalThis.__k6.sleeps = globalThis.__k6.sleeps || []).push(s); }`,
   'k6/http': `const k = () => globalThis.__k6;
     export default { request: (m, u, b, p) => k().http(m, u, b, p), get: (u, p) => k().http('GET', u, null, p), post: (u, b, p) => k().http('POST', u, b, p),
       batch: (reqs) => reqs.map((r) => k().http(r[0], r[1], r[2], r[3])) };`,
@@ -45,18 +45,27 @@ let postReserva = 201;
 let corpoReserva = '{}';    // corpo do POST /bff/event-wallets quando nao e 202
 let avancaMinuto = false;   // cada chamada ao k6 consome 1 minuto de relogio do cenario (fluxo longo que cruza a fronteira do minuto)
 let estadosFila = ['pending'];
+let ultimoEmail = '';       // o endereco do ultimo request-verification (o Mailpit falso entrega a mensagem para ele)
+let paginasMp = null;       // null = pagina padrao (ruido + a mensagem do cadastro); ou lista de paginas (cada uma, lista de resumos) servida por start/100
+const agoraMp = () => new Date().toISOString().replace('Z', '456Z');   // Created do Mailpit: RFC3339 com mais de 3 casas (ele manda ate 9)
 k6.http = (metodo, url, corpo, params) => {
   chamadas.push({ metodo, url, corpo, params: params || {} });
   if (avancaMinuto) k6.exec.scenario.startTime -= 60000;
   const resp = (status, body = '', headers = {}) => ({ status, body, headers, timings: { duration: 5 }, json: () => JSON.parse(body) });
   if (url.startsWith('http://mp:8025')) {
     if (!mailpitNoAr) return resp(0);
-    if (url.includes('/api/v1/messages')) return resp(200, '{"total":0,"messages":[]}');
-    if (url.includes('/api/v1/search')) return mailpitSemMensagem ? resp(200, '{"messages":[]}') : resp(200, JSON.stringify({ messages: [{ ID: 'm1', Snippet: 'sem codigo aqui' }] }));
+    if (url.includes('/api/v1/messages')) {
+      const st = /[?&]start=(\d+)/.exec(url);
+      if (!st) return resp(200, '{"total":0,"messages":[]}');   // a sonda do setup() (limit=1)
+      const pg = paginasMp ? (paginasMp[Number(st[1]) / 100] || [])
+        : mailpitSemMensagem ? []
+          : [{ ID: 'ruido', To: [{ Address: 'outro@example.com' }], Snippet: '', Created: agoraMp() }, { ID: 'm1', To: [{ Address: ultimoEmail.toUpperCase() }], Snippet: 'sem codigo aqui', Created: agoraMp() }];
+      return resp(200, JSON.stringify({ total: pg.length, messages: pg }));
+    }
     if (url.includes('/api/v1/message/')) return resp(200, JSON.stringify({ Text: TEXTO_DO_EMAIL }));
   }
   if (url.endsWith('/bff/users/login')) return resp(200, JSON.stringify({ user: { user_id: 7 }, token: 'tok' }));
-  if (url.endsWith('/bff/users/request-verification')) return resp(201, '{}');
+  if (url.endsWith('/bff/users/request-verification')) { ultimoEmail = JSON.parse(corpo).email; return resp(201, '{}'); }
   if (url.endsWith('/bff/users/verify-email')) return resp(201, '{}');
   if (url.endsWith('/bff/event-wallets')) return metodo === 'DELETE' ? resp(200) : resp(postReserva, postReserva === 202 ? '{"status":"queued","idempotencyKey":"k-1"}' : corpoReserva, postReserva === 202 ? { 'Idempotency-Key': 'k-1' } : {});
   if (url.includes('/bff/event-wallets?userId=')) return resp(200);
@@ -73,7 +82,7 @@ const perfil = (() => {
   return { id: 'T', tipos: { leitura: t(600), reserva: t(300), login: t(70), cadastro: t(20), escrita: t(10) } };
 })();
 globalThis.__ENV = { BASE_URL: 'http://gw:8081', SUFIXO: 'T1', USUARIOS: '40', EVENT_IDS: '10-49', PERFIL_FILE: 'perfil', MAILPIT_URL: 'http://mp:8025', MAILPIT_AUTH: `soak:${SEGREDO}`,
-  MAX_VUS: '100', MAILPIT_TETO_S: '3', PCT_ACOMPANHA: '100', CONSULTA_MS: '50', TETO_CONSULTA_S: '1', PREFIXO: 'Soak-T1' };
+  MAX_VUS: '100', MAILPIT_TETO_S: '10', PCT_ACOMPANHA: '100', CONSULTA_MS: '50', TETO_CONSULTA_S: '1', PREFIXO: 'Soak-T1' };
 globalThis.open = () => JSON.stringify(perfil);
 
 const aqui = new URL('.', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
@@ -131,17 +140,20 @@ await confere('MAILPIT_AUTH so no header Authorization (Basic), nunca na URL nem
 });
 
 saida('==> cadastro');
-await confere('request-verification -> busca no Mailpit -> codigo da mensagem -> verify-email; enderecos so @example.com', () => {
-  zera(); k6.exec.scenario.name = 'cadastro'; k6.exec.scenario.iterationInTest = 42;
+await confere('request-verification -> pagina das mensagens mais novas do Mailpit (sem busca) -> codigo da mensagem -> verify-email; enderecos so @example.com', () => {
+  zera(); k6.sleeps = []; k6.exec.scenario.name = 'cadastro'; k6.exec.scenario.iterationInTest = 42;
   script.cadastro();
   const seq = chamadas.map((c) => `${c.metodo} ${c.url.replace('http://gw:8081', '').replace('http://mp:8025', 'MP').split('?')[0]}`);
-  assert.deepEqual(seq, ['POST /bff/users/request-verification', 'GET MP/api/v1/search', 'GET MP/api/v1/message/m1', 'POST /bff/users/verify-email']);
+  assert.deepEqual(seq, ['POST /bff/users/request-verification', 'GET MP/api/v1/messages', 'GET MP/api/v1/message/m1', 'POST /bff/users/verify-email']);
+  assert.equal(chamadas[1].url, 'http://mp:8025/api/v1/messages?start=0&limit=100');
+  assert.equal(chamadas[1].params.tags.name, '/api/v1/messages');
+  assert.ok(!chamadas.some((c) => c.url.includes('/search')), 'a busca to: (O(n) no Mailpit) saiu');
+  assert.deepEqual(k6.sleeps, [2], 'a 1a consulta so depois de 2 s');
   const rv = JSON.parse(chamadas[0].corpo);
   assert.equal(rv.email, 'soak-T1-42@example.com');
   assert.equal(rv.fone, '12001000042'); // SUFIXO T1 -> digitos "1" -> k=1; n=42 (11 digitos)
   const ve = JSON.parse(chamadas[3].corpo);
   assert.deepEqual(ve, { email: 'soak-T1-42@example.com', verificationCode: CODIGO });
-  assert.ok(decodeURIComponent(chamadas[1].url).includes('to:soak-T1-42@example.com'));
   for (const e of chamadas.map((c) => String(c.corpo || '') + decodeURIComponent(c.url)).join(' ').match(/[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+/g) || []) assert.ok(e.endsWith('@example.com'), e);
 });
 await confere('toda chamada leva tags tipo, fase, min e name; as do Mailpit levam tipo=mailpit com a fase/min do cadastro', () => {
@@ -158,12 +170,41 @@ await confere('o corpo do e-mail nunca vai para o console', () => {
   assert.ok(!logs.join('\n').includes('corpo do e-mail'));
   assert.ok(!logs.join('\n').includes(CODIGO));
 });
-await confere('sem mensagem no Mailpit no prazo: nao chama verify-email (e nao imprime nada)', () => {
-  zera(); mailpitSemMensagem = true; k6.exec.scenario.iterationInTest = 43;
+await confere('sem mensagem no Mailpit no prazo: nao chama verify-email (e nao imprime nada); consulta em 2, 2, 4 s (MAILPIT_TETO_S=10), uma chamada por consulta (pagina vazia)', () => {
+  zera(); k6.sleeps = []; mailpitSemMensagem = true; k6.exec.scenario.iterationInTest = 43;
   script.cadastro();
   mailpitSemMensagem = false;
   assert.equal(chamadas.filter((c) => c.url.endsWith('/verify-email')).length, 0);
-  assert.equal(chamadas.filter((c) => c.url.includes('/api/v1/search')).length, 3);   // MAILPIT_TETO_S=3
+  assert.equal(chamadas.filter((c) => c.url.includes('/api/v1/messages')).length, 3);
+  assert.deepEqual(k6.sleeps, [2, 2, 4]);
+});
+await confere('o codigo vem do Snippet quando ele traz (sem GET /message/{id}); a mensagem esta na 2a pagina (start=100) e o endereco casa sem diferenciar caixa', () => {
+  const recentes = (n) => Array.from({ length: n }, (_, i) => ({ ID: `r${i}`, To: [{ Address: `outro-${i}@example.com` }], Snippet: '', Created: agoraMp() }));
+  zera(); k6.sleeps = []; k6.exec.scenario.iterationInTest = 44;
+  paginasMp = [recentes(100), [{ ID: 'achei', To: [{ Address: 'SOAK-T1-44@Example.com' }], Snippet: 'Codigo de Verificacao: 654321', Created: agoraMp() }]];
+  script.cadastro();
+  paginasMp = null;
+  const urls = mp().map((c) => c.url.replace('http://mp:8025', ''));
+  assert.deepEqual(urls, ['/api/v1/messages?start=0&limit=100', '/api/v1/messages?start=100&limit=100']);
+  assert.deepEqual(JSON.parse(chamadas[chamadas.length - 1].corpo), { email: 'soak-T1-44@example.com', verificationCode: '654321' });
+  assert.deepEqual(k6.sleeps, [2]);
+});
+await confere('para de paginar quando a mais antiga da pagina e anterior ao request-verification (menos a margem): a mensagem mais funda nao e lida', () => {
+  zera(); k6.sleeps = []; k6.exec.scenario.iterationInTest = 45;
+  const velha = new Date(Date.now() - 10 * 60000).toISOString();
+  paginasMp = [[{ ID: 'v', To: [{ Address: 'velha@example.com' }], Snippet: '', Created: velha }], [{ ID: 'fundo', To: [{ Address: 'soak-T1-45@example.com' }], Snippet: 'Codigo de Verificacao: 111111', Created: agoraMp() }]];
+  script.cadastro();
+  paginasMp = null;
+  assert.equal(mp().filter((c) => c.url.includes('start=100')).length, 0);
+  assert.equal(chamadas.filter((c) => c.url.endsWith('/verify-email')).length, 0);
+});
+await confere('teto de paginas por consulta: nao pagina sem fim quando todas as paginas sao recentes e sem o endereco', () => {
+  zera(); k6.sleeps = []; k6.exec.scenario.iterationInTest = 46;
+  paginasMp = Array.from({ length: 50 }, () => [{ ID: 'r', To: [{ Address: 'outro@example.com' }], Snippet: '', Created: agoraMp() }]);
+  script.cadastro();
+  paginasMp = null;
+  const n = mp().length;
+  assert.ok(n > 3 && n <= 3 * lib.MAX_PAGINAS, `${n} chamadas (3 consultas, ate ${lib.MAX_PAGINAS} paginas cada)`);
 });
 
 await confere('min e fase sao calculados POR REQUISICAO: um fluxo que cruza a fronteira do minuto carimba o minuto de cada chamada, nao o do comeco', () => {
@@ -316,8 +357,57 @@ await confere('nenhum console.* no carga-soak.js imprime o corpo do Mailpit', ()
   const consoles = txt.match(/console\.\w+\([^;]*;/g) || [];
   for (const c of consoles) assert.ok(!/busca|msg|mailpit\(|Text|Snippet/.test(c), c);
 });
+await confere('o carga-soak.js nao usa mais a busca /api/v1/search do Mailpit (varredura linear da caixa)', () => {
+  assert.ok(!/api\/v1\/search/.test(readFileSync(aqui + 'carga-soak.js', 'utf8').replace(/\/\/.*$/gm, '')));
+});
+
+saida('==> perfil de um tipo so (dry do Mailpit)');
+await confere('perfil com "so": cenarios e erroParametros so exigem o tipo presente; sem "so" os 5 tipos continuam obrigatorios', () => {
+  const unico = { id: 'U', so: 'cadastro', tipos: { cadastro: perfil.tipos.cadastro }, total_cadastros_esperado: 10 };
+  const sc = lib.cenarios(unico, { maxVus: 100, gracefulStopS: 40 });
+  assert.deepEqual(Object.keys(sc), ['cadastro']);
+  assert.equal(sc.cadastro.exec, 'cadastro');
+  const ok = { perfil: unico, maxVus: 100, mailpitUrl: 'http://mp:8025', mailpitAuth: 'soak:abcdefgh12345678', sufixo: 'T1', prefixo: 'Soak-T1' };
+  assert.equal(lib.erroParametros(ok), null);
+  assert.match(lib.erroParametros({ ...ok, perfil: { ...unico, tipos: {} } }), /cadastro/);
+  const semSo = { ...unico }; delete semSo.so;
+  assert.match(lib.erroParametros({ ...ok, perfil: semSo }), /leitura/);
+});
 
 saida('==> lib-soak');
+await confere('esperasDaBusca: 2, 2, 4, 4... ate somar no maximo MAILPIT_TETO_S', () => {
+  assert.deepEqual(lib.esperasDaBusca(30), [2, 2, 4, 4, 4, 4, 4, 4]);
+  assert.deepEqual(lib.esperasDaBusca(10), [2, 2, 4]);
+  assert.deepEqual(lib.esperasDaBusca(3), [2]);
+  assert.deepEqual(lib.esperasDaBusca(1), []);
+});
+await confere('quandoMs: RFC3339 do Mailpit com 1 a 9 casas, com offset e sem fracao; lixo = NaN', () => {
+  assert.equal(lib.quandoMs('2026-11-01T12:00:00.123456789Z'), Date.parse('2026-11-01T12:00:00.123Z'));
+  assert.equal(lib.quandoMs('2026-11-01T12:00:00.5Z'), Date.parse('2026-11-01T12:00:00.500Z'));
+  assert.equal(lib.quandoMs('2026-11-01T09:00:00.25-03:00'), Date.parse('2026-11-01T12:00:00.250Z'));
+  assert.equal(lib.quandoMs('2026-11-01T12:00:00Z'), Date.parse('2026-11-01T12:00:00Z'));
+  assert.ok(Number.isNaN(lib.quandoMs('lixo')) && Number.isNaN(lib.quandoMs(undefined)));
+});
+await confere('acharNaPagina: achou (qualquer posicao de To, sem diferenciar caixa) | nao achou e para pela data | pagina vazia | teto de paginas', () => {
+  const t0 = Date.parse('2026-11-01T12:00:00Z');
+  const m = (id, created, ...to) => ({ ID: id, To: to.map((Address) => ({ Address })), Created: created });
+  const recente = '2026-11-01T12:00:05.123456789Z';
+  const achou = lib.acharNaPagina([m('a', recente, 'x@example.com'), m('k', recente, 'y@example.com', 'SOAK-T1-1@Example.com')], 'soak-t1-1@example.com', t0, 0);
+  assert.equal(achou.msg.ID, 'k');
+  const nao = lib.acharNaPagina([m('a', recente, 'x@example.com')], 'soak-t1-1@example.com', t0, 0);
+  assert.deepEqual([nao.msg, nao.continua], [null, true]);
+  // a mais antiga da pagina: 29,999 s antes do instante menos 30 s de margem para a diferenca de relogio -> para; 31 s antes... continua
+  assert.equal(lib.acharNaPagina([m('a', recente, 'x@example.com'), m('b', '2026-11-01T11:59:29.999999999Z', 'x@example.com')], 'soak-t1-1@example.com', t0, 0).continua, false);
+  assert.equal(lib.acharNaPagina([m('a', recente, 'x@example.com'), m('b', '2026-11-01T11:59:30.500000000Z', 'x@example.com')], 'soak-t1-1@example.com', t0, 0).continua, true);
+  const vazia = lib.acharNaPagina([], 'soak-t1-1@example.com', t0, 0);
+  assert.deepEqual([vazia.msg, vazia.continua], [null, false]);
+  assert.equal(lib.acharNaPagina([m('a', recente, 'x@example.com')], 'soak-t1-1@example.com', t0, lib.MAX_PAGINAS - 2).continua, true);
+  assert.equal(lib.acharNaPagina([m('a', recente, 'x@example.com')], 'soak-t1-1@example.com', t0, lib.MAX_PAGINAS - 1).continua, false);
+  // achou numa pagina que ja passou da data: devolve a mensagem (o criterio de parada so vale para quem nao achou)
+  assert.equal(lib.acharNaPagina([m('b', '2026-11-01T11:00:00Z', 'soak-t1-1@example.com')], 'soak-t1-1@example.com', t0, 0).msg.ID, 'b');
+  // Created ilegivel nao para a paginacao (so o teto)
+  assert.equal(lib.acharNaPagina([m('a', 'lixo', 'x@example.com')], 'soak-t1-1@example.com', t0, 0).continua, true);
+});
 await confere('foneDoCadastro: 11 digitos (a regra do gateway), nunca "11...", unico por sufixo e por n', () => {
   const f = lib.foneDoCadastro;
   const doGateway = (fone) => { const limpo = fone.replace(/\D/g, ''); return limpo.length >= 10 && limpo.length <= 11; };   // BffUserController: "Telefone deve conter 10 ou 11 digitos"

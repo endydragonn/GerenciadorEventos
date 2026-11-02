@@ -23,6 +23,8 @@
   # dry-runs (spec, criterio 10): S1 = 10 min, teto baixo, X = 56000; S2 = 10 min, teto ~20000, X = 4000 (abaixo de ~17k a fila nao liga no S2), com o perfil FIXO -Fixo dry-s2
   .\soak\preparar-soak.ps1 -Id dryS1 -Bloco S1 -Teto 3000 -Duracao 600 -HostIp 192.168.68.64 -MailpitUrl http://192.168.68.64:8025
   .\soak\preparar-soak.ps1 -Id dryS2 -Bloco S2 -Teto 20000 -Fixo dry-s2 -HostIp 192.168.68.64 -MailpitUrl http://192.168.68.64:8025   # perfil FIXO: nao troque de semente (nao ha)
+  # dry longo do Mailpit (portao antes do S2): SO o cadastro, nos primeiros 40 min do S2 (mesma semente/teto do perfil-S2.json), com a caixa pre-enchida; os outros tipos nao rodam
+  .\soak\preparar-soak.ps1 -Id dryMailpit -Bloco S2 -Semente 257867 -Teto 50000 -Duracao 2400 -So cadastro -HostIp 192.168.68.64 -MailpitUrl http://192.168.68.64:8025
 #>
 [CmdletBinding()]
 param(
@@ -33,6 +35,7 @@ param(
     [Parameter(Mandatory)][string]$MailpitUrl,                                 # como o GERADOR enxerga a API do Mailpit (http://<host>:8025)
     [ValidateRange(60, 86400)][int]$Duracao = 7200,
     [int]$Semente = 0,                                                         # 0 = sorteia (e imprime, para repetir o bloco); com -Fixo nao existe semente
+    [ValidateSet('', 'cadastro')][string]$So = '',                             # perfil de UM tipo so (perfil.py --so): o dry do Mailpit roda so o cadastro; '' = os 5 tipos
     [ValidateSet('', 'dry-s2')][string]$Fixo = '',                             # perfil FIXO do perfil.py (dry-run do S2: 10 min, 3 subidas vale -> pico na reserva); '' = o perfil sorteado por semente
     [int]$Porta = 8081,
     [string]$SeedUrl = '',                                                     # como o HOST enxerga o gateway (padrao http://localhost:Porta)
@@ -49,7 +52,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib-soak.ps1')
-if ($Quentes -lt 0) { $Quentes = Get-QuentesDoBloco $Bloco }
+if ($Quentes -lt 0) { $Quentes = if ($So) { 0 } else { Get-QuentesDoBloco $Bloco } }   # perfil de um tipo so (cadastro): sem reserva, sem quentes
 if ($Capacidade -lt 0) { $Capacidade = Get-CapacidadeDoBloco $Bloco }
 $Results = Join-Path (Split-Path $PSScriptRoot -Parent) 'results'
 New-Item -ItemType Directory -Force -Path $Results | Out-Null
@@ -64,6 +67,7 @@ if ($MailpitUrl -notmatch '^https?://[^/@\s]+$') { Fail "-MailpitUrl invalido ('
 if ($Usuarios * $Eventos -lt 1000) { Fail 'Poucos pares (usuarios x eventos).' }
 $py = (Get-Command python -ErrorAction SilentlyContinue)
 if (-not $py) { Fail 'python nao encontrado (o perfil.py e do kit).' }
+if ($So -and $Fixo) { Fail "-So $So nao vale com -Fixo (o perfil fixo e sempre o mesmo)." }
 if ($Fixo) {
     if ($Bloco -ne 'S2') { Fail "-Fixo $Fixo e do dry-run do S2 (-Bloco S2)." }
     if ($PSBoundParameters.ContainsKey('Semente')) { Fail 'Com -Fixo nao existe semente do perfil (ele e sempre o mesmo): nao troque de semente; se o dry-run der 0 de 202, e defeito do mecanismo, pare e relate.' }
@@ -74,12 +78,13 @@ if ($Fixo) {
 
 # ---- perfil (deterministico: mesma semente = mesmos bytes)
 $argsPerfil = if ($Fixo) { @('--fixo', $Fixo) } else { @('--semente', $Semente, '--duracao', $Duracao) }
+if ($So) { $argsPerfil += @('--so', $So) }
 & $py.Source (Join-Path $PSScriptRoot 'perfil.py') --id $Id --teto $Teto @argsPerfil --saida $Results
 if ($LASTEXITCODE -ne 0) { Fail 'perfil.py falhou.' }
 $perfilArq = Join-Path $Results "perfil-$Id.json"
 $perfil = Get-Content $perfilArq -Raw | ConvertFrom-Json
 Info "Bloco ${Id} (gatilho do $Bloco): teto $Teto RPM, $Duracao s, $(if ($Fixo) { "perfil FIXO $Fixo (sem semente)" } else { "semente $Semente" }); $Capacidade vagas por evento comum; cadastros esperados $($perfil.total_cadastros_esperado) (MP_MAX_MESSAGES do overlay: 250000)."
-Info "Reserva do bloco: $(if ($Quentes -gt 0) { "$Quentes evento(s) quente(s) (so cancelam; PCT_QUENTE % das reservas) + o resto espalhado" } else { 'ESPALHADA pelos eventos do seed (60% confirma, 10% cancela, 30% expira), sem quentes' })."
+if ($So) { Info "Perfil de um tipo so ($So): os outros tipos nao rodam (sem reserva, sem quentes, sem fila)." } else { Info "Reserva do bloco: $(if ($Quentes -gt 0) { "$Quentes evento(s) quente(s) (so cancelam; PCT_QUENTE % das reservas) + o resto espalhado" } else { 'ESPALHADA pelos eventos do seed (60% confirma, 10% cancela, 30% expira), sem quentes' })." }
 if ($Seco) { Ok "Modo seco: perfil em $perfilArq (nada semeado)."; return }
 
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib-seed.ps1')
@@ -131,7 +136,7 @@ $linha = "k6 run --quiet --no-thresholds --summary-mode=disabled --out csv=soak-
 
 Write-Host ''
 Write-Host 'COMMIT O PERFIL (ou o gerador o regenera: python Projeto/carga/soak/perfil.py --id ' -NoNewline -ForegroundColor Yellow
-Write-Host "$Id $(if ($Fixo) { "--fixo $Fixo --teto $Teto" } else { "--semente $Semente --teto $Teto --duracao $Duracao" }) --saida Projeto/carga/results)" -ForegroundColor Yellow
+Write-Host "$Id $(if ($Fixo) { "--fixo $Fixo --teto $Teto" } else { "--semente $Semente --teto $Teto --duracao $Duracao" })$(if ($So) { " --so $So" }) --saida Projeto/carga/results)" -ForegroundColor Yellow
 Write-Host "  $perfilArq"
 Write-Host ''
 Write-Host 'NO GERADOR (Windows PowerShell, na raiz do clone, depois do firewall e do cluster no ar; a credencial e DIGITADA, nunca em argumento):' -ForegroundColor Yellow
