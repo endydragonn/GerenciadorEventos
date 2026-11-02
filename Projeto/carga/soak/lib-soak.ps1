@@ -14,3 +14,12 @@ function Get-CapacidadeDoBloco([string]$bloco) {
     if ($bloco -eq 'S1') { return 200 }
     return 500
 }
+
+# Os telefones do seed saem so dos DIGITOS do sufixo (setup.sh: host = 119 + ultimos 8 digitos, attendees = 11<i> + ultimos 6), entao "${runId}q" repetia os telefones do seed principal e o
+# identity recusava ("Telefone ja existente"). O sufixo dos quentes: "q0" + os 5 ultimos digitos do runId com cada digito deslocado de 5 (mod 10). O "0" a frente: um runId real (int, sem zero a
+# esquerda) nunca da 6 digitos iniciados em 0, entao nenhum seed principal de outra rodada colide; o deslocamento: nem um runId com zeros a esquerda colide com o proprio. Os quentes de 2 rodadas
+# so colidem se os runIds forem iguais mod 100000 (~28 h), com o banco ainda sem limpar.
+function Get-SufixoQuentes([string]$runId) {
+    $d = ($runId -replace '\D', '').PadLeft(5, '0'); $d = $d.Substring($d.Length - 5)
+    'q0' + (-join ($d.ToCharArray() | ForEach-Object { ([int][string]$_ + 5) % 10 }))
+}

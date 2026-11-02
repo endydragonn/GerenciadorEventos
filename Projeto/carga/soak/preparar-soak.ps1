@@ -102,7 +102,7 @@ try {
     if ($Quentes -gt 0) {
         $uq = (Join-Path $tmp 'users-q.json').Replace('\', '/'); $eq = (Join-Path $tmp 'events-q.json').Replace('\', '/')
         Info "Semeando $Quentes evento(s) quente(s) de $CapacidadeQuente vagas ($prefixo-Q-E1...)."
-        $seedQ = Invoke-Seed -BaseUrl $SeedUrl -Usuarios 1 -Eventos $Quentes -Capacidade $CapacidadeQuente -Prefixo "$prefixo-Q" -Sufixo "${runId}q" -UsersFile $uq -EventIdsFile $eq
+        $seedQ = Invoke-Seed -BaseUrl $SeedUrl -Usuarios 1 -Eventos $Quentes -Capacidade $CapacidadeQuente -Prefixo "$prefixo-Q" -Sufixo (Get-SufixoQuentes $runId) -UsersFile $uq -EventIdsFile $eq
         Ok "Quentes: $(($seedQ.EventIds) -join ',') ($CapacidadeQuente vagas cada)."
     }
 } finally {

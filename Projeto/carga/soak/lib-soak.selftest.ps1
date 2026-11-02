@@ -24,5 +24,18 @@ Confere 'preparar-soak: -Fixo recusa -Semente (nao troque de semente)' ($fonte.C
 Confere 'preparar-soak: -Fixo so vale no bloco S2' ($fonte.Contains('if ($Bloco -ne ''S2'') { Fail "-Fixo')) $true
 Confere 'preparar-soak: com -Fixo o perfil.py recebe --fixo e nenhuma --semente' ($fonte.Contains('if ($Fixo) { @(''--fixo'', $Fixo) } else { @(''--semente''')) $true
 
+# Get-SufixoQuentes: o setup.sh gera os telefones so dos digitos do sufixo (host: ultimos 8; attendees: ultimos 6), entao os quentes nao podem repetir os do runId (bug do dry-run S2)
+function UltimosDigitos([string]$s, [int]$n) { $d = $s -replace '\D', ''; if ($d.Length -gt $n) { $d.Substring($d.Length - $n) } else { $d } }
+foreach ($r in '367578', '364888', '12345', '100000', '999999', '007890', '000001') {
+    $q = Get-SufixoQuentes $r
+    Confere "quentes($r)='$q': ultimos 8 digitos (fone do host) diferem do runId" ((UltimosDigitos $q 8) -ne (UltimosDigitos $r 8)) $true
+    Confere "quentes($r)='$q': ultimos 6 digitos (fone dos attendees) diferem do runId" ((UltimosDigitos $q 6) -ne (UltimosDigitos $r 6)) $true
+    Confere "quentes($r): reconhecivel (comeca com q) e so [A-Za-z0-9]" ([bool]($q -match '^q\d+$')) $true
+    Confere "quentes($r): ultimos 6 digitos comecam em 0 (nenhum runId real, int, colide)" ((UltimosDigitos $q 6)[0]) '0'
+}
+Confere 'quentes: deterministico (mesmo runId, mesmo sufixo)' (Get-SufixoQuentes '367578') (Get-SufixoQuentes '367578')
+Confere 'quentes: runIds diferentes (mod 100000) dao sufixos diferentes' ((Get-SufixoQuentes '367578') -ne (Get-SufixoQuentes '364888')) $true
+Confere 'preparar-soak: o seed dos quentes usa Get-SufixoQuentes $runId (nao "${runId}q")' ($fonte.Contains('-Sufixo (Get-SufixoQuentes $runId)')) $true
+
 if ($falhas -gt 0) { Write-Host "`nselftest lib-soak: $falhas falha(s)"; exit 1 }
 Write-Host "`nselftest lib-soak: OK"
