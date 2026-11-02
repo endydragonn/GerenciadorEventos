@@ -24,6 +24,7 @@ import http from 'k6/http';
 import exec from 'k6/execution';
 import { randomSeed } from 'k6';
 import { Counter, Trend } from 'k6/metrics';
+import { sorteio100 } from '../lib-sorteio.js';
 
 const BASE = __ENV.BASE_URL;
 const PCT_LEITURA = parseInt(__ENV.PCT_LEITURA || '0', 10);
@@ -118,16 +119,6 @@ function avisar(tipo, res) {
   if (avisos >= 3) return;
   avisos++;
   console.warn(`${tipo}: HTTP ${res.status} ${String(res.body).slice(0, 160)}`);
-}
-
-// Sorteio deterministico em [0, 100) a partir de (indice, semente): decide quais aceitas confirmar
-// sem consumir Math.random (nao altera o perfil/ordem do restante do cenario).
-function sorteio100(i, semente) {
-  let h = Math.imul(i ^ Math.imul(semente, 0x9e3779b1), 0x85ebca6b);
-  h ^= h >>> 13;
-  h = Math.imul(h, 0xc2b2ae35);
-  h ^= h >>> 16;
-  return (h >>> 0) % 100;
 }
 
 // Finaliza a reserva aceita: POST /bff/event-wallets/confirm (pending -> confirmed).

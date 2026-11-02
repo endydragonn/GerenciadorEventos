@@ -1,0 +1,7 @@
+# Componente Mailpit (issue #232; era o mailpit.yaml do overlay e2e, #197): o captador de e-mail do cluster, SMTP 1025 e API/UI 8025 só dentro do cluster (Service ClusterIP).
+# Compartilhado pelo overlay `e2e` (e, por ele, o `carga`) e pelo `soak`. É o manifest de sempre, sem autenticação nem NodePort: o e2e lê a API sem credencial e o guarda do
+# e2e aborta com qualquer NodePort. O que é só do soak (auth, MP_MAX_MESSAGES, memória, NodePort) é patch no overlay `soak`.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - mailpit.yaml

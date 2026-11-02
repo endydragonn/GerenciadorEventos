@@ -497,6 +497,195 @@ make verificar-rpm PREFIXO=Deg-59713     # ao fim de cada bloco (codigos 3 e 4 c
 no cluster (a 8090 não é exposta), então o `limpar-banco.sh` loga as réplicas prontas em vez do health, e o `preparar-degraus.ps1` e o `rodar-degraus.ps1` tratam a checagem de `/actuator/health` como de **alcance** (qualquer resposta HTTP **abaixo de 500**, inclusive o 401, conta; falha de conexão, timeout ou status >= 500, como o 503 do actuator DOWN no compose, aborta). A causa do 401: no cluster o manifest liga `MANAGEMENT_SERVER_PORT=8090` (`Projeto/k8s/base/*.yaml`), o actuator vai para a porta de management e o `/actuator/health` da 8081 cai no Spring Security; é uma diferença só de ambiente (as probes da #197/#207) e o `/bff/**` não muda; só o `-Verificar` do `subir-host-rpm.ps1` e o `coleta-host.sh`/`limpar-banco.sh` têm modo cluster (subir a stack é
 `Projeto/k8s/cluster.sh`). Selftests sem Docker nem cluster (`kubectl` falso): `make selftests` (inclui `Projeto/k8s/cluster.selftest.sh`). Nada disto foi executado contra um cluster real ainda.
 
+## Teste longo (soak) (issue #232)
+
+Teste de 2 h ou mais por bloco (S1 = teto de 35k RPM com `ADMISSION_X_RPM`=56000, S2 = 50k RPM com `ADMISSION_X_RPM`=4000) contra o cluster Kubernetes, com carga que **sobe e desce ao acaso em cada tipo de forma independente** (vários podem estar em pico ao mesmo tempo).
+Confere **corretude** sob carga longa, **autoescala acompanhando a carga** (subindo e descendo) e **troca de réplica sem erro**; não mede capacidade. Desenho: `docs/superpowers/specs/2026-11-01-teste-longo-soak-design.md`.
+A infraestrutura (overlay `soak`, Mailpit, firewall, ordem do bloco) está em `Projeto/k8s/README.md`, "Teste longo (soak)". **Nenhum e-mail real sai**: o cadastro lê o código de verificação num Mailpit dentro do cluster.
+Tudo aqui está em `Projeto/carga/soak/`, exceto o `lib-sorteio.js`.
+
+**Gatilho por bloco e eventos quentes (decisões do usuário; conta completa na spec, seção "Decisões").** O KEDA do `reservation` usa `R = min(3, ceil(hot/(0,5·X)))` e o `admission` liga a fila com `hot ≥ 0,8·X·R` e a desliga
+com `hot < 0,7·X·R` e a espera vazia (`hot` = RPM do evento mais quente; `R` = réplicas prontas do `reservation`). Em regime a fila só liga com `R` no teto 3 (`hot ≥ 2,4·X`) ou de passagem. O pico de reserva é 7,35k a 10,5k no S1 e 10,5k a
+15k no S2 (o máximo do S1 é o mínimo do S2: nenhum X único serve). Por isso o X é do bloco, passado no ambiente do `cluster.sh up`:
+
+| | S1 (X = 56000) | S2 (X = 4000) |
+|---|---|---|
+| alvo do KEDA do `reservation` | 28000 | 2000 |
+| reserva | **espalhada** pelos 2000 eventos do seed (60% confirma, 10% cancela, 30% expira): `hot` ≈ 3,7 a 5,3 RPM por evento | 95% no(s) evento(s) quente(s) (que só cancelam) |
+| `hot` (RPM do evento mais quente) | ≈ 3,7 a 5,3 (vale ≈ 0,5) | 9,975k a 14,25k (vale 1,425k; 95% da reserva em 1 quente) |
+| `reservation` | 1 réplica (alvo 28k, nunca alcançado); o critério 2 **não se aplica** a ele | `R`=3 em todo pico, 1 no vale |
+| fila (202) | nunca liga (limiar 44,8k) | liga em todo pico (limiar 9,6k com `R`=3 < pico mínimo 9,975k; 3,2k com `R`=1); desliga abaixo de 8,4k com `R`=3 e em 2,8k com `R`=1 no vale |
+
+**Os eventos quentes existem só no S2** (o único bloco que precisa da fila e do X = 4000): `preparar-soak.ps1` usa `-Quentes` = 1 no S2 e 0 no S1 por padrão (`Get-QuentesDoBloco`, `lib-soak.ps1`; um valor explícito vale) e só então semeia os quentes e exporta `QUENTES_IDS` ao k6. No **S1** (X = 56000, sem fila) a reserva
+fica **espalhada** pelos eventos do seed (mapeamento `intercalado` do kit, pares únicos) com o mix realista 60% confirma / 10% cancela / 30% expira e confirmação de verdade: é o bloco da confirmação em massa, com o overselling conferido (200 vagas por evento: ≈ 240 a 400 mil confirmações conforme a semente; a fronteira de capacidade é exercitada nas sementes altas, nos últimos 15 a 30 min: conta de capacidade abaixo). No **S2**, a reserva mira poucos **eventos quentes** (`-Quentes 1 -CapacidadeQuente 20000`; `QUENTES_IDS` no k6): `PCT_QUENTE` (95) % das reservas vão a ele e **cancelam logo** (o par usuário × evento se repete; toda 202 quente é acompanhada),
+`INSISTENTES` (1) usuário recebe `PCT_INSISTENTE` (25) % delas para tentar o 429 do limite por usuário do `admission` **só por carga**; os 5% restantes seguem o mapeamento par-único e o 60/10/30 de sempre nos 2000 eventos comuns (500 vagas). **Mix efetivo da reserva no S2** (quentes só cancelam): ≈ 3% confirma, ≈ 95,5% cancela, ≈ 1,5% expira.
+Capacidade do quente = **20000** (finita): os holds em aberto são `reservas quentes/s × (tempo até cancelar + atraso da devolução assíncrona)`, ≈ 237/s no pico do S2 × 60 s tolerados ≈ 14,3k (spec, "Decisões" 2). Com 20000 vagas e 2000 usuários o quente nunca enche por reservas ativas: no S2 o soak confere a convergência da saga (hold/release por `holdId`, revive `cancelled → pending`), não estressa o overselling; o overselling sob disputa já foi medido na R4/R5 e fica fora do soak.
+
+**Capacidade do S1 (decisão do usuário: 200 vagas por evento, padrão do bloco; 2000 × 200 = 400 mil vagas, 4 M de pares).** O `preparar-soak.ps1` semeia o S1 com `-Capacidade` 200 por padrão (`Get-CapacidadeDoBloco`, `lib-soak.ps1`; o S2 usa 500; um `-Capacidade` explícito vence), como faz com `-Quentes`.
+Tentativas de reserva em 2 h = área do perfil da reserva (teto 30% × 35k = 10,5k; pico 70–100%, vale 10%): média ≈ 5k/min, **≈ 627 mil** (8 sementes: 404 mil a 770 mil; teórico se todo o bloco ficasse no pico máximo: 1,26 M); o `intercalado` manda a tentativa `i` ao evento `i % 2000`, então cada evento recebe o mesmo número ±1 (média 313). Das aceitas, 60% confirma (a vaga some), 10% cancela (volta em segundos) e 30% expira (volta em `max_time_in_line` = 120 s + até 30 s da varredura: ≈ 2 a 4 em voo por evento, ≈ 8 mil no total).
+Um evento **lota** quando confirmadas + em voo chegam a 200, o que pede ≈ 330 tentativas no evento (≈ 660 mil no total): um pouco acima da média (≈ 188 confirmadas + 2 a 4 em voo, desvio ≈ 9). **Logo a lotação depende da semente (sorteada por bloco) e só acontece nos últimos 15 a 30 min.** Conta (perfil.py de cada semente + Monte Carlo do 60/10/30; ordem de grandeza, tabela completa na spec, "Decisões" 2):
+
+| semente (tentativas) | eventos que lotam (de 2000) | o 1º lota em | 400 "lotado" |
+|---|---|---|---|
+| baixa, 404 mil e 443 mil (sementes 2 e 6) | 0 | – | 0 |
+| média, 597 mil e 616 mil (sementes 1 e 7) | 24 e 116 (1% a 6%) | ≈ 105 min | 91 e 472 |
+| alta, 701 mil a 770 mil (sementes 3, 4, 5 e 8; 4 de 8) | 1850 a 2000 (92% a 100%) | 88 a 102 min | 37 mil a 104 mil |
+
+**Escolha da semente do S1 (decisão do usuário: alguns eventos têm de lotar).** A semente é escolhida ANTES de rodar, pelo total esperado de tentativas de reserva do perfil (área da taxa da reserva no `perfil-<id>.json`, que o `preparar-soak.ps1` mostra antes de rodar): é uma propriedade do perfil, não do resultado. Regra: usar uma semente com **≥ 700 mil tentativas** esperadas (pela simulação, lotam 92% a 100% dos eventos a partir de ≈ 88 a 102 min). **Semente usada no S1: 4** (≈ 701 mil tentativas, a mais baixa das que lotam com folga, para passar menos tempo em modo "lotado"). Totais com teto 35k e 2 h, sementes 1 a 12: ≥ 700 mil = 3 (770k), 4 (701k), 5 (734k), 8 (748k); 580 a 620 mil = 1, 7, 9, 12 (lotam só 1% a 6%, perto de 105 min, com risco de nenhum lotar se o gerador descartar iterações); ≤ 480 mil = 2, 6, 10, 11 (não lotam).
+
+**"Lotado" é 400 de negócio:** não reprova o critério 3 (só 5xx e status 0 reprovam), aparece em `c400` da reserva no por-minuto, e como cancelados e expirados devolvem a vaga o evento oscila na fronteira. As confirmações ficam em ≈ 240 a 400 mil (teto: as 400 mil vagas). O critério de overselling (ativas ≤ capacidade por evento, `verificar-rpm`) lê a capacidade do próprio banco e continua o mesmo, agora com a fronteira de fato tocada nas sementes altas (`quant` chega a 0). Trade-offs: não há **disputa concorrente** pela última vaga (≈ 5 RPM por evento; a disputa é da R4/R5); nas sementes altas, nos últimos 15 a 30 min a reserva vira rejeição barata (sem append nem confirm); com semente baixa o S1 não chega à fronteira. `-Capacidade 500` volta ao comportamento sem lotação; `-e MAPEAMENTO=sequencial` no k6 enche cada evento (2000 tentativas seguidas; `hot` ≈ 7,35k a 10,5k, ainda sem fila nem réplica do `reservation`; a maioria vira 400 "lotado" e as confirmações caem para ≈ 100 mil): nenhum dos dois é o padrão.
+Pares: o `intercalado` usa o usuário `⌊i / 2000⌋`, então 627 mil tentativas tocam só ≈ 313 usuários, cada um em eventos diferentes; **nenhum par se repete** (i < 4 M), logo **0 respostas 400 de "vínculo existente"** no S1. O mix do S1 tem o `reservation` em 1 réplica e a fila fora (`hot` ≈ 5 RPM).
+
+
+| Arquivo | Onde roda | O que faz |
+|---|---|---|
+| `perfil.py` | host ou gerador (Python ≥ 3.8) | a partir de `--semente` e `--teto`, sorteia o perfil dos 5 tipos e grava `perfil-<id>.json` (**mesma semente = mesmos bytes**: só `random()`, chaves ordenadas, LF, sem timestamps). Fatias do teto: leitura 60%, reserva 30%, login 7%, cadastro 2%, escrita de catálogo 1%. Fases de 3 a 10 min (a última absorve o resto, sempre ≥ 3 min), rampa de 30 a 60 s no início de cada fase, pico (70% a 100% do teto do tipo) ou vale (10%), 50% cada. O arquivo traz os `stages` do k6, as fases (tag `fase`), a taxa e o pico **por minuto** e o `total_cadastros_esperado` (1 e-mail por cadastro). `--fixo dry-s2` (sem `--semente`) grava o perfil FIXO do dry-run do S2 (3 subidas vale → pico, 600 s; ver "Dry-runs curtos"), também byte a byte igual |
+| `carga-soak.js` | gerador (k6) | 5 cenários `ramping-arrival-rate` em paralelo (`timeUnit` 1 min: o alvo é RPM de **iterações**; um cadastro são 2 chamadas e uma reserva com confirmação também, e contam 1). Lê o perfil de `PERFIL_FILE`. Reusa `degraus/lib-admissao.js` (classificação da reserva, acompanhamento do 202, usuários do seed), `degraus/lib-mapeamento.js` (par usuário × evento, `intercalado` por padrão) e `lib-sorteio.js` (o sorteio determinístico que era interno do `carga-aleatoria.js` e do `carga-degraus.js`; agora é um módulo só, com selftest de equivalência). Tags em toda amostra: `tipo` (`mailpit` nas chamadas ao captador e na sonda do `setup()`), `fase`, `min` (minuto do bloco; **as duas calculadas por requisição**, não por iteração) e `name` (o caminho com `{id}`); `url` fica fora das `systemTags`. **Nenhuma Trend** (só o CSV bruto) |
+| `agregar.py` | host ou gerador (Python 3.14.7 no gerador) | lê o CSV do `k6 --out csv` (`.csv` ou `.csv.gz`) **por streaming** (vários GB sem compressão por bloco) e grava `soak-<id>-por-minuto.csv`: por minuto e por tipo, `taxa`, `reqs`, p50/p95/p99 (nearest-rank), contagem por código **mutuamente exclusiva** (`c2xx` = 200–299 menos o 202, `c202`, `c400`, `c429`, `c5xx`, `c0` = status 0 / erro de transporte, `outros`), `descartadas`, `verificacoes_2xx` e `inicio_s` (epoch do minuto). **Nunca descarta contagem em silêncio**: amostra atrasada (minuto já fechado) vai para uma linha `atrasada=1` do mesmo (minuto, tipo) **no próprio por-minuto** (o que o `crit3` soma), é impressa por tipo, e o programa sai com **código 3** se ela tiver 5xx ou status 0 |
+| `verificar-soak.sh` | host (Git Bash) | `pre`, `amostrar` e `pos` (abaixo) |
+| `amostra.py`, `criterios.py` | host | as peças puras do `verificar-soak.sh` (amostra do `kubectl`, pré-checks, critérios 1 a 3), com selftest |
+| `preparar-soak.ps1` | host | gera o perfil, semeia (2000 × 2000, com a capacidade do bloco: `-Capacidade` S1 = 200, S2 = 500; e, só no S2, os eventos quentes; `-Quentes` padrão do bloco); `-Fixo dry-s2` usa o perfil fixo do dry-run do S2, promove o host do seed por SQL e imprime a linha EXATA do gerador (mesmo modelo do `preparar-degraus.ps1`); exige `-Bloco S1|S2` |
+| `firewall-mailpit.ps1` (+ `lib-firewall.ps1`, `conferir-firewall.ps1`) | host (Administrador só no `Criar`/`Remover`) | **uma** regra permanente do Windows para a API do Mailpit (8025): `Block` para todo o IPv4 menos o gerador (faixas complementares; o `Block` vence as `Allow` largas do Docker Desktop) **e para todo o IPv6** (`::-ffff:…:ffff`; o gerador tem IPv6 global, mas o k6 usa a URL IPv4), criada UMA vez e removida só no fim dos testes. O IP do gerador vem do `GERADOR_IP` (DHCP: não é fixo; mudou = rode o `Criar` de novo). `Status` mostra a regra (com `-GeradorIp`, se confere) e as `Allow` largas; `-WhatIf` nativo. O `conferir-firewall.ps1` é o que o `verificar-soak pre` roda, sem administrador |
+
+### Cada tipo de carga
+
+| Tipo | Fatia | Fluxo |
+|---|---|---|
+| leitura | 60% | `GET /bff/events/{id}` (50%), `GET /bff/event-wallets/user/{id}` (30%) ou `GET /bff/events/search` (20%) |
+| reserva | 30% | `POST /bff/event-wallets` (braço `cas`). **S1:** espalhada pelos eventos do seed. **S2:** 95% vão ao(s) evento(s) quente(s) e cancelam logo (toda 202 quente é acompanhada; ver acima); as demais (e todas no S1): o 202 é acompanhado em `PCT_ACOMPANHA` % (padrão 10) até `pending`, `rejected` ou `timed_out`, como no harness, e depois da reserva aceita 60% `POST /confirm`, 10% `DELETE /bff/event-wallets` (cancela), 30% expira sozinha |
+| login | 7% | `POST /bff/users/login` com usuário do seed (bcrypt) |
+| cadastro | 2% | `request-verification` → código lido no Mailpit (`/api/v1/search?query=to:<endereço>`, depois a mensagem se o resumo não trouxer o código) → `verify-email`. Endereço sempre `soak-<sufixo>-<n>@example.com`; sem mensagem em `MAILPIT_TETO_S` (30 s) a iteração desiste (o e-mail perdido é conferido no fim) |
+| escrita de catálogo | 1% | o host do seed cria `<PREFIXO>-W<n>` (`POST /bff/events`) e edita (`PUT`, com apresentador). Nenhuma rota promove usuário a host: o `preparar-soak.ps1` o faz por SQL |
+
+### Passo a passo (um bloco)
+
+Pré-requisitos no host: o cluster `soak` no ar e a regra permanente de firewall já criada (uma vez, até o fim dos testes; `Projeto/k8s/README.md`), `CARGA_K8S=kind-gerenciador` no ambiente do shell, `MAILPIT_AUTH` no ambiente (a mesma do `cluster.sh up`), `MAILPIT_URL`
+(padrão `http://localhost:8025`), `Projeto/.env` e `Projeto/supabase/.env` presentes (nada deles é impresso).
+
+```powershell
+# HOST (PowerShell, em Projeto/carga), nesta ordem. Os alvos do make chamam o bash do Git (o do PATH costuma ser o do WSL)
+$env:CARGA_K8S = 'kind-gerenciador'
+# $env:MAILPIT_AUTH ja esta no ambiente (a mesma do cluster.sh up)
+# $env:GERADOR_IP = o IP ATUAL do gerador (ipconfig la; DHCP: ja foi 192.168.68.54/22 e pode mudar). Mudou desde o ultimo bloco? Rode de novo, como administrador:
+#   .\soak\firewall-mailpit.ps1 -Acao Criar -GeradorIp $env:GERADOR_IP      (fail-safe: com o IP velho o gerador fica bloqueado, a porta nao abre; o pre aborta pedindo isso)
+# GERADOR_OFFSET_S: no GERADOR, w32tm /stripchart /computer:time.windows.com /samples:1 /dataonly e cole o numero apos a virgula COMO O W32TM IMPRIME (ex. -01.3043740s; virgula decimal vale). Ele imprime referencia - local, entao negativo = relogio ADIANTADO; o pre inverte o sinal ao gravar (+ = adiantado)
+# (0) o cluster ja subiu com o gatilho do bloco: ADMISSION_X_RPM=56000 (S1) ou 4000 (S2) no ambiente do cluster.sh up, e o admission reiniciado se o X mudou (k8s/README.md)
+make limpar-banco                                   # 1. banco limpo (modo cluster); depois espere readyReplicas=1 em todos os Deployments com ScaledObject
+.\soak\preparar-soak.ps1 -Id S1 -Bloco S1 -Semente 4 -Teto 35000 -HostIp <ip do host na LAN> -MailpitUrl http://<ip do host na LAN>:8025   # 2. perfil + seed (S1: 2000 usuarios x 2000 eventos de 200 vagas, semente 4 pela regra da escolha; S2: 500 vagas + quentes) + host por SQL; imprime a linha do gerador
+make limpar-mailpit                                 # 3. Mailpit vazio (DELETE /api/v1/messages; o seed nao manda e-mail, mas e depois dele que vale)
+make verificar-soak-pre SOAK_ID=S1 SOAK_BLOCO=S1 GERADOR_IP=$env:GERADOR_IP GERADOR_OFFSET_S=<offset do w32tm no gerador>   # 4. GERADOR_IP = o IP ATUAL do gerador (DHCP). Aborta (codigo 1) se algo estiver errado: e-mail real, sem #231, replica != 1, X/alvo do KEDA que nao e o do bloco, regra de firewall da 8025 fora do esperado, Mailpit pequeno, sem 401 ou nao vazio
+make amostrar-soak SOAK_ID=S1                       # 5. em um TERMINAL PROPRIO durante o bloco (replicas, HPA e pods a cada 5 s); Ctrl+C ao fim
+make coleta-host ROTULO=soak-S1                     #    em outro terminal; a coleta do kit em modo cluster
+```
+
+```powershell
+# GERADOR: as linhas que o preparar-soak.ps1 imprime (git checkout do commit com o perfil, MAILPIT_AUTH digitada com Read-Host -AsSecureString (sem eco), $perfil, k6 run ...).
+# Resumo do que ela faz: k6 run --quiet --no-thresholds --summary-mode=disabled --out csv=soak-S1-k6.csv.gz -e 'BASE_URL=...' -e 'SUFIXO=...' ... Projeto/carga/soak/carga-soak.js
+# k6 >= 1.3 (o gerador tem a v2.2.0): --summary-mode=disabled (K6_SUMMARY_MODE=disabled); --no-summary e K6_NO_SUMMARY foram REMOVIDOS na v2.0.0. Sem thresholds e sem resumo o k6 nao acumula metricas em memoria.
+# O bruto vai direto para .csv.gz: vários GB por bloco sem compressao (estimativa ~10 a 15 GB no S2; ~1 a 2 GB em gz); o gerador tem 1,5 TB livres, confira o espaco antes.
+python soak/agregar.py soak-S1-k6.csv.gz --id S1     # Python 3.14.7 do gerador (python/py/python3); le o .gz por streaming; grava soak-S1-por-minuto.csv (so ele e o perfil entram no repo; o bruto fica no gerador)
+```
+
+```powershell
+# HOST, ao fim do bloco (copie o soak-S1-por-minuto.csv do gerador para Projeto/carga/results/); pare o amostrar-soak e a coleta (Ctrl+C)
+make verificar-soak-pos SOAK_ID=S1 SOAK_BLOCO=S1 SOAK_SUFIXO=<SUFIXO> SOAK_PREFIXO=Soak-<SUFIXO>
+```
+
+**Relógios:** o `inicio_s` do por-minuto vem do relógio do gerador (k6) e as amostras de pods do `amostrar` vêm do relógio do host (e os timestamps do kubelet, da VM do Docker); a ligação minuto ↔ pod que saiu usa ±5 s. Na partida de cada bloco o `verificar-soak pre` **grava no log do bloco** (não sincroniza nada) o offset dos três relógios contra a mesma
+referência (`time.windows.com`): host (`w32tm /stripchart /computer:time.windows.com /samples:1 /dataonly`), nó do kind (`docker exec <cluster>-control-plane date -u`, contra o do host, no ponto médio da chamada) e gerador (`GERADOR_OFFSET_S`, medido lá com o mesmo `w32tm`). Diferença relativa > 5 s **só avisa** (o pre não aborta). Com deriva maior, o "nenhum pod saiu neste minuto" do relatório pode estar errado: `w32tm /resync` nos três e rode o pre de novo.
+
+### Fim dos testes
+
+Depois do último bloco, como administrador no host: `.\soak\firewall-mailpit.ps1 -Acao Remover` (apaga a regra permanente do `Block` da 8025 e confirma que `Get-NetFirewallRule` não a acha). Derrube o cluster (`cluster.sh down`) e apague o CSV bruto do gerador.
+
+**`MAX_VUS` (padrão 2000) e a RAM do gerador:** o k6 entrega a cada VU uma **cópia** do retorno do `setup()` (as 2000 sessões, ≈ 1,5 a 2 MB), além de ~1 a 2 MB do próprio VU; com 2000 VUs isso passa de 3 a 4 GB só em dados. Dimensione `-MaxVus` pela RAM
+livre do gerador (critério 4: livre ≥ 1 GB) e pelos VUs que o 202 acompanhado segura (≈ taxa de 202 por segundo × ≥ 1 s de consulta): o dry-run mede.
+
+**`verificar-soak.sh pre --bloco S1|S2`** aborta (código 1) se: o `notification` **vivo** não tiver os seis valores do Mailpit (a entrada `MAIL_PASSWORD` tem de existir, vazia e sem `valueFrom`; a API do Kubernetes omite `value` vazio, então "ausente" e "vazio" são
+distinguidos pelo nome) ou trouxer `SPRING_MAIL_*` / `SPRING_APPLICATION_JSON`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` com `spring.mail` (também como chave do Secret `env-notification`; só as chaves são lidas); o gatilho não for o do bloco (`ADMISSION_X_RPM` do Secret
+`env-admission` ≠ 56000/4000, pod do `admission` que subiu antes do Secret, `targetValue` do ScaledObject do `reservation` ≠ 0,5·X); a regra permanente de firewall da 8025 não conferir (`conferir-firewall.ps1` pelo `powershell.exe`, sem administrador: existe, habilitada, entrada, TCP 8025, `Block`, perfil Any, `RemoteAddress` exatamente o complemento do IP ATUAL do gerador (`GERADOR_IP`) **mais todo o IPv6** (`::/0` ou `::-ffff:…:ffff`; qualquer outra forma IPv6 reprova); se o IP do gerador mudou (DHCP), aborta com "rode o Criar de novo com o IP novo"); a API do Mailpit não responder 401 a um GET sem credencial; existir ScaledObject do `stock` ou o Hikari do `stock` for diferente de 245 (**a #231 não foi aplicada**); algum Deployment autoescalado tiver `replicas` ou `readyReplicas` diferente de 1; o total esperado de
+cadastros do perfil × 2 passar do `MP_MAX_MESSAGES` do Mailpit aplicado (o do render do overlay `soak`; cobre o "total > `MP_MAX_MESSAGES`"); o Mailpit não estiver vazio (registra `mailpit_inicio=0`).
+**`pos`**, nesta ordem: (1) espera o lag do group `notification` chegar a 0 e registra `lag_notification=0`; (2) conta o Mailpit filtrado pelo sufixo; (3) confere o `From` de **todas** as mensagens (`@example.com`); (4) `verificar-rpm`
+(overselling, código 3; sagas, código 4; sobem como estão); (5) os critérios 1 a 3 e a fila (S2: 202 obrigatório, 429 só registrado); se o critério 3 reprovar, lista os minutos com 5xx/status 0 por tipo e, ao lado, os pods que saíram neles (horário, serviço, nome; das amostras do `amostrar`); (6) só então o bloco seguinte roda o `limpar-banco`. O registro vai para `results/soak-<id>-verificacoes.log`.
+
+### Critérios de aprovação (por bloco)
+
+1. **Corretude:** overselling 0 e sagas convergidas (`verificar-rpm`). **S1:** overselling 0 *conferido sob confirmação em massa* (reserva espalhada, 60/10/30, 200 vagas por evento, ≈ 240 a 400 mil confirmações em 2 h conforme a semente; nas sementes altas a fronteira de capacidade é exercitada e o "lotado" é 400 de negócio, que não reprova; sem disputa concorrente pela última vaga), com a confirmação de verdade; **S2:** *convergência da saga* (hold/release por `holdId`, revive `cancelled → pending`, 0 órfãs) com o overselling *conferido, mas não estressado* (os quentes só cancelam: mix efetivo ≈ 3% confirma, 95,5% cancela, 1,5% expira; o overselling sob disputa é da R4/R5); no Mailpit, 1 e-mail por `request-verification` com 2xx (`verificacoes_2xx` do por-minuto) — **e-mail perdido sempre reprova**, duplicado só é tolerado a ±60 s de um pod do
+   `notification` saindo (`deletionTimestamp` ou `restartCount` que subiu, das amostras de pods); todo `From` termina em `@example.com`; `restartCount` do Mailpit não sobe e o pod não é trocado no bloco.
+2. **Autoescala acompanha a carga**, por serviço com HPA do KEDA, pela série `soak-<id>-replicas.csv` (métrica e alvo do HPA, `spec.replicas`): a métrica por pod passa de alvo × 1,1 (a tolerância do HPA) com réplicas < 3 → em até 60 s
+   o serviço ganha réplica; a carga total (réplicas × métrica) cabe em 1 pod no alvo por pelo menos 5 min → volta a 1 em até 5 min. Episódios mais curtos que o prazo não são avaliados (o `crit2` avisa se nenhum foi: critério vácuo). O `stock`
+   (sem HPA) deve ficar em 1 o bloco inteiro. **No S1 o `reservation` fica fora** (X=56k: o alvo do KEDA, 28k, nunca é alcançado de propósito; ele fica em 1 réplica).
+3. **Troca de réplica sem erro:** 0 respostas 5xx **e 0 com status 0** (erro de transporte do k6; coluna `c0`) em todos os tipos, exceto `tipo=mailpit`. É o que "troca de réplica sem erro" quer provar: a limitação do L4 do gateway pode dar status 0 quando um pod sai com keep-alive
+   aberto, e isso é **achado real**, não exceção (decisão do usuário; trocar para "só registrar" é a constante `C0_REPROVA` em `criterios.py`). 202, 429 e os 400 de negócio não reprovam.
+   **Fila:** no S2 a reserva precisa ter 202 (a fila ligou); 429 só é registrado (ver abaixo); no S1 só registra.
+4. **Gerador válido** (RAM livre ≥ 1 GB, sem "Insufficient VUs" fora do S2, memória do k6 estável): conferido no gerador; o `descartadas` do por-minuto mostra as iterações descartadas. Não sai do `verificar-soak.sh`.
+
+Limitação conhecida, que não reprova: as réplicas novas do gateway não recebem tráfego do k6 (conexões abertas; teste B do K2-diagnóstico).
+
+**O 429.** O `admission` devolve 429 quando o usuário tem mais de 5 mensagens em espera (`max-waiting-per-user`, script Lua) ou a fila passa de `max-length` 100000. Em regime a espera por usuário é ≈ 0, então o kit tenta provocá-lo só por carga
+(1 usuário insistente com 25% das reservas quentes: 42 a 59 req/s no pico do S2, o que enche 5 em espera se a latência da fila passar de ~85 a 120 ms). Se não sair, o critério do S2 fica **202 obrigatório, 429 só registrado**
+(o `fila` imprime "0 respostas 429" sem reprovar).
+
+### Dry-runs curtos (antes dos blocos de 2 h)
+
+DOIS, em cluster `soak` de verdade, ≈10 min cada, com a #231 aplicada e critérios 1 a 3 verdes. Cada um sobe com o X do SEU bloco (`ADMISSION_X_RPM` no `cluster.sh up`, e `rollout restart deploy/admission` se o X mudou), como os blocos:
+
+| | S1 (dry) | S2 (dry) |
+|---|---|---|
+| X / teto | 56000 / teto baixo (3000) | 4000 / teto ~20000, **perfil FIXO `dry-s2`** (`hot` de pico 0,95 × 6000 = 5,7k passa dos 3,2k que ligam a fila com `R`=1; no `dry-s2` abaixo de ~11,2k de teto a fila não liga: 3200 / (0,95 × 0,3)) |
+| perfil | sorteado por semente (impressa) | fixo, 3 subidas vale → pico na reserva (abaixo) |
+| reserva | espalhada, 60/10/30 (sem quentes), 200 vagas por evento | 1 quente (95%, só cancela) |
+| o que prova | pipeline inteiro, confirmação real, `reservation` em 1 | **a troca de bloco** e **o critério da fila (202 obrigatório)** |
+
+```powershell
+# S1 (dry): cluster com ADMISSION_X_RPM=56000
+.\soak\preparar-soak.ps1 -Id dryS1 -Bloco S1 -Teto 3000 -Duracao 600 -HostIp <ip do host> -MailpitUrl http://<ip do host>:8025 -Usuarios 200 -Eventos 200 -MaxVus 400
+# ... pre (make verificar-soak-pre SOAK_ID=dryS1 SOAK_BLOCO=S1 GERADOR_IP=... GERADOR_OFFSET_S=...), amostrar, k6 no gerador, agregar, pos.
+
+# TROCA DE BLOCO (a do S2): subir o cluster com o X novo (bloco Git Bash abaixo), reiniciar o admission (o envFrom nao recarrega) e conferir pelo pre
+kubectl --context kind-gerenciador -n gerenciador rollout restart deploy/admission ; kubectl --context kind-gerenciador -n gerenciador rollout status deploy/admission
+make limpar-banco ; .\soak\preparar-soak.ps1 -Id dryS2 -Bloco S2 -Teto 20000 -Fixo dry-s2 -HostIp <ip do host> -MailpitUrl http://<ip do host>:8025 -Usuarios 200 -Eventos 200 -MaxVus 800
+make limpar-mailpit ; make verificar-soak-pre SOAK_ID=dryS2 SOAK_BLOCO=S2 GERADOR_IP=$env:GERADOR_IP GERADOR_OFFSET_S=<offset>   # o pre aborta se o X vivo, o pod do admission ou o alvo do KEDA nao forem os do S2
+```
+
+```bash
+# TROCA DE BLOCO, Git Bash no host (o mesmo comando do bloco, com o X novo; MAILPIT_AUTH ja exportada): atualiza o Secret env-admission e o ScaledObject
+ADMISSION_X_RPM=4000 K8S_OVERLAY=soak SLIM_TAG=k8s K8S_DB_REMOTO=192.168.68.50:5433 Projeto/k8s/cluster.sh up --trilha <b1|c|nenhuma>
+```
+
+**Perfil FIXO do dry-run do S2 (`-Fixo dry-s2`, `perfil.py --fixo dry-s2`).** Não é sorteado por semente (não existe semente do perfil: o `preparar-soak.ps1` recusa `-Semente` com `-Fixo`); os 5 tipos seguem a mesma tabela de 600 s, com rampa de 30 s no início de cada fase: vale (10% do teto do tipo) 0–60 s, pico (100%) 60–180 s, vale 180–300 s, pico 300–420 s, vale 420–480 s, pico 480–600 s. Com teto 20000 a reserva (30% = 6000 RPM) tem vale de 600 e pico de 6000: **3 subidas bruscas vale → pico** (aos 60 s, 300 s e 480 s), e o `hot` de pico é 0,95 × 6000 = 5,7k, acima dos 3,2k (0,8 × X × R, `R`=1) que ligam a fila; na rampa o `hot` passa dos 3,2k aos ≈ 15 s. A **1ª subida acontece com o `reservation` em 1 réplica**, antes de o KEDA subir a 2–3 (o alvo é 2000): é ela que garante os 202. As subidas 2 e 3 só dão 202 se o `reservation` tiver voltado a 1 réplica (a descida do KEDA leva a janela de 120 s + 1 pod a cada 60 s), então valem como chances extras. No pico, com `R`=2–3, `0,7·X·R` passa de `hot` e a fila desliga.
+
+**Não troque de semente (não há): se o critério "202 obrigatório" der 0 de 202, é defeito do mecanismo (gatilho, `adm:hot`, fila); pare e relate.**
+
+`-Seco` só gera o perfil e imprime o plano (sem seed, sem SQL). Com 600 s o perfil tem 3 a 4 fases por tipo. Para exercitar a autoescala, o teto e as fases curtas não bastam: confira o aviso "critério vácuo" do `crit2`.
+
+**Portões que só dá para ver ao vivo (o selftest não os cobre), no roteiro dos dois dry-runs:**
+
+1. `Get-NetTCPConnection -LocalPort 8025 -State Listen`: ver se a 8025 escuta também em `[::]` (por isso a regra Block cobre todo o IPv6).
+2. O `pre` alcançando `localhost:8025` **com o Block ativo** (loopback não é filtrado por ele: o `GET` sem credencial tem de dar 401 mesmo assim).
+3. `.\soak\firewall-mailpit.ps1 -Acao Status -GeradorIp $env:GERADOR_IP` logo depois do `Criar`: confere o **formato real** do `RemoteAddress` que o Windows devolve (faixa IPv6 ou `::/0`) e que o `conferir-firewall.ps1` o aceita.
+4. De OUTRA máquina da LAN: `curl.exe -m 5 http://<host>:8025/api/v1/messages` = timeout (IPv4 e, se tiver, IPv6); do gerador, sem credencial = 401.
+5. `descartadas` da reserva no por-minuto (iterações que o k6 descartou por falta de VU; no S2 toda 202 quente é acompanhada e segura o VU ≥ 1 s).
+6. RSS e `restartCount` do Mailpit no S2 (`kubectl top pod`, `get pod mailpit`), com a taxa de cadastro do teto 20000.
+7. Os relógios gravados no log do `pre` (host/nó/gerador) e o aviso se passarem de 5 s.
+
+### Selftests (sem Docker, cluster, k6 nem Mailpit)
+
+`make selftests` roda, além dos de antes: `python soak/perfil_selftest.py`, `python soak/agregar_selftest.py` (inclui `.gz`, `c0` e a amostra atrasada com 5xx/status 0 → linha `atrasada=1` no por-minuto, `crit3` reprova e código 3), `python soak/criterios_selftest.py` (inclui o `amostra.py`, o gatilho por bloco,
+`spring.mail`, o `c0` e o relatório de pods), `node soak/carga-soak.selftest.mjs` (o script roda com stubs do k6:
+Mailpit fora aborta o `setup()` sem nenhuma chamada ao BFF; credencial só no header; endereços só `@example.com`; `min`/`fase` por requisição; reserva quente), `node lib-sorteio.selftest.mjs`, `bash soak/verificar-soak.selftest.sh` (`kubectl`, `curl` e `verificar-rpm` falsos)
+`soak/firewall-mailpit.selftest.ps1` (faixas complementares, a conferência da regra propriedade a propriedade, o IPv6 total e `-WhatIf`, sem tocar no firewall; o `verificar-soak.selftest.sh` roda o `pre` com um `powershell.exe`, `w32tm` e `docker` falsos, inclusive os relógios) e `soak/lib-soak.selftest.ps1` (o padrão de quentes por bloco).
+Os do `cluster.sh` (os seis valores do SMTP, ausente e errado; a poda do Mailpit fail-closed com lag > 0, ilegível e 0) estão no `Projeto/k8s/cluster.selftest.sh`.
+
+### Pendências
+
+- O cluster `soak` real, o firewall (timeout na LAN, 401 sem credencial, formato real do `RemoteAddress`) e os dois dry-runs ainda não rodaram; a #231 precisa estar aplicada.
+- **A reserva exercita o `reservation` e a fila só no S2** (decisões 1 e 2 da spec): eventos quentes + X=4000; no S1 a reserva é espalhada (60/10/30 com confirmação) e o `reservation` fica em 1. O 429 depende de a latência da fila deixar um usuário com 5 em espera: se não sair, fica só registrado.
+- **O cluster precisa subir com o X do bloco e o `admission` reiniciar ao trocar de bloco** (o `envFrom` não recarrega): o `verificar-soak pre` confere o X do Secret, a idade dos pods do `admission` e o alvo do KEDA.
+- O `verificar-soak.sh pre` nao espera `readyReplicas=1`: aborta se algum Deployment autoescalado nao estiver em 1 pronta (espere antes de rodar o `make verificar-soak-pre`).
+- O gerador tem Python 3.14.7 (`python`/`py`/`python3`): o `agregar.py` roda lá; o `perfil.py` roda em qualquer um dos dois (o perfil é determinístico, basta a semente).
+- A busca `to:` do Mailpit é um `LIKE` sem índice no JSON do destinatário: com ≈100 mil mensagens cada busca varre a tabela (o Mailpit do soak tem até 2 CPU). Se virar gargalo, `MAILPIT_TETO_S` e a taxa de cadastro são os botões.
+
 ## Matriz do experimento (runner oficial)
 
 Para **um** braço por vez, roda a disputa de vagas (teste 1, `PCT_CONFIRMA=100`) para
