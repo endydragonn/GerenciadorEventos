@@ -18,8 +18,11 @@ export const minutoEm = (decorridoMs) => Math.max(0, Math.floor(decorridoMs / 60
 
 // Enderecos de cadastro: SO @example.com (nenhum e-mail real), unicos por bloco (SUFIXO do seed) e por iteracao (n).
 export const enderecoDoCadastro = (sufixo, n) => `soak-${sufixo}-${n}@example.com`;
-// fone UNIQUE no banco: "11" + 9 digitos do n (o seed usa "11" + indice de 3 digitos + 6 do sufixo: nunca colide com "110000...")
-export const foneDoCadastro = (n) => `11${String(n).padStart(9, '0')}`;
+// fone UNIQUE no banco e os blocos rodam sobre o MESMO banco (o limpar-banco pode nao rodar entre eles): o telefone depende do SUFIXO e do n, nunca so do n.
+// Formato: "12" + 6 ultimos digitos do sufixo (zeros a esquerda) + n com 7 digitos = 15 digitos. O prefixo "12" nunca colide com o seed (setup.sh e seed-data.sql: tudo "11...",
+// inclusive os quentes). Nenhum codigo valida o formato do fone; o limite real e varchar(20) de pending_verifications (users.fone e text), por isso 15 digitos e nao os 11 de um
+// celular: 11 nao deixaria espaco para sufixo + n ate 999999 (o pior perfil faz ~120 mil cadastros). Sufixo sem digitos ("T1" no selftest) vale como zeros.
+export const foneDoCadastro = (sufixo, n) => `12${String(sufixo).replace(/\D/g, '').slice(-6).padStart(6, '0')}${String(n).padStart(7, '0')}`;
 
 // Codigo de 6 digitos do e-mail de verificacao ("Código de Verificação: 123456", EmailTemplates do notification); null se nao achar.
 export function extrairCodigo(texto) {

@@ -202,7 +202,7 @@ export function cadastro() {
   const n = exec.scenario.iterationInTest;
   const email = enderecoDoCadastro(SUFIXO, n);
   const r1 = bff(c, 'POST', '/bff/users/request-verification', {
-    name: `Soak ${SUFIXO} ${n}`, email, password: 'SoakSenha#123', fone: foneDoCadastro(n), birthdate: '1990-01-15',
+    name: `Soak ${SUFIXO} ${n}`, email, password: 'SoakSenha#123', fone: foneDoCadastro(SUFIXO, n), birthdate: '1990-01-15',
   }, null, '/bff/users/request-verification', true);
   if (r1.status >= 500) { avisar('request-verification 5xx', r1); return; }
   if (r1.status !== 201) return; // 400 de negocio: sem e-mail para esperar

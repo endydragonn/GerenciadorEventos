@@ -136,7 +136,7 @@ await confere('request-verification -> busca no Mailpit -> codigo da mensagem ->
   assert.deepEqual(seq, ['POST /bff/users/request-verification', 'GET MP/api/v1/search', 'GET MP/api/v1/message/m1', 'POST /bff/users/verify-email']);
   const rv = JSON.parse(chamadas[0].corpo);
   assert.equal(rv.email, 'soak-T1-42@example.com');
-  assert.equal(rv.fone, '11000000042');
+  assert.equal(rv.fone, '120000010000042'); // SUFIXO T1 -> digitos "1"
   const ve = JSON.parse(chamadas[3].corpo);
   assert.deepEqual(ve, { email: 'soak-T1-42@example.com', verificationCode: CODIGO });
   assert.ok(decodeURIComponent(chamadas[1].url).includes('to:soak-T1-42@example.com'));
@@ -285,6 +285,23 @@ await confere('nenhum console.* no carga-soak.js imprime o corpo do Mailpit', ()
 });
 
 saida('==> lib-soak');
+await confere('foneDoCadastro: depende do sufixo, cabe em varchar(20) ate n=999999 e nunca colide com os telefones do seed (11...)', () => {
+  const f = lib.foneDoCadastro;
+  for (const n of [1, 999999]) {
+    assert.match(f('364888', n), /^\d{15}$/);
+    assert.notEqual(f('364888', n), f('367775', n));
+  }
+  assert.notEqual(f('364888', 1), f('364888', 2));
+  // seed (setup.sh): host = "119" + 8 digitos; attendees = "11" + indice de 3 digitos + 6 do sufixo; os quentes usam "q0"+5 digitos
+  const doSeed = new Set();
+  for (const s of ['364888', '367775', 'q012345']) {
+    const d = s.replace(/\D/g, '');
+    doSeed.add(`119${d.slice(-8).padStart(8, '0')}`);
+    for (let i = 0; i < 1000; i++) doSeed.add(`11${String(i).padStart(3, '0')}${d.slice(-6).padStart(6, '0')}`);
+  }
+  for (const s of ['364888', '367775']) for (const n of [1, 42, 100000, 999999]) assert.ok(!doSeed.has(f(s, n)) && !f(s, n).startsWith('11'));
+  assert.match(f('T1', 1), /^\d{15}$/); // sufixo sem digitos suficientes ou com letras (selftest)
+});
 await confere('faseEm, minutoEm, extrairCodigo, destinoDaReserva, erroParametros', () => {
   const f = perfil.tipos.leitura.fases;
   assert.equal(lib.faseEm(f, 0), 'pico'); assert.equal(lib.faseEm(f, 299.9), 'pico'); assert.equal(lib.faseEm(f, 300), 'vale'); assert.equal(lib.faseEm(f, 9999), 'vale');
