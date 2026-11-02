@@ -29,7 +29,9 @@ antes dos blocos reais de 2 h, no cluster kind (trilha b1, Istio com sidecar, ov
 - **Banco não limpo.** Os dois dry-runs rodaram sobre o banco como estava, sem `limpar-banco`, e o S2 rodou em cima do S1.
   Foi isso que expôs o telefone do cadastro repetido entre blocos: 513 respostas `verify-email` 400 no S2, por `Users_fone_key`.
   O número bate exatamente com os 513 cadastros do S1. A correção está no commit 2b3e8e8: o telefone agora depende do sufixo.
-  Os blocos reais rodam o `limpar-banco` antes de cada bloco.
+  Os blocos reais rodam o `limpar-banco` antes de cada bloco. Com a guarda contra vácuo do commit 98ccad6, o `entregue` aplicado
+  a este CSV **reprova** o dry S2 no cadastro: só 1947 dos 2460 cadastros (79%) concluíram o `verify-email`. Na época, o
+  critério 1 contava os 2xx do `request-verification` e por isso aprovou. O dry S1 continua aprovado, com 513 de 514.
 - **Os 400 da reserva no S2 não têm motivo registrado.** O k6 não gravava o corpo da resposta. Pelo backend, as causas possíveis
   são "Evento lotado" e "Vínculo já existente". Os blocos reais contam por motivo (`reserva_400{motivo}`).
 - **Fail-open do admission no S2.** Houve 13 `Read timed out` no `POST /internal/admissions`, entre 04:28 e 04:32Z, pelo log do
