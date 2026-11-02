@@ -46,6 +46,19 @@ foreach ($prog in 'Any', '', 'C:\Program Files\Docker\Docker\resources\com.docke
 foreach ($prog in '%SystemRoot%\system32\spoolsv.exe', 'System', '%systemroot%\system32\WUDFHost.exe') { Confere "programa '$prog' nao libera a 8025" (Test-ProgramaRelevante $prog) $false }
 
 Confere 'regra de pacote UWP (programa Any, pacote S-1-15-2-...) nao libera a 8025' (Test-ProgramaRelevante 'Any' 'S-1-15-2-1') $false
+Confere 'regra de app UWP com Owner (Teams, Xbox, To Do: programa Any, pacote vazio, Owner = SID do usuario) nao libera a 8025' (Test-ProgramaRelevante 'Any' 'Any' 'S-1-5-21-1-2-3-1001') $false
+Confere 'regra sem Owner nem pacote (Docker) continua relevante' (Test-ProgramaRelevante 'C:\x\com.docker.backend.exe' 'Any' '') $true
+
+Write-Host '==> perfil ativo: so conta a Allow larga cujo Profile inclui uma rede ativa (as do Docker sao Public e as redes do host sao Private)'
+Confere 'Public com so Private ativo: nao conta' (Test-PerfilAtivo 'Public' @('Private')) $false
+Confere 'Any conta' (Test-PerfilAtivo 'Any' @('Private')) $true
+Confere "'Private, Public' com Private ativo conta" (Test-PerfilAtivo 'Private, Public' @('Private')) $true
+Confere "'Domain, Private' com Private ativo (duas redes Private) conta" (Test-PerfilAtivo 'Domain, Private' @('Private', 'Private')) $true
+Confere "'Domain, Public' com so Private ativo: nao conta" (Test-PerfilAtivo 'Domain, Public' @('Private')) $false
+Confere 'Private sem nenhuma rede ativa: nao conta' (Test-PerfilAtivo 'Private' @()) $false
+Confere 'Any sem nenhuma rede ativa: conta' (Test-PerfilAtivo 'Any' @()) $true
+Confere 'DomainAuthenticated e o perfil Domain' (ConvertTo-PerfilFirewall 'DomainAuthenticated') 'Domain'
+Confere 'Private fica Private' (ConvertTo-PerfilFirewall 'Private') 'Private'
 
 Write-Host '==> conferencia da regra permanente (Get-ProblemasDaRegra): so o complemento EXATO do gerador passa'
 $G = '192.168.68.54'
@@ -79,6 +92,29 @@ Confere 'o gerador DENTRO da faixa (0.0.0.0-192.168.68.54)' (Problemas @('0.0.0.
 Confere 'um buraco a mais (o vizinho .56 fora)' (Problemas @('0.0.0.0-192.168.68.53', '192.168.68.55', '192.168.68.57-255.255.255.255')).Count 1
 Confere 'complemento de OUTRO gerador (192.168.68.66)' (Problemas @('0.0.0.0-192.168.68.65', '192.168.68.67-255.255.255.255')).Count 1
 Confere 'um problema por propriedade quando tudo esta errado' (Problemas @('Any') 'False' 'Outbound' 'Allow' 'Private' 'UDP' '80').Count 7
+Write-Host '==> conferencia da Allow do gerador (Get-ProblemasDaAllow): so o IP do gerador, TCP 8025, perfil Any'
+function ProblemasAllow($remote = $G, $enabled = 'True', $dir = 'Inbound', $acao = 'Allow', $perfil = 'Any', $proto = 'TCP', $porta = '8025') { @(Get-ProblemasDaAllow $enabled $dir $acao $perfil $proto $porta $remote $G 8025) }
+$chamador = @(Get-ProblemasDaAllow 'True' 'Inbound' 'Allow' 'Any' 'TCP' '8025' '192.168.68.54' $G 8025)
+Confere 'como o chamador: Allow certa da 0 itens' $chamador.Count 0
+$chamador = @(Get-ProblemasDaAllow 'False' 'Outbound' 'Allow' 'Any' 'TCP' '8025' '192.168.68.54' $G 8025)
+Confere 'como o chamador: dois problemas dao 2 itens' $chamador.Count 2
+Confere 'Allow desabilitada' (ProblemasAllow -enabled 'False').Count 1
+Confere 'Allow de saida (Outbound)' (ProblemasAllow -dir 'Outbound').Count 1
+Confere 'acao Block' (ProblemasAllow -acao 'Block').Count 1
+Confere 'perfil Private' (ProblemasAllow -perfil 'Private').Count 1
+Confere 'protocolo UDP' (ProblemasAllow -proto 'UDP').Count 1
+Confere 'LocalPort 80' (ProblemasAllow -porta '80').Count 1
+Confere 'LocalPort Any' (ProblemasAllow -porta 'Any').Count 1
+Confere 'RemoteAddress de OUTRO gerador' (ProblemasAllow '192.168.68.66').Count 1
+Confere 'RemoteAddress Any' (ProblemasAllow 'Any').Count 1
+Confere 'RemoteAddress LocalSubnet' (ProblemasAllow 'LocalSubnet').Count 1
+Confere 'RemoteAddress faixa 192.168.68.0/24' (ProblemasAllow '192.168.68.0/24').Count 1
+Confere 'RemoteAddress faixa 192.168.68.54-192.168.68.60' (ProblemasAllow '192.168.68.54-192.168.68.60').Count 1
+Confere 'RemoteAddress com o gerador e mais um IP (dois itens)' (ProblemasAllow @('192.168.68.54', '192.168.68.66')).Count 1
+Confere 'RemoteAddress vazio' (ProblemasAllow $null).Count 1
+Confere 'tudo errado: um problema por propriedade' (ProblemasAllow 'Any' 'False' 'Outbound' 'Block' 'Private' 'UDP' '80').Count 7
+Confere 'IP de outro: a mensagem manda rodar o Criar de novo' ((@(ProblemasAllow '192.168.68.66') | Where-Object { $_ -match 'Criar de novo' }).Count) 1
+
 Write-Host '==> IPv6: o Block cobre TODO o IPv6 (o gerador tem IPv6 global) e so as formas de "tudo" passam'
 foreach ($f in '::/0', '::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', '0:0:0:0:0:0:0:0-FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF') { Confere "IPv6 total '$f' aceito" (Test-Ipv6Total $f) $true }
 foreach ($f in '::/64', '2001:db8::/32', '::1', 'fe80::1-fe80::9', '::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe', '1::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', '::-ffff::', 'Any', '192.168.68.55') { Confere "IPv6 '$f' NAO e todo o IPv6" (Test-Ipv6Total $f) $false }
@@ -99,8 +135,10 @@ else {
     $antes = @(Get-NetFirewallRule -DisplayName 'TCC soak mailpit 8025*' -ErrorAction SilentlyContinue).Count
     $saida = (& powershell -NoProfile -ExecutionPolicy Bypass -File $script -Acao Criar -GeradorIp 192.168.68.54 -WhatIf 2>&1 | Out-String)
     Confere 'Criar -WhatIf: mostra o Block com as faixas complementares (e o gerador fora)' ([bool]($saida -match 'What if' -and $saida -match '192\.168\.68\.54' -and $saida -match '0\.0\.0\.0-192\.168\.68\.53' -and $saida -match '192\.168\.68\.55-255\.255\.255\.255')) $true
+    Confere 'Criar -WhatIf: cita tambem a Allow so do gerador (regra, TCP 8025, IP do gerador)' ([bool]($saida -match 'TCC soak mailpit 8025 - gerador' -and $saida -match 'Allow TCP 8025 de entrada para 192\.168\.68\.54 ')) $true
     Confere 'Criar -WhatIf: o IPv6 inteiro tambem entra no Block' ([bool]($saida -match 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff')) $true
-    Confere 'Remover -WhatIf: cita a regra de bloqueio' ([bool](((& powershell -NoProfile -ExecutionPolicy Bypass -File $script -Acao Remover -WhatIf 2>&1 | Out-String) -match 'bloqueio'))) $true
+    $saidaRem = (& powershell -NoProfile -ExecutionPolicy Bypass -File $script -Acao Remover -WhatIf 2>&1 | Out-String)
+    Confere 'Remover -WhatIf: cita a regra de bloqueio e a Allow do gerador' ([bool]($saidaRem -match 'bloqueio' -and $saidaRem -match 'TCC soak mailpit 8025 - gerador')) $true
     $depois = @(Get-NetFirewallRule -DisplayName 'TCC soak mailpit 8025*' -ErrorAction SilentlyContinue).Count
     Confere '-WhatIf nao criou nem apagou nenhuma regra' $depois $antes
     & powershell -NoProfile -ExecutionPolicy Bypass -File $script -Acao Criar -GeradorIp Any -WhatIf *> $null

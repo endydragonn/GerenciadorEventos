@@ -11,8 +11,9 @@
 #             aplicada); algum Deployment autoescalado tem replicas != 1 (ou nao esta pronto); 2x o total de cadastros esperado do perfil passa do MP_MAX_MESSAGES do Mailpit
 #             APLICADO (o do render do overlay soak); o gatilho nao e o do bloco (decisao C: ADMISSION_X_RPM do Secret env-admission = 56000 no S1 e 4000 no S2, nenhum pod do
 #             admission anterior ao Secret, targetValue do ScaledObject do reservation = 0,5 x X); a API do Mailpit responde SEM credencial com algo diferente de 401 (auth desligada);
-#             a regra PERMANENTE de firewall da 8025 nao esta como deve (soak/conferir-firewall.ps1, pelo powershell.exe, SEM administrador: existe, habilitada, entrada, TCP, LocalPort 8025,
-#             Block, perfil Any, RemoteAddress = exatamente o complemento do IP do gerador INFORMADO AGORA + todo o IPv6; IP novo do gerador = aborta com a instrucao de rodar o Criar de novo); o Mailpit nao esta vazio. Registra "mailpit_inicio=0".
+#             as DUAS regras PERMANENTES de firewall da 8025 nao estao como devem (soak/conferir-firewall.ps1, pelo powershell.exe, SEM administrador: existem, habilitadas, entrada, TCP, LocalPort 8025,
+#             perfil Any; Block com RemoteAddress = exatamente o complemento do IP do gerador INFORMADO AGORA + todo o IPv6; Allow com RemoteAddress = so o IP do gerador; IP novo do gerador ou
+#             Allow ausente = aborta com a instrucao de rodar o Criar de novo); o Mailpit nao esta vazio. Registra "mailpit_inicio=0".
 #    limpar-mailpit
 #             DELETE /api/v1/messages: esvazia o Mailpit no inicio do bloco (depois do limpar-banco e do seed; o `pre` confere que esta vazio).
 #    amostrar --id ID [--intervalo 5] [--vezes N]
@@ -123,8 +124,8 @@ cmd_pre() {
     reg "ok: notification -> Mailpit (MAIL_HOST=mailpit, MAIL_PASSWORD vazio, sem spring.mail), sem ScaledObject do stock, Hikari do stock 245, autoescalados em 1 replica pronta, MP_MAX_MESSAGES >= 2x $total, bloco $A_bloco com ADMISSION_X_RPM=${x_vivo:-?} e alvo do KEDA = 0,5 x X"
     # a regra PERMANENTE de firewall (decisao 5): criada uma vez pelo usuario como administrador; aqui so e CONFERIDA (powershell.exe le Get-NetFirewallRule/PortFilter/AddressFilter, sem administrador)
     local fw_ps1="$AQUI/conferir-firewall.ps1"; command -v cygpath >/dev/null 2>&1 && fw_ps1="$(cygpath -w "$fw_ps1")"
-    "${POWERSHELL:-powershell.exe}" -NoProfile -ExecutionPolicy Bypass -File "$fw_ps1" -GeradorIp "$gip" </dev/null | tee -a "$LOG" || abortar "a regra de firewall da 8025 nao esta como deve (acima). Se o IP do gerador mudou (DHCP) ou a regra e outra, rode o Criar de novo com o IP novo, como administrador (o gerador fica bloqueado ate la, a porta nao abre): powershell -File soak\\firewall-mailpit.ps1 -Acao Criar -GeradorIp $gip"
-    reg "ok: regra de firewall da 8025 confere (Block de todo o IPv4 menos o gerador $gip)"
+    "${POWERSHELL:-powershell.exe}" -NoProfile -ExecutionPolicy Bypass -File "$fw_ps1" -GeradorIp "$gip" </dev/null | tee -a "$LOG" || abortar "as regras de firewall da 8025 (Block e Allow do gerador) nao estao como devem (acima). Se o IP do gerador mudou (DHCP), falta a Allow ou a regra e outra, rode o Criar de novo com o IP novo, como administrador (o gerador fica bloqueado ate la, a porta nao abre): powershell -File soak\\firewall-mailpit.ps1 -Acao Criar -GeradorIp $gip"
+    reg "ok: regra de firewall da 8025 confere (Block de todo o IPv4 menos o gerador $gip e Allow so do gerador)"
     registrar_relogios "${A_gerador_offset_s:-}"
     # a basic auth do Mailpit esta ligada: um GET SEM credencial tem de dar 401 (nenhum -K: a credencial nem e lida)
     sem_auth="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$MAILPIT_URL/api/v1/messages?limit=1" </dev/null 2>/dev/null)"

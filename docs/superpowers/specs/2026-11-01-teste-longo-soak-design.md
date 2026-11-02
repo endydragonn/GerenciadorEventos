@@ -107,7 +107,7 @@ tipo, se o tipo está em pico e o **total esperado de cadastros do bloco**.
      - o gatilho não for o do bloco (recebe `--bloco S1|S2`): `ADMISSION_X_RPM` do Secret `env-admission` diferente de 56000 (S1) ou 4000 (S2), pod do `admission` que subiu antes do Secret, ou
        `targetValue` do ScaledObject do `reservation` diferente de 0,5 × X;
      - a API do Mailpit não responder **401** a um GET sem credencial (prova que a basic auth está ligada);
-     - a regra de firewall `Block` da 8025 não existir, não estiver habilitada, não for de entrada/TCP/8025/`Block` ou o `RemoteAddress` não for **exatamente** o complemento do IP **atual** do gerador (`GERADOR_IP`, informado na partida: o IP é por DHCP, nunca fixo) **mais todo o IPv6**; com o IP do gerador mudado, aborta com "rode o Criar de novo com o IP novo" (fail-safe: o gerador fica bloqueado, a porta não abre);
+     - a `Allow` do gerador (entrada, TCP 8025, perfil Any, `RemoteAddress` = só o IP do gerador) não existir ou divergir, ou a regra de firewall `Block` da 8025 não existir, não estiver habilitada, não for de entrada/TCP/8025/`Block` ou o `RemoteAddress` não for **exatamente** o complemento do IP **atual** do gerador (`GERADOR_IP`, informado na partida: o IP é por DHCP, nunca fixo) **mais todo o IPv6**; com o IP do gerador mudado, aborta com "rode o Criar de novo com o IP novo" (fail-safe: o gerador fica bloqueado, a porta não abre);
      - existir ScaledObject `stock`, ou o Hikari do `stock` for diferente de 245 (pré-condição: a
        #231 aplicada);
      - algum Deployment autoescalado tiver `replicas` diferente de 1;
@@ -165,10 +165,10 @@ relatório registra a distribuição por pod.
 
   Um `up` com outro overlay (base, completa, rodada) mantém o Gmail real, e o pré-check impede que o
   k6 rode nele.
-- **NodePort do Mailpit**: a restrição é **obrigatoriamente** uma regra **`Block`** do firewall do Windows no host, **permanente até o fim dos testes** (decisão 5): TCP 8025, entrada, para todo o IPv4 **menos**
+- **NodePort do Mailpit**: a restrição é **obrigatoriamente** uma regra **`Block`** do firewall do Windows no host (mais a `Allow` do gerador, decisão 5), **permanente até o fim dos testes**: TCP 8025, entrada, para todo o IPv4 **menos**
   o gerador (faixas complementares `0.0.0.0-<ip-1>` e `<ip+1>-255.255.255.255`, mais todo o IPv6; o Docker Desktop costuma ter regras `Allow` largas, de qualquer origem, que o Windows soma, e o `Block` vence o `Allow`, então
-  ele não pode incluir o gerador). Criada uma vez pelo usuário como administrador; o `verificar-soak pre` de cada bloco a confere sem administrador; o `Remover` roda no fim dos testes; o `Status` lista a regra
-  e as `Allow` largas que cobrem a porta. Somam-se a basic auth efêmera do Mailpit (o pré-check exige 401 sem credencial) e o fato de o `listenAddress` do kind ficar em `0.0.0.0`.
+  ele não pode incluir o gerador). Criada uma vez pelo usuário como administrador; o `verificar-soak pre` de cada bloco a confere sem administrador; o `Remover` roda no fim dos testes; o `Status` lista as regras
+  e as outras `Allow` largas de rede ativa que cobrem a porta. Somam-se a basic auth efêmera do Mailpit (o pré-check exige 401 sem credencial) e o fato de o `listenAddress` do kind ficar em `0.0.0.0`.
   `loadBalancerSourceRanges` e "regra do kind" não filtram no kind, por isso não são usados.
 - O CSV bruto, o por-minuto e o perfil não têm segredo: o `--out csv` do k6 grava métricas, tags e
   URL, sem headers nem corpo. As senhas são de teste, do seed.
@@ -185,7 +185,7 @@ relatório registra a distribuição por pod.
    #231 e com réplica diferente de 1.
 5. Grep em `carga-soak.js`: nenhum endereço fora de `@example.com`.
 6. A regra de firewall existe e bloqueia: de outra máquina da LAN, `curl http://<host>:<porta>/api/v1/messages` dá timeout; do gerador sem
-   credencial, dá 401. Offline: `firewall-mailpit.selftest.ps1` cobre as faixas complementares (o gerador fora de todas, os vizinhos dentro, extremos 0.0.0.1 e 255.255.255.254), a conferência da regra
+   credencial, dá 401. Offline: `firewall-mailpit.selftest.ps1` cobre as faixas complementares (o gerador fora de todas, os vizinhos dentro, extremos 0.0.0.1 e 255.255.255.254), a conferência da `Allow` do gerador, o filtro de perfil ativo e de app UWP das `Allow` largas, a conferência da regra
    (cada propriedade errada, o complemento em outras notações, o **IPv6 total** exigido em `::/0` ou `::-ffff:…:ffff` e qualquer outra forma IPv6 reprovada) e o `-WhatIf`; o `verificar-soak.selftest.sh` cobre o `pre` com o `powershell.exe` falso, o IP do gerador mudado (aborta com a instrução) e os relógios (`w32tm` e `docker` falsos; aviso > 5 s sem abortar). A remoção é um item de "fim dos testes" do README do carga.
 7. O `verificar-soak` aborta se o total do perfil passar do `MP_MAX_MESSAGES`. Também registra o lag 0
    do `notification` antes da contagem e um Mailpit com 0 mensagens no início do bloco.
@@ -306,13 +306,15 @@ quando o critério 3 reprova, o `verificar-soak pos` lista os minutos com 5xx/st
 para ligar (ou não) a causa ao L4 do gateway. Trocar para "só registrar" é uma constante (`C0_REPROVA` em `criterios.py`). **Os relógios do gerador (o `inicio_s` vem do k6), do host (as amostras de pods) e do nó do kind (timestamps do kubelet, da VM do Docker) precisam estar
 sincronizados**: o `verificar-soak pre` **grava** o offset dos três contra `time.windows.com` e **avisa** se a diferença passar de 5 s (não aborta, não sincroniza; `w32tm /resync` e rodar o pre de novo). Com deriva maior que ±5 s o "nenhum pod saiu neste minuto" pode estar errado.
 
-### 5. Firewall permanente, só o `Block` (decidido pelo usuário)
+### 5. Firewall permanente (decidido pelo usuário): `Block` mais a `Allow` do gerador
 
 A regra de **bloqueio** da 8025 (`Block`, entrada, TCP 8025, todas as origens **menos** o gerador, por faixas complementares) é criada **uma vez** pelo usuário, como administrador, e **fica até o fim dos testes**: não é
-criada nem removida a cada bloco. O `Remover` continua, para o usuário rodar no fim. **A regra `Allow` só do gerador deixou de existir** (ponytail: uma peça a menos): o `Block` já não inclui o gerador, e quem decide se
-o gerador alcança a porta são as regras `Allow` que o host já tem (o Docker Desktop e várias do Windows liberam todas as portas, qualquer origem; o `-Acao Status` as lista). Se uma máquina não tiver nenhuma,
-o `Criar` avisa e o passo do gerador (401 sem credencial) acusa o timeout; aí basta uma `Allow` do IP do gerador na 8025. *Trade-off:* sem a nossa `Allow` o acesso do gerador depende de regras que não são do kit.
-O `verificar-soak pre` de **cada bloco** confere, **sem administrador**, que a regra existe, está habilitada, é de entrada, TCP, LocalPort 8025, ação `Block`, perfil Any e que o `RemoteAddress` é **exatamente** o
+criada nem removida a cada bloco. O `Remover` continua, para o usuário rodar no fim. **Achado ao vivo (revisa o desenho "só o `Block`", que supunha que as `Allow` largas do host liberavam o gerador):** as `Allow` do Docker Desktop (`com.docker.backend.exe`) são só do perfil Public e as redes do host
+(Ethernet, Tailscale) são Private, então o gerador (192.168.68.54) levava timeout na 8025 pelo bloqueio padrão do Windows; a 8081 só passa por regras próprias (`TCC backend 8081`, Private). O `Show-AllowsLargos` enganava
+por contar regras de outro perfil e regras de app UWP (Teams, Xbox, To Do: programa Any, só o `Owner` as distingue). **Por isso o kit cria também uma `Allow` própria** (`TCC soak mailpit 8025 - gerador`: entrada, TCP 8025,
+perfil Any, `RemoteAddress` = só o IP do gerador). Ela não alarga nada (o escopo é só o gerador, que já está fora do `Block`), o `Block` segue barrando o resto da LAN e o `Remover` apaga as duas. O `Show-AllowsLargos` passou a
+contar só `Allow` de perfil de rede ativa e a ignorar as de app UWP (informativo).
+O `verificar-soak pre` de **cada bloco** confere, **sem administrador**, as duas regras. A `Allow` precisa existir, habilitada, entrada, `Allow`, TCP, LocalPort 8025, perfil Any, `RemoteAddress` = um item, o IP do gerador (sem ela aborta com "rode o Criar de novo"). Quanto ao `Block`: a regra existe, está habilitada, é de entrada, TCP, LocalPort 8025, ação `Block`, perfil Any e que o `RemoteAddress` é **exatamente** o
 complemento do IP do gerador (o gerador fora, todo o resto do IPv4 dentro; compara os intervalos, não o texto): `Get-NetFirewallRule` + `Get-NetFirewallPortFilter` + `Get-NetFirewallAddressFilter` pelo `powershell.exe`
 (`soak/conferir-firewall.ps1`). O IP do gerador é o `GERADOR_IP` que o kit já usa (`make ... GERADOR_IP=<ip>`; `verificar-soak.sh pre --gerador-ip`). O `Block` cobre **todo o IPv6** além do IPv4 complementar ao gerador (decisão do usuário: o gerador tem IPv6 global, mas o k6 usa a URL IPv4, então o IPv6 inteiro fica fechado): o `Criar` grava a faixa `::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff` e o `conferir-firewall.ps1` **exige** esse item (aceita `::/0` ou a faixa, as formas que o Windows pode devolver; qualquer outra forma IPv6 reprova).
 **O IP do gerador não é fixo** (DHCP: já foi 192.168.68.54/22 e pode mudar): vem sempre do `GERADOR_IP`. O `pre` de cada bloco confere que o IP atual, informado na partida, é exatamente a exceção da regra; se não for, aborta com "rode o Criar de novo com o IP novo" (fail-safe: o gerador fica bloqueado, a porta não abre).

@@ -105,7 +105,8 @@ cat > "$T/bin/powershell.exe" <<'EOF'
 #!/usr/bin/env bash
 echo "powershell $*" >> "$FAKE_LOG"
 case "${FAKE_FW:-ok}" in
-    ok) echo "[ ok ] regra 'TCC soak mailpit 8025 - bloqueio': Block, entrada, TCP 8025, todo o IPv4 menos o gerador"; exit 0 ;;
+    ok) echo "[ ok ] regra 'TCC soak mailpit 8025 - bloqueio': Block, entrada, TCP 8025, todo o IPv4 menos o gerador"; echo "[ ok ] regra 'TCC soak mailpit 8025 - gerador': Allow, entrada, TCP 8025, so o gerador"; exit 0 ;;
+    semallow) echo "[ ok ] regra 'TCC soak mailpit 8025 - bloqueio': Block, entrada, TCP 8025, todo o IPv4 menos o gerador"; echo "[erro] esperada exatamente 1 regra 'TCC soak mailpit 8025 - gerador' no firewall, achei 0: sem ela o gerador nao alcanca a 8025. Rode o Criar de novo como administrador"; exit 1 ;;
     falta) echo "[erro] esperada exatamente 1 regra 'TCC soak mailpit 8025 - bloqueio' no firewall, achei 0."; exit 1 ;;
     remoto) echo "[erro] regra 'TCC soak mailpit 8025 - bloqueio': RemoteAddress (Any) nao e exatamente o complemento do gerador"; exit 1 ;;
 esac
@@ -184,6 +185,8 @@ confere "pre: confere a regra de firewall pelo powershell.exe (-NoProfile, confe
 confere "pre: registra que a regra confere" "$(echo "$saida" | grep -c 'regra de firewall da 8025 confere')" "1"
 saida="$(FAKE_FW=falta rodar pre --id T --perfil "$FX/perfil.json" --bloco S1)"; rc=$?
 confere "pre: regra de firewall ausente aborta (e diz como criar)" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'achei 0' && echo "$saida" | grep -q 'ABORTA' && echo "$saida" | grep -q 'Acao Criar -GeradorIp 192.168.68.54' && echo sim || echo nao)" "sim"
+saida="$(FAKE_FW=semallow rodar pre --id T --perfil "$FX/perfil.json" --bloco S1)"; rc=$?
+confere "pre: sem a Allow do gerador aborta (e diz para rodar o Criar de novo)" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q "gerador' no firewall, achei 0" && echo "$saida" | grep -q 'ABORTA' && echo "$saida" | grep -q 'Criar de novo' && echo sim || echo nao)" "sim"
 : > "$FAKE_LOG"; saida="$(FAKE_FW=remoto rodar pre --id T --perfil "$FX/perfil.json" --bloco S1)"; rc=$?
 confere "pre: regra com RemoteAddress que nao e o complemento do gerador aborta, sem chegar ao Mailpit" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'complemento' && [ "$(grep -c '^curl' "$FAKE_LOG")" = 0 ] && echo sim || echo nao)" "sim"
 : > "$FAKE_LOG"; rodar pre --id T --perfil "$FX/perfil.json" --bloco S1 >/dev/null

@@ -68,21 +68,37 @@ function Test-OrigemLarga($remote) {
 
 # O programa da regra pode estar escutando na 8025? Sem restricao de programa (Any/vazio) ou o Docker Desktop (com.docker.backend, vpnkit, wsl: quem publica a porta do kind). Uma regra presa a outro
 # programa (spoolsv, svchost, msra...) nao libera a 8025: o Allow vale so para o trafego daquele programa.
-function Test-ProgramaRelevante($programa, $pacote = 'Any') {
+function Test-ProgramaRelevante($programa, $pacote = 'Any', $dono = '') {
     $p = "$programa"; $k = "$pacote"
     if (-not ($k -eq '' -or $k -eq 'Any')) { return $false }   # regra de app UWP (Teams, To Do...): vale so para o pacote
+    if ("$dono" -ne '') { return $false }                      # regra com Owner (SID do usuario): as de app UWP (Teams, Xbox, To Do) chegam com programa Any e pacote vazio, so o Owner as distingue
     return ($p -eq '' -or $p -eq 'Any' -or $p -match '(?i)docker|vpnkit|wsl')
 }
 
-# Regras Allow de ENTRADA habilitadas que cobrem a porta (porta Any ou faixa/lista que a contem) com origem larga e programa relevante (Test-ProgramaRelevante). Fora as do proprio kit.
+# O perfil da regra (Get-NetFirewallRule .Profile: 'Any', 'Private', 'Domain, Private'...) inclui um dos perfis das redes ATIVAS? 'Any' sempre conta. As Allow do Docker sao so Public e as redes do host Private: nao liberam nada.
+function Test-PerfilAtivo([string]$perfilRegra, [string[]]$perfisAtivos) {
+    if ($perfilRegra.Trim() -eq 'Any') { return $true }
+    foreach ($p in ($perfilRegra -split ',')) { if ($perfisAtivos -contains $p.Trim()) { return $true } }
+    return $false
+}
+
+# NetworkCategory de Get-NetConnectionProfile -> nome do perfil do firewall
+function ConvertTo-PerfilFirewall([string]$categoria) {
+    if ($categoria -eq 'DomainAuthenticated') { return 'Domain' }
+    return $categoria
+}
+
+# Regras Allow de ENTRADA habilitadas que cobrem a porta (porta Any ou faixa/lista que a contem) com origem larga, programa relevante (Test-ProgramaRelevante) e perfil de uma rede ATIVA (Test-PerfilAtivo). Fora as do proprio kit.
 # So le o firewall. -> objetos { Nome, Programa, Porta, Origem }
 function Get-AllowsLargos([int]$porta, [string[]]$ignorar) {
     $out = @()
+    $ativos = @(Get-NetConnectionProfile -ErrorAction SilentlyContinue | ForEach-Object { ConvertTo-PerfilFirewall "$($_.NetworkCategory)" })
     foreach ($r in @(Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)) {
         if ($ignorar -contains $r.DisplayName) { continue }
+        if (-not (Test-PerfilAtivo "$($r.Profile)" $ativos)) { continue }
         $pf = $r | Get-NetFirewallPortFilter; $af = $r | Get-NetFirewallAddressFilter; $ap = $r | Get-NetFirewallApplicationFilter
         $cobre = ($pf.Protocol -in 'TCP', 'Any') -and (Test-PortaCoberta $pf.LocalPort $porta)
-        if ($cobre -and (Test-OrigemLarga $af.RemoteAddress) -and (Test-ProgramaRelevante $ap.Program $ap.Package)) {
+        if ($cobre -and (Test-OrigemLarga $af.RemoteAddress) -and (Test-ProgramaRelevante $ap.Program $ap.Package $r.Owner)) {
             $out += [pscustomobject]@{ Nome = $r.DisplayName; Programa = "$($ap.Program)"; Porta = "$($pf.LocalPort)"; Origem = "$($af.RemoteAddress)" }
         }
     }
@@ -147,4 +163,18 @@ function Get-ProblemasDaRegra($enabled, $direction, $action, $profile, $protocol
         if ($a -ne $e) { $erros += "RemoteAddress ($(@($remoteAddress) -join ',')) nao e exatamente o complemento de $geradorIp (esperado: todo o IPv4 menos ele: $(@(Get-FaixasComplementares $geradorIp) -join ', ')). Se o IP do gerador mudou (DHCP), rode o Criar de novo com o IP novo (como administrador): o gerador fica bloqueado ate la, a porta nao abre." }
     }
     return $erros   # sem a virgula: os chamadores fazem @(...), e ", $erros" vazio virava UM item (array vazio)
+}
+
+# Problemas da regra Allow do gerador lida do firewall (vazio = ok): Inbound, Allow, TCP, LocalPort exatamente a porta, perfil Any e RemoteAddress = UM item, o IP do gerador. Mesmos parametros crus de Get-ProblemasDaRegra.
+function Get-ProblemasDaAllow($enabled, $direction, $action, $profile, $protocol, $localPort, $remoteAddress, [string]$geradorIp, [int]$porta) {
+    $erros = @()
+    if ("$enabled" -ne 'True') { $erros += "a Allow do gerador nao esta habilitada (Enabled=$enabled)" }
+    if ("$direction" -ne 'Inbound') { $erros += "a Allow do gerador nao e de entrada (Direction=$direction)" }
+    if ("$action" -ne 'Allow') { $erros += "a acao da Allow do gerador nao e Allow (Action=$action)" }
+    if ("$profile" -ne 'Any') { $erros += "o perfil da Allow do gerador nao e Any (Profile=$profile): as redes do host podem ser Privada, Publica ou Dominio" }
+    if ("$protocol" -ne 'TCP') { $erros += "o protocolo da Allow do gerador nao e TCP (Protocol=$protocol)" }
+    if (@($localPort).Count -ne 1 -or "$($localPort)" -ne "$porta") { $erros += "LocalPort da Allow do gerador nao e exatamente $porta (LocalPort=$(@($localPort) -join ','))" }
+    $itens = @($remoteAddress | Where-Object { $null -ne $_ } | ForEach-Object { "$_".Trim() })
+    if ($itens.Count -ne 1 -or $itens[0] -ne $geradorIp) { $erros += "RemoteAddress da Allow do gerador ($($itens -join ',')) nao e exatamente o IP do gerador $geradorIp (um item so). Se o IP do gerador mudou (DHCP), rode o Criar de novo com o IP novo (como administrador): sem a Allow certa o gerador nao alcanca a porta." }
+    return $erros   # sem a virgula: os chamadores fazem @(...)
 }

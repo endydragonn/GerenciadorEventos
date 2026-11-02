@@ -545,7 +545,7 @@ Pares: o `intercalado` usa o usuário `⌊i / 2000⌋`, então 627 mil tentativa
 | `verificar-soak.sh` | host (Git Bash) | `pre`, `amostrar` e `pos` (abaixo) |
 | `amostra.py`, `criterios.py` | host | as peças puras do `verificar-soak.sh` (amostra do `kubectl`, pré-checks, critérios 1 a 3), com selftest |
 | `preparar-soak.ps1` | host | gera o perfil, semeia (2000 × 2000, com a capacidade do bloco: `-Capacidade` S1 = 200, S2 = 500; e, só no S2, os eventos quentes; `-Quentes` padrão do bloco); `-Fixo dry-s2` usa o perfil fixo do dry-run do S2, promove o host do seed por SQL e imprime a linha EXATA do gerador (mesmo modelo do `preparar-degraus.ps1`); exige `-Bloco S1|S2` |
-| `firewall-mailpit.ps1` (+ `lib-firewall.ps1`, `conferir-firewall.ps1`) | host (Administrador só no `Criar`/`Remover`) | **uma** regra permanente do Windows para a API do Mailpit (8025): `Block` para todo o IPv4 menos o gerador (faixas complementares; o `Block` vence as `Allow` largas do Docker Desktop) **e para todo o IPv6** (`::-ffff:…:ffff`; o gerador tem IPv6 global, mas o k6 usa a URL IPv4), criada UMA vez e removida só no fim dos testes. O IP do gerador vem do `GERADOR_IP` (DHCP: não é fixo; mudou = rode o `Criar` de novo). `Status` mostra a regra (com `-GeradorIp`, se confere) e as `Allow` largas; `-WhatIf` nativo. O `conferir-firewall.ps1` é o que o `verificar-soak pre` roda, sem administrador |
+| `firewall-mailpit.ps1` (+ `lib-firewall.ps1`, `conferir-firewall.ps1`) | host (Administrador só no `Criar`/`Remover`) | **duas** regras permanentes do Windows para a API do Mailpit (8025), criadas UMA vez e removidas só no fim dos testes: `Block` para todo o IPv4 menos o gerador (faixas complementares) **e para todo o IPv6** (`::-ffff:…:ffff`; o gerador tem IPv6 global, mas o k6 usa a URL IPv4), que continua barrando o resto da LAN, e `Allow` (`TCC soak mailpit 8025 - gerador`) só do IP do gerador, perfil Any. A `Allow` própria é necessária porque as do Docker Desktop são só do perfil Public e as redes do host são Private (sem ela o gerador leva timeout); ela não alarga nada, porque o escopo é só o gerador. O IP do gerador vem do `GERADOR_IP` (DHCP: não é fixo; mudou = rode o `Criar` de novo). `Status` mostra as duas regras (com `-GeradorIp`, se conferem) e as outras `Allow` largas de rede ativa (fora as de app UWP); `-WhatIf` nativo. O `conferir-firewall.ps1` é o que o `verificar-soak pre` roda, sem administrador |
 
 ### Cada tipo de carga
 
@@ -559,8 +559,8 @@ Pares: o `intercalado` usa o usuário `⌊i / 2000⌋`, então 627 mil tentativa
 
 ### Passo a passo (um bloco)
 
-Pré-requisitos no host: o cluster `soak` no ar e a regra permanente de firewall já criada (uma vez, até o fim dos testes; `Projeto/k8s/README.md`), `CARGA_K8S=kind-gerenciador` no ambiente do shell, `MAILPIT_AUTH` no ambiente (a mesma do `cluster.sh up`), `MAILPIT_URL`
-(padrão `http://localhost:8025`), `Projeto/.env` e `Projeto/supabase/.env` presentes (nada deles é impresso).
+Pré-requisitos no host: o cluster `soak` no ar e as duas regras permanentes de firewall já criadas (uma vez, até o fim dos testes; `Projeto/k8s/README.md`), `CARGA_K8S=kind-gerenciador` no ambiente do shell, `MAILPIT_AUTH` no ambiente (a mesma do `cluster.sh up`), `MAILPIT_URL`
+(padrão `http://localhost:8025`), `Projeto/.env` e `Projeto/supabase/.env` presentes (nada deles é impresso). Nos dry-runs a credencial efêmera do Mailpit foi passada ao gerador por mensagem entre sessões do Claude Code, por decisão do usuário (o valor não consta em nenhum arquivo).
 
 ```powershell
 # HOST (PowerShell, em Projeto/carga), nesta ordem. Os alvos do make chamam o bash do Git (o do PATH costuma ser o do WSL)
@@ -573,7 +573,7 @@ $env:CARGA_K8S = 'kind-gerenciador'
 make limpar-banco                                   # 1. banco limpo (modo cluster); depois espere readyReplicas=1 em todos os Deployments com ScaledObject
 .\soak\preparar-soak.ps1 -Id S1 -Bloco S1 -Semente 4 -Teto 35000 -HostIp <ip do host na LAN> -MailpitUrl http://<ip do host na LAN>:8025   # 2. perfil + seed (S1: 2000 usuarios x 2000 eventos de 200 vagas, semente 4 pela regra da escolha; S2: 500 vagas + quentes) + host por SQL; imprime a linha do gerador
 make limpar-mailpit                                 # 3. Mailpit vazio (DELETE /api/v1/messages; o seed nao manda e-mail, mas e depois dele que vale)
-make verificar-soak-pre SOAK_ID=S1 SOAK_BLOCO=S1 GERADOR_IP=$env:GERADOR_IP GERADOR_OFFSET_S=<offset do w32tm no gerador>   # 4. GERADOR_IP = o IP ATUAL do gerador (DHCP). Aborta (codigo 1) se algo estiver errado: e-mail real, sem #231, replica != 1, X/alvo do KEDA que nao e o do bloco, regra de firewall da 8025 fora do esperado, Mailpit pequeno, sem 401 ou nao vazio
+make verificar-soak-pre SOAK_ID=S1 SOAK_BLOCO=S1 GERADOR_IP=$env:GERADOR_IP GERADOR_OFFSET_S=<offset do w32tm no gerador>   # 4. GERADOR_IP = o IP ATUAL do gerador (DHCP). Aborta (codigo 1) se algo estiver errado: e-mail real, sem #231, replica != 1, X/alvo do KEDA que nao e o do bloco, regras de firewall da 8025 (Block e Allow do gerador) fora do esperado, Mailpit pequeno, sem 401 ou nao vazio
 make amostrar-soak SOAK_ID=S1                       # 5. em um TERMINAL PROPRIO durante o bloco (replicas, HPA e pods a cada 5 s); Ctrl+C ao fim
 make coleta-host ROTULO=soak-S1                     #    em outro terminal; a coleta do kit em modo cluster
 ```
@@ -596,14 +596,14 @@ referência (`time.windows.com`): host (`w32tm /stripchart /computer:time.window
 
 ### Fim dos testes
 
-Depois do último bloco, como administrador no host: `.\soak\firewall-mailpit.ps1 -Acao Remover` (apaga a regra permanente do `Block` da 8025 e confirma que `Get-NetFirewallRule` não a acha). Derrube o cluster (`cluster.sh down`) e apague o CSV bruto do gerador.
+Depois do último bloco, como administrador no host: `.\soak\firewall-mailpit.ps1 -Acao Remover` (apaga as duas regras permanentes da 8025, o `Block` e a `Allow` do gerador, e confirma que `Get-NetFirewallRule` não acha nenhuma). Derrube o cluster (`cluster.sh down`) e apague o CSV bruto do gerador.
 
 **`MAX_VUS` (padrão 2000) e a RAM do gerador:** o k6 entrega a cada VU uma **cópia** do retorno do `setup()` (as 2000 sessões, ≈ 1,5 a 2 MB), além de ~1 a 2 MB do próprio VU; com 2000 VUs isso passa de 3 a 4 GB só em dados. Dimensione `-MaxVus` pela RAM
 livre do gerador (critério 4: livre ≥ 1 GB) e pelos VUs que o 202 acompanhado segura (≈ taxa de 202 por segundo × ≥ 1 s de consulta): o dry-run mede.
 
 **`verificar-soak.sh pre --bloco S1|S2`** aborta (código 1) se: o `notification` **vivo** não tiver os seis valores do Mailpit (a entrada `MAIL_PASSWORD` tem de existir, vazia e sem `valueFrom`; a API do Kubernetes omite `value` vazio, então "ausente" e "vazio" são
 distinguidos pelo nome) ou trouxer `SPRING_MAIL_*` / `SPRING_APPLICATION_JSON`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` com `spring.mail` (também como chave do Secret `env-notification`; só as chaves são lidas); o gatilho não for o do bloco (`ADMISSION_X_RPM` do Secret
-`env-admission` ≠ 56000/4000, pod do `admission` que subiu antes do Secret, `targetValue` do ScaledObject do `reservation` ≠ 0,5·X); a regra permanente de firewall da 8025 não conferir (`conferir-firewall.ps1` pelo `powershell.exe`, sem administrador: existe, habilitada, entrada, TCP 8025, `Block`, perfil Any, `RemoteAddress` exatamente o complemento do IP ATUAL do gerador (`GERADOR_IP`) **mais todo o IPv6** (`::/0` ou `::-ffff:…:ffff`; qualquer outra forma IPv6 reprova); se o IP do gerador mudou (DHCP), aborta com "rode o Criar de novo com o IP novo"); a API do Mailpit não responder 401 a um GET sem credencial; existir ScaledObject do `stock` ou o Hikari do `stock` for diferente de 245 (**a #231 não foi aplicada**); algum Deployment autoescalado tiver `replicas` ou `readyReplicas` diferente de 1; o total esperado de
+`env-admission` ≠ 56000/4000, pod do `admission` que subiu antes do Secret, `targetValue` do ScaledObject do `reservation` ≠ 0,5·X); as duas regras permanentes de firewall da 8025 não conferirem (`conferir-firewall.ps1` pelo `powershell.exe`, sem administrador: existem, habilitadas, entrada, TCP 8025, perfil Any; `Block` com `RemoteAddress` exatamente o complemento do IP ATUAL do gerador (`GERADOR_IP`) **mais todo o IPv6** (`::/0` ou `::-ffff:…:ffff`; qualquer outra forma IPv6 reprova); `Allow` (`TCC soak mailpit 8025 - gerador`) com `RemoteAddress` exatamente o IP do gerador, um item só; se o IP do gerador mudou (DHCP) ou a `Allow` não existe, aborta com "rode o Criar de novo" como administrador); a API do Mailpit não responder 401 a um GET sem credencial; existir ScaledObject do `stock` ou o Hikari do `stock` for diferente de 245 (**a #231 não foi aplicada**); algum Deployment autoescalado tiver `replicas` ou `readyReplicas` diferente de 1; o total esperado de
 cadastros do perfil × 2 passar do `MP_MAX_MESSAGES` do Mailpit aplicado (o do render do overlay `soak`; cobre o "total > `MP_MAX_MESSAGES`"); o Mailpit não estiver vazio (registra `mailpit_inicio=0`).
 **`pos`**, nesta ordem: (1) espera o lag do group `notification` chegar a 0 e registra `lag_notification=0`; (2) conta o Mailpit filtrado pelo sufixo; (3) confere o `From` de **todas** as mensagens (`@example.com`); (4) `verificar-rpm`
 (overselling, código 3; sagas, código 4; sobem como estão); (5) os critérios 1 a 3 e a fila (S2: 202 obrigatório, 429 só registrado); se o critério 3 reprovar, lista os minutos com 5xx/status 0 por tipo e, ao lado, os pods que saíram neles (horário, serviço, nome; das amostras do `amostrar`); (6) só então o bloco seguinte roda o `limpar-banco`. O registro vai para `results/soak-<id>-verificacoes.log`.
@@ -663,7 +663,7 @@ ADMISSION_X_RPM=4000 K8S_OVERLAY=soak SLIM_TAG=k8s K8S_DB_REMOTO=192.168.68.50:5
 
 1. `Get-NetTCPConnection -LocalPort 8025 -State Listen`: ver se a 8025 escuta também em `[::]` (por isso a regra Block cobre todo o IPv6).
 2. O `pre` alcançando `localhost:8025` **com o Block ativo** (loopback não é filtrado por ele: o `GET` sem credencial tem de dar 401 mesmo assim).
-3. `.\soak\firewall-mailpit.ps1 -Acao Status -GeradorIp $env:GERADOR_IP` logo depois do `Criar`: confere o **formato real** do `RemoteAddress` que o Windows devolve (faixa IPv6 ou `::/0`) e que o `conferir-firewall.ps1` o aceita.
+3. `.\soak\firewall-mailpit.ps1 -Acao Status -GeradorIp $env:GERADOR_IP` logo depois do `Criar`: confere o **formato real** do `RemoteAddress` que o Windows devolve (faixa IPv6 ou `::/0`; na `Allow`, o IP puro) e que o `conferir-firewall.ps1` o aceita, e lista as outras `Allow` largas de rede ativa (a do Docker é Public e a rede do host é Private: não libera o gerador, por isso a `Allow` do kit).
 4. De OUTRA máquina da LAN: `curl.exe -m 5 http://<host>:8025/api/v1/messages` = timeout (IPv4 e, se tiver, IPv6); do gerador, sem credencial = 401.
 5. `descartadas` da reserva no por-minuto (iterações que o k6 descartou por falta de VU; no S2 toda 202 quente é acompanhada e segura o VU ≥ 1 s).
 6. RSS e `restartCount` do Mailpit no S2 (`kubectl top pod`, `get pod mailpit`), com a taxa de cadastro do teto 20000.
@@ -674,12 +674,12 @@ ADMISSION_X_RPM=4000 K8S_OVERLAY=soak SLIM_TAG=k8s K8S_DB_REMOTO=192.168.68.50:5
 `make selftests` roda, além dos de antes: `python soak/perfil_selftest.py`, `python soak/agregar_selftest.py` (inclui `.gz`, `c0` e a amostra atrasada com 5xx/status 0 → linha `atrasada=1` no por-minuto, `crit3` reprova e código 3), `python soak/criterios_selftest.py` (inclui o `amostra.py`, o gatilho por bloco,
 `spring.mail`, o `c0` e o relatório de pods), `node soak/carga-soak.selftest.mjs` (o script roda com stubs do k6:
 Mailpit fora aborta o `setup()` sem nenhuma chamada ao BFF; credencial só no header; endereços só `@example.com`; `min`/`fase` por requisição; reserva quente), `node lib-sorteio.selftest.mjs`, `bash soak/verificar-soak.selftest.sh` (`kubectl`, `curl` e `verificar-rpm` falsos)
-`soak/firewall-mailpit.selftest.ps1` (faixas complementares, a conferência da regra propriedade a propriedade, o IPv6 total e `-WhatIf`, sem tocar no firewall; o `verificar-soak.selftest.sh` roda o `pre` com um `powershell.exe`, `w32tm` e `docker` falsos, inclusive os relógios) e `soak/lib-soak.selftest.ps1` (o padrão de quentes por bloco).
+`soak/firewall-mailpit.selftest.ps1` (faixas complementares, a conferência do `Block` e da `Allow` do gerador propriedade a propriedade, o IPv6 total, o filtro de perfil ativo e de app UWP das `Allow` largas e `-WhatIf`, sem tocar no firewall; o `verificar-soak.selftest.sh` roda o `pre` com um `powershell.exe`, `w32tm` e `docker` falsos, inclusive os relógios) e `soak/lib-soak.selftest.ps1` (o padrão de quentes por bloco).
 Os do `cluster.sh` (os seis valores do SMTP, ausente e errado; a poda do Mailpit fail-closed com lag > 0, ilegível e 0) estão no `Projeto/k8s/cluster.selftest.sh`.
 
 ### Pendências
 
-- O cluster `soak` real, o firewall (timeout na LAN, 401 sem credencial, formato real do `RemoteAddress`) e os dois dry-runs ainda não rodaram; a #231 precisa estar aplicada.
+- O cluster `soak` real, o firewall (timeout na LAN, 401 sem credencial do gerador, formato real do `RemoteAddress`) e os dois dry-runs ainda não rodaram; a #231 precisa estar aplicada.
 - **A reserva exercita o `reservation` e a fila só no S2** (decisões 1 e 2 da spec): eventos quentes + X=4000; no S1 a reserva é espalhada (60/10/30 com confirmação) e o `reservation` fica em 1. O 429 depende de a latência da fila deixar um usuário com 5 em espera: se não sair, fica só registrado.
 - **O cluster precisa subir com o X do bloco e o `admission` reiniciar ao trocar de bloco** (o `envFrom` não recarrega): o `verificar-soak pre` confere o X do Secret, a idade dos pods do `admission` e o alvo do KEDA.
 - O `verificar-soak.sh pre` nao espera `readyReplicas=1`: aborta se algum Deployment autoescalado nao estiver em 1 pronta (espere antes de rodar o `make verificar-soak-pre`).
