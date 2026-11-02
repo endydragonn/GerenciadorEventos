@@ -174,6 +174,8 @@ print(sum(int(l["verificacoes_2xx"] or 0) for l in csv.DictReader(open(sys.argv[
     [ -f "$pods" ] && cp "$pods" "$tmp/pods.csv"
     reg "2/3. Mailpit com $total mensagens no total; cadastros 2xx esperados: $esperados"
     if crit emails --paginas "$tmp"/pag-*.json --esperados "$esperados" --sufixo "$A_sufixo" --pods "$tmp/pods.csv" | tee -a "$LOG"; then reg "criterio 1 (e-mail): ok"; else reg "criterio 1 (e-mail): REPROVOU (perdido, duplicado fora de +-60 s de um pod do notification saindo, ou From fora de @example.com)"; falhas=$((falhas + 1)); fi
+    # 3b. a carga entregue nao pode passar por vacuo: cada tipo com >= 90% das iteracoes que o perfil esperava (S1 de 2026-11-02: 37253 cadastros com 400 e "criterio 1: ok")
+    if crit entregue --por-minuto "$pm" --perfil "$A_perfil" --bloco "$A_bloco" | tee -a "$LOG"; then reg "carga entregue: ok"; else reg "criterio 1 (carga entregue): REPROVOU (tipo com menos de 90% das iteracoes do perfil: o fluxo falhou; veja c400/c5xx do tipo no por-minuto)"; falhas=$((falhas + 1)); fi
     # 4. overselling e sagas (o verificar-rpm do kit, em modo cluster); 3 e 4 sobem como estao
     if [ -n "${VERIFICAR_RPM:-}" ]; then CARGA_K8S="$CTX" $VERIFICAR_RPM "$A_prefixo"; rc_rpm=$?
     else CARGA_K8S="$CTX" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$AQUI/../rpm/subir-host-rpm.ps1" 2>/dev/null || echo "$AQUI/../rpm/subir-host-rpm.ps1")" -Verificar -Prefixo "$A_prefixo"; rc_rpm=$?; fi

@@ -1,6 +1,7 @@
 """Auto-teste do criterios.py e do amostra.py (issue #232): pre-checks do cluster vivo, criterios 1 a 3 e a amostra do kubectl. Sem cluster, sem rede.
 Uso:  python criterios_selftest.py"""
 import copy
+import json
 import os
 import sys
 import tempfile
@@ -373,6 +374,54 @@ class Emails(unittest.TestCase):
     def test_extras_viram_aviso(self):
         ms = [msg("soak-b1-%d@example.com" % i, 1000 + i) for i in range(3)]
         self.assertEqual(C.criterio_emails(ms, 2, "b1", [])["extras"], 1)
+
+    def test_carga_entregue_com_os_csv_reais(self):
+        # S1 real de 2026-11-02 (todos os cadastros com 400, 0 de 37254) reprova; dry S1 aprova (513/514); dry S2 reprova no cadastro (1947/2460 = 79%: os 513 telefones repetidos)
+        base = os.path.join(AQUI, "..", "results", "11-soak")
+        def roda(pasta, id_, bloco):
+            with open(os.path.join(base, pasta, "perfil-%s.json" % id_), encoding="utf-8") as f:
+                perfil = json.load(f)
+            return C.carga_entregue(C.ler_csv(os.path.join(base, pasta, "soak-%s-por-minuto.csv" % id_)), perfil, bloco)
+        s1 = roda("S1-tentativa1", "S1", "S1")
+        self.assertEqual(len(s1), 1)
+        self.assertIn("cadastros 2xx 0 de 37254 esperados pelo perfil: o fluxo de cadastro falhou (veja c400 do tipo cadastro)", s1[0])
+        self.assertEqual(roda("dry-run", "dryS1", "S1"), [])
+        s2 = roda("dry-run", "dryS2", "S2")
+        self.assertEqual(len(s2), 1)
+        self.assertIn("cadastros 2xx 1947 de 2460 esperados pelo perfil", s2[0])
+
+    def perfil_cem(self):
+        return {"total_cadastros_esperado": 100, "por_minuto": [{t: {"rpm": 100.0} for t in ("cadastro", "escrita", "leitura", "login", "reserva")}]}
+
+    def linhas_cem(self, **v):
+        # cadastro: c2xx inclui o request-verification (verificacoes_2xx) E o verify-email; o sucesso do cadastro e o verify = c2xx - verificacoes_2xx
+        base = {"cadastro": {"c2xx": 200, "verificacoes_2xx": 100}, "escrita": {"c2xx": 200}, "leitura": {"c2xx": 100}, "login": {"c2xx": 100}, "reserva": {"c2xx": 60, "c202": 20, "c400": 20}}
+        base.update(v)
+        return [dict({"tipo": t, "c2xx": 0, "c202": 0, "c400": 0, "verificacoes_2xx": 0, "descartadas": 0}, **c) for t, c in base.items()]
+
+    def test_carga_entregue_piso_de_90_por_cento_por_tipo(self):
+        perfil, linhas = self.perfil_cem(), self.linhas_cem
+        self.assertEqual(C.carga_entregue(linhas(), perfil, "S1"), [])
+        self.assertEqual(C.carga_entregue(linhas(cadastro={"c2xx": 190, "verificacoes_2xx": 100}), perfil, "S1"), [])
+        self.assertEqual(len(C.carga_entregue(linhas(cadastro={"c2xx": 189, "verificacoes_2xx": 100}), perfil, "S1")), 1)
+        self.assertEqual(len(C.carga_entregue(linhas(cadastro={"c2xx": 100, "verificacoes_2xx": 100}), perfil, "S1")), 1)   # request-verification ok, verify-email 400 (Users_fone_key)
+        self.assertEqual(len(C.carga_entregue(linhas(escrita={"c2xx": 179}), perfil, "S1")), 1)   # 2 chamadas por iteracao: 179/2 = 89,5
+        self.assertEqual(C.carga_entregue(linhas(escrita={"c2xx": 180}), perfil, "S1"), [])
+        self.assertEqual(len(C.carga_entregue(linhas(leitura={"c2xx": 0}), perfil, "S1")), 1)
+        self.assertEqual(len(C.carga_entregue(linhas(login={"c2xx": 50}), perfil, "S1")), 1)
+        self.assertEqual(len(C.carga_entregue(linhas(reserva={"c2xx": 50, "c202": 20, "c400": 19}), perfil, "S1")), 1)  # 89
+        self.assertEqual(C.carga_entregue(linhas(reserva={"c2xx": 0, "c202": 90, "c400": 0}), perfil, "S1"), [])
+        self.assertEqual(len(C.carga_entregue(linhas(cadastro={}, leitura={}), perfil, "S1")), 2)
+
+    def test_carga_entregue_descartadas_so_descontam_no_s2(self):
+        # o S2 tolera "Insufficient VUs" (descartadas); o S1 nao: as mesmas descartadas reprovam no S1
+        perfil = self.perfil_cem()
+        ls = self.linhas_cem(leitura={"c2xx": 60, "descartadas": 40})
+        self.assertEqual(C.carga_entregue(ls, perfil, "S2"), [])
+        r = C.carga_entregue(ls, perfil, "S1")
+        self.assertEqual(len(r), 1)
+        self.assertIn("leitura", r[0])
+        self.assertEqual(len(C.carga_entregue(self.linhas_cem(leitura={"c2xx": 40, "descartadas": 40}), perfil, "S2")), 1)   # 40 de 60 esperados: ainda abaixo
 
     def test_parse_do_created_do_mailpit(self):
         self.assertEqual(C.parse_quando("2026-11-01T12:00:00Z"), 1793534400.0)

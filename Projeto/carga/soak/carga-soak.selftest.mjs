@@ -138,7 +138,7 @@ await confere('request-verification -> busca no Mailpit -> codigo da mensagem ->
   assert.deepEqual(seq, ['POST /bff/users/request-verification', 'GET MP/api/v1/search', 'GET MP/api/v1/message/m1', 'POST /bff/users/verify-email']);
   const rv = JSON.parse(chamadas[0].corpo);
   assert.equal(rv.email, 'soak-T1-42@example.com');
-  assert.equal(rv.fone, '120000010000042'); // SUFIXO T1 -> digitos "1"
+  assert.equal(rv.fone, '12001000042'); // SUFIXO T1 -> digitos "1" -> k=1; n=42 (11 digitos)
   const ve = JSON.parse(chamadas[3].corpo);
   assert.deepEqual(ve, { email: 'soak-T1-42@example.com', verificationCode: CODIGO });
   assert.ok(decodeURIComponent(chamadas[1].url).includes('to:soak-T1-42@example.com'));
@@ -318,13 +318,17 @@ await confere('nenhum console.* no carga-soak.js imprime o corpo do Mailpit', ()
 });
 
 saida('==> lib-soak');
-await confere('foneDoCadastro: depende do sufixo, cabe em varchar(20) ate n=999999 e nunca colide com os telefones do seed (11...)', () => {
+await confere('foneDoCadastro: 11 digitos (a regra do gateway), nunca "11...", unico por sufixo e por n', () => {
   const f = lib.foneDoCadastro;
-  for (const n of [1, 999999]) {
-    assert.match(f('364888', n), /^\d{15}$/);
-    assert.notEqual(f('364888', n), f('367775', n));
+  const doGateway = (fone) => { const limpo = fone.replace(/\D/g, ''); return limpo.length >= 10 && limpo.length <= 11; };   // BffUserController: "Telefone deve conter 10 ou 11 digitos"
+  const sufixos = ['370785', '364888', '367775', 'T1'];
+  for (const s of sufixos) for (const n of [0, 1, 999999]) {
+    assert.match(f(s, n), /^\d{11}$/);
+    assert.ok(doGateway(f(s, n)) && !f(s, n).startsWith('11'), f(s, n));
   }
-  assert.notEqual(f('364888', 1), f('364888', 2));
+  for (const n of [1, 42]) for (let a = 0; a < sufixos.length; a++) for (let b = a + 1; b < sufixos.length; b++) assert.notEqual(f(sufixos[a], n), f(sufixos[b], n));
+  for (const s of sufixos) assert.notEqual(f(s, 1), f(s, 2));
+  assert.match(f('364888', 1), /^(1[2-9]|[2-9]\d)\d{9}$/);   // dois digitos de 12 a 99 + 3 do sufixo + 6 do n
   // seed (setup.sh): host = "119" + 8 digitos; attendees = "11" + indice de 3 digitos + 6 do sufixo; os quentes usam "q0"+5 digitos
   const doSeed = new Set();
   for (const s of ['364888', '367775', 'q012345']) {
@@ -332,8 +336,7 @@ await confere('foneDoCadastro: depende do sufixo, cabe em varchar(20) ate n=9999
     doSeed.add(`119${d.slice(-8).padStart(8, '0')}`);
     for (let i = 0; i < 1000; i++) doSeed.add(`11${String(i).padStart(3, '0')}${d.slice(-6).padStart(6, '0')}`);
   }
-  for (const s of ['364888', '367775']) for (const n of [1, 42, 100000, 999999]) assert.ok(!doSeed.has(f(s, n)) && !f(s, n).startsWith('11'));
-  assert.match(f('T1', 1), /^\d{15}$/); // sufixo sem digitos suficientes ou com letras (selftest)
+  for (const s of ['364888', '367775']) for (const n of [1, 42, 100000, 999999]) assert.ok(!doSeed.has(f(s, n)));
 });
 await confere('faseEm, minutoEm, extrairCodigo, destinoDaReserva, erroParametros', () => {
   const f = perfil.tipos.leitura.fases;
@@ -351,6 +354,8 @@ await confere('faseEm, minutoEm, extrairCodigo, destinoDaReserva, erroParametros
   assert.match(lib.erroParametros({ ...ok, mailpitAuth: 'soak:curta12345' }), /MAILPIT_AUTH/);   // senha < 16: a mesma regra do cluster.sh e do verificar-soak.sh
   assert.match(lib.erroParametros({ ...ok, mailpitUrl: '' }), /MAILPIT_URL/);
   assert.match(lib.erroParametros({ ...ok, maxVus: 5 }), /MAX_VUS/);
+  assert.match(lib.erroParametros({ ...ok, perfil: { ...ok.perfil, total_cadastros_esperado: 1000000 } }), /total_cadastros_esperado/);   // n com 6 digitos no telefone
+  assert.equal(lib.erroParametros({ ...ok, perfil: { ...ok.perfil, total_cadastros_esperado: 999999 } }), null);
   assert.match(lib.erroParametros({ ...ok, perfil: { tipos: {} } }), /leitura/);
 });
 

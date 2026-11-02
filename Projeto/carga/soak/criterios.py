@@ -14,6 +14,7 @@ Subcomandos (saida 0 = ok, 1 = reprovou; imprime o motivo, nunca segredo):
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import sys
@@ -335,6 +336,25 @@ def criterio_emails(mensagens, esperados, sufixo, saidas, tol_s=60):
             "from_ruins": [m["de"] for m in mensagens if not m["de"].endswith(DOMINIO)]}
 
 
+def carga_entregue(por_minuto, perfil, bloco, piso=0.9):
+    """-> lista de mensagens de reprovacao: tipo cujo "sucesso" somado no por-minuto ficou abaixo de `piso` das iteracoes que o perfil esperava (soma da taxa por minuto; cadastro:
+    total_cadastros_esperado). Sem isso um tipo que falha em tudo passa por vacuo (S1 de 2026-11-02: 37253 cadastros com 400, 0 e-mails para 0 cadastros 2xx, criterio 1 "ok").
+    No S2 (que tolera Insufficient VUs) o esperado de cada tipo desconta as `descartadas` do tipo; no S1 nada.
+    Sucesso por tipo: cadastro = verify-email 2xx = c2xx - verificacoes_2xx (a unicidade do fone so e checada no verify: 400 por Users_fone_key; as chamadas ao Mailpit tem tipo=mailpit); leitura e login = c2xx; escrita = c2xx / 2 (a iteracao faz POST e PUT); reserva = c2xx + c202 + c400 (o por-minuto nao separa o 400 de lotado)."""
+    soma = lambda tipo, cols, div=1: sum(sum(int(l[c] or 0) for c in cols) for l in por_minuto if l["tipo"] == tipo) / div
+    contagem = {"cadastro": soma("cadastro", ["c2xx"]) - soma("cadastro", ["verificacoes_2xx"]), "leitura": soma("leitura", ["c2xx"]), "login": soma("login", ["c2xx"]),
+                "escrita": soma("escrita", ["c2xx"], 2), "reserva": soma("reserva", ["c2xx", "c202", "c400"])}
+    erros = []
+    for tipo, n in contagem.items():
+        esperado = perfil["total_cadastros_esperado"] if tipo == "cadastro" else math.ceil(sum(m[tipo]["rpm"] for m in perfil["por_minuto"]))
+        if bloco == "S2":
+            esperado -= soma(tipo, ["descartadas"])
+        if n < piso * esperado:
+            rotulo = "cadastros 2xx" if tipo == "cadastro" else "%s com sucesso" % tipo
+            erros.append("%s %d de %d esperados pelo perfil: o fluxo de %s falhou (veja c400 do tipo %s)" % (rotulo, n, esperado, tipo, tipo))
+    return erros
+
+
 # ----------------------------------------------------------------------------- CLI
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -342,6 +362,7 @@ def main(argv=None):
     p = sub.add_parser("pre"); p.add_argument("--lista", required=True); p.add_argument("--total", type=int, required=True)
     p.add_argument("--bloco", choices=sorted(X_DO_BLOCO)); p.add_argument("--x-esperado", type=float); p.add_argument("--x-vivo", type=float)
     p.add_argument("--admission-antigo", choices=("0", "1"), default="0"); p.add_argument("--chaves-secret", default=None)
+    p = sub.add_parser("entregue"); p.add_argument("--por-minuto", required=True); p.add_argument("--perfil", required=True); p.add_argument("--bloco", required=True, choices=sorted(X_DO_BLOCO))
     p = sub.add_parser("crit3"); p.add_argument("--por-minuto", required=True); p.add_argument("--pods", default=None)
     p = sub.add_parser("fila"); p.add_argument("--por-minuto", required=True); p.add_argument("--bloco", required=True, choices=sorted(X_DO_BLOCO))
     p = sub.add_parser("crit2"); p.add_argument("--replicas", required=True); p.add_argument("--max", type=int, default=3); p.add_argument("--bloco", choices=sorted(X_DO_BLOCO))
@@ -360,6 +381,13 @@ def main(argv=None):
             erros = pre_checks(json.load(f), a.total, x_esperado=x, x_vivo=a.x_vivo, admission_antigo=a.admission_antigo == "1", chaves_secret=chaves)
         for e in erros:
             print("   [PRE] " + e)
+        return 1 if erros else 0
+    if a.cmd == "entregue":
+        with open(a.perfil, encoding="utf-8") as f:
+            erros = carga_entregue(ler_csv(a.por_minuto), json.load(f), a.bloco)
+        print("carga entregue: %s" % ("todos os tipos com >= 90% das iteracoes do perfil" if not erros else "%d tipo(s) abaixo de 90%% do perfil" % len(erros)))
+        for e in erros:
+            print("   [VIOLACAO] " + e)
         return 1 if erros else 0
     if a.cmd == "crit3":
         c3 = criterio3(ler_csv(a.por_minuto))

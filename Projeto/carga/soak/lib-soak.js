@@ -18,11 +18,15 @@ export const minutoEm = (decorridoMs) => Math.max(0, Math.floor(decorridoMs / 60
 
 // Enderecos de cadastro: SO @example.com (nenhum e-mail real), unicos por bloco (SUFIXO do seed) e por iteracao (n).
 export const enderecoDoCadastro = (sufixo, n) => `soak-${sufixo}-${n}@example.com`;
-// fone UNIQUE no banco e os blocos rodam sobre o MESMO banco (o limpar-banco pode nao rodar entre eles): o telefone depende do SUFIXO e do n, nunca so do n.
-// Formato: "12" + 6 ultimos digitos do sufixo (zeros a esquerda) + n com 7 digitos = 15 digitos. O prefixo "12" nunca colide com o seed (setup.sh e seed-data.sql: tudo "11...",
-// inclusive os quentes). Nenhum codigo valida o formato do fone; o limite real e varchar(20) de pending_verifications (users.fone e text), por isso 15 digitos e nao os 11 de um
-// celular: 11 nao deixaria espaco para sufixo + n ate 999999 (o pior perfil faz ~120 mil cadastros). Sufixo sem digitos ("T1" no selftest) vale como zeros.
-export const foneDoCadastro = (sufixo, n) => `12${String(sufixo).replace(/\D/g, '').slice(-6).padStart(6, '0')}${String(n).padStart(7, '0')}`;
+// fone UNIQUE no banco e os blocos rodam sobre o MESMO banco: o telefone depende do SUFIXO e do n, nunca so do n.
+// O gateway (BffUserController, cadastro) exige 10 ou 11 digitos apos limpar o que nao e digito ("Telefone deve conter 10 ou 11 digitos", senao 400): o formato tem EXATAMENTE 11.
+// Formato: [12..99] (2 digitos) + 3 digitos + n com 6 digitos (n ate 999999; o erroParametros recusa o perfil que passa disso). Os 5 primeiros vem de k = (ultimos digitos do sufixo) mod 88000
+// (88 x 1000), entao dois sufixos so colidem se forem iguais mod 88000 (o limpar-banco roda antes de cada bloco: e so defesa). Nunca comeca com "11": todo o seed e "11..."
+// (setup.sh: host "119"+8, attendees "11"+3+6; limpar-banco.sh: sonda "119"+8). Sufixo sem digitos ("T1" no selftest) vale como zero.
+export const foneDoCadastro = (sufixo, n) => {
+  const k = (Number(String(sufixo).replace(/\D/g, '').slice(-9)) || 0) % 88000;
+  return `${12 + Math.floor(k / 1000)}${String(k % 1000).padStart(3, '0')}${String(n).padStart(6, '0')}`;
+};
 
 // Codigo de 6 digitos do e-mail de verificacao ("Código de Verificação: 123456", EmailTemplates do notification); null se nao achar.
 export function extrairCodigo(texto) {
@@ -61,6 +65,7 @@ export function erroParametros(p) {
       return `PERFIL_FILE sem stages/fases do tipo ${t}.`;
     }
   }
+  if (p.perfil.total_cadastros_esperado > 999999) return `PERFIL_FILE com total_cadastros_esperado ${p.perfil.total_cadastros_esperado} > 999999: o telefone do cadastro (foneDoCadastro) so tem 6 digitos para o n.`;
   if (!(p.maxVus >= 20)) return `MAX_VUS invalido: ${p.maxVus} (>= 20).`;
   if (!p.mailpitUrl || !/^https?:\/\//.test(p.mailpitUrl)) return 'MAILPIT_URL ausente ou invalida (http://<host>:<porta>).';
   if (!/^[A-Za-z0-9._-]+:[A-Za-z0-9._~+-]{16,}$/.test(p.mailpitAuth || '')) return 'MAILPIT_AUTH ausente ou fora do formato (variavel de ambiente <usuario>:<senha de >= 16 caracteres A-Za-z0-9._~+-; nunca por -e).';

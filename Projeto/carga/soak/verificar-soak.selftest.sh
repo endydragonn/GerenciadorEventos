@@ -43,8 +43,11 @@ grava("cluster-base.json", cluster(notif=[{"name": "SPRING_DATASOURCE_HIKARI_MAX
 grava("cluster-sem231-so.json", cluster(so_stock=True))
 grava("cluster-sem231-hikari.json", cluster(hikari="60"))
 grava("cluster-replica2.json", cluster(rep=2))
-grava("perfil.json", {"total_cadastros_esperado": 3})
-grava("perfil-grande.json", {"total_cadastros_esperado": 125001})
+def perfil(n):  # so o cadastro tem taxa esperada; os outros tipos esperam 0 (o por-minuto de teste nem sempre tem linha deles)
+    zero = {"rpm": 0.0}
+    return {"total_cadastros_esperado": n, "por_minuto": [{"minuto": 0, "cadastro": {"rpm": float(n)}, "escrita": zero, "leitura": zero, "login": zero, "reserva": zero}]}
+grava("perfil.json", perfil(3))
+grava("perfil-grande.json", perfil(125001))
 def msg(i, de="soak@example.com"): return {"ID": "m%d" % i, "Created": "2026-11-01T12:00:%02dZ" % i, "From": {"Address": de}, "To": [{"Address": "soak-T1-%d@example.com" % i}]}
 grava("pag-ok.json", {"total": 3, "messages": [msg(1), msg(2), msg(3)]})
 grava("pag-perdido.json", {"total": 2, "messages": [msg(1), msg(2)]})
@@ -237,6 +240,9 @@ printf '0\n' > "$FAKE_LAGS"; saida="$(FAKE_RPM_RC=4 rodar "${POS[@]}")"; rc=$?
 confere "pos: saga nao convergiu (codigo 4) sobe como 4" "$rc" "4"
 printf '0\n' > "$FAKE_LAGS"; saida="$(FAKE_MP_PAG=pag-perdido.json rodar "${POS[@]}")"; rc=$?
 confere "pos: e-mail perdido (2 mensagens para 3 cadastros) reprova (codigo 1)" "$rc|$(echo "$saida" | grep -c 'perdidas 1')" "1|1"
+# carga entregue: o perfil-grande espera 125001 cadastros e o por-minuto tem 3 (com e-mail de todos): reprova pelo vacuo, nao pelo e-mail
+printf '0\n' > "$FAKE_LAGS"; saida="$(rodar pos --id T --perfil "$FX/perfil-grande.json" --bloco S1 --sufixo T1 --prefixo Soak-T1)"; rc=$?
+confere "pos: tipo abaixo de 90% das iteracoes do perfil reprova (codigo 1) e diz 'cadastros 2xx 3 de 125001'" "$([ "$rc" = 1 ] && echo "$saida" | grep -q 'cadastros 2xx 3 de 125001 esperados pelo perfil: o fluxo de cadastro falhou' && echo "$saida" | grep -q 'criterio 1 (carga entregue): REPROVOU' && echo sim || echo nao)" "sim"
 cp "$FX/por-minuto-5xx.csv" "$T/results/soak-T-por-minuto.csv"; printf '0\n' > "$FAKE_LAGS"
 saida="$(rodar "${POS[@]}")"; rc=$?
 confere "pos: 5xx fora de tipo=mailpit reprova o criterio 3 (codigo 1)" "$([ "$rc" = 1 ] && echo "$saida" | grep -q 'criterio 3: REPROVOU' && echo sim || echo nao)" "sim"
