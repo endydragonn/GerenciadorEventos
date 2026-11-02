@@ -1,0 +1,9 @@
+resumo da saga soak-S1 (janela >= 2026-11-02T05:24:08.006342Z; ORPHAN_MS 30000)
+compensacoes por minuto: /e/TCC/wt/Issue-232/Projeto/carga/results/saga-soak-S1-20261102-022409.csv (0 minuto(s) com compensacao; a subcontagem do reabrir de chave compensated apaga o resolved_at: ~0 na R5)
+tempo ate resolver (compensated: resolved_at - created_at; o do reaper e o tempo ate a orfa se resolver):
+  resolver_inline: sem amostra
+  resolver_reaper: sem amostra
+lag de devolucao (hold.updated_at - occurred_at do ReservationCancelled/Expired com o mesmo holdId, hold released):
+  devolucao: sem amostra
+fim do bloco: devolucao_pendente 0, orfa_inversa 0, sagas_reserving 0, sagas_compensating 0
+latencia dos passos: logger saga.timing desligado (LOGGING_LEVEL_SAGA_TIMING=DEBUG so no bloco que mede): latencia dos passos fora
