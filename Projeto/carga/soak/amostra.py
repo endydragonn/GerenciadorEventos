@@ -6,7 +6,7 @@ Grava (acrescenta; cabecalho se o arquivo e novo):
   <prefixo>-replicas.csv   epoch_s,servico,metrica,alvo,replicas,prontas
       uma linha por Deployment (servico = nome do Deployment). `replicas` = spec.replicas (a decisao do autoescalador), `prontas` = status.readyReplicas.
       `metrica` e `alvo` so existem nos servicos com HPA do KEDA (a metrica do ScaledObject; vazio nos outros, como o stock e o frontend): external -> averageValue
-      (quantidade do Kubernetes, ex. 500m = 0,5) ou Resource -> averageUtilization (%). E a fonte do criterio 2 (autoescala acompanha a carga).
+      (quantidade do Kubernetes, ex. 500m = 0,5) ou Resource/ContainerResource -> averageUtilization (%). E a fonte do criterio 2 (autoescala acompanha a carga).
   <prefixo>-pods.csv       epoch_s,pod,app,pronto,restarts,terminando
       pronto 0/1, restarts = soma dos restartCount, terminando = 1 se o pod tem deletionTimestamp. Fonte do restartCount do Mailpit e das saidas do notification
       (tolerancia de e-mail duplicado).
@@ -44,9 +44,10 @@ def metrica_do_hpa(hpa):
     if not specs or not atuais:
         return None, None
     s, c = specs[0], atuais[0]
-    if s.get("type") == "Resource":
-        alvo = ((s.get("resource") or {}).get("target") or {}).get("averageUtilization")
-        atual = ((c.get("resource") or {}).get("current") or {}).get("averageUtilization")
+    if s.get("type") in ("Resource", "ContainerResource"):  # com sidecar (Istio) o KEDA gera ContainerResource
+        chave = s["type"][0].lower() + s["type"][1:]
+        alvo = ((s.get(chave) or {}).get("target") or {}).get("averageUtilization")
+        atual = ((c.get(chave) or {}).get("current") or {}).get("averageUtilization")
         return (None if atual is None else float(atual)), (None if alvo is None else float(alvo))
     if s.get("type") in ("External", "Pods", "Object"):
         chave = s["type"].lower()

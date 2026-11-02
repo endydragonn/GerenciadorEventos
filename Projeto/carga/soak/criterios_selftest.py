@@ -421,6 +421,14 @@ class Amostra(unittest.TestCase):
         self.assertEqual(por["stock"], [1000, "stock", "", "", 1, 1])
         self.assertEqual(pods, [[1000, "mailpit-abc", "mailpit", 1, 2, 0], [1000, "notification-x", "notification", 0, 0, 1]])
 
+    def test_metrica_do_hpa_container_resource(self):
+        # KEDA com sidecar (Istio) gera o HPA de CPU como ContainerResource (chave `containerResource`)
+        hpa = {"spec": {"metrics": [{"containerResource": {"container": "identity", "name": "cpu", "target": {"averageUtilization": 50, "type": "Utilization"}}, "type": "ContainerResource"}]},
+               "status": {"currentMetrics": [{"containerResource": {"container": "identity", "current": {"averageUtilization": 1, "averageValue": "9m"}, "name": "cpu"}, "type": "ContainerResource"}]}}
+        self.assertEqual(AM.metrica_do_hpa(hpa), (1.0, 50.0))
+        del hpa["status"]["currentMetrics"]
+        self.assertEqual(AM.metrica_do_hpa(hpa), (None, None))
+
     def test_main_acrescenta_com_cabecalho_uma_vez(self):
         import io
         with tempfile.TemporaryDirectory() as d:
