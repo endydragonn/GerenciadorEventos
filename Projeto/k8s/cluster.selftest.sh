@@ -137,6 +137,31 @@ confere "K8S_POOLS invalido (so r5 ou vazio)" "$([ "$rc" -ne 0 ] && echo "$saida
 confere "db-cliente.yaml: sem envFrom (nao monta o env-db inteiro)" "$(grep -c 'envFrom' "$AQUI/db-cliente.yaml")" "0"
 confere "db-cliente.yaml: secretKeyRef so de APP_DB_USER, APP_DB_PASSWORD, POSTGRES_PASSWORD, POSTGRES_DB (env-db) e POOLER_TENANT_ID (env-supabase-pooler)" "$(grep -c 'secretKeyRef: {' "$AQUI/db-cliente.yaml")|$(grep -o 'key: [A-Z_]*' "$AQUI/db-cliente.yaml" | sort | tr '\n' ' ')" "5|key: APP_DB_PASSWORD key: APP_DB_USER key: POOLER_TENANT_ID key: POSTGRES_DB key: POSTGRES_PASSWORD "
 
+# --- 2c2. minimo do admission (#235): default 2 (o 503 da consulta da fila na rampa vinha de 1 pod so), acompanhando o teto quando ele e 1; valor explicito vale, com a validacao de 1 a 3 e MIN <= MAX
+min_so() { "$PY" -c '
+import re, sys
+for d in sys.stdin.read().split("\n---\n"):
+    if re.search(r"^kind: ScaledObject$", d, re.M) and re.search(r"^metadata:\n(?:  .*\n)*?  name: " + sys.argv[1] + "$", d, re.M): print(re.search(r"minReplicaCount: (\d+)", d).group(1))
+' "$1" | tr -d '\r'; }
+mins() { for s in admission backend identity catalog reservation notification; do echo "$1" | min_so $s; done | tr '\n' ','; }
+confere "admission (#235): default minReplicaCount 2 no render; os outros 5 seguem em 1" "$(mins "$r_rod")" "2,1,1,1,1,1,"
+confere "admission (#235): base/autoescala.yaml com minReplicaCount 2 (o default do cluster.sh e o mesmo)" "$(cat "$P/k8s/base/autoescala.yaml" | min_so admission)" "2"
+r_am1="$(rodar env K8S_OVERLAY=rodada K8S_ADMISSION_MAX=1 bash "$SH" renderizar --trilha nenhuma)"
+confere "admission (#235): K8S_ADMISSION_MAX=1 sem MIN: o default acompanha o teto (min 1, max 1)" "$(echo "$r_am1" | min_so admission)|$(echo "$r_am1" | grep -c 'maxReplicaCount: 1')" "1|1"
+saida="$(rodar env K8S_OVERLAY=rodada K8S_ADMISSION_MAX=1 bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "admission (#235): K8S_ADMISSION_MAX=1 sem MIN: o guarda nao aborta por MIN > MAX" "$rc" "0"
+confere "admission (#235): K8S_POOLS=r5 (teto 1 por padrao) sem MIN: min 1" "$(mins "$r_r5")" "1,1,1,1,1,1,"
+saida="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "admission (#235): K8S_POOLS=r5 sem nenhuma variavel de MIN/MAX: o guarda aceita" "$rc" "0"
+for v in 1 3; do
+    confere "admission (#235): K8S_ADMISSION_MIN=$v explicito vale (MAX default 3)" "$(rodar env K8S_OVERLAY=rodada K8S_ADMISSION_MIN=$v bash "$SH" renderizar --trilha nenhuma | min_so admission)" "$v"
+done
+confere "admission (#235): K8S_ADMISSION_MIN=2 e K8S_ADMISSION_MAX=2 explicitos" "$(rodar env K8S_OVERLAY=rodada K8S_ADMISSION_MIN=2 K8S_ADMISSION_MAX=2 bash "$SH" renderizar --trilha nenhuma | min_so admission)" "2"
+for v in "K8S_ADMISSION_MIN=0" "K8S_ADMISSION_MIN=4" "K8S_ADMISSION_MIN=3 K8S_ADMISSION_MAX=2" "K8S_ADMISSION_MIN=2 K8S_ADMISSION_MAX=1" "K8S_POOLS=r5 K8S_ADMISSION_MIN=2"; do
+    saida="$(rodar env K8S_OVERLAY=rodada $v bash "$SH" guarda --trilha nenhuma)"; rc=$?
+    confere "admission (#235): '$v' recusado (a validacao de 1 a 3 e MIN <= MAX segue valendo)" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'K8S_ADMISSION_MIN' && echo sim || echo nao)" "sim"
+done
+
 # --- 2d. as linhas [ok] do guarda leem os valores do render (nao imprimem valores fixos): muda o componente na copia temporaria e o guarda acompanha
 sed -i 's/value: "1000"/value: "777"/' "$P/k8s/overlays/pools-r5/kustomization.yaml"
 saida="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 bash "$SH" guarda --trilha nenhuma)"

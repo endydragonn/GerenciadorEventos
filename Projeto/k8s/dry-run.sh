@@ -31,7 +31,7 @@
 #
 #  Variáveis (todas opcionais): SLIM_TAG (obrigatória até a R5 terminar: k8s), K8S_NOME (gerenciador-e2e-dry), MANTER (1), K8S_ESPERA,
 #    DRY_X_RPM (600: o X do admission; o alvo do reservation no KEDA é 0,5 x ele; 500..5000), K8S_CPU_ALVO (20: % do request de CPU para os 4 serviços de CPU: backend, identity, catalog, admission),
-#    K8S_DESCE_SEG (45: janela de estabilização da descida; o padrão do cluster é 120), AUTOESCALA_NOTIFICATION_LAG (4: lagThreshold 2), K8S_<SVC>_MIN/_MAX (1/3; o stock não tem: fixo em 1),
+#    K8S_DESCE_SEG (45: janela de estabilização da descida; o padrão do cluster é 120), AUTOESCALA_NOTIFICATION_LAG (4: lagThreshold 2), K8S_<SVC>_MIN/_MAX (1/3, o admission com mínimo 1 aqui: o default do cluster é 2; o stock não tem: fixo em 1),
 #    DRY_CAPACIDADE (30: vagas do evento quente), DRY_USUARIOS (60), DRY_RPS_A (20), DRY_DURACAO_A (300 s), DRY_DURACAO_B (180 s), DRY_RPS_C (1500), DRY_DURACAO_C (150 s), DRY_RPS_C1 (3000), DRY_DURACAO_C1 (90 s),
 #    DRY_EMAILS (15000), DRY_ESPERA_DESCIDA (600 s: teto de cada espera de descida).
 # =============================================================================
@@ -61,6 +61,7 @@ command -v openssl >/dev/null 2>&1 || { echo "[ABORTA] preciso de openssl (crede
 X_RPM="${DRY_X_RPM:-600}"; RPS_A="${DRY_RPS_A:-20}"; DUR_A="${DRY_DURACAO_A:-300}"; DUR_B="${DRY_DURACAO_B:-180}"
 RPS_C="${DRY_RPS_C:-1500}"; DUR_C="${DRY_DURACAO_C:-150}"; CAP="${DRY_CAPACIDADE:-30}"; USUARIOS="${DRY_USUARIOS:-60}"; EMAILS="${DRY_EMAILS:-15000}"
 ESPERA_DESCIDA="${DRY_ESPERA_DESCIDA:-600}"; DESCE="${K8S_DESCE_SEG:-45}"; FUNDO_RPS=5
+export K8S_ADMISSION_MIN="${K8S_ADMISSION_MIN:-1}" # o default do cluster é 2 (#235); a fase E espera todos os serviços em 1 réplica
 export ADMISSION_X_RPM="$X_RPM" K8S_CPU_ALVO="${K8S_CPU_ALVO:-20}" K8S_DESCE_SEG="$DESCE" AUTOESCALA_NOTIFICATION_LAG="${AUTOESCALA_NOTIFICATION_LAG:-4}"
 # credenciais efêmeras (a shell vence o Projeto/.env na interpolação do compose): nada do real entra no cluster
 REDIS_PASSWORD="$(openssl rand -hex 16)"; RABBITMQ_USER="dry$(openssl rand -hex 4)"; RABBITMQ_PASSWORD="$(openssl rand -hex 16)"

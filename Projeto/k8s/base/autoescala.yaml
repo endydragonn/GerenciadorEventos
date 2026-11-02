@@ -1,5 +1,5 @@
 # Autoescala (issue #197, D5 = a, KEDA sem Prometheus): um ScaledObject por serviço Java escalável (os 6; o `stock` NÃO tem, #231); o KEDA cria o HPA (`keda-hpa-<nome>`). Valores PADRÃO aqui; o cluster.sh gera
-# o patch (kustomization temporário) com K8S_<SVC>_MIN/_MAX (default 1/3), K8S_DESCE_SEG (120), K8S_CPU_ALVO (50), o alvo do reservation (0,5 x ADMISSION_X_RPM, da MESMA
+# o patch (kustomization temporário) com K8S_<SVC>_MIN/_MAX (default 1/3; admission 2/3, #235), K8S_DESCE_SEG (120), K8S_CPU_ALVO (50), o alvo do reservation (0,5 x ADMISSION_X_RPM, da MESMA
 # variável que o admission recebe) e o lagThreshold do notification (0,5 x AUTOESCALA_NOTIFICATION_LAG). Sem escala a zero.
 #  - reservation: metrics-api em GET /internal/metrics/hot do admission (o adm:hot, RPM do evento mais quente), com o token SÓ de métrica (ClusterTriggerAuthentication
 #    admission-metrics, criada pelo cluster.sh): réplicas = ceil(RPM / (0,5 x X)). Sem a chave o endpoint devolve 0 (nunca 404: o KEDA, em erro, congela as réplicas).
@@ -168,7 +168,7 @@ metadata:
 spec:
   scaleTargetRef: {name: admission}
   pollingInterval: 5
-  minReplicaCount: 1
+  minReplicaCount: 2
   maxReplicaCount: 3
   advanced:
     horizontalPodAutoscalerConfig:

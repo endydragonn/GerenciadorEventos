@@ -15,7 +15,7 @@
 #                                       instalado por helm: istio/base + istio/istiod), `c` = balanceamento no cliente (módulo Maven client-lb + Services headless),
 #                                       `nenhuma` = a base pura (Service L4 do Kubernetes), o controle. Trocar de trilha = `down` + `up --trilha <outra>`.
 #                                       Desde a etapa 4 o `up` instala (helm, versões de chart FIXAS, --wait) o metrics-server e o KEDA (todas as trilhas) e aplica os ScaledObjects da
-#                                       autoescala (D5): reservation pelo adm:hot do admission, notification pelo lag, os demais por CPU (6 ScaledObjects: o stock é FIXO em 1 réplica, #231). K8S_<SVC>_MIN/_MAX (default 1/3), K8S_DESCE_SEG (120),
+#                                       autoescala (D5): reservation pelo adm:hot do admission, notification pelo lag, os demais por CPU (6 ScaledObjects: o stock é FIXO em 1 réplica, #231). K8S_<SVC>_MIN/_MAX (default 1/3; admission 2/3, #235), K8S_DESCE_SEG (120),
 #                                       K8S_CPU_ALVO (50) e AUTOESCALA_NOTIFICATION_LAG (100) viram o patch gerado; o alvo do reservation é 0,5 x o ADMISSION_X_RPM que o admission recebe.
 #    guarda --trilha ...                só confere o isolamento do overlay e2e/carga (Secrets e NodePort) com a trilha somada; não cria nada
 #    imagem <img...>                    carrega imagens avulsas no nó (o e2e usa para o pod auxiliar)
@@ -197,7 +197,11 @@ montar_selecao() {
     done
     for s in $AUTOESCALADOS; do
         S="$(echo "$s" | tr 'a-z' 'A-Z')"; vmin="K8S_${S}_MIN"; vmax="K8S_${S}_MAX"
-        min="${!vmin:-1}"; max="${!vmax:-$([ "$POOLS" = r5 ] && echo 1 || echo 3)}"
+        max="${!vmax:-$([ "$POOLS" = r5 ] && echo 1 || echo 3)}"
+        # mínimo do admission = 2 (#235: com 1 pod só, o degrau da rampa passa dos timeouts de 200 ms do Redis/RabbitMQ antes de o KEDA ter outro pronto e a consulta da fila dá 503);
+        # só o DEFAULT acompanha um teto 1 (K8S_ADMISSION_MAX=1, K8S_POOLS=r5): um K8S_ADMISSION_MIN explícito segue na validação abaixo
+        dmin=1; [ "$s" != admission ] || { dmin=2; [[ "$max" =~ ^[0-9]+$ ]] && [ "$max" -eq 1 ] && dmin="$max"; }
+        min="${!vmin:-$dmin}"
         # teto 3: a conta do Supavisor (4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 245 = 1497 <= 1500, README "Pool do Supavisor") supõe no máximo 3 réplicas por serviço escalável + 1 em término, e o stock fixo em 1; acima disso, refazer a conta
         inteiro_entre "$vmin" "$min" 1 3; inteiro_entre "$vmax" "$max" 1 3
         [ "$min" -le "$max" ] || abortar "$vmin ($min) maior que $vmax ($max)."
