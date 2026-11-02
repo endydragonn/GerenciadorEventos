@@ -94,9 +94,11 @@ Leitura:
 - **Papel das réplicas.** As 3 réplicas do notification são consequência do lag, mas provavelmente também contribuem: 3 sessões SMTP
   simultâneas num Mailpit já lento. Separar os dois efeitos exige reproduzir (Mailpit lento com 1 réplica contra 3).
 
-**Ainda não provado:** a classe exata da exceção, que não foi logada. O Message-ID não ajuda: com o `SimpleMailMessage` ele é gerado a cada
-envio e não separa "reenvio do SMTP" de "reprocessamento". O que separa as duas hipóteses é a `processed_event` com 1 linha por evento,
-junto com a escada de intervalos.
+**Mesmo pod, nova tentativa.** O Message-ID é gerado a cada envio (`SimpleMailMessage`), mas traz o hostname do pod. Em 235 dos 239
+endereços, todas as cópias saíram do **mesmo pod**: é o retry do próprio consumer. Os outros 4 trocaram de pod no meio do retry, num
+rebalance de subida (às 08:16, 08:29 e 09:29). Os headers das duplicatas (Message-ID, Date e To, sem o corpo) ficaram fora do git.
+
+**Ainda não provado:** a classe exata da exceção, que não foi logada.
 
 ## Critério 3: 464 respostas 5xx
 
