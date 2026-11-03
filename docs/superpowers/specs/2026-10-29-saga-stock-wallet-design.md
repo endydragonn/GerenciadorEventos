@@ -18,6 +18,8 @@ Aceitas pela sessão de interface em caráter provisório; o merge do PR da #47 
 R5 mostrar o `stock` saturado, a D3 é reaberta.
 
 > **Nota (#205):** D3 (b) implementada no cluster Kubernetes (`stock` de 1 a 3 réplicas, Hikari 60 por réplica; spec do K8s, seção "`stock` escalável"); o compose segue com (a). O consumo de `reservation.wallet` com 2+ réplicas está provado em `StockReleaseConsumerTest`.
+>
+> **Nota (#231):** a (b) foi **revertida no cluster**: o `stock` voltou a 1 réplica fixa, Hikari 245 e `Recreate`, sem ScaledObject (o Hikari 60 × 3 esgotava o pool e derrubava o b1 a 20k; `Projeto/carga/results/10-k8s-db-remoto/K2-diagnostico/`). A D3 segue na opção (a) em todos os ambientes.
 
 | # | Pergunta | Opções (trade-off em uma frase) | Decidido |
 |---|---|---|---|

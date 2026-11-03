@@ -14,10 +14,10 @@
 #    parado     `up --so redpanda`: nó só com control plane, CoreDNS, kube-proxy, metrics-server, KEDA e o Redpanda; `docker stats` do nó = linha de base "parado"
 #    ocioso     stack inteira no ar e parada (nenhuma requisição): linha de base "ocioso"
 #    fundo      tráfego leve contínuo até o fim (5 req/s: 1 reserva e 2 leituras): qualquer 5xx numa descida de réplica aparece aqui
-#    A rajada   reservas no `cas` num evento só, acima do limiar (20 req/s com X=600: RPM >> 0,5 x X): reservation (RPM) e stock (CPU) sobem; mede se a réplica NOVA do reservation
+#    A rajada   reservas no `cas` num evento só, acima do limiar (20 req/s com X=600: RPM >> 0,5 x X): reservation (RPM) sobe (o stock fica em 1 réplica fixa, #231); mede se a réplica NOVA do reservation
 #               recebe conexões (b1: segundos; c: até um TTL; nenhuma: controle, esperado ocioso)
 #    B degrau   a mesma carga oscilando (12 s de pico, 8 s de vale): NENHUMA descida do reservation enquanto o degrau dura (#206)
-#    descida    só o tráfego de fundo: reservation e stock voltam ao mínimo depois da janela (K8S_DESCE_SEG) e de 1 pod por 60 s
+#    descida    só o tráfego de fundo: o reservation volta ao mínimo depois da janela (K8S_DESCE_SEG) e de 1 pod por 60 s
 #    C1/C leitura  C1: o backend fixo em 1 réplica sob carga de leitura que o SATURA (CPU perto do limite, p95 alto ou iterações descartadas); C: a mesma carga com a autoescala solta (backend sobe).
 #               Nenhum pod sai do Service, nenhum reinício por probe, sem Unhealthy/Killing por probe nos containers da aplicação (#207)
 #    D e-mails  rajada de pedidos de e-mail em identity.notification: notification sobe até 3 réplicas (3 partições) e volta; nenhum e-mail duplicado, nenhum perdido
@@ -25,13 +25,13 @@
 #
 #  Critérios automáticos (dry-run-analise.py): o tráfego de fundo rodou do começo ao fim (RESUMO e volume >= 90% do esperado); 0 5xx na janela de 60 s depois de cada descida dos serviços que o fundo
 #  exercita (backend, admission, reservation, stock, catalog; identity e notification só informados); relógio do nó x host dentro de 5 s; overselling 0 com o evento esgotado; e-mails = o conjunto esperado;
-#  CSV com subidas e descidas;
+#  CSV com subidas e descidas; o `stock` fica em 1 réplica o dry-run inteiro (#231, no lugar do antigo "stock chega a 2+ réplicas" da #205);
 #  adm:replicas == prontas do reservation fora das transições; réplica nova com tráfego; sem descida no degrau B; sem Unhealthy/Killing/reinício na fase C; CPU do nó por fase.
 #  Ao sair (inclusive em falha, por trap) reaplica o overlay `e2e` (sem SEED_ENABLED), confere `POST /bff/seed` -> 404 e apaga o cluster (MANTER=1 mantém).
 #
 #  Variáveis (todas opcionais): SLIM_TAG (obrigatória até a R5 terminar: k8s), K8S_NOME (gerenciador-e2e-dry), MANTER (1), K8S_ESPERA,
-#    DRY_X_RPM (600: o X do admission; o alvo do reservation no KEDA é 0,5 x ele; 500..5000), K8S_CPU_ALVO (20: % do request de CPU para os 5 serviços de CPU),
-#    K8S_DESCE_SEG (45: janela de estabilização da descida; o padrão do cluster é 120), AUTOESCALA_NOTIFICATION_LAG (4: lagThreshold 2), K8S_<SVC>_MIN/_MAX (1/3),
+#    DRY_X_RPM (600: o X do admission; o alvo do reservation no KEDA é 0,5 x ele; 500..5000), K8S_CPU_ALVO (20: % do request de CPU para os 4 serviços de CPU: backend, identity, catalog, admission),
+#    K8S_DESCE_SEG (45: janela de estabilização da descida; o padrão do cluster é 120), AUTOESCALA_NOTIFICATION_LAG (4: lagThreshold 2), K8S_<SVC>_MIN/_MAX (1/3; o stock não tem: fixo em 1),
 #    DRY_CAPACIDADE (30: vagas do evento quente), DRY_USUARIOS (60), DRY_RPS_A (20), DRY_DURACAO_A (300 s), DRY_DURACAO_B (180 s), DRY_RPS_C (1500), DRY_DURACAO_C (150 s), DRY_RPS_C1 (3000), DRY_DURACAO_C1 (90 s),
 #    DRY_EMAILS (15000), DRY_ESPERA_DESCIDA (600 s: teto de cada espera de descida).
 # =============================================================================
@@ -233,11 +233,11 @@ marca B inicio
 k6run B reserva "${ST%,}" 200
 marca B fim
 
-# --- 7. descida do reservation e do stock com só o tráfego de fundo ----------------------------------------------------------------------------------------------------
+# --- 7. descida do reservation com só o tráfego de fundo (o stock é fixo em 1 réplica, #231: aqui só se confere que continua em 1) ----------------------------------------------------------------------------------------------------
 fundo_vivo "descida"
 marca descida inicio
 esperar_prontas reservation 1 "$ESPERA_DESCIDA" && ok "reservation voltou a 1" || erro "reservation não voltou a 1 em ${ESPERA_DESCIDA}s (prontas=$(prontas reservation))"
-esperar_prontas stock 1 120 && ok "stock voltou a 1 (ou nunca subiu)" || erro "stock não voltou a 1"
+[ "$(prontas stock)" = 1 ] && ok "stock segue em 1 réplica (fora da autoescala)" || erro "stock não está em 1 réplica (prontas=$(prontas stock))"
 marca descida fim
 fundo_vivo "C1"
 

@@ -2,13 +2,13 @@
 # =============================================================================
 #  registrar-replicas.sh  -  issue #197 (etapa 4b): réplicas dos 7 serviços ao longo do tempo, para o dry-run de carga com autoescala
 # =============================================================================
-#  A cada 2 s (REGISTRAR_INTERVALO_S) grava no CSV `ts,servico,prontas,desejadas,metrica`, uma linha por serviço autoescalado, lidas de UM `kubectl get deploy,hpa`:
+#  A cada 2 s (REGISTRAR_INTERVALO_S) grava no CSV `ts,servico,prontas,desejadas,metrica`, uma linha por serviço Java (os 6 autoescalados mais o `stock`, fixo em 1 réplica desde a #231: sem HPA, `desejadas` vazio), lidas de UM `kubectl get deploy,hpa`:
 #    ts        epoch em segundos
 #    servico   backend | identity | catalog | reservation | stock | notification | admission
 #    prontas   status.readyReplicas do Deployment (0 se ausente)
 #    desejadas status.desiredReplicas do HPA que o KEDA cria (keda-hpa-<servico>)
 #    metrica   valor atual lido pelo HPA: o `averageValue` do HPA, RPM do evento mais quente ÷ réplicas atuais, POR POD (reservation, via `metrics-api`), o lag (notification, `kafka`) ou a utilização de CPU em % do request
-#              do container da aplicação (os outros cinco). Texto cru do HPA (o RPM pode vir como quantidade, p.ex. `1200` ou `833500m`).
+#              do container da aplicação (os outros quatro; o `stock` não tem HPA e fica sem métrica). Texto cru do HPA (o RPM pode vir como quantidade, p.ex. `1200` ou `833500m`).
 #  Mais uma linha `adm-replicas,<valor>,,` por ciclo: o `adm:replicas` que o admission grava no Redis (D4); vazio se a chave expirou (REGISTRAR_ADM=0 desliga).
 #
 #  Uso:  K8S_NOME=gerenciador-e2e-dry Projeto/k8s/registrar-replicas.sh [arquivo.csv]     (roda até receber SIGTERM/Ctrl-C)

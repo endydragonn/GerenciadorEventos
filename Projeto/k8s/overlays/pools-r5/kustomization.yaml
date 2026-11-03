@@ -1,8 +1,8 @@
 # Componente `pools-r5` (issue #228): os pools de REPLICA UNICA da Rodada 5 (bloco 1, compose), para os blocos K0/K1 da rodada com o db remoto compararem com o compose. O `cluster.sh up` o soma quando
 # K8S_POOLS=r5 e só com a autoescala travada em 1 (K8S_<SVC>_MAX=1, o padrão com K8S_POOLS=r5; o `cluster.sh` recusa MAX > 1). Valores = os do docker-compose.yml (+ carga/docker-compose.carga.yml):
 #   Hikari: reservation 1000, stock 250, identity 100, catalog 100, backend 10, notification 3; workers do admission 32 (ADMISSION_WORKER_CONCURRENCY, o default do compose).
-# Soma no Supavisor: 1000 + 250 + 100 + 100 + 10 + 3 = 1463 <= POOLER_MAX_CLIENT_CONN 1500, com 1 réplica de cada e maxSurge 0 (sem pod extra no rollout). Com réplicas a conta estouraria:
-# o K2 (autoescala 1..3) NÃO usa este componente e segue com os pools do cluster (1492). O pool real do Supavisor (245) e o max_connections do db vêm do overlay `rodada`.
+# Soma no Supavisor: 1000 + 250 + 100 + 100 + 10 + 3 = 1463 <= POOLER_MAX_CLIENT_CONN 1500, com 1 réplica de cada e maxSurge 0 (sem pod extra no rollout; o stock, `Recreate`). Com réplicas a conta estouraria:
+# o K2 (autoescala 1..3) NÃO usa este componente e segue com os pools do cluster (stock 245, 1 réplica fixa: 4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 245 = 1497, #231). O stock aqui fica em 250 (réplica única, como no compose). O pool real do Supavisor (245) e o max_connections do db vêm do overlay `rodada`.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 patches:

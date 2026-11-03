@@ -31,7 +31,7 @@
 #
 #  MODO CLUSTER (issue #228): com CARGA_K8S=<contexto kubectl> (ex.: kind-gerenciador) o mesmo roteiro roda contra o cluster Kubernetes (Projeto/k8s), sem Docker. Sem a variavel
 #  nada disto e carregado. Todo kubectl leva --context $CARGA_K8S (nunca o current-context), namespace gerenciador. Equivalencias: parar/religar = pausar o ScaledObject do KEDA
-#  (autoscaling.keda.sh/paused-replicas=0, senao o KEDA sobe o pod de volta) + scale 0 / voltar as replicas de antes, esperando prontas; a chave do JWT = um pod descartavel que monta o PVC
+#  (autoscaling.keda.sh/paused-replicas=0, senao o KEDA sobe o pod de volta; o stock, 1 replica fixa sem ScaledObject desde a #231, so leva o scale) + scale 0 / voltar as replicas de antes, esperando prontas; a chave do JWT = um pod descartavel que monta o PVC
 #  identity-keys e apaga o arquivo (identity e backend parados antes); psql = sts/db (db no cluster) ou pod cliente db-cliente (db remoto, senha lida DENTRO do pod: k8s/lib-db-cliente.sh);
 #  rpk/redis-cli/rabbitmqctl por `kubectl exec`; o lb nao existe (a entrada e o NodePort da BASE_URL). O scaler.sh nao existe no cluster (a autoescala e o KEDA, que o roteiro pausa).
 #
@@ -363,13 +363,15 @@ esperar_sem_pods_k8s() {
 ANOT_ANTES=carga.gerenciador/replicas-antes   # anotacao do Deployment com as replicas de antes: a recuperacao (e a recusa de uma nova limpeza) as le dali
 RELIGAR_ESTADO=                               # "" = nao tentou religar | falhou | ok
 
+tem_scaledobject_k8s() { [ "$1" != stock ]; } # o stock e 1 replica fixa, SEM ScaledObject, no cluster (#231): nada a pausar nem a retomar
+
 parar_k8s() { # <deploy>: anota as replicas de antes, pausa o KEDA em 0 e zera
     local d="$1" n
     n="$(kc get "deploy/$d" -o jsonpath='{.spec.replicas}' 2>/dev/null | tr -d '\r')"
     [ "${n:-0}" -ge 1 ] || { log "$d: ja em 0 replicas (nao foi este script que parou)"; return 0; }
     REPL_K8S[$d]="$n"   # ANTES de qualquer mudanca: se o annotate der certo e o scale falhar, o trap ainda religa este
     kc annotate "deploy/$d" "$ANOT_ANTES=$n" --overwrite >/dev/null || return 1
-    kc annotate "scaledobject/$d" autoscaling.keda.sh/paused-replicas=0 --overwrite >/dev/null 2>&1 || log "AVISO: sem ScaledObject $d (o KEDA nao esta pausado para ele)"
+    if tem_scaledobject_k8s "$d"; then kc annotate "scaledobject/$d" autoscaling.keda.sh/paused-replicas=0 --overwrite >/dev/null 2>&1 || log "AVISO: sem ScaledObject $d (o KEDA nao esta pausado para ele)"; fi
     kc scale "deploy/$d" --replicas=0 >/dev/null || return 1
     PARADOS="$PARADOS $d"
     esperar_sem_pods_k8s "$d"
@@ -393,7 +395,7 @@ religar_k8s() { # 1) tira a pausa e faz o scale de TODOS os que o script parou; 
     for etapa in identity stock "reservation catalog" admission backend notification; do
         for d in $etapa; do
             [ -n "${REPL_K8S[$d]:-}" ] || continue
-            kc annotate "scaledobject/$d" autoscaling.keda.sh/paused-replicas- >/dev/null 2>&1 || true
+            ! tem_scaledobject_k8s "$d" || kc annotate "scaledobject/$d" autoscaling.keda.sh/paused-replicas- >/dev/null 2>&1 || true
             kc scale "deploy/$d" --replicas="${REPL_K8S[$d]}" >/dev/null || log "ERRO: scale $d falhou"
         done
     done

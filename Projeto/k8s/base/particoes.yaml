@@ -1,5 +1,5 @@
 # Job `particoes` (o one-shot do override de autoescala, agora no cluster): leva `reservation.wallet` e `identity.notification` a 3 partições, para
-# que o `notification` e o `stock` possam ter até 3 réplicas. O broker do cluster nasce a cada cluster, então a mudança NÃO é irreversível como no
+# que o `notification` possa ter até 3 réplicas (o `stock` voltou a 1 réplica fixa na #231; as 3 partições seguem, o seek e a espera dele não mudam). O broker do cluster nasce a cada cluster, então a mudança NÃO é irreversível como no
 # compose real. `reservation.wallet` é criado aqui se ainda não existe (com 3 partições); `identity.notification` só é ESPERADO (quem o cria é o
 # `identity`). O seek do `notification`, do `stock` e a espera do `reservation` só andam com 3 partições, então nenhum consumer assina o tópico com 1.
 # Idempotente: tópico que já tem 3 não é tocado.

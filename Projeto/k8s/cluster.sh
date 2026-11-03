@@ -15,7 +15,7 @@
 #                                       instalado por helm: istio/base + istio/istiod), `c` = balanceamento no cliente (módulo Maven client-lb + Services headless),
 #                                       `nenhuma` = a base pura (Service L4 do Kubernetes), o controle. Trocar de trilha = `down` + `up --trilha <outra>`.
 #                                       Desde a etapa 4 o `up` instala (helm, versões de chart FIXAS, --wait) o metrics-server e o KEDA (todas as trilhas) e aplica os ScaledObjects da
-#                                       autoescala (D5): reservation pelo adm:hot do admission, notification pelo lag, os demais por CPU. K8S_<SVC>_MIN/_MAX (default 1/3), K8S_DESCE_SEG (120),
+#                                       autoescala (D5): reservation pelo adm:hot do admission, notification pelo lag, os demais por CPU (6 ScaledObjects: o stock é FIXO em 1 réplica, #231). K8S_<SVC>_MIN/_MAX (default 1/3), K8S_DESCE_SEG (120),
 #                                       K8S_CPU_ALVO (50) e AUTOESCALA_NOTIFICATION_LAG (100) viram o patch gerado; o alvo do reservation é 0,5 x o ADMISSION_X_RPM que o admission recebe.
 #    guarda --trilha ...                só confere o isolamento do overlay e2e/carga (Secrets e NodePort) com a trilha somada; não cria nada
 #    imagem <img...>                    carrega imagens avulsas no nó (o e2e usa para o pod auxiliar)
@@ -37,7 +37,9 @@
 #  Service db sem selector + EndpointSlice para o IP e a porta dados). Só com overlay de Secrets reais (base | completa | rodada). Sem a variável, nada muda. Trocar de modo = `down` + `up`.
 #  O overlay rodada também leva o pool real do Supavisor em 245 e, com o db no cluster, max_connections=300 (os do bloco 1 da R5 no compose). K8S_POOLS=r5 (#228) soma o componente
 #  pools-r5: os Hikari e os workers de RÉPLICA ÚNICA da R5 (reservation 1000, stock 250, identity/catalog 100, backend 10, notification 3, workers do admission 32); só com a autoescala
-#  travada em 1: o default de K8S_<SVC>_MAX vira 1 e um valor maior ABORTA (a conta do Supavisor, 1463 <= 1500, só fecha com 1 réplica de cada). Sem K8S_POOLS ficam os pools do cluster.
+#  travada em 1: o default de K8S_<SVC>_MAX vira 1 e um valor maior ABORTA (a conta do Supavisor, 1463 <= 1500, só fecha com 1 réplica de cada). Sem K8S_POOLS ficam os pools do cluster
+#  (reservation 200, stock 245 fixo em 1 réplica com Recreate, identity/catalog 50, backend 10, notification 3: 4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 245 = 1497 <= 1500, #231).
+#  K8S_STOCK_MIN/K8S_STOCK_MAX deixaram de existir (#231): o stock não tem ScaledObject; um valor diferente de 1 ABORTA em vez de ser ignorado em silêncio.
 #  SLIM_TAG=latest ABORTA (as :latest da R5 não têm o actuator): use SLIM_TAG=k8s até a R5 terminar; K8S_PERMITIR_LATEST=1 só depois que as :latest forem regeradas.
 #  CONTEXTO EXPLÍCITO (E4): todo kubectl daqui passa --context kind-<nome>; nunca depende do current-context (o `kind create` o troca).
 #  Segredos: os Secrets saem do `docker compose config` (o ambiente que o compose entrega a cada container) para arquivos temporários (mktemp, chmod 700,
@@ -71,8 +73,8 @@ KEDA_REPO=https://kedacore.github.io/charts
 METRICS_SERVER_VERSAO=3.14.0                           # chart kubernetes-sigs/metrics-server (appVersion 0.9.0), publicado em 2026-08-19, fixo
 METRICS_SERVER_REPO=https://kubernetes-sigs.github.io/metrics-server
 TRILHA=""
-# serviços sob autoescala (KEDA): os 7 Java; o frontend e a infra ficam com 1 réplica fixa
-AUTOESCALADOS="backend identity catalog reservation stock notification admission"
+# serviços sob autoescala (KEDA): 6 dos 7 Java; o stock (#231), o frontend e a infra ficam com 1 réplica fixa (replicas: 1 no Deployment)
+AUTOESCALADOS="backend identity catalog reservation notification admission"
 
 # Git Bash: o kubectl/docker/kind são nativos do Windows e a conversão de path do MSYS reescreveria "/bin/sh", "/actuator/..." nos argumentos
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'; WIN=1 ;; *) WIN=0 ;; esac
@@ -181,10 +183,14 @@ montar_selecao() {
     gerar_env >/dev/null 2>&1 || true
     [ -s "$TMP/adm-alvo" ] || abortar "não consegui ler o ADMISSION_X_RPM do admission no 'docker compose config' (o alvo do reservation no KEDA é 0,5 x ele)."
     alvo="$(tr -d '[:space:]' <"$TMP/adm-alvo")"
+    # o stock saiu da autoescala (#231): K8S_STOCK_MIN/MAX não viram mais ScaledObject; ignorar um valor > 1 em silêncio enganaria quem tem a variável de antes
+    for _v in K8S_STOCK_MIN K8S_STOCK_MAX; do
+        [ -z "${!_v:-}" ] || [ "${!_v}" = 1 ] || abortar "$_v=${!_v}: o stock é UMA réplica fixa no cluster (#231, sem ScaledObject; Hikari 245 com Recreate cabe nos 1500 do Supavisor só assim). Tire a variável."
+    done
     for s in $AUTOESCALADOS; do
         S="$(echo "$s" | tr 'a-z' 'A-Z')"; vmin="K8S_${S}_MIN"; vmax="K8S_${S}_MAX"
         min="${!vmin:-1}"; max="${!vmax:-$([ "$POOLS" = r5 ] && echo 1 || echo 3)}"
-        # teto 3: a conta do Supavisor (1492 <= 1500, spec "stock escalável") supõe no máximo 3 réplicas por serviço + 1 em término; acima disso, refazer a conta
+        # teto 3: a conta do Supavisor (4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 245 = 1497 <= 1500, README "Pool do Supavisor") supõe no máximo 3 réplicas por serviço escalável + 1 em término, e o stock fixo em 1; acima disso, refazer a conta
         inteiro_entre "$vmin" "$min" 1 3; inteiro_entre "$vmax" "$max" 1 3
         [ "$min" -le "$max" ] || abortar "$vmin ($min) maior que $vmax ($max)."
         [ "$POOLS" != r5 ] || [ "$max" -le 1 ] \
@@ -546,6 +552,10 @@ esperar() { # [app]: sem argumento espera tudo
     ok "tudo pronto (Deployments, StatefulSets, o Job particoes e os ScaledObjects Ready)"
 }
 
+podar_stock_antigo() { # #231: o apply não poda; num cluster de antes o ScaledObject stock (max 3) e o keda-hpa-stock (o KEDA o apaga junto) brigariam com o `replicas: 1` do Deployment
+    kn delete scaledobject stock --ignore-not-found >/dev/null || abortar "não consegui apagar o ScaledObject stock de um cluster anterior à #231."
+}
+
 cmd_up() {
     local trilha="" so=""
     while [ $# -gt 0 ]; do
@@ -572,6 +582,7 @@ cmd_up() {
     autoescala_segredos # também com `--so`: o admission (secretKeyRef não opcional) e o ScaledObject do reservation precisam dos Secrets; idempotente (reaproveita o token)
     # b1: o namespace passa a injetar o sidecar (db, Supavisor, Redpanda, Redis, RabbitMQ, Mailpit e o Job particoes têm inject=false nos manifests da trilha)
     [ "$TRILHA" = b1 ] && { k label namespace "$NS" istio-injection=enabled --overwrite >/dev/null || abortar "label istio-injection no namespace $NS falhou."; ok "namespace $NS com istio-injection=enabled"; }
+    podar_stock_antigo
     if [ -n "$so" ]; then render | kn apply -l "app=$so" -f - || abortar "kubectl apply -l app=$so falhou."
     else render | kn apply -f - || abortar "kubectl apply falhou."; fi
     esperar "$so"

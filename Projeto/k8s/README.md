@@ -6,7 +6,7 @@ os mesmos nomes de Service e portas do compose (`backend:8081`, `reservation:808
 [`docs/superpowers/specs/2026-10-29-k8s-autoescala-design.md`](../../docs/superpowers/specs/2026-10-29-k8s-autoescala-design.md).
 
 **Estado (etapa 4b de 4):** cluster, manifests da stack inteira, probes, Secrets/ConfigMaps, `cluster.sh`, o e2e contra o cluster, as **duas trilhas de balanceamento** (`--trilha b1|c`, mais `nenhuma` como controle) e a
-**autoescala** (KEDA + metrics-server por helm, 7 ScaledObjects, o endpoint `GET /internal/metrics/hot` do `admission` e a leitura das réplicas ativas pela API do Kubernetes), mais os overlays `completa` e `carga`.
+**autoescala** (KEDA + metrics-server por helm, 6 ScaledObjects (o `stock` é fixo em 1 réplica, #231), o endpoint `GET /internal/metrics/hot` do `admission` e a leitura das réplicas ativas pela API do Kubernetes), mais os overlays `completa` e `carga`.
 O **dry-run de carga com autoescala** (etapa 4b: `registrar-replicas.sh`, `dry-run.sh`) está em "Dry-run de carga com autoescala" abaixo. Sem carga, tudo fica no mínimo (1 réplica).
 
 ## Avisos
@@ -124,9 +124,21 @@ dry-run semear por `POST /bff/seed`; Secrets do override do e2e, **nunca o SMTP 
 - **Recursos (provisórios):** `requests`/`limits` de CPU e memória em todos (obrigatório para o HPA por CPU da etapa 4). Os serviços Java: 500m/768Mi pedidos, 2 CPU/1,5Gi no máximo
   (admission e notification menores). A rodada formal calibra.
 - **`identity-keys`:** PVC `ReadWriteOnce`; com um nó só todas as réplicas montariam o mesmo diretório (a chave continua criada com `link(2)`, #112).
-- **Pool do Supavisor:** o teto é o do compose (`POOLER_MAX_CLIENT_CONN=1500`, pool real 45). No cluster: Hikari 200 por réplica no `reservation`, 60 no `stock`, 50 no `identity` e no `catalog`,
-  10 no `backend`, 3 no `notification` (o compose base mantém 1000 e 250). Conta com até 3 réplicas por serviço e +1 pod em término por serviço: 4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 4×60 = **1492 ≤ 1500**
-  (com 3 réplicas e nenhuma em término: 1119). **Máximo acima de 3 em qualquer serviço exige refazer a conta:** o `cluster.sh` recusa `K8S_<SVC>_MAX` acima de 3.
+- **Pool do Supavisor:** o teto é o do compose (`POOLER_MAX_CLIENT_CONN=1500`, pool real 45). No cluster: Hikari 200 por réplica no `reservation`, 50 no `identity` e no `catalog`,
+  10 no `backend`, 3 no `notification` (o compose base mantém 1000 e 250) e **245 no `stock`, que é UMA réplica fixa** (#231, abaixo). Conta com até 3 réplicas por serviço escalável e +1 pod em término por
+  serviço, e o `stock` uma vez só: 4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 245 = **1497 ≤ 1500** (com 3 réplicas e nenhuma em término: 3×200 + 3×10 + 3×3 + 3×50 + 3×50 + 245 = 1184).
+  **Máximo acima de 3 em qualquer serviço escalável exige refazer a conta:** o `cluster.sh` recusa `K8S_<SVC>_MAX` acima de 3 (o `cluster.selftest.sh` refaz a soma a partir do render e confere 1497).
+  - **Por que o `stock` é fixo, com Hikari 245 e `Recreate` (#231).** A #205 o deixou escalar de 1 a 3 réplicas com Hikari 60 por réplica (para a soma caber nos 1500). O diagnóstico do K2
+    ([`K2-diagnostico`](../carga/results/10-k8s-db-remoto/K2-diagnostico/README.md), diagnóstico 1 contra o teste A) mostrou que esse pool era o gargalo de origem da parada do braço b1 já a 20k: com 60 × 3 o pool
+    esgotava (pending médio 142,6, máximo 237), a entrada do stock levava 729 ms no p50 e a entrada do gateway 5,6 s no p50, com parada; com Hikari 250 e 1 réplica (teste A) o degrau passou
+    sem parada, o pending ficou perto de 0 e a entrada do gateway caiu para 160 ms no p50. As réplicas extras não compensam o pool menor: o CAS na linha quente do `eventcap` serializa as reservas
+    de qualquer forma. Por isso o `stock` voltou a ser como no K1 e no compose, **1 réplica fixa, sem ScaledObject** (`replicas: 1` no Deployment). O `Recreate` tira o pod velho antes de subir o novo (com o
+    `RollingUpdate` o pod em término seguraria conexões em cima das do novo e a soma passaria dos 1500: 1502 com 250, 1752 com o pod velho sobreposto). O **245** é o pool real do Supavisor **no overlay `rodada`**
+    (`POOLER_DEFAULT_POOL_SIZE`; em base, e2e e carga é 45): conexão do Hikari acima disso só espera no Supavisor (no teste A, com o Hikari em 250, o `pg_conexoes` parou em 247), então 245 rende o mesmo e fecha a conta em 1497.
+    O compose segue com 250. `K8S_STOCK_MIN`/`K8S_STOCK_MAX` deixaram de existir: o `cluster.sh` aborta se receberem valor diferente de 1.
+    **Ressalva do `Recreate`:** o "sem sobreposição" vale para o rollout de template. Num `kubectl delete pod` ou numa eviction o ReplicaSet sobe o pod novo com o velho ainda em `Terminating` (grace de 60 s), e podem
+    ficar 2×245 conexões por alguns segundos (a soma passa de 1500 nesse intervalo: acima do `POOLER_MAX_CLIENT_CONN` o Supavisor recusa a conexão de cliente nova, e o Hikari do pod novo tenta de novo).
+    Num cluster de antes da #231, o `up` apaga o ScaledObject `stock` que sobrou (o `apply` não poda).
 
 ## Autoescala (etapa 4a, D5 = a: KEDA sem Prometheus)
 
@@ -138,11 +150,11 @@ Antes do `apply` o script espera os APIServices `v1beta1.metrics.k8s.io` e `v1be
 |---|---|---|
 | `reservation` | `metrics-api` em `GET http://admission.gerenciador.svc.cluster.local:8085/internal/metrics/hot` (valueLocation `rpm`), com o token só de métrica | `AverageValue` = `0,5 × ADMISSION_X_RPM` (o `cluster.sh` lê a MESMA variável que o `admission` recebe: o dry-run reduz as duas juntas): réplicas = `ceil(RPM ÷ (0,5 × X))` |
 | `notification` | `kafka`: lag do group `notification` em `identity.notification` | `lagThreshold` = `0,5 × AUTOESCALA_NOTIFICATION_LAG` (50); `allowIdleConsumers: false` (no máximo uma réplica por partição, 3) |
-| `backend`, `identity`, `catalog`, `admission`, `stock` | `cpu` com `containerName` = o container da aplicação (o sidecar da trilha B1 não entra na conta) | `Utilization` 50 (`K8S_CPU_ALVO`) |
+| `backend`, `identity`, `catalog`, `admission` | `cpu` com `containerName` = o container da aplicação (o sidecar da trilha B1 não entra na conta) | `Utilization` 50 (`K8S_CPU_ALVO`) |
 
-- **Mínimo e máximo** por serviço: `K8S_<SVC>_MIN` / `K8S_<SVC>_MAX` (`SVC` em maiúsculas: `BACKEND`, `IDENTITY`, `CATALOG`, `RESERVATION`, `STOCK`, `NOTIFICATION`, `ADMISSION`), defaults **1/3** em todos, inclusive o `stock`. Inteiros de 1 a 3, `MIN <= MAX` (o teto 3 é o da
+- **Mínimo e máximo** por serviço: `K8S_<SVC>_MIN` / `K8S_<SVC>_MAX` (`SVC` em maiúsculas: `BACKEND`, `IDENTITY`, `CATALOG`, `RESERVATION`, `NOTIFICATION`, `ADMISSION`), defaults **1/3** em todos. O `stock` **não está na lista** (#231): é 1 réplica fixa, sem ScaledObject. Inteiros de 1 a 3, `MIN <= MAX` (o teto 3 é o da
   conta do Supavisor); o `cluster.sh` gera o patch num kustomization temporário (sempre montado, também com `--trilha nenhuma`: o `guarda` renderiza exatamente o que será aplicado). Sem escala a zero. Infra e `frontend` ficam com 1 réplica fixa.
-  Os Deployments dos 7 serviços **não têm `spec.replicas`**: reaplicar o manifest não os volta para 1.
+  Os Deployments dos 6 serviços escalados **não têm `spec.replicas`**: reaplicar o manifest não os volta para 1. O do `stock` tem `replicas: 1` e `strategy: Recreate`.
 - **Descida suavizada (#206):** `behavior.scaleDown.stabilizationWindowSeconds` = `K8S_DESCE_SEG` (default 120; o HPA desce para a MAIOR recomendação da janela) e no máximo **1 pod por 60 s**; subida **sem janela**, no máximo **1 pod por 15 s**. `pollingInterval` 5 s.
 - **Token só de métrica (P3).** A cada **cluster novo** o `cluster.sh` gera um valor aleatório (fora do `.env`, nunca impresso) e o guarda em dois Secrets `admission-metrics`: no namespace `keda` (lido pela `ClusterTriggerAuthentication` `admission-metrics`, parâmetro `apiKey`) e no
   `gerenciador` (o `admission` o lê como `ADMISSION_METRICS_TOKEN`). Um `up` repetido no mesmo cluster **reaproveita** o valor (senão o admission e o KEDA ficariam com valores diferentes: 401 e o reservation congelado). O `admission` aceita esse token **apenas** em `GET /internal/metrics/hot` e
@@ -160,7 +172,7 @@ Antes do `apply` o script espera os APIServices `v1beta1.metrics.k8s.io` e `v1be
   olhe o `lastState.terminated.exitCode`/`reason` do container (`kubectl get pod -o jsonpath='{.status.containerStatuses[*].lastState}'`). Na 4a isso foi atribuído a "o perfil nega a escrita nativa no stderr"; a causa real era o `getegid` ausente (a JVM só ignorava a `JAVA_TOOL_OPTIONS`), corrigida na 4b.
 
 **e2e e autoescala.** O roteiro assume um pod por serviço, então o `run-e2e.sh` sobe com `K8S_<SVC>_MIN=MAX=1` (e `K8S_DESCE_SEG=5`) e `K8S_RESERVATION_MAX=2` (o teto que o admission aceita ler), e logo depois do `up` limita o ScaledObject do reservation a 1. O passo 7 (catalog em 2 réplicas) e o novo
-passo 8 (reservation em 2) mexem no **min/max do ScaledObject**, nunca em `kubectl scale` (o HPA o desfaria); "stock fora" **pausa** o ScaledObject do stock (`autoscaling.keda.sh/paused`) antes de escalar a 0. O passo 8 confere: 7 ScaledObjects `Ready` e 7 HPAs com a métrica lida (sem `<unknown>`),
+passo 8 (reservation em 2) mexem no **min/max do ScaledObject**, nunca em `kubectl scale` (o HPA o desfaria); "stock fora" é um `kubectl scale` direto (o `stock` não tem HPA que o reviva). O passo 8 confere: 6 ScaledObjects `Ready` e 6 HPAs com a métrica lida (sem `<unknown>`),
 `kubectl top pods`, `GET /internal/metrics/hot` com o token de métrica (200, corpo com `rpm`), sem token, com token errado e com o token de métrica numa outra rota (401), e `adm:replicas` = `readyReplicas` do reservation com 2 réplicas (e de volta a 1). Também: label da trilha no namespace, `java.security` extra ativo na
 trilha `c` (o log do backend, COM o perfil Seccomp, traz `Picked up JAVA_TOOL_OPTIONS: -Djava.security.properties=...`; a prova por `/proc/<pid>/environ` e por um pod efêmero SEM perfil continua como controle independente) e, na `b1`, `attempts: 0` no mesh config e `EXIT_ON_ZERO_ACTIVE_CONNECTIONS` no `istio-proxy`.
 
@@ -201,9 +213,9 @@ de capacidade 30, 60 usuários. As janelas de 1 pod por 60 s na descida e por 15
 |---|---|---|
 | `parado` / `ocioso` | `docker stats` do nó só com a infra do kind + KEDA + metrics-server + Redpanda, e com a stack inteira parada | linha de base de CPU/RAM do nó |
 | `fundo` | tráfego leve contínuo até o fim (5 req/s: 1 reserva e 2 leituras) | um 5xx em qualquer descida de réplica aparece aqui |
-| `A` | 20 req/s de reservas no `cas` num evento só (RPM >> 300) por 300 s | `reservation` (RPM do `adm:hot`) e `stock` (CPU) sobem; a réplica nova do reservation recebe conexões |
+| `A` | 20 req/s de reservas no `cas` num evento só (RPM >> 300) por 300 s | `reservation` (RPM do `adm:hot`) sobe e o `stock` fica em 1 réplica fixa (#231); a réplica nova do reservation recebe conexões |
 | `B` | a mesma carga oscilando (12 s pico, 8 s vale) por 180 s | **nenhuma descida do reservation enquanto o degrau dura** (#206: a janela segura a descida) |
-| `descida` | só o fundo | reservation e stock voltam ao mínimo depois da janela |
+| `descida` | só o fundo | o reservation volta ao mínimo depois da janela; o stock segue em 1 |
 | `C1` | backend **fixo em 1 réplica** (min=max=1) e leitura (`GET /bff/events/<id>`) a 3000 req/s, que o SATURA | nenhum pod sai do Service, nenhum reinício por probe, sem `Unhealthy`/`Killing` por probe (#207) |
 | `C` | a mesma leitura (1500 req/s) com a autoescala solta | o backend sobe e volta |
 | `D` | 15000 pedidos de e-mail em `identity.notification` por 3 produtores | `notification` sobe a 3 réplicas (3 partições) e volta; nenhum e-mail duplicado nem perdido |
@@ -227,7 +239,7 @@ Cada coluna é um cluster novo, criado pelo `dry-run.sh`; todos os critérios au
 
 | | `c` | `b1` | `nenhuma` (controle) |
 |---|---|---|---|
-| máximo de réplicas (reservation / stock / notification / backend) | 3 / 3 / 3 / 3 | 3 / 3 / 3 / 3 | 3 / 3 / 3 / 3 |
+| máximo de réplicas (reservation / stock / notification / backend; o `stock` era escalável nesta rodada, #231 o fixou em 1) | 3 / 3 / 3 / 3 | 3 / 3 / 3 / 3 | 3 / 3 / 3 / 3 |
 | descidas no caminho do fundo (backend/admission/reservation/stock/catalog) e 5xx nas janelas de 60 s depois delas | 12 descidas, **0** 5xx | 13 descidas, **0** 5xx | 14 descidas, **0** 5xx |
 | descidas de `identity` e `notification` (4 por rodada; o fundo não as exercita por HTTP: só informadas) | 4, 0 5xx | 4, 0 5xx | 4, 0 5xx |
 | degrau B: descidas do reservation (métrica por pod: mínimo a pico) | 0 (métrica 0 a 568, prontas 3) | 0 (métrica 0 a 526, prontas 3) | 0 (métrica 213 a 575, prontas 3) |
@@ -238,6 +250,16 @@ Cada coluna é um cluster novo, criado pelo `dry-run.sh`; todos os critérios au
 | e-mails (15000 pedidos): mensagens / destinatários distintos | 15000 / 15000 | 15000 / 15000 | 15000 / 15000 |
 | overselling (evento quente, capacidade 30): ativas / `quant` | 30 / 0 | 30 / 0 | 30 / 0 |
 | `POST /bff/seed` depois do dry-run | 404 | 404 | 404 |
+
+### Dry-run da #231 (2026-11-01; stock fixo em 1 réplica)
+
+- **`c`:** passou em todos os critérios.
+- **`b1`:** passou na repetição. Na 1ª rodada a réplica nova do reservation recebeu a primeira conexão na 8082 fora da janela de 15 s; na repetição, em 12 s. Um vigia no pod novo mostrou o sidecar com conexões de entrada ~4 s depois de o pod aparecer: o critério fica na borda da janela.
+- **`nenhuma` (controle L4):** falhou nas duas rodadas, sempre no critério "0 5xx nas janelas de 60 s depois de cada descida". Em cada rodada houve 2 respostas 503 em **leitura**, ~20 s depois de cada descida do catalog (o backend desceu junto, então o critério conta em dobro).
+  - **O problema já existia antes da #231.** A mesma `nenhuma` no código anterior, com o stock escalável (`Issue-228`, 334adf4), também deu 503 em leitura nas descidas do catalog e do backend: 4 linhas `ERRO5XX`, 12 contagens nas janelas.
+  - Causa provável: o gateway chama o catalog pelo Service L4 e mantém keep-alive com o pod do catalog que está saindo. O `CatalogIndisponivelHandler` devolve então 503.
+  - Na `b1` e na `c`, que balanceiam por requisição ou no cliente, houve 0 5xx nas descidas.
+- **Nas três trilhas:** o stock ficou em 1 réplica o dry-run inteiro, com overselling 0 (30 de 30, `quant` 0) e os 15.000 e-mails chegaram sem duplicar.
 
 **CPU e RAM do nó** (`docker stats` do contêiner do kind; CPU em % de um núcleo, 100 = 1 núcleo; amostra a cada ~3 s; a **linha de base** é o que o cluster custa antes de qualquer carga):
 
@@ -260,18 +282,20 @@ Cada coluna é um cluster novo, criado pelo `dry-run.sh`; todos os critérios au
 - **Mailpit guarda só 500 mensagens por padrão** (`MP_MAX_MESSAGES`): subiu para 50000 no overlay `e2e`, senão a conferência de e-mails duplicados/perdidos seria vácua.
 - **Os `stages` do k6 são rampas lineares**, não patamares: o roteiro usa um estágio curto de subida e um patamar com o mesmo alvo.
 
-### Dry-run com o `stock` escalado (#205; a rodar depois da R5)
+### Dry-run com o `stock` fixo em 1 réplica (#231, no lugar do `stock` escalado da #205)
 
-O `stock` já é autoescalado por CPU como os outros 4 serviços HTTP (`K8S_STOCK_MIN`/`K8S_STOCK_MAX`, default 1/3; Hikari 60 por réplica, conta 1492 ≤ 1500 acima), e a **fase A** do dry-run (rajada de reservas no `cas`) o faz subir: não há parâmetro novo, o dry-run da #197 já é o da #205.
-Comando (sob o lock Docker, depois do aviso de fim da R5; gerar antes as imagens com `SLIM_TAG=k8s Projeto/slim/gerar-imagens-slim.sh`):
+A #205 deixou o `stock` autoescalável de 1 a 3 réplicas (Hikari 60 por réplica) e o dry-run exigia que ele chegasse a 2+ réplicas. A #231 **reverteu isso no cluster**: o `stock` é 1 réplica fixa, Hikari 245,
+`Recreate` e sem ScaledObject, como no K1 e no compose. O motivo e a evidência estão em "Pool do Supavisor" (acima) e em [`K2-diagnostico`](../carga/results/10-k8s-db-remoto/K2-diagnostico/README.md): o pool 60 × 3
+era o gargalo da parada do b1 a 20k, e com 250 × 1 (teste A) o degrau passou. O dry-run da #197 (comando abaixo, sem parâmetro novo) continua o mesmo:
 
 ```bash
-SLIM_TAG=k8s Projeto/k8s/dry-run.sh --trilha nenhuma     # (ou b1 | c); o `stock` com os defaults 1/3
+SLIM_TAG=k8s Projeto/k8s/dry-run.sh --trilha nenhuma     # (ou b1 | c)
 ```
 
-Critério do aceite da #205, ambos automáticos no `dry-run-analise.py` (código de saída 0 só com todos ok): **`stock` chega a 2+ réplicas** (`stock sobe (max N) e desce por CPU na mesma rajada`, N ≥ 2) e **overselling 0 no CAS** (com o evento esgotado: reservas ativas == capacidade, `eventcap.quant` coerente com os holds `held` debitados; `resumo.txt`, arquivos `overselling*.txt` e `quant-incoerente.txt`).
-A prova de que o consumo de `reservation.wallet` com 2+ réplicas não devolve a vaga duas vezes é o teste de `StockReleaseConsumerTest` (infra real, sem cluster): o roteiro do dry-run não cancela nem expira reservas (o evento quente tem `max_time_in_line` de 3600 s), então ele não exerce a devolução; `quant-incoerente.txt` = 0 só confere a invariante do CAS.
-Precedente: no dry-run da #197 (tabela acima) o `stock` chegou a **3** réplicas nas três trilhas, com overselling 0 (30 ativas para capacidade 30, `quant` 0).
+Critérios do `dry-run-analise.py` que mudam ou ficam (código de saída 0 só com todos ok): **o `stock` fica em 1 réplica o dry-run inteiro** (`stock fica em 1 replica o dry-run inteiro, fora da autoescala`: máximo de
+`prontas` 1, 0 subidas e 0 descidas; no lugar do antigo `stock chega a 2+ réplicas` da #205) e **overselling 0 no CAS** (com o evento esgotado: reservas ativas == capacidade, `eventcap.quant` coerente com os holds `held`
+debitados; `resumo.txt`, arquivos `overselling*.txt` e `quant-incoerente.txt`). O teste `StockReleaseConsumerTest` (2+ réplicas do consumer, infra real) continua valendo como prova de que o `stock` tolera réplicas, mas o cluster não as usa.
+Histórico: no dry-run da #197 (tabela acima, 2026-10-30, antes da #231) o `stock` ainda chegou a **3** réplicas nas três trilhas, com overselling 0 (30 ativas para capacidade 30, `quant` 0); a coluna "stock" dessa tabela não vale mais.
 
 ## Rodada com o db remoto (issue #228)
 
@@ -303,17 +327,17 @@ Todos com `K8S_OVERLAY=rodada`, `SLIM_TAG=k8s` (até a R5 terminar), `ADMISSION_
 |---|---|---|---|
 | Trilha | `nenhuma` | `b1` | `nenhuma` |
 | Banco | Dell `192.168.68.50:5433` | Dell | StatefulSet `db` no cluster |
-| Autoescala | travada em 1 (`K8S_<SVC>_MAX=1`) | 1 a 3 | travada em 1 |
+| Autoescala | travada em 1 (`K8S_<SVC>_MAX=1`) | 1 a 3 (o `stock` fixo em 1) | travada em 1 |
 | `K8S_DB_REMOTO` | `192.168.68.50:5433` | `192.168.68.50:5433` | (vazio) |
 | `K8S_POOLS` | `r5` | (vazio) | `r5` |
 | `max_connections` | 300 (o Dell já roda assim) | 300 (Dell) | 300 (o overlay `rodada` põe no `db` do cluster) |
 | Pool real do Supavisor (`POOLER_DEFAULT_POOL_SIZE`) | 245 | 245 | 245 |
-| Hikari reservation / stock / identity / catalog / backend / notification | 1000 / 250 / 100 / 100 / 10 / 3 | 200 / 60 / 50 / 50 / 10 / 3 | 1000 / 250 / 100 / 100 / 10 / 3 |
+| Hikari reservation / stock / identity / catalog / backend / notification | 1000 / 250 / 100 / 100 / 10 / 3 | 200 / 245 / 50 / 50 / 10 / 3 (245 vale a partir da #231; a medição de 2026-11-01 usou o `stock` com 60 × 3) | 1000 / 250 / 100 / 100 / 10 / 3 |
 | Workers do admission (`ADMISSION_WORKER_CONCURRENCY`) | 32 | 32 por réplica (do Secret, sem override) | 32 |
-| Soma no Supavisor (limite 1500) | 1463 | 1492 (3 réplicas + 1 em término por serviço; conta da seção "Pool do Supavisor") | 1463 |
+| Soma no Supavisor (limite 1500) | 1463 | 1497 (3 réplicas + 1 em término por serviço escalável, stock fixo em 1; conta da seção "Pool do Supavisor"; a medição de 2026-11-01, com o `stock` 60 × 3, somava 1492) | 1463 |
 
 K1 e K0 têm a configuração e os pools do **bloco 1 da R5 / #227** (`carga/rpm/docker-compose.rpm.yml`: `max_connections` 300, pool real 245; Hikari e workers do `docker-compose.yml`), então só o lugar do banco
-os separa (K1 x K0 = efeito do db remoto no cluster). O K2 mantém os pools do cluster (os da conta de 1492) com o pool real em 245.
+os separa (K1 x K0 = efeito do db remoto no cluster). O K2 mantém os pools do cluster (os da conta de 1497, #231, com o `stock` fixo em 1 réplica e Hikari 245) com o pool real em 245.
 
 ### Comandos, por bloco (no host; `Projeto/.env` e `Projeto/supabase/.env` presentes, nada deles é impresso)
 

@@ -47,9 +47,9 @@
 #  Os helpers que fazem `docker exec`/`docker compose exec` passam por `sexec`; stock fora = `kubectl scale`, pausa do stock = SIGSTOP/SIGCONT no PID a partir do
 #  no (crictl), queda do reservation = SIGKILL no PID pelo no (como o `docker stop -t 0`; o `kubectl delete pod --force` desmonta a rede do pod e nao deixa orfas). O isolamento (Secrets e NodePort) e conferido por `cluster.sh guarda`
 #  ANTES de qualquer apply. No fim `kind delete cluster` (MANTER=1 mantem).
-#  AUTOESCALA (#197, etapa 4): o cluster tem KEDA + metrics-server e os 7 ScaledObjects. Para o roteiro ter UMA replica por servico (varios passos assumem um pod so), o e2e sobe com
+#  AUTOESCALA (#197, etapa 4): o cluster tem KEDA + metrics-server e os 6 ScaledObjects (o stock, #231, e 1 replica fixa sem ScaledObject). Para o roteiro ter UMA replica por servico (varios passos assumem um pod so), o e2e sobe com
 #  K8S_<SVC>_MIN=MAX=1 (K8S_DESCE_SEG=5) e K8S_RESERVATION_MAX=2 (o teto que o admission aceita ler), e logo depois do `up` limita o ScaledObject do reservation a 1. Os passos que precisam de
-#  2 replicas (7: catalog; 8: reservation) mexem no min/max do ScaledObject, nunca em `kubectl scale` (o HPA o desfaria); "stock fora" PAUSA o ScaledObject do stock antes de escalar a 0. O passo 8 confere
+#  2 replicas (7: catalog; 8: reservation) mexem no min/max do ScaledObject, nunca em `kubectl scale` (o HPA o desfaria); "stock fora" e um `kubectl scale` direto (o stock nao tem HPA que o revivesse). O passo 8 confere
 #  ScaledObjects/HPAs Ready com metrica lida, `GET /internal/metrics/hot` (token de metrica: 200; sem token, token errado e token de metrica em outra rota: 401) e `adm:replicas` = readyReplicas do reservation (D4).
 #  Sem carga pesada: o dry-run de carga (etapa 4b) e quem prova a subida e a descida sob carga.
 #  Compatibilidade: Linux/macOS e Git Bash do Windows (Docker Desktop).
@@ -251,7 +251,7 @@ if [ "$K8S" = "1" ]; then
     [ "${E2E_COMPLETA:-0}" = "1" ] && abortar "E2E_K8S=1 roda so as *.slim (E2E_COMPLETA=1 vale so para o compose)."
     for f in kind kubectl $([ "$TRILHA_K8S" = b1 ] && echo helm); do command -v "$f" >/dev/null 2>&1 || abortar "preciso de '$f' no PATH (kind em E:\\TCC\\claude-tooling\\bin)."; done
     # autoescala (#197, etapa 4): uma replica por servico no roteiro (min=max=1); o reservation sobe com teto 2 (o admission so grava adm:replicas dentro de [1, max]) e e limitado a 1 depois do up
-    for _s in BACKEND IDENTITY CATALOG STOCK NOTIFICATION ADMISSION; do export "K8S_${_s}_MIN=1" "K8S_${_s}_MAX=1"; done
+    for _s in BACKEND IDENTITY CATALOG NOTIFICATION ADMISSION; do export "K8S_${_s}_MIN=1" "K8S_${_s}_MAX=1"; done
     export K8S_RESERVATION_MIN=1 K8S_RESERVATION_MAX=2 K8S_DESCE_SEG=5
     cluster guarda --trilha "$TRILHA_K8S" || abortar "o isolamento NAO pode ser verificado/garantido: nada foi criado."
     ok "Secrets do overlay e2e conferidos (mailpit, credenciais efemeras, X baixo) e manifests sem NodePort"
@@ -316,7 +316,7 @@ if [ "$K8S" = "1" ]; then
     kc patch scaledobject reservation --type merge -p '{"spec":{"maxReplicaCount":1}}' >/dev/null || abortar "nao consegui limitar o ScaledObject do reservation a 1 replica"
     confere "namespace com o label da trilha do up (guarda contra misturar trilhas)" "$TRILHA_K8S" \
         "$(kubectl --context "$CTX" get namespace "$K8S_NS" -o jsonpath="{.metadata.labels['trilha-balanceamento']}")"
-    confere "ScaledObjects Ready (7: reservation, notification, backend, identity, catalog, admission, stock)" 7 \
+    confere "ScaledObjects Ready (6: reservation, notification, backend, identity, catalog, admission; o stock e fixo, sem ScaledObject)" 6 \
         "$(kc get scaledobject -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | grep -c True)"
     confere "nenhum container reiniciou por probe/falha (restartCount total)" 0 \
         "$(kc get pods -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.restartCount}{"\n"}{end}{end}' | awk '{s += $1} END {print s + 0}')"
@@ -666,8 +666,7 @@ pid_no() { # app: PID do processo do container NO NO (de dentro o PID 1 ignora S
 }
 stock_fora() {
     if [ "$K8S" = "1" ]; then
-        # o ScaledObject (min 1) revive o Deployment: PAUSA antes de escalar a 0 (autoscaling.keda.sh/paused) e solta no stock_volta
-        kc annotate scaledobject stock autoscaling.keda.sh/paused=true --overwrite >/dev/null || abortar "pausar o ScaledObject do stock falhou"
+        # o stock nao tem ScaledObject (#231, 1 replica fixa): o scale a 0 nao e desfeito por nenhum HPA
         kc scale deploy/stock --replicas=0 >/dev/null || abortar "kubectl scale do stock para 0 falhou"
         for i in $(seq 1 60); do [ -z "$(kc get pods -l app=stock -o name)" ] && break; sleep 2; done
     else
@@ -680,7 +679,6 @@ stock_volta() {
     if [ "$K8S" = "1" ]; then
         kc scale deploy/stock --replicas=1 >/dev/null || abortar "kubectl scale do stock para 1 falhou"
         kc rollout status deploy/stock --timeout=180s >/dev/null || abortar "o stock nao voltou a ficar pronto"
-        kc annotate scaledobject stock autoscaling.keda.sh/paused- >/dev/null || abortar "soltar a pausa do ScaledObject do stock falhou"
     else
         dexec start "$STOCK_CID" >/dev/null || abortar "docker start do stock falhou"
         esperar_saudavel "$STOCK_CID" 120 || abortar "o stock nao voltou a ficar healthy"
@@ -1007,9 +1005,9 @@ kc patch scaledobject catalog --type merge -p '{"spec":{"minReplicaCount":1,"max
 
 echo "==> 8. autoescala (#197, etapa 4): HPAs com metrica lida, metrica do admission e adm:replicas (D4)"
 hpas_com_metrica() { kc get hpa -o jsonpath='{range .items[*]}{.status.currentMetrics[0].type}{"\n"}{end}' | grep -c .; }
-for i in $(seq 1 60); do [ "$(hpas_com_metrica)" = "7" ] && break; sleep 3; done
-confere "HPAs criados pelo KEDA (keda-hpa-<servico>)" 7 "$(kc get hpa -o name | grep -c 'keda-hpa-')"
-confere "HPAs com a metrica lida (currentMetrics presente: metrics-server e external metrics funcionando)" 7 "$(hpas_com_metrica)"
+for i in $(seq 1 60); do [ "$(hpas_com_metrica)" = "6" ] && break; sleep 3; done
+confere "HPAs criados pelo KEDA (keda-hpa-<servico>, 6: o stock nao tem)" 6 "$(kc get hpa -o name | grep -c 'keda-hpa-')"
+confere "HPAs com a metrica lida (currentMetrics presente: metrics-server e external metrics funcionando)" 6 "$(hpas_com_metrica)"
 confere "kubectl top pods (metrics-server responde)" sim "$([ "$(kc top pods --no-headers 2>/dev/null | grep -c .)" -ge 1 ] && echo sim || echo nao)"
 # o token SO de metrica (Secret admission-metrics do namespace): vai no argv de um curl efemero (nao e o INTERNAL_API_TOKEN do .env)
 TOKEN_METRICA="$(kc get secret admission-metrics -o jsonpath='{.data.token}' | base64 -d)"

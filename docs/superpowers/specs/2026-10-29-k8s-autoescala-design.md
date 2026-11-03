@@ -249,7 +249,9 @@ explicitamente (`--trilha nenhuma`), para servir de controle no dry-run.
 |---|---|---|
 | `reservation` | KEDA `metrics-api`: `GET /internal/metrics/hot` (novo no `admission`), autenticado pelo **token de métrica** (abaixo), devolve o `adm:hot`; sem a chave, `200` com `0`, nunca 404 (E5: o KEDA em erro congela as réplicas) | `AverageValue` = `0,5 × ADMISSION_X_RPM` (D3): `réplicas desejadas = ceil(RPM ÷ (0,5 × X))`; o `cluster.sh` gera o alvo da **mesma** variável que o `admission` recebe (o dry-run reduz as duas juntas) |
 | `notification` | KEDA `kafka`: lag do group `notification` em `identity.notification` | `lagThreshold` = `0,5 × AUTOESCALA_NOTIFICATION_LAG` (50); `allowIdleConsumers: false` limita às partições |
-| `backend`, `identity`, `catalog`, `admission`, `stock` | KEDA `cpu` com `containerName` = o container da aplicação (vira `ContainerResource` no HPA; o sidecar da trilha B1 não entra na conta) | `Utilization` 50 |
+| `backend`, `identity`, `catalog`, `admission` | KEDA `cpu` com `containerName` = o container da aplicação (vira `ContainerResource` no HPA; o sidecar da trilha B1 não entra na conta) | `Utilization` 50 |
+
+O `stock` não aparece na tabela: desde a #231 é 1 réplica fixa, sem ScaledObject.
 
 - **KEDA sem acesso amplo a segredos (P3):** o chart do KEDA é instalado com o acesso a secrets restrito ao namespace dele
   (`KEDA_RESTRICT_SECRET_ACCESS=true`; o nome exato do value é conferido no chart da versão fixada). O `metrics-api` usa um **token só de
@@ -259,7 +261,7 @@ explicitamente (`--trilha nenhuma`), para servir de controle no dry-run.
   `gerenciador`.
 - Diferença documentada na ADR: nos serviços HTTP a regra passa de req/s para CPU (o aceite permite "ou a diferença fica documentada").
   O KEDA não tem scaler que leia uma chave simples do Redis, por isso o `adm:hot` sai por um endpoint do `admission`.
-- **Mínimo e máximo** por serviço configuráveis (`K8S_<SVC>_MIN`/`_MAX`, defaults 1/3 em todos, inclusive o `stock`, #205); o `cluster.sh`
+- **Mínimo e máximo** por serviço configuráveis (`K8S_<SVC>_MIN`/`_MAX`, defaults 1/3 nos 6 serviços escaláveis; o `stock` saiu na #231, ver "`stock` escalável (#205), revertido na #231"); o `cluster.sh`
   gera o patch de kustomize. Sem escala a zero. Infra (`db`, Supavisor, Redpanda, Redis, RabbitMQ) e o `frontend` com 1 réplica fixa.
 - **Descida suavizada (requisito da #206):** `behavior.scaleDown.stabilizationWindowSeconds` configurável (`K8S_DESCE_SEG`, default 120 s,
   o valor que a R4 usou por config). O HPA desce só para a **maior** recomendação da janela: uma amostra baixa isolada no meio de um degrau
@@ -284,9 +286,18 @@ explicitamente (`--trilha nenhuma`), para servir de controle no dry-run.
 - Teste: servidor HTTP falso no lugar da API (resposta com `readyReplicas`, 403, timeout, JSON inválido) → chave gravada ou não; o caminho
   real é coberto no dry-run (subir o `reservation` para 2 e ver `adm:replicas = 2`).
 
-## `stock` escalável (#205)
+## `stock` escalável (#205), revertido na #231
 
-- Escala de 1 a 3 por CPU (tabela acima), min/máx configuráveis.
+> **Atualização (#231, decisão do usuário, 2026-11-01): no cluster o `stock` voltou a ser como no K1 e no compose, 1 réplica fixa, Hikari 245, `strategy: Recreate` e sem ScaledObject.**
+> O diagnóstico do K2 ([`K2-diagnostico`](../../../Projeto/carga/results/10-k8s-db-remoto/K2-diagnostico/README.md), diagnóstico 1 contra o teste A) mostrou que o Hikari 60 por réplica era o gargalo de origem da parada do
+> braço b1 a 20k: o pool esgotava (pending médio 142,6, máximo 237), o hold levava ~730 ms e a entrada do gateway ~5,6 s no p50. O teste A, que muda só o `stock` (Hikari 250, 1 réplica), passou os 3 minutos
+> a 20k sem parada, com o p50 da entrada do gateway em 160 ms. As réplicas extras não compensam o pool menor: o CAS na linha quente do `eventcap` serializa as reservas de qualquer forma.
+> **A conta de pools passa a ser** 4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 245 = **1497 ≤ 1500** (o `stock` conta uma vez; `Recreate` evita o pod velho sobreposto ao novo, que com 250 daria 1502 e, com
+> `RollingUpdate`, 1752). O **245** é o pool real do Supavisor no overlay `rodada` (`POOLER_DEFAULT_POOL_SIZE`; em base, e2e e carga é 45): conexão do Hikari acima disso só espera no Supavisor (no teste A, `pg_conexoes` parou em 247). O compose segue com 250.
+> `K8S_STOCK_MIN`/`K8S_STOCK_MAX` deixaram de existir (o `cluster.sh` aborta com valor diferente de 1) e o dry-run passa a conferir que o `stock` **fica em 1 réplica** no lugar de exigir 2+. O texto abaixo é o
+> desenho original da #205, mantido como histórico: a escala, o Hikari 60 e a soma de 1492 **não valem mais**.
+
+- Escala de 1 a 3 por CPU (tabela acima), min/máx configuráveis. *(Revertido na #231.)*
 - **Pool (P4 = a):** no cluster, Hikari **200 por réplica no `reservation`** e **60 no `stock`** (env no manifest; o compose base mantém
   1000 e 250, e o override de autoescala 300 no `reservation`). O Supavisor do cluster tem o mesmo teto (`POOLER_MAX_CLIENT_CONN=1500`). A
   conta reserva **+1 pod por serviço** (o que está em término depois de uma descida, com o pool ainda aberto; o rollout não soma, porque
@@ -349,7 +360,7 @@ explicitamente (`--trilha nenhuma`), para servir de controle no dry-run.
   vira `kubectl delete pod --grace-period=0 --force`. A asserção continua: ≥ 1 hold liberado (inline, reaper ou lápide) e 0 órfãs ao fim.
 - No fim, `kind delete cluster --name gerenciador-e2e` (`MANTER=1` mantém). O e2e em compose continua o padrão.
 
-## Dry-run de carga com autoescala (aceites da #197 e #205)
+## Dry-run de carga com autoescala (aceites da #197 e #205; o critério de 2+ réplicas do `stock` saiu na #231)
 
 Local, não é medição. Roda **uma vez por trilha** (B1 e C, mesmo roteiro e mesmos parâmetros) e uma vez com `--trilha nenhuma` como controle. Overlay `carga` (= `e2e` + seed: Mailpit e Secrets do override do e2e, nunca SMTP real, P2) + capacidades baixas (X e alvos de CPU
 reduzidos por env) para forçar subida e descida em minutos. No fim (inclusive em falha, por `trap`) o roteiro reaplica o overlay sem
@@ -357,7 +368,7 @@ reduzidos por env) para forçar subida e descida em minutos. No fim (inclusive e
 
 - `Projeto/k8s/registrar-replicas.sh`: a cada 2 s grava `ts,servico,prontas,desejadas,metrica` em `Projeto/k8s/saida/replicas-<ts>.csv`
   (gitignored, como o CSV do scaler) a partir de `kubectl get deploy,hpa`.
-- Roteiro: rajada no `cas` acima do limiar → `reservation` e `stock` sobem; degrau oscilante → nenhuma descida no meio (#206); carga acima
+- Roteiro: rajada no `cas` acima do limiar → `reservation` sobe (o `stock` fica em 1 réplica fixa, #231); degrau oscilante → nenhuma descida no meio (#206); carga acima
   da capacidade de uma réplica do `backend` → nenhum pod sai do Service nem reinicia por probe (#207); rajada em `identity.notification`
   → `notification` até 3 e volta; fim da carga → tudo volta ao mínimo depois da janela.
 - Critérios: **0 5xx atribuíveis a descida** (janela de 60 s depois de cada descida no CSV, nas duas trilhas; P10); overselling 0 no CAS (`ativas ≤ capacity` e `quant` coerente, por `cluster.sh psql`), nenhum e-mail duplicado (Mailpit do
