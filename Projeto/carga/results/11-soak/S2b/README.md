@@ -1,0 +1,100 @@
+# Soak — bloco S2b (issue #232), 2026-11-03
+
+**Resultado: REPROVADO só no critério 3. Foram 12 respostas 503 num único minuto, todas no `GET /bff/event-wallets/admission`, por um timeout do Redis com o host saturado.**
+
+O S2b repete o S2 depois das duas correções:
+
+- o cadastro do k6 pagina o Mailpit (commit 02af3d9), aprovada no dry longo do Mailpit;
+- o `admission` tem mínimo 2 réplicas (#235).
+
+Os dois defeitos do S2 não voltaram. O critério 1 teve 0 e-mails duplicados (no S2 foram 262), e as 464 respostas 5xx da reserva caíram para 12.
+
+| | |
+|---|---|
+| Cluster | kind, trilha b1 (Istio), overlay `soak`, db no Dell (`192.168.68.50:5433`), `ADMISSION_X_RPM=4000`, `admission` no mínimo 2, commit 71047ee |
+| Perfil | `perfil-S2b.json` (na raiz de `results/`): semente 257867, teto 50000 RPM, 7200 s. É o mesmo do `perfil-S2.json`, com 54.649 cadastros esperados |
+| Seed | `Soak-446582`: 2000 usuários e 2000 eventos de 500 vagas, mais 1 evento quente (2001) de 20000 vagas. Foi semeado sobre o banco limpo (`limpar-banco` em modo cluster) |
+| k6 | v2.2.0 no gerador (192.168.68.54), `MAX_VUS=1000`, de 02:33:15Z a 04:34:11Z, com exit 0 |
+| Relógios | maior diferença de 0,91 s (host +1,48 s, nó +1,53 s, gerador +2,39 s) |
+
+## Números
+
+| Tipo | Requisições | 2xx | 202 | 400 | 429 | 5xx | status 0 | Descartadas | p95 por minuto (máx.) |
+|---|---|---|---|---|---|---|---|---|---|
+| leitura | 1.605.943 | 1.605.943 | — | 0 | 0 | 0 | 0 | 67.031 | 2.587 ms |
+| reserva | 2.320.627 | 1.647.511 | 629.962 | 1.819 (todos "vínculo") | 41.323 | **12** | 0 | 77.817 | 484 ms |
+| login | 190.603 | 190.603 | — | 0 | 0 | 0 | 0 | 2.068 | 2.995 ms |
+| cadastro | 109.296 | 109.296 (54.648 `verify-email`) | — | 0 | 0 | 0 | 0 | 0 | 2.978 ms |
+| escrita | 56.502 | 56.502 | — | 0 | 0 | 0 | 0 | 0 | 3.687 ms |
+| Mailpit (k6) | 109.297 | 109.297 | — | — | — | 0 | 0 | — | 26,4 ms (no S2: 28 s) |
+
+- **Critério 1 (e-mail):** 54.648 mensagens do bloco para 54.648 cadastros. Foram 0 perdidas, **0 duplicadas**, 0 extras e 0 From fora de `@example.com`. O Mailpit terminou com 0 restarts em 1356 amostras.
+- **Reservas** (`verificar-rpm`, código 0):
+  - overselling 0;
+  - 23.872 confirmadas, 11.901 expiradas e 6.021 canceladas;
+  - sagas convergidas: 0 velhas, 0 órfãs e 0 devoluções pendentes;
+  - `reserva_400{motivo}`: vínculo = 1819, lotado = 0, outro = 0.
+- **Critério 2:** 0 violações. Subidas e descidas avaliadas:
+
+  | Serviço | Subidas | Descidas |
+  |---|---|---|
+  | backend | 3 | 3 |
+  | reservation | 3 | 4 |
+  | catalog | 2 | 4 |
+  | identity | 1 | 1 |
+  | admission | 0 | 3 |
+
+  O admission ficou em 2 ou mais réplicas o bloco inteiro.
+- **Carga entregue:** todos os tipos com ≥ 90% das iterações do perfil.
+- **Fila:** 629.962 respostas 202 e 41.323 respostas 429.
+- **Gerador:** RAM livre mínima de 2,41 GB, abaixo da qual nunca se chegou ao aviso de 1,5 GB. O k6 teve pico de 7,57 GB por minuto (7,72 GB numa amostra), `vus_max` 900 e CPU de no máximo 26%. Houve 3 avisos "Insufficient VUs":
+  - reserva (400 VUs) às 02:34:57Z;
+  - leitura (300) às 03:50:36Z;
+  - login (100) às 03:52:26Z.
+
+## Critério 3: os 12 respostas 503
+
+Todas vieram do `GET /bff/event-wallets/admission` (consulta do resultado da fila), no minuto 77 (03:51Z), e nenhum pod saiu nesse minuto. O caminho foi este:
+
+1. Às 03:51:36Z, um pod do `admission` registrou `Redis indisponível (QueryTimeoutException: Redis command timed out): respondendo 503`. O timeout do Redis no `admission` é de 200 ms (`ADMISSION_REDIS_TIMEOUT_MS`).
+2. O gateway registrou `admission indisponível na consulta` e repassou o 503. É o contrato da #43: 503 quando o `admission` está fora.
+3. O Redis não reiniciou. Nada mudou no log dele depois do boot, e o restartCount ficou em 0.
+
+O contexto da janela de 03:50 a 03:52Z, que é o pico do bloco:
+
+- backend, reservation, identity e admission estavam em 3 réplicas, e o nó com 77% de CPU;
+- a própria `coleta-host` leu −1 do Redis às 03:51:31Z, e as amostras levaram de 2 a 4 s (o normal é ~1 s);
+- havia de 80 a 85 sessões do Postgres esperando lock (`pg_espera_lock`);
+- os workers do `admission` registraram `Read timed out` no `POST /internal/reservations` e `503 Reserva em andamento`, voltando a mensagem à fila;
+- foi a mesma janela dos "Insufficient VUs" de leitura e login, e dos maiores descartes (minutos 76–77, com reserva em 5.981 e 9.184).
+
+**Causa provável, ainda não provada:** um engasgo de cerca de 1 s do Redis com o host saturado. Não houve troca de réplica nem defeito novo. A consulta do resultado não tem retry no gateway, então o cliente recebe 503 e o k6 o conta.
+
+Os logs com timestamp e os eventos do cluster foram guardados no host, fora do git, antes de o cluster ser recriado para o S1. Ficaram os logs do `admission` (as 2 réplicas que sobraram; a 3ª já tinha descido), do Redis, do backend e do reservation, mais o `kubectl get events -A`.
+
+## Banco (Dell)
+
+A coleta é a `coleta-k8s-soak-S2b`, de 02:33:06Z a 04:40:46Z. Ref `K8sDB-dell-soak-S2`, commit 15c6535, arquivo `dell/coleta-k8s-soak-S2b.tar.gz`, com sha256 `1c5999d4…16397`.
+
+- **Vigia:** sem alerta, sem restart, sem FATAL/PANIC, sem alerta de disco e 0 deadlocks em todos os snapshots.
+- **Delta:** commit +9.503.600, rollback +746.179, 0 conflitos. `temp_files` +93 (71 MB): é o primeiro bloco com spill para disco. `meu_banco` foi de 19 MB para 909 MB.
+- **Conexões:** pico de 264 no total (o pool cheio) e 239 active.
+- **CPU (us+sy):** média de 31,6%, mas em 95% ou mais por minutos inteiros nestas janelas: 03:50–03:52, 03:56–03:57, 04:10–04:14 e 04:24–04:25. **Desta vez o Dell virou gargalo de CPU nos picos**, ao contrário do S2.
+- **pg_waits:** dominado por `Lock/transactionid`, com 49.612 amostras-sessão e pico de 92 sessões simultâneas às 02:53Z. É a disputa de linha no evento quente. `LWLock/LockManager` chegou a 55–76 sessões nos picos.
+- **Transação mais antiga:** chegou a 42 s em `idle in transaction`, às 03:52Z.
+
+**No minuto dos 503 (03:51Z):**
+
+- o Dell ficou com 100% de CPU o minuto inteiro, 150 processos na fila de execução para 8 threads e PSI cpu de 96;
+- as 245 conexões do pool estavam ocupadas, com 213 active em mediana;
+- havia de 70 a 86 sessões esperando lock de linha;
+- uma transação segurou lock por até 35 s.
+
+Ou seja, os dois lados estavam saturados ao mesmo tempo: o nó kind (Redis do `admission`) e o Postgres no Dell. O 503 em si veio do timeout de 200 ms do Redis no `admission`. Os dados não separam se a saturação do banco contribuiu para ele, por exemplo segurando threads do host, ou se foi só coincidência de pico. Grande parte da CPU do Dell é backend disputando lock no evento quente, e não trabalho útil.
+
+## Ressalvas
+
+- **Credencial do Mailpit:** foi gerada para este bloco e passada ao gerador por mensagem entre sessões, por decisão do usuário. No gerador ela ficou só no ambiente do processo do k6 e foi removida ao fim. O valor não aparece em nenhum arquivo.
+- **Fora do git:** as amostras do `amostrar` (`soak-S2b-replicas.csv` e `-pods.csv`) ficam fora pelo `.gitignore`. O CSV bruto do k6 (175 MB) ficou no gerador. A `coleta-host` não gravou o `pgss-*`, porque foi parada por `kill`.
+- **Horários:** o `soak-S2b-verificacoes.log`, o `verificar-rpm-S2b.log` e o `registro-*.txt` estão em UTC−3. A telemetria e o por-minuto estão em UTC.
+- **S1:** roda em seguida. A regra só barra o S1 por reprovação em corretude, e o critério 3 não é de corretude.
