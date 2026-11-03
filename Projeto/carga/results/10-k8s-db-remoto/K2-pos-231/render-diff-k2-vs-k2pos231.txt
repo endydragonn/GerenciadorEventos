@@ -1,0 +1,49 @@
+1225a1226
+>   replicas: 1
+1230,1233c1231
+<     rollingUpdate:
+<       maxSurge: 0
+<       maxUnavailable: 1
+<     type: RollingUpdate
+---
+>     type: Recreate
+1252c1250
+<           value: "60"
+---
+>           value: "245"
+1837,1871d1834
+< ---
+< apiVersion: keda.sh/v1alpha1
+< kind: ScaledObject
+< metadata:
+<   labels:
+<     app: stock
+<   name: stock
+<   namespace: gerenciador
+< spec:
+<   advanced:
+<     horizontalPodAutoscalerConfig:
+<       behavior:
+<         scaleDown:
+<           policies:
+<           - periodSeconds: 60
+<             type: Pods
+<             value: 1
+<           stabilizationWindowSeconds: 120
+<         scaleUp:
+<           policies:
+<           - periodSeconds: 15
+<             type: Pods
+<             value: 1
+<           stabilizationWindowSeconds: 0
+<   maxReplicaCount: 3
+<   minReplicaCount: 1
+<   pollingInterval: 5
+<   scaleTargetRef:
+<     name: stock
+<   triggers:
+<   - metadata:
+<       containerName: stock
+<       value: "50"
+<     metricType: Utilization
+<     type: cpu

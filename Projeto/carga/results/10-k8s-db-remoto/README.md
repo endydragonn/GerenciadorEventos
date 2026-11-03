@@ -484,9 +484,26 @@ O cluster ficou no ar para a investigação.
 - `dell/`: coleta do Dell pela sessão DB (ref temporário `K8sDB-dell-K2-rep`, 562bf5c, sha256 `f8cec76d…f27ef`, 1.091.168 bytes, conferido),
   com o mesmo recorte do K1.
 
+## K2-pos-231 (`Deg-473284`), 2026-11-03, issue #237
+
+O K2 refeito com o `stock` da #231: 1 réplica fixa, Hikari 245, `Recreate` e sem ScaledObject. O `admission` ficou com `K8S_ADMISSION_MIN=1`
+para o A/B limpo. A análise completa e as fontes estão em [`K2-pos-231/README.md`](K2-pos-231/README.md).
+
+| | Parada | 20k p50 / p95 | 26k p50 / p95 | 32k p50 / p95 | 5xx | Overselling |
+|---|---|---|---|---|---|---|
+| K2 | 20k | 2.943,5 / 5.019,6 | — | — | 0 | 0 |
+| K2-repeticao | 32k | 1.795,0 / 4.841,3 | 1.550,5 / 3.222,5 | 4.453,1 / 5.940,9 | 67 / 1 (26k) | 0 |
+| K2-pos-231 | 32k | 891,1 / 2.875,9 | 1.436,7 / 2.970,8 | 3.963,9 / 5.515,2 | 0 | 0 |
+
+**Leitura:**
+- Com a #231 o b1 passa do 20k e para no mesmo 32k do K2-repetição, com latência menor nos degraus anteriores.
+- O limite provável agora, não isolado, é o lock da linha quente no Dell: o pool real de 245 ficou cheio, com até 239 sessões esperando lock, e o
+  Dell ficou com CPU e disco sobrando.
+
 ## Versão do harness por bloco
 
 - K0: #228 em a826c8d, com as correções de `-c` e da variável `ReadPath` aplicadas só no `verificar` final.
 - K1: 67c0ef8.
 - K2: e4f862f.
 - K2-repeticao: a7da861 (o código k6 do gerador, em 850d38e, é idêntico em todos os blocos).
+- K2-pos-231: ada814b (topo da `Issue-232`), o mesmo k6 em 850d38e.
