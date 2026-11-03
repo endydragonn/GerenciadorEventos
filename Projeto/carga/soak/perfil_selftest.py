@@ -223,7 +223,7 @@ class PerfilUmTipoSo(unittest.TestCase):
     def test_perfil_completo_nao_ganha_a_chave_so_e_o_s2_real_nao_muda_de_bytes(self):
         cheio = P.gerar_perfil("S2", 257867, 50000, 7200)
         self.assertNotIn("so", cheio)
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "perfil-S2.json"), "rb") as f:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "11-soak", "S2", "perfil-S2.json"), "rb") as f:
             self.assertEqual(P.serializar(cheio), f.read())
 
     def test_main_so_grava_bytes_iguais_e_o_resumo_diz_o_total(self):
