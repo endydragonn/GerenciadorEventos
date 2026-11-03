@@ -1697,7 +1697,7 @@ O `reservation` mantém nome, container, porta `:8082` e a API `/internal/reserv
   réplica, senão o Hikari do `stock` = 1500 − soma da R4). Nenhum Hikari da R4 muda.
   **No cluster Kubernetes o `stock` voltou a 1 réplica fixa (#231; a #205, D3 b, o tinha deixado escalar de 1 a 3 com Hikari 60 por réplica):** sem ScaledObject, `replicas: 1`,
   `strategy: Recreate` e Hikari **245** (o pool real do Supavisor no overlay `rodada`; em base, e2e e carga é 45); a conta do cluster (4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 245 = **1497 ≤ 1500**) está em "Cluster Kubernetes". O diagnóstico do K2
-  (`Projeto/carga/results/10-k8s-db-remoto/K2-diagnostico/`, diagnóstico 1 contra o teste A) mostrou que o Hikari 60 × 3 esgotava o pool e derrubava o b1 a 20k (entrada do gateway 5,6 s no p50), e que
+  (`Projeto/carga/results/10-k8s-db-remoto/K2-diagnostico/`, diagnóstico 1 contra o teste A) mostrou que o Hikari 60 × 3 esgotava o pool do stock e fez o K2 parar a 20k (entrada do gateway 5,6 s no p50; no K2-repetição, sem a #231, o b1 passou do 20k e parou no 32k, o mesmo ponto do K2-pos-231, já com ela: `Projeto/carga/results/10-k8s-db-remoto/K2-pos-231/`), e que
   com 250 × 1 o degrau passou (160 ms no p50): o CAS na linha quente do `eventcap` serializa as reservas, então réplicas extras não compensam o pool menor. O compose segue com 1 réplica e 250.
   O `stock` não tem job agendado (o reaper é do `reservation`): com N réplicas só os dois consumers dividem o
   tópico, e ambos são idempotentes (provado em `StockReleaseConsumerTest` e `CatalogReconciliationTest`, abaixo; o código continua pronto para réplicas, só o cluster não as usa).
