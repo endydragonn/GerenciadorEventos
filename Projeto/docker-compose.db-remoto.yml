@@ -1,0 +1,70 @@
+# Override da rodada com o Postgres em máquina dedicada (issue #227; opção A: só o `db` fora, pooler e
+# serviços seguem no host). O `db` local sai do `up` (profile) e o pooler e o meta apontam para o banco
+# remoto, que publica a 5433. Uso, em Projeto/ (somado aos -f da rodada; sem --build, para não retaguear
+# as imagens slim):
+#   DB_REMOTO_HOST=<ip> docker compose -f docker-compose.yml ... -f docker-compose.db-remoto.yml up -d --wait
+# Sem DB_REMOTO_HOST qualquer comando com este arquivo recusa. Sem o arquivo, o compose base não muda.
+services:
+  db:
+    profiles: ["db-local"]
+
+  supabase-pooler:
+    depends_on: !reset {}
+    environment:
+      POSTGRES_HOST: ${DB_REMOTO_HOST:?defina DB_REMOTO_HOST com o IP da maquina do banco}
+      POSTGRES_PORT: 5433
+
+  meta:
+    depends_on: !reset {}
+    environment:
+      PG_META_DB_HOST: ${DB_REMOTO_HOST:?defina DB_REMOTO_HOST com o IP da maquina do banco}
+      PG_META_DB_PORT: 5433
+
+  # Volume novo: os tópicos nascem de novo com 1 partição (o volume `redpanda-data` fica intacto).
+  redpanda:
+    volumes: !override
+      - redpanda-data-db-remoto:/var/lib/redpanda/data
+
+  # Cliente psql do kit de carga (CONTAINER_DB / CARGA_DB=gerenciador-db-remoto), sem mudar os scripts:
+  # eles fazem `docker exec <container> psql -h 127.0.0.1|localhost ...` (ou sem -h, com PGHOST). A ponte
+  # repassa a 5432 local do namespace de rede dela ao banco remoto, e o cliente divide esse namespace.
+  db-ponte:
+    image: alpine/socat:1.8.0.3
+    container_name: gerenciador-db-ponte
+    command: ["TCP-LISTEN:5432,fork,reuseaddr", "TCP:${DB_REMOTO_HOST:?defina DB_REMOTO_HOST com o IP da maquina do banco}:5433"]
+    restart: unless-stopped
+
+  # Senhas só dentro do container: a do usuário do app (admin) pela mesma variável que o `db` do compose
+  # base usa (POSTGRES_PASSWORD do Projeto/.env, como APP_DB_PASSWORD) e a do supabase_admin (coleta-host.sh)
+  # lida do supabase/.env montado só-leitura. As duas vão para um pgpass 600; sem PGPASSWORD global, que
+  # valeria para os dois usuários. O limpar-banco.sh passa PGPASSWORD="$POSTGRES_PASSWORD" com -U admin.
+  db-cliente:
+    image: supabase/postgres:17.6.1.136
+    container_name: gerenciador-db-remoto
+    network_mode: "service:db-ponte"
+    depends_on:
+      - db-ponte
+    environment:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGPASSFILE: /tmp/pgpass
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./supabase/.env:/run/secrets/supabase.env:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        umask 077
+        esc() { printf '%s' "$$1" | sed -e 's/\\/\\\\/g' -e 's/:/\\:/g'; }
+        supa=$$(sed -n 's/^POSTGRES_PASSWORD=//p' /run/secrets/supabase.env | tail -n 1 | tr -d '\r' | sed -e 's/^"\(.*\)"$$/\1/' -e "s/^'\(.*\)'$$/\1/")
+        printf '*:*:*:%s:%s\n*:*:*:supabase_admin:%s\n' "$$POSTGRES_USER" "$$(esc "$$POSTGRES_PASSWORD")" "$$(esc "$$supa")" > /tmp/pgpass
+        unset supa
+        exec sleep infinity
+    restart: unless-stopped
+
+volumes:
+  redpanda-data-db-remoto:
+    driver: local
