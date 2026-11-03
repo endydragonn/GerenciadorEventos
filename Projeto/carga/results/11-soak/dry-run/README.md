@@ -21,7 +21,7 @@ antes dos blocos reais de 2 h, no cluster kind (trilha b1, Istio com sidecar, ov
 | Fila: 202 / 429 | 0 / 0 | 949 / 0 |
 | Reserva 400 | 0 | 2179, só nos minutos de pico |
 | Mailpit: restarts, RSS máximo | 0 | 0, 30 Mi (fonte fora do git: amostras do `amostrar`) |
-| Gerador: RAM livre mínima, descartadas | 9,28 GB, 0 | 9,06 GB, 0 (k6 com pico de 604 MB). RAM e k6: fonte fora do git (telemetria do gerador não versionada nos dry); descartadas: por-minuto |
+| Gerador: RAM livre mínima, descartadas | 9,28 GB, 0 | 9,06 GB, 0 (k6 com pico de 604 MB; GB na unidade da sessão do gerador, sem fonte). RAM e k6: fonte fora do git (telemetria do gerador não versionada nos dry); descartadas: por-minuto |
 | Diferença entre os relógios (host, nó, gerador) | 0,69 s | 0,76 s |
 
 ## Ressalvas

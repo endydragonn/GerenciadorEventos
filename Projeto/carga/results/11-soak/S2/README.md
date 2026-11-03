@@ -39,10 +39,10 @@
   | catalog | 2 | 4 |
   | identity | 1 | 0 |
   | notification | 4 | 4 |
-- **Carga entregue**: ok pela regra do S2, que desconta as descartadas do esperado. Sem o desconto, o cadastro ficou em 47% (25.892 `verify-email` 2xx de 54.649 esperados; 28.755 descartadas) e a reserva em 94%.
+- **Carga entregue**: ok pela regra do S2, que desconta as descartadas do esperado. Sem o desconto, o cadastro ficou em 47% (25.892 `verify-email` 2xx de 54.649 esperados; 28.755 descartadas) e a reserva em 94,5%.
 - **Gerador**:
-  - RAM livre mínima de 2,92 GB;
-  - k6 com pico de 7,33 GB;
+  - RAM livre mínima de 2,92 GiB;
+  - k6 com pico de 7,33 GiB;
   - CPU no máximo em 28% (a amostra de 62% das 08:00:09 é anterior à partida do k6);
   - 5 `status 0` no `tipo=mailpit` (timeouts da busca, fora do critério 3).
 - **Mailpit**: 0 restarts e 26.155 mensagens.
@@ -51,7 +51,7 @@
 - **DB** (Dell, ref `K8sDB-dell-soak-S2`, commit 5513f7a):
   - 0 deadlocks e 0 conflitos;
   - pico de 263 conexões, com o pool cheio várias vezes;
-  - CPU (us+sy, pela sessão DB, na janela da coleta) com média de 23% (recalculado do mpstat/sar da ref: 22,3%) e pico de ~100% (09:17–09:41 e 09:53–09:54);
+  - CPU (us+sy, recalculada do mpstat da ref na coleta inteira) com média de 22,3% (a sessão DB reportou 23%) e pico de ~100% (09:17–09:41 e 09:53–09:54);
   - ~1.290 commits por segundo;
   - `meu_banco` foi de 14 MB para 892 MB;
   - nas janelas dos 5xx de 08:00, 08:01, 08:29 e 09:11, o db estava longe do limite: CPU até 25% e conexões abaixo do pool.
@@ -66,7 +66,7 @@ Fatos:
 - **Um evento por cadastro.** O mesmo evento foi **enviado mais de uma vez**; não houve pedido duplo:
   - `request-verification`: 25.893 respostas 2xx (`verificacoes_2xx` do por-minuto);
   - `verify-email`: 51.785 − 25.893 = 25.892 respostas 2xx;
-  - `notification.processed_event`: 25.893 linhas no bloco (`processed_event-S2.csv`).
+  - `notification.processed_event`: 25.893 linhas no bloco, todas `VerificationCodeRequested` (contagem por minuto em `processed_event-S2-por-minuto.csv`; o export bruto ficou fora do git, em `E:\TCC\evidencias\soak-S2\processed_event-S2.csv`, sha256 `b9a4e56f05ce0a2e18e535a4b415bc511ec9efeefbeb9360f49c62ca9e78e7cf`).
 - **Os intervalos formam uma escada.** Cada degrau é o timeout de leitura do JavaMail (`mail.smtp.timeout=5000`) mais o backoff
   exponencial do consumer (1, 2 e 4 s, `EventsKafkaConfig`):
   - da 1ª para a 2ª cópia: 231 de 239 em ~6 s;
@@ -116,7 +116,7 @@ Fatos:
     e limit de 2). Só 1 pod fica pronto até 08:01:44; o 2º fica pronto às 08:01:44 e o 3º às 08:02:01.
   - 09:11:45–09:12:24: o mesmo padrão, de 155% a 224%, com 1 pod pronto até 09:12:08.
   - Reservation e backend sobem junto: até 5 JVMs arrancam no mesmo nó do kind.
-- **Log do gateway.** O `AdmissionIndisponivelHandler` ("serviço admission indisponível na consulta") registra 456 ocorrências (excerto em `admission-503-S2.log`):
+- **Log do gateway.** O `AdmissionIndisponivelHandler` ("serviço admission indisponível na consulta") registra 456 ocorrências (as 8 linhas estão em `failopen-admission-S2.log`; o `admission-503-S2.log` traz 6 delas, do pod que sobreviveu):
   - 08:01: 1 + 1 + 168 + 9;
   - 08:30: 49;
   - 09:12: 1;

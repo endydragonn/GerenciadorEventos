@@ -2,7 +2,7 @@
 
 **Resultado: APROVADO nos critérios 1 a 3. O portão do Mailpit passou: o p95 da API ficou estável do começo ao fim (7 a 13 ms).**
 
-É o portão antes de repetir o S2. O bloco S2 reprovou com 262 e-mails duplicados: a busca `to:` do Mailpit, que é linear,
+É o portão antes de repetir o S2. O bloco S2 reprovou com 262 e-mails duplicados, provavelmente porque a busca `to:` do Mailpit, que é linear,
 saturou o captador, o SMTP passou dos 5 s do JavaMail e o retry do consumer reenviou o e-mail.
 
 A correção é só no harness (commit 02af3d9): o cadastro pagina as mensagens mais novas, parando pela data do pedido, e consulta

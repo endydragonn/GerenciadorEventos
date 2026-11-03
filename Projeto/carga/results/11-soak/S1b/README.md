@@ -54,7 +54,7 @@ A coleta é a `coleta-k8s-soak-S1b`, de 05:03:38Z a 07:09:24Z. Ref `K8sDB-dell-s
 - **Vigia:** sem alerta, sem restart, sem FATAL/PANIC, sem alerta de disco e 0 deadlocks em todos os snapshots.
 - **Delta:** commit +7.357.880, rollback +685.725, 0 conflitos, `temp_files` +45 (43 MiB). `meu_banco` foi de 28 MB para 1.073 MB.
 - **Conexões:** pico de 140 no total, longe do pool de 245, e 93 active.
-- **CPU (us+sy, pela sessão DB, na janela da coleta):** média de 13% e pico de 68% (recalculado do mpstat/sar da ref: 12,1% e 67,1%), sem nenhum segundo em 95% ou mais. O Dell ficou folgado o bloco inteiro.
+- **CPU (us+sy, recalculada do mpstat da ref na coleta inteira):** média de 12,1% e pico de 67,0% (a sessão DB reportou 13% e 68%), sem nenhum segundo em 95% ou mais. O Dell ficou folgado o bloco inteiro.
 - **pg_waits:**
   - `LWLock/WALWrite`: 853 amostras-sessão, com pico de 93, em rajadas curtas de commits esperando o WAL. É o candidato a próximo gargalo se a carga subir.
   - `IO/WalSync`: 975 amostras-sessão, com pico de 2.

@@ -59,7 +59,7 @@ Os dois defeitos do S2 não voltaram. O critério 1 teve 0 e-mails duplicados (n
 Todas vieram do `GET /bff/event-wallets/admission` (consulta do resultado da fila), no minuto 77 (03:51Z), e nenhum pod saiu nesse minuto. O caminho foi este (excerto dos logs em `admission-503-S2b.log`):
 
 1. Às 03:51:36Z, um pod do `admission` registrou `Redis indisponível (QueryTimeoutException: Redis command timed out): respondendo 503`. O timeout do Redis no `admission` é de 200 ms (`ADMISSION_REDIS_TIMEOUT_MS`).
-2. O gateway registrou `admission indisponível na consulta` e repassou o 503. É o contrato da #43: 503 quando o `admission` está fora.
+2. O gateway registrou `admission indisponível na consulta` e repassou o 503. O excerto tem 1 linha do gateway para as 12 respostas: as outras 11 ficaram no limitador do log (não houve log seguinte). É o contrato da #43: 503 quando o `admission` está fora.
 3. O Redis não reiniciou. Nada mudou no log dele depois do boot, e o restartCount ficou em 0.
 
 O contexto da janela de 03:50 a 03:52Z, que é o pico do bloco:
@@ -70,7 +70,7 @@ O contexto da janela de 03:50 a 03:52Z, que é o pico do bloco:
 - os workers do `admission` registraram `Read timed out` no `POST /internal/reservations` e `503 Reserva em andamento`, voltando a mensagem à fila;
 - foi a mesma janela dos "Insufficient VUs" de leitura e login, e dos maiores descartes (minutos 76–77, com reserva em 5.981 e 9.184).
 
-**Causa provável, ainda não provada:** um engasgo de cerca de 1 s do Redis com o host saturado. Não houve troca de réplica nem defeito novo. A consulta do resultado não tem retry no gateway, então o cliente recebe 503 e o k6 o conta.
+**Causa provável, ainda não provada:** um engasgo do Redis acima dos 200 ms do timeout, com o host saturado. Não houve troca de réplica nem defeito novo. A consulta do resultado não tem retry no gateway, então o cliente recebe 503 e o k6 o conta.
 
 O excerto versionado é o `admission-503-S2b.log`: as linhas de "indisponível" do gateway e do `admission`, sem segredo nem e-mail. Os logs completos com timestamp e os eventos do cluster foram guardados no host, fora do git, em `E:\TCC\evidencias\soak-S2b\`, antes de o cluster ser recriado para o S1. Lá estão os logs do `admission` (as 2 réplicas que sobraram; a 3ª já tinha descido), do Redis, do backend e do reservation, e o `kubectl get events -A`.
 
@@ -81,7 +81,7 @@ A coleta é a `coleta-k8s-soak-S2b`, de 02:33:06Z a 04:40:46Z. Ref `K8sDB-dell-s
 - **Vigia:** sem alerta, sem restart, sem FATAL/PANIC, sem alerta de disco e 0 deadlocks em todos os snapshots.
 - **Delta:** commit +9.503.600, rollback +746.179, 0 conflitos. `temp_files` +93 (68 MiB): é o primeiro bloco com spill para disco. `meu_banco` foi de 19 MB para 909 MB.
 - **Conexões:** pico de 264 no total (o pool cheio) e 239 active.
-- **CPU (us+sy, pela sessão DB, na janela da coleta):** média de 31,6% (recalculado do mpstat/sar da ref: 30,5%), mas em 95% ou mais por minutos inteiros nestas janelas: 03:50–03:52, 03:56–03:57, 04:10–04:14 e 04:24–04:25. **Desta vez o Dell virou gargalo de CPU nos picos**, ao contrário do S2.
+- **CPU (us+sy, recalculada do mpstat da ref na coleta inteira):** média de 30,5% (a sessão DB reportou 31,6%), mas em 95% ou mais por minutos inteiros nestas janelas: 03:50–03:52, 03:56–03:57, 04:10–04:14 e 04:24–04:25. **Desta vez o Dell virou gargalo de CPU nos picos**, ao contrário do S2.
 - **pg_waits:** dominado por `Lock/transactionid`, com 49.612 amostras-sessão e pico de 92 sessões simultâneas às 02:53Z. É a disputa de linha no evento quente. `LWLock/LockManager` teve pico de 84 sessões (03:52:34Z).
 - **Transação mais antiga:** chegou a 42 s em `idle in transaction`, às 03:52Z.
 

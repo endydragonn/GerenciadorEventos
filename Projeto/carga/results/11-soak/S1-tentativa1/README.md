@@ -41,11 +41,11 @@ CSV é o teste da correção. O S1 será repetido depois do S2, com a mesma seme
 - **Critério 4 (gerador):**
   - 0 descartadas e nenhum "Insufficient VUs";
   - RAM livre mínima de 3,21 GiB e CPU no máximo em 17%;
-  - k6 (WorkingSet64) entre 5,3 e 7,4 GB, sem crescer com o tempo. O custo é por VU **alocado** (`vus_max` = 1000, os preAllocated), não por VU ativo (2 a 98). Cada VU leva uma cópia dos dados do setup (2000 sessões e 2000 eventos), ≈ 7,4 MB por VU (`soak-S1-vus-mem-por-minuto.csv` e `telemetria-gerador-soak-S1.csv`).
+  - k6 (WorkingSet64) entre 5,3 e 7,4 GiB, sem crescer com o tempo. O custo é por VU **alocado** (`vus_max` = 1000, os preAllocated), não por VU ativo (2 a 98). Cada VU leva uma cópia dos dados do setup (2000 sessões e 2000 eventos), ≈ 7,4 MB por VU (`soak-S1-vus-mem-por-minuto.csv` e `telemetria-gerador-soak-S1.csv`).
 - **Fail-open do admission:** 3 ocorrências (1 às 05:34Z e 2 registradas às 07:02Z; o contador do log inclui a ocorrência atual), por `Read timed out` no `POST /internal/admissions`; as reservas seguiram síncronas, sem 5xx (`failopen-admission-S1.log`).
 - **DB** (Dell, ref `K8sDB-dell-soak-S1`, commit 356f22c):
   - 0 deadlocks e 0 conflitos;
-  - pico de 90 conexões, CPU (us+sy, pela sessão DB, na janela da coleta) no pico em 27% e na média em 8,2% (recalculado do mpstat/sar da ref: 25,1% e 7,4%);
+  - pico de 90 conexões, CPU (us+sy, recalculada do mpstat da ref na coleta inteira) no pico em 25,1% e na média em 7,4% (a sessão DB reportou 27% e 8,2%);
   - ~930 commits por segundo;
   - `meu_banco` foi de 14 MB para 1.042 MB.
 
