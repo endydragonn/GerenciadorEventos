@@ -46,7 +46,19 @@ O S1b repete o S1, com a mesma semente, a mesma capacidade e um sufixo novo. É 
 
 ## Banco (Dell)
 
-A coleta é a `coleta-k8s-soak-S1b` (ref `K8sDB-dell-soak-S1`), começou às 05:03:38Z e ainda aguarda o fechamento da sessão DB.
+A coleta é a `coleta-k8s-soak-S1b`, de 05:03:38Z a 07:09:24Z. Ref `K8sDB-dell-soak-S1`, commit 56eb7e8, arquivo `dell/coleta-k8s-soak-S1b.tar.gz`, com sha256 `c28bae6a…01bb9`.
+
+- **Vigia:** sem alerta, sem restart, sem FATAL/PANIC, sem alerta de disco e 0 deadlocks em todos os snapshots.
+- **Delta:** commit +7.357.880, rollback +685.725, 0 conflitos, `temp_files` +45 (43 MB). `meu_banco` foi de 28 MB para 1.073 MB.
+- **Conexões:** pico de 140 no total, longe do pool de 245, e 93 active.
+- **CPU (us+sy):** média de 13% e pico de 68%, sem nenhum segundo em 95% ou mais. O Dell ficou folgado o bloco inteiro.
+- **pg_waits:**
+  - `LWLock/WALWrite`: 853 amostras-sessão, com pico de 93, em rajadas curtas de commits esperando o WAL. É o candidato a próximo gargalo se a carga subir.
+  - `IO/WalSync`: 975 amostras-sessão, com pico de 2.
+  - `Lock/transactionid`: só 19, com pico de 6, contra 49.612 no S2b.
+- **Transação mais antiga:** 9 s em `idle in transaction`. No S2b chegou a 42 s.
+
+Comparado ao S2b, sem o evento quente a fila de lock some e a CPU do Dell não satura. Isso reforça que a saturação do S2b veio da disputa no evento quente, e não de um limite geral do banco.
 
 ## Ressalvas
 
