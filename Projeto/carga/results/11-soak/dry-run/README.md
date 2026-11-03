@@ -7,8 +7,8 @@ antes dos blocos reais de 2 h, no cluster kind (trilha b1, Istio com sidecar, ov
 
 | Bloco | Perfil | Sufixo | k6 (UTC) | Resultado |
 |---|---|---|---|---|
-| dry S1 | `perfil-dryS1.json` (X 56000, teto baixo) | 364888 | 04:04–04:15 | APROVADO nos critérios 1 a 3 |
-| dry S2 | `perfil-dryS2.json` (teto 20000, X 4000) | 367775 (quente 2142) | 04:26:32–04:36:39 | APROVADO nos critérios 1 a 3 |
+| dry S1 | `perfil-dryS1.json` (X 56000, teto baixo) | 364888 | 04:04–04:15 | APROVADO nos critérios 1 e 3; critério 2 vácuo (por desenho) |
+| dry S2 | `perfil-dryS2.json` (teto 20000, X 4000) | 367775 (quente 2142) | 04:26:32–04:36:39 | APROVADO na época; REPROVA no critério 1 pela guarda atual (79% dos cadastros) |
 
 ## Números
 
@@ -20,8 +20,8 @@ antes dos blocos reais de 2 h, no cluster kind (trilha b1, Istio com sidecar, ov
 | Critério 3: 5xx / status 0 | 0 / 0 | 0 / 0 |
 | Fila: 202 / 429 | 0 / 0 | 949 / 0 |
 | Reserva 400 | 0 | 2179, só nos minutos de pico |
-| Mailpit: restarts, RSS máximo | 0 | 0, 30 Mi |
-| Gerador: RAM livre mínima, descartadas | 9,28 GB, 0 | 9,06 GB, 0 (k6 com pico de 604 MB) |
+| Mailpit: restarts, RSS máximo | 0 | 0, 30 Mi (fonte fora do git: amostras do `amostrar`) |
+| Gerador: RAM livre mínima, descartadas | 9,28 GB, 0 | 9,06 GB, 0 (k6 com pico de 604 MB). RAM e k6: fonte fora do git (telemetria do gerador não versionada nos dry); descartadas: por-minuto |
 | Diferença entre os relógios (host, nó, gerador) | 0,69 s | 0,76 s |
 
 ## Ressalvas
@@ -35,7 +35,7 @@ antes dos blocos reais de 2 h, no cluster kind (trilha b1, Istio com sidecar, ov
 - **Os 400 da reserva no S2 não têm motivo registrado.** O k6 não gravava o corpo da resposta. Pelo backend, as causas possíveis
   são "Evento lotado" e "Vínculo já existente". Os blocos reais contam por motivo (`reserva_400{motivo}`).
 - **Fail-open do admission no S2.** Houve 13 `Read timed out` no `POST /internal/admissions`, entre 04:28 e 04:32Z, pelo log do
-  `backend`. As reservas seguiram síncronas e não houve nenhum 5xx. Não reprova.
+  `backend` (fonte fora do git: o log não foi guardado). As reservas seguiram síncronas e não houve nenhum 5xx. Não reprova.
 - **Critério 2 do S1 vazio por desenho.** O teto do dry S1 é baixo e não liga a autoescala. No S2, a amostra do HPA de CPU
   (`ContainerResource`, por causa do sidecar) só foi lida depois do commit 357a89c.
 - **Tentativas abortadas do S1** (`S1-tentativas-abortadas/`). Houve duas, às 00:37 e às 00:48 no horário local, e as duas

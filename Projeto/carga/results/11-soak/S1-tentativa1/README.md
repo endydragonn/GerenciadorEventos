@@ -7,12 +7,12 @@ ou 11 dígitos (`BffUserController:245`). Os 37.253 cadastros deram 400 no `requ
 
 O pós-bloco da época marcou "critério 1 ok" **por vácuo**: 0 mensagens para 0 cadastros 2xx, contra 37.254 esperados pelo perfil.
 Esse "ok" não vale. O pós-bloco foi corrigido para reprovar quando um tipo fica abaixo do esperado pelo perfil, e a reprovação deste
-CSV é o teste da correção. O S1 será repetido depois do S2, com a mesma semente, a mesma capacidade e um sufixo novo.
+CSV é o teste da correção. O S1 será repetido depois do S2, com a mesma semente, a mesma capacidade e um sufixo novo (na data do bloco; depois: 02af3d9 e #235, S2b e S1b).
 
 | | |
 |---|---|
 | Cluster | kind, trilha b1 (Istio), overlay `soak`, db no Dell (`192.168.68.50:5433`), `ADMISSION_X_RPM=56000` |
-| Perfil | `perfil-S1.json`: semente 4, teto 35000 RPM, 7200 s, 200 vagas por evento |
+| Perfil | `perfil-S1.json` (nesta pasta): semente 4, teto 35000 RPM, 7200 s, 200 vagas por evento |
 | Seed | `Soak-370785`, com 2000 usuários × 2000 eventos, sobre o banco limpo (`limpar-banco` em modo cluster) |
 | k6 | v2.2.0 no gerador (192.168.68.54), commit c37925a, `MAX_VUS=2000`. Partiu às 05:24:59Z e terminou às 07:25:51Z, com exit 0 |
 | Relógios | maior diferença de 0,79 s (host, nó e gerador) |
@@ -31,7 +31,7 @@ CSV é o teste da correção. O S1 será repetido depois do S2, com a mesma seme
   - overselling 0 em 17.466 eventos;
   - 398.329 confirmadas, 199.648 expiradas e 66.327 canceladas;
   - sagas convergidas (0 velhas, 0 órfãs, 0 devoluções pendentes);
-  - os eventos lotaram, como a semente 4 previa: `reserva_400{motivo}` com lotado = 36.562, vínculo = 0 e outro = 0;
+  - os eventos lotaram, como a semente 4 previa: `reserva_400{motivo}` com lotado = 36.562, vínculo = 0 e outro = 0 (stdout do `agregar.py`, em `agregar-S1.log`);
   - fila: 0 respostas 202 e 0 de 429 (com X = 56k a fila não liga).
 - **Critério 2** (subidas/descidas avaliadas, sem violação):
   - admission 5/5, backend 1/2, catalog 2/6 e identity 4/2, sempre com 0 violações;
@@ -40,12 +40,12 @@ CSV é o teste da correção. O S1 será repetido depois do S2, com a mesma seme
 - **Critério 3:** 0 respostas 5xx e 0 com status 0 em ~2,4 M requisições. Nenhum pod reiniciou, e o Mailpit também teve 0 restarts.
 - **Critério 4 (gerador):**
   - 0 descartadas e nenhum "Insufficient VUs";
-  - RAM livre mínima de 3,21 GB e CPU no máximo em 17%;
+  - RAM livre mínima de 3,21 GiB e CPU no máximo em 17%;
   - k6 (WorkingSet64) entre 5,3 e 7,4 GB, sem crescer com o tempo. O custo é por VU **alocado** (`vus_max` = 1000, os preAllocated), não por VU ativo (2 a 98). Cada VU leva uma cópia dos dados do setup (2000 sessões e 2000 eventos), ≈ 7,4 MB por VU (`soak-S1-vus-mem-por-minuto.csv` e `telemetria-gerador-soak-S1.csv`).
-- **Fail-open do admission:** 2 ocorrências (05:34 e 07:02Z), por `Read timed out` no `POST /internal/admissions`; as reservas seguiram síncronas, sem 5xx (`failopen-admission-S1.log`).
+- **Fail-open do admission:** 3 ocorrências (1 às 05:34Z e 2 registradas às 07:02Z; o contador do log inclui a ocorrência atual), por `Read timed out` no `POST /internal/admissions`; as reservas seguiram síncronas, sem 5xx (`failopen-admission-S1.log`).
 - **DB** (Dell, ref `K8sDB-dell-soak-S1`, commit 356f22c):
   - 0 deadlocks e 0 conflitos;
-  - pico de 90 conexões, CPU no pico em 27% e na média em 8,2%;
+  - pico de 90 conexões, CPU (us+sy, pela sessão DB, na janela da coleta) no pico em 27% e na média em 8,2% (recalculado do mpstat/sar da ref: 25,1% e 7,4%);
   - ~930 commits por segundo;
   - `meu_banco` foi de 14 MB para 1.042 MB.
 

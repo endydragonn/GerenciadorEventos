@@ -11,7 +11,7 @@ menos vezes. A partir deste dry o cluster também sobe com o `admission` em mín
 | | |
 |---|---|
 | Cluster | kind, trilha b1 (Istio), overlay `soak`, db no Dell (`192.168.68.50:5433`), `ADMISSION_X_RPM=4000`, commit b058a12 |
-| Perfil | `perfil-dryMailpit.json` (na raiz de `results/`): só cadastro, semente 257867, teto 50000 RPM, 2400 s. A curva de cadastro é a dos primeiros 40 min do S2: 3 picos de 850 a 900 cadastros/min, 22.539 esperados |
+| Perfil | `perfil-dryMailpit.json` (nesta pasta): só cadastro, semente 257867, teto 50000 RPM, 2400 s. A curva de cadastro é a dos primeiros 40 min do S2: 3 picos de 850 a 900 cadastros/min, 22.539 esperados |
 | Mailpit | pré-enchido com **55.000 mensagens antigas** (`prefill-<n>@example.com`, por `kubectl port-forward` em 127.0.0.1, encerrado logo depois), para a caixa ter o tamanho do S2 desde o 1º minuto. Terminou com 77.538 |
 | Seed | `Soak-427425` (200 usuários e 200 eventos), sobre o banco limpo (`limpar-banco` em modo cluster) |
 | k6 | v2.2.0 no gerador (192.168.68.54), `MAX_VUS=1000`, de 21:06:01Z a 21:46:10Z, com exit 0 |
@@ -27,9 +27,9 @@ menos vezes. A partir deste dry o cluster também sobe com o `admission` em mín
 | Critério 2 | 0 violações; identity com 2 subidas e 2 descidas avaliadas; admission no mínimo 2 o bloco inteiro |
 | Critério 3 | 0 respostas 5xx e 0 status 0 |
 | Reservas | o perfil não roda reserva: overselling 0 e sagas convergidas no `verificar-rpm` (código 0); fila não avaliada |
-| Mailpit (sonda do host, a cada min) | listagem `limit=100` com mediana de 7 ms e máximo de 25 ms; CPU de 5 a 138m; RSS de 33 a 39 Mi; 0 restarts |
+| Mailpit (sonda do host, a cada min) | listagem `limit=100` com mediana de 6,3 ms e máximo de 25 ms; CPU de 5 a 138m; RSS de 33 a 39 Mi; 0 restarts |
 | Notification | 1 réplica o bloco inteiro (no S2 subiu a 3 com o lag) |
-| Gerador | RAM livre mínima de 9,49 GB; k6 com no máximo 143 MB; CPU no máximo em 12% |
+| Gerador | RAM livre mínima de 9,27 GiB; k6 com no máximo 143 MB; CPU no máximo em 12% |
 
 Os números da DB (Dell, ref `K8sDB-dell-soak-dryMailpit`, commit 7944bf5) foram:
 
