@@ -1,0 +1,92 @@
+{
+  "run_id": "338431",
+  "duracao_degrau_s": 180,
+  "duracao_s": 270.04756430000003,
+  "usuarios": 1000,
+  "eventos": 64,
+  "pares_planejados": 60001,
+  "max_vus": 3000,
+  "vus_max": 3000,
+  "pct_confirma": 100,
+  "mapeamento": "sequencial",
+  "pct_acompanha": 5,
+  "consulta_ms": 1000,
+  "teto_consulta_s": 35,
+  "graceful_s": 45,
+  "parada_p95_ms": 5000,
+  "parada_janela_s": 60,
+  "parada": null,
+  "parada_texto": "nenhuma",
+  "degraus": [
+    {
+      "nome": "degrau_20000",
+      "situacao": "completo",
+      "duracao_efetiva_s": 180,
+      "rpm_alvo": 20000,
+      "cota": 60001,
+      "reservas": 60001,
+      "confirmas": 28991,
+      "erros_5xx": 0,
+      "confirma_5xx": 0,
+      "outros": 0,
+      "sem_login": 0,
+      "alem_dos_pares": 0,
+      "descartadas": 0,
+      "reservas_202": 3042,
+      "acompanhadas": 137,
+      "admitidas": 45,
+      "rejected": 92,
+      "timed_out": 0,
+      "sem_estado": 0,
+      "recusadas_429": 0,
+      "conflitos_422": 0,
+      "consultas_estado": 313,
+      "admitir_p50_ms": 2021,
+      "admitir_p95_ms": 3545.6,
+      "admitir_p99_ms": 3628.92,
+      "fim_a_fim_n": 29083,
+      "fim_a_fim_p50_ms": 222,
+      "fim_a_fim_p95_ms": 2735,
+      "fim_a_fim_p99_ms": 3718.1800000000003,
+      "p50_ms": 163.8406,
+      "p95_ms": 2168.5246,
+      "p99_ms": 3519.074,
+      "janelas": [
+        {
+          "w": 0,
+          "n": 10000,
+          "p95_ms": 1837.7001499999997
+        },
+        {
+          "w": 1,
+          "n": 10000,
+          "p95_ms": 3474.0000499999996
+        },
+        {
+          "w": 2,
+          "n": 10000,
+          "p95_ms": 2092.8656699999997
+        },
+        {
+          "w": 3,
+          "n": 10000,
+          "p95_ms": 1291.8255449999979
+        },
+        {
+          "w": 4,
+          "n": 10000,
+          "p95_ms": 1067.3883149999997
+        },
+        {
+          "w": 5,
+          "n": 10001,
+          "p95_ms": 1039.1004
+        }
+      ],
+      "p95_max_janela_ms": 3474.0000499999996,
+      "fora_das_janelas": 0
+    }
+  ],
+  "faltando": [],
+  "inconsistencias": []
+}

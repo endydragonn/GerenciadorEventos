@@ -1,0 +1,84 @@
+{
+  "run_id": "340211",
+  "duracao_degrau_s": 90,
+  "duracao_s": 180.86483139999999,
+  "usuarios": 1000,
+  "eventos": 64,
+  "pares_planejados": 60001,
+  "max_vus": 3000,
+  "vus_max": 3000,
+  "pct_confirma": 100,
+  "mapeamento": "sequencial",
+  "pct_acompanha": 5,
+  "consulta_ms": 1000,
+  "teto_consulta_s": 35,
+  "graceful_s": 45,
+  "parada_p95_ms": 5000,
+  "parada_janela_s": 90,
+  "parada": {
+    "degrau": "degrau_40000",
+    "indice": 0,
+    "pw": 0,
+    "p95_ms": 8872.093,
+    "limite_ms": 5000,
+    "janela_s": 90
+  },
+  "parada_texto": "p95_acima_de_5000ms_em_janela_de_90s_no_degrau_40000",
+  "degraus": [
+    {
+      "nome": "degrau_40000",
+      "situacao": "parcial",
+      "duracao_efetiva_s": 90,
+      "rpm_alvo": 40000,
+      "cota": 60001,
+      "reservas": 37961,
+      "confirmas": 13104,
+      "erros_5xx": 0,
+      "confirma_5xx": 0,
+      "outros": 0,
+      "sem_login": 0,
+      "alem_dos_pares": 0,
+      "descartadas": 20136,
+      "reservas_202": 5490,
+      "acompanhadas": 280,
+      "admitidas": 34,
+      "rejected": 47,
+      "timed_out": 21,
+      "sem_estado": 178,
+      "recusadas_429": 9363,
+      "conflitos_422": 0,
+      "consultas_estado": 4787,
+      "admitir_p50_ms": 32914,
+      "admitir_p95_ms": 37322.1,
+      "admitir_p99_ms": 37649.77,
+      "fim_a_fim_n": 13172,
+      "fim_a_fim_p50_ms": 10072.5,
+      "fim_a_fim_p95_ms": 14955.349999999997,
+      "fim_a_fim_p99_ms": 16404.349999999984,
+      "p50_ms": 3358.3606,
+      "p95_ms": 8872.093,
+      "p99_ms": 10520.47894,
+      "janelas": [
+        {
+          "w": 0,
+          "n": 19201,
+          "p95_ms": 4701.7719
+        },
+        {
+          "w": 1,
+          "n": 11043,
+          "p95_ms": 10008.373459999999
+        },
+        {
+          "w": 2,
+          "n": 7717,
+          "p95_ms": 8993.320139999998
+        }
+      ],
+      "p95_max_janela_ms": 10008.373459999999,
+      "fora_das_janelas": 0
+    }
+  ],
+  "faltando": [],
+  "inconsistencias": []
+}

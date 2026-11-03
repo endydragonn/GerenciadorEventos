@@ -29,6 +29,12 @@
 #      varias vezes (round-robin pelas replicas) ate nenhuma dar 401: isso prova o JWKS em cache em TODAS as replicas do gateway. A sonda deixa 1
 #      usuario no banco (o kit semeia os dele com e-mails unicos); SONDA_LIGADA=0 pula. Sem /bff/seed (404) so avisa.
 #
+#  MODO CLUSTER (issue #228): com CARGA_K8S=<contexto kubectl> (ex.: kind-gerenciador) o mesmo roteiro roda contra o cluster Kubernetes (Projeto/k8s), sem Docker. Sem a variavel
+#  nada disto e carregado. Todo kubectl leva --context $CARGA_K8S (nunca o current-context), namespace gerenciador. Equivalencias: parar/religar = pausar o ScaledObject do KEDA
+#  (autoscaling.keda.sh/paused-replicas=0, senao o KEDA sobe o pod de volta) + scale 0 / voltar as replicas de antes, esperando prontas; a chave do JWT = um pod descartavel que monta o PVC
+#  identity-keys e apaga o arquivo (identity e backend parados antes); psql = sts/db (db no cluster) ou pod cliente db-cliente (db remoto, senha lida DENTRO do pod: k8s/lib-db-cliente.sh);
+#  rpk/redis-cli/rabbitmqctl por `kubectl exec`; o lb nao existe (a entrada e o NodePort da BASE_URL). O scaler.sh nao existe no cluster (a autoescala e o KEDA, que o roteiro pausa).
+#
 #  O SCALER TEM DE ESTAR PARADO. Com ele rodando, uma replica parada fica abaixo do minimo e ele faz `compose up --scale` no meio do TRUNCATE. Parar o
 #  scaler = Ctrl+C no terminal dele. O script detecta pelo Redis: um scaler (sem --seco) renova a chave adm:replicas (TTL 15 s) a cada laco; se ela
 #  existe, espera ESPERA_SCALER_S (> TTL) e, se continuar existindo, RECUSA rodar. Suba o scaler de novo DEPOIS (ele recalcula do estado atual).
@@ -43,6 +49,9 @@ ESPERA_HEALTHY_S="${ESPERA_HEALTHY_S:-180}"
 ESPERA_SCALER_S="${ESPERA_SCALER_S:-20}"
 SONDA_TETO_S="${SONDA_TETO_S:-150}"
 SONDA_LIGADA="${SONDA_LIGADA:-1}"
+# modo cluster (#228): a lib do pod cliente do banco (so carregada com CARGA_K8S; K8S_LIB muda o caminho, o selftest copia o script)
+# shellcheck source=../k8s/lib-db-cliente.sh
+[ -z "${CARGA_K8S:-}" ] || . "${K8S_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../k8s/lib-db-cliente.sh}"
 CONTAINER_DB="${CONTAINER_DB:-gerenciador-db}"
 CONTAINER_RPK="${CONTAINER_RPK:-gerenciador-redpanda}"
 CONTAINER_REDIS="${CONTAINER_REDIS:-gerenciador-redis}"
@@ -318,6 +327,232 @@ END \$\$;" -c "VACUUM ANALYZE;" 2>/dev/null' || { log "ERRO: TRUNCATE falhou"; r
     return 0
 }
 
+# --- modo cluster (#228) ------------------------------------------------------------------------------------------------------------------------
+
+# deploys parados pela limpeza, na ordem de PARADA (inversa da subida); o notification por ultimo, como no compose
+SERVICOS_PARADA_K8S="backend admission catalog reservation stock identity notification"
+declare -A REPL_K8S=()   # deploy -> replicas de antes (so dos que ESTE script parou)
+
+kc() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' kubectl --context "$CARGA_K8S" -n gerenciador "$@"; }   # sem a conversao de path do Git Bash (kubectl nativo do Windows)
+kexec() { local alvo="$1"; shift; kc exec "$alvo" -c "${alvo#*/}" -- "$@"; }   # kexec <sts/x|deploy/x> cmd...   (stdin nao e repassado: sem -i; -c <container> = o nome do alvo, para o kubectl nao escrever "Defaulted container" no stderr)
+
+# "<prontas> <desejadas>" do Deployment
+k8s_prontas() { kc get "deploy/$1" -o jsonpath='{.status.readyReplicas} {.spec.replicas}' 2>/dev/null | tr -d '\r'; }
+
+# esperar_prontos_k8s <deploy>: espera readyReplicas == spec.replicas >= 1 (o KEDA pode mexer em spec.replicas: compara a cada volta)
+esperar_prontos_k8s() {
+    local fim pr de
+    fim=$(( $(date +%s) + ESPERA_HEALTHY_S ))
+    while :; do
+        read -r pr de <<< "$(k8s_prontas "$1")"
+        [ "${pr:-0}" -ge 1 ] && [ "${pr:-0}" = "${de:-x}" ] && return 0
+        if [ "$(date +%s)" -ge "$fim" ]; then log "ERRO: deploy/$1 nao ficou pronto em ${ESPERA_HEALTHY_S}s (prontas '${pr:-0}' de '${de:-?}')"; return 1; fi
+        sleep 3
+    done
+}
+
+# esperar_sem_pods_k8s <deploy>: espera nao haver mais pod do app (o scale 0 so termina quando os pods saem; o preStop leva ate 20 s)
+esperar_sem_pods_k8s() {
+    local fim; fim=$(( $(date +%s) + ESPERA_HEALTHY_S ))
+    while [ -n "$(kc get pods -l "app=$1" -o name 2>/dev/null | tr -d '\r')" ]; do
+        if [ "$(date +%s)" -ge "$fim" ]; then log "ERRO: os pods de $1 nao sairam em ${ESPERA_HEALTHY_S}s"; return 1; fi
+        sleep 2
+    done
+}
+
+ANOT_ANTES=carga.gerenciador/replicas-antes   # anotacao do Deployment com as replicas de antes: a recuperacao (e a recusa de uma nova limpeza) as le dali
+RELIGAR_ESTADO=                               # "" = nao tentou religar | falhou | ok
+
+parar_k8s() { # <deploy>: anota as replicas de antes, pausa o KEDA em 0 e zera
+    local d="$1" n
+    n="$(kc get "deploy/$d" -o jsonpath='{.spec.replicas}' 2>/dev/null | tr -d '\r')"
+    [ "${n:-0}" -ge 1 ] || { log "$d: ja em 0 replicas (nao foi este script que parou)"; return 0; }
+    REPL_K8S[$d]="$n"   # ANTES de qualquer mudanca: se o annotate der certo e o scale falhar, o trap ainda religa este
+    kc annotate "deploy/$d" "$ANOT_ANTES=$n" --overwrite >/dev/null || return 1
+    kc annotate "scaledobject/$d" autoscaling.keda.sh/paused-replicas=0 --overwrite >/dev/null 2>&1 || log "AVISO: sem ScaledObject $d (o KEDA nao esta pausado para ele)"
+    kc scale "deploy/$d" --replicas=0 >/dev/null || return 1
+    PARADOS="$PARADOS $d"
+    esperar_sem_pods_k8s "$d"
+}
+
+# recuperacao_k8s [svc=n ...]: os comandos EXATOS para voltar o cluster ao estado de antes (tirar a pausa do KEDA, devolver as replicas, apagar a anotacao)
+recuperacao_k8s() {
+    local p c="kubectl --context $CARGA_K8S -n gerenciador"
+    log "RECUPERACAO (copie e rode, com os servicos que a limpeza parou):"
+    log "  $c annotate scaledobject --all autoscaling.keda.sh/paused-replicas-"
+    for p in "$@"; do log "  $c scale deploy/${p%%=*} --replicas=${p#*=}"; done
+    log "  $c annotate deploy --all $ANOT_ANTES-"
+}
+
+# pares svc=n dos Deployments que ESTE script parou
+pares_parados_k8s() { local d; for d in "${!REPL_K8S[@]}"; do echo "$d=${REPL_K8S[$d]}"; done; }
+
+religar_k8s() { # 1) tira a pausa e faz o scale de TODOS os que o script parou; 2) so depois espera, na ordem (identity, stock, reservation+catalog, admission, backend, notification)
+    local etapa d
+    RELIGAR_ESTADO=falhou
+    for etapa in identity stock "reservation catalog" admission backend notification; do
+        for d in $etapa; do
+            [ -n "${REPL_K8S[$d]:-}" ] || continue
+            kc annotate "scaledobject/$d" autoscaling.keda.sh/paused-replicas- >/dev/null 2>&1 || true
+            kc scale "deploy/$d" --replicas="${REPL_K8S[$d]}" >/dev/null || log "ERRO: scale $d falhou"
+        done
+    done
+    for etapa in identity stock "reservation catalog" admission backend notification; do
+        for d in $etapa; do
+            [ -n "${REPL_K8S[$d]:-}" ] || continue
+            esperar_prontos_k8s "$d" || return 1
+            log "no ar e pronto: $d"
+        done
+    done
+    for d in "${!REPL_K8S[@]}"; do kc annotate "deploy/$d" "$ANOT_ANTES-" >/dev/null 2>&1 || true; done
+    RELIGAR_ESTADO=ok
+}
+
+# apaga a chave do JWT do PVC identity-keys com um pod descartavel (identity e backend ja parados; o PVC e RWO)
+apagar_chave_k8s() {
+    local fase fim
+    kc delete pod/limpar-chave --ignore-not-found >/dev/null 2>&1
+    kc apply -f - >/dev/null <<EOF || return 1
+apiVersion: v1
+kind: Pod
+metadata:
+  name: limpar-chave
+  labels: {app: limpar-chave, sidecar.istio.io/inject: "false"}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext: {seccompProfile: {type: RuntimeDefault}}
+  containers:
+    - name: limpar-chave
+      image: busybox:1.37.0
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c", "rm -f /k/$ARQUIVO_CHAVE && test ! -e /k/$ARQUIVO_CHAVE"]
+      volumeMounts:
+        - {name: chaves, mountPath: /k}
+  volumes:
+    - name: chaves
+      persistentVolumeClaim: {claimName: identity-keys}
+EOF
+    fim=$(( $(date +%s) + ESPERA_HEALTHY_S ))
+    while :; do
+        fase="$(kc get pod/limpar-chave -o jsonpath='{.status.phase}' 2>/dev/null | tr -d '\r')"
+        case "$fase" in Succeeded|Failed) break ;; esac
+        [ "$(date +%s)" -ge "$fim" ] && { fase=timeout; break; }
+        sleep 2
+    done
+    kc delete pod/limpar-chave --wait=false >/dev/null 2>&1
+    [ "$fase" = Succeeded ]
+}
+
+religar_k8s_se_abortou() {
+    local rc=$?
+    [ "$rc" = 0 ] && return
+    [ "$RELIGAR_ESTADO" = ok ] && { log "ERRO (rc=$rc): a limpeza falhou DEPOIS de religar tudo (nada a recuperar)"; return; }
+    if [ "$NAO_RELIGAR" = 1 ]; then
+        log "ERRO (rc=$rc): nao consegui apagar a chave do JWT; os servicos ficam PARADOS e o KEDA PAUSADO (religar com a chave antiga deixaria os tokens antigos valendo). Resolva e rode de novo; para voltar ao estado de antes sem apagar a chave:"
+        # shellcheck disable=SC2046
+        recuperacao_k8s $(pares_parados_k8s)
+        return
+    fi
+    [ "${#REPL_K8S[@]}" -gt 0 ] || return   # nada foi anotado nem parado
+    set +e
+    if [ "$RELIGAR_ESTADO" = "" ]; then
+        log "ERRO (rc=$rc): limpeza abortada; religando o que o script parou"
+        religar_k8s
+    else
+        log "ERRO (rc=$rc): religar nao terminou"
+    fi
+    [ "$RELIGAR_ESTADO" = ok ] && return
+    # shellcheck disable=SC2046
+    recuperacao_k8s $(pares_parados_k8s)
+}
+
+# o mesmo TRUNCATE do compose (uma unica instrucao: catalog.event e stock.eventcap andam juntos)
+SQL_TRUNCATE_K8S="DO \$\$ DECLARE t text; BEGIN
+  SELECT string_agg(format('%I.%I', schemaname, tablename), ', ') INTO t FROM pg_tables WHERE schemaname IN ('public', 'reservation', 'stock', 'catalog', 'identity');
+  EXECUTE 'TRUNCATE ' || t || ' RESTART IDENTITY CASCADE';
+END \$\$;"
+
+principal_k8s() {
+    local d n q gt g tp seek_ok i filas n_gw saida paus ants pend
+    # 0. guardas, antes de parar qualquer coisa: o contexto responde, o PVC da chave existe
+    kc get deploy/identity -o name >/dev/null 2>&1 || { log "ERRO: o contexto $CARGA_K8S nao responde ou nao tem deploy/identity no namespace gerenciador (CARGA_K8S errado?)"; return 1; }
+    kc get pvc/identity-keys -o name >/dev/null 2>&1 || { log "ERRO: o cluster nao tem o PVC identity-keys: nao ha como apagar a chave do JWT"; return 1; }
+    # uma limpeza anterior que abortou deixa o KEDA pausado em 0 e/ou a anotacao das replicas: rodar de novo "daria certo" com o cluster parado. Recusa e diz como recuperar.
+    paus="$(kc get scaledobject -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.annotations.autoscaling\.keda\.sh/paused-replicas}{"\n"}{end}' | tr -d '\r')" \
+        || { log "ERRO: nao consegui ler os ScaledObjects (KEDA instalado? contexto $CARGA_K8S)"; return 1; }
+    ants="$(kc get deploy -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.annotations.carga\.gerenciador/replicas-antes}{"\n"}{end}' | tr -d '\r')" \
+        || { log "ERRO: nao consegui ler os Deployments"; return 1; }
+    pend=(); while read -r d n; do [ -n "${n:-}" ] && pend+=("$d=$n"); done <<< "$ants"
+    if [ -n "$(printf '%s\n' "$paus" | awk 'NF >= 2')" ] || [ "${#pend[@]}" -gt 0 ]; then
+        log "ERRO: uma limpeza anterior nao terminou (ScaledObject pausado: $(printf '%s\n' "$paus" | awk 'NF >= 2 {printf "%s ", $1}')| replicas anotadas: ${pend[*]:-nenhuma}). Nada foi parado agora. Recupere o cluster:"
+        recuperacao_k8s ${pend[@]+"${pend[@]}"}
+        return 1
+    fi
+    db_psql_preparar "$CARGA_K8S" || return 1   # local x remoto decidido UMA vez e o pod cliente garantido UMA vez (db_psql so faz o exec)
+    log "db $([ "$DB_PSQL_ALVO" = sts/db ] && echo 'no cluster (sts/db)' || echo 'FORA do cluster (sem sts/db): psql pelo pod cliente db-cliente')"
+    trap religar_k8s_se_abortou EXIT
+
+    # 2. parar (inversa da subida), com o KEDA pausado
+    for d in $SERVICOS_PARADA_K8S; do parar_k8s "$d" || { log "ERRO: parar $d falhou"; return 1; }; done
+
+    # 3. chave do JWT (ANTES do TRUNCATE, com identity e backend parados)
+    NAO_RELIGAR=1
+    apagar_chave_k8s || { log "ERRO: nao consegui apagar $ARQUIVO_CHAVE do PVC identity-keys"; return 1; }
+    NAO_RELIGAR=0
+    log "chave de assinatura do identity apagada do PVC identity-keys (tokens antigos agora dao 401)"
+
+    # 4a. consumer groups para o fim dos topicos (mesma regra do compose)
+    for gt in reservation:reservation.wallet stock:reservation.wallet stock-catalog:catalog.event notification:identity.notification; do
+        g="${gt%%:*}"; tp="${gt#*:}"; seek_ok=0
+        for i in 1 2 3 4 5 6; do
+            kexec sts/redpanda rpk group seek "$g" --to end --topics "$tp" --allow-new-topics >/dev/null 2>&1 && { seek_ok=1; break; }
+            sleep 5
+        done
+        if [ "$seek_ok" = 0 ]; then
+            if [ "$g" = notification ]; then
+                log "AVISO: rpk group seek notification falhou; o topico identity.notification NAO e apagado (confira: rpk group describe notification)"
+            else
+                log "AVISO: rpk group seek $g falhou; apagando o topico $tp e o group $g (reset antigo)"
+                kexec sts/redpanda rpk topic delete "$tp" >/dev/null 2>&1 || true
+                kexec sts/redpanda rpk group delete "$g" >/dev/null 2>&1 || true
+            fi
+        fi
+    done
+    # 4b. TRUNCATE (banco do cluster ou o remoto, pelo db_psql)
+    db_psql "$CARGA_K8S" app -v ON_ERROR_STOP=1 -q -c "$SQL_TRUNCATE_K8S" -c "VACUUM ANALYZE;" >/dev/null 2>&1 || { log "ERRO: TRUNCATE falhou"; return 1; }
+    log "banco truncado (public, reservation, stock, catalog, identity)"
+    # 4c. Redis e filas do admission, com o admission PARADO
+    saida="$(kexec deploy/redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli FLUSHDB' 2>/dev/null | tr -d '\r')"
+    [ "$saida" = OK ] || { log "ERRO: FLUSHDB do Redis nao respondeu OK (REDIS_PASSWORD no pod? Redis fora?)"; return 1; }
+    log "redis: FLUSHDB ok"
+    filas="$(kexec deploy/rabbitmq rabbitmqctl -q list_queues name 2>/dev/null)" || { log "ERRO: rabbitmqctl list_queues falhou"; return 1; }
+    for q in $(printf '%s\n' "$filas" | tr -d '\r' | grep '^admission\.' || true); do
+        kexec deploy/rabbitmq rabbitmqctl -q purge_queue "$q" >/dev/null || { log "ERRO: purge_queue $q falhou"; return 1; }
+        log "rabbitmq: purge $q"
+    done
+    for tp in catalog.event.DLT reservation.wallet.DLT t27.e2e t27.e2e.DLT t27.relay t146.e2e t146.e2e.DLT; do
+        kexec sts/redpanda rpk topic delete "$tp" >/dev/null 2>&1 || true
+    done
+    kexec sts/redpanda rpk group delete gerenciador-eventos >/dev/null 2>&1 || true
+
+    # 5. religar so o que este script parou
+    religar_k8s || return 1
+
+    # 6. sonda do JWKS: login de sonda + chamadas autenticadas pela entrada do gateway (o NodePort da BASE_URL) ate nenhuma dar 401.
+    # Sem replica do backend para provar (estava em 0 antes) a sonda NAO roda: isso e falha, nunca um sucesso silencioso.
+    n_gw="${REPL_K8S[backend]:-0}"
+    if [ "$SONDA_LIGADA" = 1 ]; then
+        [ "$n_gw" -gt 0 ] || { log "ERRO: o backend estava em 0 replicas antes da limpeza: o JWKS do gateway NAO foi provado (suba o backend e rode a sonda, ou SONDA_LIGADA=0 se for de proposito)"; return 1; }
+        sonda_jwks "$n_gw" || return 1
+    fi
+    log "backend: $(k8s_prontas backend) (prontas desejadas)"
+    db_psql "$CARGA_K8S" app -Atc "select 'event(catalog)='||count(*) from catalog.event; select 'walletevent='||count(*) from reservation.walletevent; select 'eventcap(stock)='||count(*) from stock.eventcap; select 'event_store(reservation)='||count(*) from reservation.event_store; select 'users(identity)='||count(*) from identity.users" 2>/dev/null || true
+    kexec sts/redpanda rpk topic list 2>/dev/null || true
+    return 0
+}
+
 [ "${LIMPAR_LIB:-0}" = "1" ] && return 0 2>/dev/null
-principal
+if [ -n "${CARGA_K8S:-}" ]; then principal_k8s; else principal; fi
 exit $?

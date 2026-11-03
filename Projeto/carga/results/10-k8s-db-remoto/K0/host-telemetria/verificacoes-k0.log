@@ -1,0 +1,40 @@
+# verificar-rpm do K0 (Deg-296361), modo cluster
+## 1a execucao (09:03Z, antes das correcoes da volta 4): abortou depois das 2 tabelas (stderr 'Defaulted container' do kubectl no PS 5.1)
+Defaulted container "db" out of: db, copiar-config (init)
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+     868 |          156245 |           434000 |                       0 |                 0
+(1 row)
+
+  status   | count  
+-----------+--------
+ confirmed | 144942
+ expired   | 153147
+ pending   |  11303
+(3 rows)
+
+
+kubectl.exe : Defaulted container "backend" out of: backend, espera (init)
+No E:\TCC\wt\Issue-228\Projeto\carga\lib-servicos.ps1:56 caractere:97
++ ... texto $ctx -Resto (@('exec', $Alvo, '--') + $Comando); & kubectl @k }
++                                                            ~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Defaulted conta..., espera (init):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+## execucao final (com as correcoes): rc 0
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+     868 |          144942 |           434000 |                       0 |                 0
+(1 row)
+
+  status   | count  
+-----------+--------
+ confirmed | 144942
+ expired   | 164450
+(2 rows)
+
+
+[ ok ] overselling 0.
+[info] sagas: esperando as invariantes convergirem (limite 45s; origem: ORPHAN_MS + 3 x SCAN_MS lidos do container reservation)...
+[ ok ] sagas convergidas (velhas 0, hold held com saga compensated 0, devolucao pendente 0, orfa inversa 0, quant divergente 0).

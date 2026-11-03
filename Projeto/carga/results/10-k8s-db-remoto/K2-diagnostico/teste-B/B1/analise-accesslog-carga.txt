@@ -1,0 +1,39 @@
+# 1. Tempo por salto (ms): proxy, direção, destino, rota, n, duração p50/p95/p99, upstream_service_time p50/p95
+backend      in  backend      POST /bff/event-wallets                    n= 39865 dur p50=3314 p95=8793 p99=10470  ust p50=3331 p95=8870
+backend      out admission    POST /internal/admissions                  n= 36936 dur p50=17 p95=230 p99=505  ust p50=15 p95=188
+admission    in  admission    POST /internal/admissions                  n= 36922 dur p50=12 p95=179 p99=472  ust p50=10 p95=153
+reservation  in  reservation  POST /internal/reservations                n= 26412 dur p50=2114 p95=4663 p99=5848  ust p50=2113 p95=4663
+reservation  out stock        POST /internal/holds                       n= 26007 dur p50=1071 p95=3576 p99=4689  ust p50=1071 p95=3575
+stock        in  stock        POST /internal/holds                       n= 26007 dur p50=1068 p95=3574 p99=4688  ust p50=1068 p95=3574
+backend      out reservation  POST /internal/reservations                n= 24221 dur p50=2199 p95=4731 p99=5909  ust p50=2198 p95=4731
+backend      in  backend      POST /bff/event-wallets/confirm            n= 13837 dur p50=4281 p95=6597 p99=7017  ust p50=4442 p95=6611
+backend      out reservation  POST /internal/reservations/confirm        n= 13310 dur p50=787 p95=1577 p99=1858  ust p50=787 p95=1575
+reservation  in  reservation  POST /internal/reservations/confirm        n= 13310 dur p50=783 p95=1565 p99=1838  ust p50=782 p95=1563
+backend      in  backend      GET /bff/event-wallets/admission           n=  4787 dur p50=139 p95=5361 p99=5916  ust p50=137 p95=5357
+admission    in  admission    GET /internal/admissions/result            n=  4785 dur p50=18 p95=110 p99=168  ust p50=17 p95=108
+backend      out admission    GET /internal/admissions/result            n=  4785 dur p50=28 p95=153 p99=229  ust p50=28 p95=151
+admission    out reservation  POST /internal/reservations                n=  2191 dur p50=1016 p95=2729 p99=3307  ust p50=1016 p95=2729
+backend      out catalog      GET /internal/events/{id}/exists           n=  1977 dur p50=134 p95=554 p99=683  ust p50=132 p95=553
+admission    out reservation  GET /internal/reservations/replay          n=   956 dur p50=813 p95=1364 p99=1786  ust p50=813 p95=1364
+reservation  in  reservation  GET /internal/reservations/replay          n=   956 dur p50=811 p95=1359 p99=1786  ust p50=811 p95=1358
+
+# 2. Códigos >= 500 e response_flags diferentes de "-" por salto
+admission    in  admission    GET /internal/admissions/result            0 DC: 1
+admission    in  admission    POST /internal/admissions                  0 DC: 653, 200 DC: 2, 503 -: 8
+backend      in  backend      GET /bff/event-wallets/admission           503 -: 3
+backend      in  backend      POST /bff/event-wallets                    0 DC: 1903
+backend      in  backend      POST /bff/event-wallets/confirm            0 DC: 727
+backend      out admission    GET /internal/admissions/result            0 DC: 1
+backend      out admission    POST /internal/admissions                  0 DC: 734, 200 DC: 1, 503 -: 3
+
+# 3. POST /bff/event-wallets de entrada por pod do gateway, a cada 10 s
+20:52:00 242ns=635 blkd7=699 bq5xg=693
+20:52:10 242ns=1943 blkd7=2031 bq5xg=1894
+20:52:20 242ns=2198 blkd7=2254 bq5xg=2213
+20:52:30 242ns=2220 blkd7=2228 bq5xg=2223
+20:52:40 242ns=1599 blkd7=1679 bq5xg=1530
+20:52:50 242ns=782 blkd7=814 bq5xg=795
+20:53:00 242ns=907 blkd7=932 bq5xg=942
+20:53:10 242ns=961 blkd7=1005 bq5xg=948
+20:53:20 242ns=1118 blkd7=1142 bq5xg=1067
+20:53:30 242ns=731 blkd7=843 bq5xg=839

@@ -1,0 +1,9 @@
+resumo da saga k8sK2diag (janela >= 2026-11-01T19:56:11.413443Z; ORPHAN_MS 30000)
+compensacoes por minuto: /e/TCC/wt/Issue-228/Projeto/carga/results/saga-k8sK2diag-20261101-165612.csv (0 minuto(s) com compensacao; a subcontagem do reabrir de chave compensated apaga o resolved_at: ~0 na R5)
+tempo ate resolver (compensated: resolved_at - created_at; o do reaper e o tempo ate a orfa se resolver):
+  resolver_inline: sem amostra
+  resolver_reaper: sem amostra
+lag de devolucao (hold.updated_at - occurred_at do ReservationCancelled/Expired com o mesmo holdId, hold released):
+  devolucao: n 515 p50 214 p95 374 max 424 (ms)
+fim do bloco: devolucao_pendente 0, orfa_inversa 0, sagas_reserving 0, sagas_compensating 0
+latencia dos passos: logger saga.timing desligado (LOGGING_LEVEL_SAGA_TIMING=DEBUG so no bloco que mede): latencia dos passos fora

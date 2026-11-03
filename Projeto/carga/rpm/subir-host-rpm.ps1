@@ -8,6 +8,7 @@
   .\subir-host-rpm.ps1 -MaxConnections 100          # padrao do Postgres (pool do pooler = 45)
   .\subir-host-rpm.ps1 -Verificar -Prefixo Rpm-123456     # sai com codigo 3 se houver overselling no braco CAS (criterio de parada do bloco, #178)
   .\subir-host-rpm.ps1 -Verificar -Prefixo Deg-123456 -OrfaLimiteS 45   # R5 (#204): depois do overselling (3), espera o lag do group stock e as sagas do prefixo; codigo 4 = invariante da saga que nao convergiu no limite
+  $env:CARGA_K8S = 'kind-gerenciador'; .\subir-host-rpm.ps1 -Verificar -Prefixo Deg-123456   # modo cluster (#228): so o -Verificar (overselling, orfas) contra o banco do cluster ou o remoto; sem Docker
   .\subir-host-rpm.ps1 -ComposeExtras docker-compose.autoescala.yml   # braco C: overrides extras DEPOIS dos de carga e rpm (Hikari 300 por replica); a R4 roda o braco sem autoescala antes
 #>
 [CmdletBinding()]
@@ -39,7 +40,7 @@ function Registrar($alvo, $saida) {
     # RESERVATION_READPATH e do backend (gateway); relay/consumer sao do servico reservation (#33)
     # containers por label (issue #178): com a autoescala as replicas nao se chamam gerenciador-<servico>
     $cb = Get-ContainerDoServico backend; $cr = Get-ContainerDoServico reservation
-    $cfg = ($(if ($cb) { docker exec $cb printenv RESERVATION_READPATH 2>$null }) + ' / ' + (@($(if ($cr) { docker exec $cr printenv EVENTS_RELAY_ENABLED EVENTS_CONSUMER_ENABLED 2>$null })) -join ' / '))
+    $cfg = ($(if ($cb) { Get-EnvServico $cb RESERVATION_READPATH 2>$null }) + ' / ' + (@($(if ($cr) { 'EVENTS_RELAY_ENABLED', 'EVENTS_CONSUMER_ENABLED' | ForEach-Object { Get-EnvServico $cr $_ 2>$null } })) -join ' / '))
     $cab = "===== {0} | {1} | config: {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $alvo, $cfg
     Add-Content -Path (Join-Path $dir 'verificacoes.log') -Value (@($cab, $saida, '') -join "`n") -Encoding utf8
 }
@@ -65,7 +66,7 @@ SELECT status, count(*) FROM reservation.walletevent
     # Mensagens ainda na fila de admissao viram reserva DEPOIS do fim do bloco: espera drenar antes de contar (so se ha RabbitMQ/admission)
     $resto = Wait-FilaDeAdmissao
     if ($null -ne $resto -and $resto -gt 0) { Write-Host "[aviso] admission.requests ainda com $resto mensagens depois da espera: a contagem abaixo pode estar incompleta; rode de novo." -ForegroundColor Yellow }
-    $saida = $sql | docker exec -i (Get-ContainerDb) sh -c 'psql -v ON_ERROR_STOP=1 -U $POSTGRES_USER -d $POSTGRES_DB' | Out-String
+    $saida = $sql | Invoke-PsqlDb -Flags '-v ON_ERROR_STOP=1' | Out-String
     Write-Host $saida
     $rc = $LASTEXITCODE
     Registrar "prefixo $Prefixo" $saida.TrimEnd()
@@ -76,12 +77,13 @@ WITH ev AS (SELECT e.event_id, c.capacity FROM catalog.event e JOIN stock.eventc
 ativas AS (SELECT ev.capacity, count(w.*) FILTER (WHERE w.status IN ('pending','confirmed')) AS n FROM ev LEFT JOIN reservation.walletevent w ON w.event_id = ev.event_id GROUP BY ev.event_id, ev.capacity)
 SELECT coalesce(sum(n - capacity) FILTER (WHERE n > capacity), 0) FROM ativas;
 "@
-    $over = ($qOver | docker exec -i (Get-ContainerDb) sh -c 'psql -v ON_ERROR_STOP=1 -At -U $POSTGRES_USER -d $POSTGRES_DB' | Out-String).Trim()
+    $over = ($qOver | Invoke-PsqlDb -Flags '-v ON_ERROR_STOP=1 -At' | Out-String).Trim()
     $cb = Get-ContainerDoServico backend
-    $readpath = if ($cb) { ((docker exec $cb printenv RESERVATION_READPATH 2>$null) | Out-String).Trim() } else { '' }
+    # nome proprio: $readpath colidiria com o parametro $ReadPath (ValidateSet), e o PS aborta com o valor vazio (no cluster a variavel nao existe)
+    $readpathAtual = if ($cb) { ((Get-EnvServico $cb RESERVATION_READPATH 2>$null) | Out-String).Trim() } else { '' }
     if ($over -match '^\d+$' -and [int64]$over -gt 0) {
-        if ($readpath -eq 'naive') { Write-Host "[info] overselling $over no braco naive (esperado: e o que a rodada mede)." -ForegroundColor Cyan }
-        else { Write-Host "[erro] OVERSELLING $over no braco '$(if ($readpath) { $readpath } else { 'cas?' })': criterio de parada do bloco. NAO prossiga." -ForegroundColor Red; exit 3 }
+        if ($readpathAtual -eq 'naive') { Write-Host "[info] overselling $over no braco naive (esperado: e o que a rodada mede)." -ForegroundColor Cyan }
+        else { Write-Host "[erro] OVERSELLING $over no braco '$(if ($readpathAtual) { $readpathAtual } else { 'cas?' })': criterio de parada do bloco. NAO prossiga." -ForegroundColor Red; exit 3 }
     } elseif ($over -notmatch '^\d+$') { Write-Host "[erro] nao consegui ler o overselling ('$over')." -ForegroundColor Red; exit 1 }
     else { Write-Host '[ ok ] overselling 0.' -ForegroundColor Green }
     # ---- Rodada 5 (#204): saga stock + wallet. O overselling (codigo 3) tem precedencia e segue sendo SO overselling; aqui o codigo 4 = invariante da saga que nao
@@ -91,8 +93,8 @@ SELECT coalesce(sum(n - capacity) FILTER (WHERE n > capacity), 0) FROM ativas;
     $origemLimite = "parametro -OrfaLimiteS (ORFA_LIMITE_S)"
     if ($limite -le 0) {
         $origemLimite = "ORPHAN_MS + 3 x SCAN_MS $(if ($cr) { 'lidos do container reservation' } else { 'padrao do servico: container reservation nao achado' })"
-        $om = if ($cr) { ((docker exec $cr printenv RESERVATION_SAGA_ORPHAN_MS 2>$null) | Out-String).Trim() } else { '' }
-        $sm = if ($cr) { ((docker exec $cr printenv RESERVATION_SAGA_REAPER_SCAN_MS 2>$null) | Out-String).Trim() } else { '' }
+        $om = if ($cr) { ((Get-EnvServico $cr RESERVATION_SAGA_ORPHAN_MS 2>$null) | Out-String).Trim() } else { '' }
+        $sm = if ($cr) { ((Get-EnvServico $cr RESERVATION_SAGA_REAPER_SCAN_MS 2>$null) | Out-String).Trim() } else { '' }
         $limite = Get-OrfaLimiteS -OrphanMs $om -ScanMs $sm
     }
     $lag = Wait-LagDoGroup -Group stock
@@ -122,7 +124,7 @@ SELECT (SELECT count(*) FROM reservation.idempotency_key k WHERE k.event_id IN (
     Write-Host "[info] sagas: esperando as invariantes convergirem (limite ${limite}s; origem: $origemLimite)..." -ForegroundColor Cyan
     $fimSaga = (Get-Date).AddSeconds($limite)
     while ($true) {
-        $lin = ($qSaga | docker exec -i (Get-ContainerDb) sh -c 'psql -v ON_ERROR_STOP=1 -At -F, -U $POSTGRES_USER -d $POSTGRES_DB' | Out-String).Trim()
+        $lin = ($qSaga | Invoke-PsqlDb -Flags '-v ON_ERROR_STOP=1 -At -F,' | Out-String).Trim()
         if ($LASTEXITCODE -ne 0 -or $lin -notmatch '^\d+(,\d+){4}$') { Write-Host "[erro] nao consegui ler as sagas do prefixo ('$lin')." -ForegroundColor Red; exit 1 }
         $p = $lin -split ','
         $dec = Get-DecisaoSaga -LimiteS $limite -SagasVelhas $p[0] -HoldHeldSagaCompensada $p[1] -DevolucaoPendente $p[2] -OrfaInversa $p[3] -QuantDivergente $p[4]

@@ -110,6 +110,107 @@ try {
 } finally { $env:PATH = $pathAntes; Remove-Item -Recurse -Force $dirFake -ErrorAction SilentlyContinue }
 Confere 'o EAP do chamador nao foi alterado' $ErrorActionPreference 'Stop'
 Write-Host ''
+Write-Host '==> MODO CLUSTER (#228): CARGA_K8S=<contexto>; kubectl/docker/bash simulados (funcoes do PowerShell), nenhuma chamada real'
+$script:dockerChamado = 0; $script:kArgs = $null; $script:bArgs = $null; $script:bStdin = $null
+function docker { $script:dockerChamado++; $script:dArgs = ($args -join ' '); $global:LASTEXITCODE = 0 }
+function kubectl { $script:kArgs = @($args); $global:LASTEXITCODE = 0; if ($null -ne $script:kSaida) { $script:kSaida } }
+function fakebash { $script:bArgs = @($args); $script:bStdin = @($input); $global:LASTEXITCODE = 0 }
+$env:CARGA_K8S = ''
+Confere 'sem CARGA_K8S: modo compose (contexto nulo)' ($null -eq (Get-ContextoK8s)) $true
+Confere 'sem CARGA_K8S: o container do servico vem do docker ps (nao deploy/)' ([bool](Get-ContainerDoServico -Servico reservation)) $false
+Invoke-ExecAlvo 'gerenciador-reservation' printenv RESERVATION_READPATH
+Confere 'sem CARGA_K8S: Invoke-ExecAlvo chama o docker (e nunca o kubectl)' "$($script:dockerChamado)|$($null -eq $script:kArgs)" '2|True'
+'SELECT 1;' | Invoke-PsqlDb -Flags '-v ON_ERROR_STOP=1 -At'
+Confere 'sem CARGA_K8S: Invoke-PsqlDb e o docker exec -i <db> sh -c psql de sempre (mesmos argumentos)' $script:dArgs 'exec -i gerenciador-db sh -c psql -v ON_ERROR_STOP=1 -At -U $POSTGRES_USER -d $POSTGRES_DB'
+$env:CARGA_K8S = 'kind-gerenciador'; $script:dockerChamado = 0
+Confere 'com CARGA_K8S: o contexto' (Get-ContextoK8s) 'kind-gerenciador'
+Confere 'argumentos do kubectl: --context primeiro, namespace gerenciador' ((Get-ArgsKubectl -Contexto 'kind-x' -Resto @('get', 'pods')) -join ' ') '--context kind-x -n gerenciador get pods'
+Confere 'o servico vira deploy/<servico> (sem docker ps)' ((Get-ContainerDoServico -Servico reservation) + '|' + $script:dockerChamado) 'deploy/reservation|0'
+Invoke-ExecAlvo 'deploy/reservation' printenv RESERVATION_SAGA_ORPHAN_MS
+Confere 'Invoke-ExecAlvo em cluster: kubectl --context .. -n gerenciador exec <alvo> -- cmd; docker intocado' (($script:kArgs -join ' ') + '|' + $script:dockerChamado) '--context kind-gerenciador -n gerenciador exec deploy/reservation -c reservation -- printenv RESERVATION_SAGA_ORPHAN_MS|0'
+# env de um servico em cluster: do SPEC do Deployment (as imagens slim nao tem printenv nem sh); literal, valueFrom (marcador, nunca o valor do Secret) ou vazio
+$jp = "{.spec.template.spec.containers[?(@.name=='reservation')].env[?(@.name=='RESERVATION_SAGA_ORPHAN_MS')].value}@@@{.spec.template.spec.containers[?(@.name=='reservation')].env[?(@.name=='RESERVATION_SAGA_ORPHAN_MS')].valueFrom}"
+$script:dockerChamado = 0; $script:kSaida = '12345@@@'
+$v = Get-EnvServico -Alvo 'deploy/reservation' -Var RESERVATION_SAGA_ORPHAN_MS
+Confere 'Get-EnvServico em cluster: o literal vem do spec (kubectl get deploy/<svc> -o jsonpath, com --context; sem exec, sem printenv, sem docker)' "$v|$($script:kArgs -join ' ')|$($script:dockerChamado)" "12345|--context kind-gerenciador -n gerenciador get deploy/reservation -o jsonpath=$jp|0"
+$script:kSaida = '@@@{"secretKeyRef":{"key":"K","name":"env-reservation"}}'
+Confere 'Get-EnvServico em cluster: variavel de valueFrom/Secret vira <de Secret/ConfigMap> (o valor do Secret nunca e lido)' ((Get-EnvServico -Alvo 'deploy/reservation' -Var RESERVATION_SAGA_ORPHAN_MS) + '|' + [bool](($script:kArgs -join ' ') -match 'secret ')) '<de Secret/ConfigMap>|False'
+$script:kSaida = '@@@'
+Confere 'Get-EnvServico em cluster: variavel ausente do spec = valor vazio' ([string](Get-EnvServico -Alvo 'deploy/reservation' -Var RESERVATION_SAGA_ORPHAN_MS)) ''
+$script:kSaida = $null
+Confere 'Get-EnvServico em cluster: kubectl sem saida (erro) = valor vazio' ([string](Get-EnvServico -Alvo 'deploy/reservation' -Var RESERVATION_SAGA_ORPHAN_MS)) ''
+$env:CARGA_K8S = ''
+$null = Get-EnvServico -Alvo 'gerenciador-reservation' -Var RESERVATION_SAGA_ORPHAN_MS
+Confere 'sem CARGA_K8S: Get-EnvServico e o docker exec printenv de sempre' $script:dArgs 'exec gerenciador-reservation printenv RESERVATION_SAGA_ORPHAN_MS'
+$env:CARGA_K8S = 'kind-gerenciador'
+$script:dockerChamado = 0
+$env:CARGA_BASH = 'fakebash'; $env:APP_DB_PASSWORD = 'CANARIO-APP'; $env:POSTGRES_PASSWORD = 'CANARIO-PG'
+'SELECT 1;' | Invoke-PsqlDb -Flags '-v ON_ERROR_STOP=1 -At'
+Confere 'psql em cluster: o SQL vai por stdin' ($script:bStdin -join '|') 'SELECT 1;'
+Confere 'psql em cluster: lib (k8s/lib-db-cliente.sh), contexto e flags nos argumentos do bash, via db_psql' ([bool]($script:bArgs[-1] -eq '-At' -and $script:bArgs -contains 'kind-gerenciador' -and ($script:bArgs -join ' ') -match 'lib-db-cliente\.sh' -and ($script:bArgs -join ' ') -match 'db_psql')) $true
+Confere 'psql em cluster: a senha do ambiente do shell nunca vira argumento' ([bool](($script:bArgs -join ' ') -match 'CANARIO')) $false
+Confere 'psql em cluster: o one-liner do bash cita a lib e o contexto com \" (o PowerShell 5.1 tira aspas duplas SEM barra de argumento de .exe)' ([bool](($script:bArgs -join ' ') -match [regex]::Escape('. \"$1\"'))) $true
+Confere 'psql em cluster: nenhuma aspa dupla sem a barra nos argumentos do bash' ([bool](($script:bArgs -join ' ') -match '(?<!\\)"')) $false
+Confere 'psql em cluster: decide e prepara o pod UMA vez (db_psql_preparar) e so entao db_psql' ([bool](($script:bArgs -join ' ') -match 'db_psql_preparar .* && db_psql ')) $true
+Confere 'psql em cluster: nao chama o docker' $script:dockerChamado 0
+$script:dockerChamado = 0
+$null = Wait-LagDoGroup -Group stock -TetoS 1
+Confere 'lag do group em cluster: kubectl exec sts/redpanda -- rpk group describe stock' (($script:kArgs -join ' ') + '|' + $script:dockerChamado) '--context kind-gerenciador -n gerenciador exec sts/redpanda -c redpanda -- rpk group describe stock|0'
+$null = Wait-FilaDeAdmissao -TetoS 1
+Confere 'fila de admissao em cluster: kubectl exec deploy/rabbitmq -- rabbitmqctl' (($script:kArgs -join ' ') + '|' + $script:dockerChamado) '--context kind-gerenciador -n gerenciador exec deploy/rabbitmq -c rabbitmq -- rabbitmqctl -q list_queues name messages_ready messages_unacknowledged|0'
+$env:CARGA_K8S = ''; $env:CARGA_BASH = ''; $env:APP_DB_PASSWORD = ''; $env:POSTGRES_PASSWORD = ''
+Remove-Item function:docker, function:kubectl, function:fakebash
+
+# kubectl REAL que escreve em stderr ("Defaulted container ...": pod com init container) e/ou sai com 1 (printenv de variavel que nao existe): NAO derruba o chamador (PS 5.1 + EAP=Stop + `2>$null`
+# num .exe lanca NativeCommandError), a saida e o $LASTEXITCODE sao os do comando. kubectl.cmd falso no PATH (nao e o kubectl).
+$dirK = Join-Path ([IO.Path]::GetTempPath()) ('fake-kubectl-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $dirK | Out-Null
+[IO.File]::WriteAllText((Join-Path $dirK 'kubectl.cmd'), "@echo off`r`necho Defaulted container backend out of: backend, espera (init) 1>&2`r`nif defined FAKE_SAIDA echo %FAKE_SAIDA%`r`nexit /b %FAKE_RC%`r`n")
+$pathAntesK = $env:PATH; $env:PATH = "$dirK;$env:PATH"; $env:CARGA_K8S = 'kind-gerenciador'
+try {
+    $env:FAKE_RC = '1'; $env:FAKE_SAIDA = ''
+    $r = 'nao-lancou'; $saida = $null
+    try { $saida = Invoke-ExecAlvo 'deploy/backend' printenv RESERVATION_READPATH 2>$null; $r = "rc=$LASTEXITCODE" } catch { $r = "lancou: $($_.Exception.Message)" }
+    Confere 'kubectl que escreve em stderr e sai com 1 (variavel inexistente): o script segue, sem excecao, com o codigo 1' $r 'rc=1'
+    Confere 'kubectl que escreve em stderr e sai com 1: a saida e vazia (valor vazio, como no compose)' ((@($saida) -join '').Trim()) ''
+    $env:FAKE_RC = '0'; $env:FAKE_SAIDA = 'naive'
+    $saida = Invoke-ExecAlvo 'deploy/backend' printenv RESERVATION_READPATH 2>$null
+    Confere 'kubectl com stderr e saida: a saida do comando chega ao chamador e o codigo e 0' ((@($saida) -join '').Trim() + '|' + $LASTEXITCODE) 'naive|0'
+    Confere 'o EAP do chamador nao foi alterado pelo Invoke-ExecAlvo' $ErrorActionPreference 'Stop'
+} finally { $env:PATH = $pathAntesK; $env:CARGA_K8S = ''; $env:FAKE_RC = ''; $env:FAKE_SAIDA = ''; Remove-Item -Recurse -Force $dirK -ErrorAction SilentlyContinue }
+
+# sem Git Bash: aborta com mensagem clara (nunca cai para o `bash` do PATH, que no Windows costuma ser o do WSL)
+$pw = $env:ProgramW6432; $env:CARGA_BASH = ''
+$semGit = Join-Path ([IO.Path]::GetTempPath()) ('sem-git-' + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Path $semGit | Out-Null
+try {
+    $env:ProgramW6432 = $semGit
+    $msg = 'nao-lancou'; try { $null = Get-BashExe } catch { $msg = $_.Exception.Message }
+    Confere 'sem Git Bash: Get-BashExe lanca erro que cita o Git Bash e o CARGA_BASH (nao devolve "bash")' ([bool]($msg -match 'Git Bash' -and $msg -match 'CARGA_BASH')) $true
+} finally { $env:ProgramW6432 = $pw; Remove-Item -Recurse -Force $semGit -ErrorAction SilentlyContinue }
+
+# ponta a ponta com o Git Bash de verdade e uma lib num caminho COM ESPACO (o kubectl e falso, no PATH): o one-liner tem de citar o caminho
+$gitBash = Join-Path $env:ProgramW6432 'Git\bin\bash.exe'
+if (Test-Path $gitBash) {
+    $raiz = Join-Path ([IO.Path]::GetTempPath()) ('lib com espaco ' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force (Join-Path $raiz 'carga'), (Join-Path $raiz 'k8s'), (Join-Path $raiz 'bin') | Out-Null
+    Copy-Item (Join-Path $PSScriptRoot 'lib-servicos.ps1') (Join-Path $raiz 'carga')
+    Copy-Item (Join-Path $PSScriptRoot '..\k8s\lib-db-cliente.sh'), (Join-Path $PSScriptRoot '..\k8s\db-cliente.yaml') (Join-Path $raiz 'k8s')
+    # kubectl falso (script bash achado pelo PATH do Git Bash): registra os argumentos e o stdin; `get sts/db` responde que o db esta no cluster
+    $fake = "#!/usr/bin/env bash`n" + 'printf "%s\n" "kubectl $*" >> "$FAKE_K_LOG"' + "`n" + 'case "$*" in *"exec -i"*) cat >> "$FAKE_K_LOG.stdin" ;; *"get sts/db"*) echo statefulset.apps/db ;; esac' + "`nexit 0`n"
+    [IO.File]::WriteAllText((Join-Path $raiz 'bin\kubectl'), $fake.Replace("`r`n", "`n"))
+    $logk = Join-Path $raiz 'k.log'
+    $pathAntes = $env:PATH; $env:CARGA_K8S = 'kind-gerenciador'; $env:FAKE_K_LOG = ($logk -replace '\\', '/')
+    $env:PATH = (Join-Path $raiz 'bin') + ';' + $env:PATH
+    try {
+        . (Join-Path $raiz 'carga\lib-servicos.ps1')
+        'SELECT 1;' | Invoke-PsqlDb -Flags '-v ON_ERROR_STOP=1 -At'
+        $linhas = @(Get-Content $logk -ErrorAction SilentlyContinue)
+        Confere 'Git Bash real + lib em caminho com espaco: o psql chega ao kubectl (1 get sts/db e 1 exec -i sts/db, ambos com --context)' ("$(@($linhas | Where-Object { $_ -match 'get sts/db' }).Count)|$(@($linhas | Where-Object { $_ -match '^kubectl --context kind-gerenciador -n gerenciador exec -i sts/db -c db -- sh -c ' }).Count)") '1|1'
+        Confere 'Git Bash real + lib em caminho com espaco: o SQL chega por stdin' ((Get-Content ($logk + '.stdin') -ErrorAction SilentlyContinue) -join '|') 'SELECT 1;'
+    } finally { $env:PATH = $pathAntes; $env:CARGA_K8S = ''; $env:FAKE_K_LOG = ''; Remove-Item -Recurse -Force $raiz -ErrorAction SilentlyContinue }
+} else { Write-Host '   [pulado] sem Git Bash neste host: o teste ponta a ponta do psql em cluster nao rodou' }
+
+Write-Host ''
 Write-Host '=================================================='
 if ($script:falhas -eq 0) { Write-Host '   RESULTADO: OK -- lib-servicos.ps1 passou em todas as assercoes.' }
 else { Write-Host "   RESULTADO: $($script:falhas) ASSERCAO(OES) FALHARAM." }

@@ -103,7 +103,9 @@ help:
 	@Write-Host '  make coleta-host     (no HOST: +5 colunas no fim do CSV -- lag_stock, lag_stock_catalog, saga_reservando, saga_orfas, saga_compensando --. ORDEM POR BLOCO: ao fim do k6 a coleta CONTINUA ate saga_reservando e saga_compensando = 0 no CSV ou ate passar ORFA_LIMITE_S; so entao Ctrl+C (gera saga-*.csv e resumo-saga-*.txt), depois verificar-rpm, depois limpar-banco)'
 	@Write-Host '  make verificar-rpm   PREFIXO=Deg-<id> [ORFA_LIMITE_S=45]   (no HOST: overselling (codigo 3), depois o lag do group stock e as sagas do prefixo; codigo 4 = orfa/invariante da saga que nao convergiu no limite)'
 	@Write-Host '  LOGGING_LEVEL_SAGA_TIMING=DEBUG no reservation (linha comentada no carga/docker-compose.carga.yml): latencia dos passos da saga no resumo, SO no bloco que mede'
-	@Write-Host '  make selftests       (sem Docker/stack: lib-degraus, lib-servicos, lib-admissao, carga-degraus (k6 stub), coleta-host, limpar-banco)'
+	@Write-Host 'MODO CLUSTER (#228) - o mesmo kit contra o cluster Kubernetes (Projeto/k8s), sem Docker: CARGA_K8S=<contexto kubectl>, ex. $$env:CARGA_K8S="kind-gerenciador" no PowerShell, ANTES do make; sem a variavel nada muda'
+	@Write-Host '  make limpar-banco | coleta-host | verificar-rpm PREFIXO=Deg-<id>   (no HOST, com CARGA_K8S: KEDA pausado e deploys a 0, TRUNCATE no db do cluster ou no remoto pelo pod db-cliente, chave do JWT apagada do PVC; rodada com o db remoto: k8s/README.md)'
+	@Write-Host '  make selftests       (sem Docker/stack: lib-degraus, lib-servicos, lib-admissao, carga-degraus (k6 stub), coleta-host, limpar-banco, cluster.sh do k8s)'
 
 setup-host:
 	.\setup-host.ps1 -ReadPath $(READPATH) $(if $(GERADOR_IP),-GeradorIp $(GERADOR_IP)) $(if $(COMPOSE_EXTRAS),-ComposeExtras $(COMPOSE_EXTRAS))
@@ -186,6 +188,7 @@ selftests:
 	node degraus/lib-mapeamento.selftest.mjs
 	& "$$env:ProgramW6432\Git\bin\bash.exe" ./coleta-host.selftest.sh
 	& "$$env:ProgramW6432\Git\bin\bash.exe" ./limpar-banco.selftest.sh
+	& "$$env:ProgramW6432\Git\bin\bash.exe" ../k8s/cluster.selftest.sh
 
 report-degraus:
 	$(if $(CSV),,$(error Informe CSV=results\degraus-<id>.csv))
