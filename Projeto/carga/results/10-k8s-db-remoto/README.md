@@ -487,7 +487,8 @@ O cluster ficou no ar para a investigação.
 ## K2-pos-231 (`Deg-473284`), 2026-11-03, issue #237
 
 O K2 refeito com o `stock` da #231: 1 réplica fixa, Hikari 245, `Recreate` e sem ScaledObject. O `admission` ficou com `K8S_ADMISSION_MIN=1`
-para o A/B limpo. A análise completa e as fontes estão em [`K2-pos-231/README.md`](K2-pos-231/README.md).
+para o A/B da #231: o render só difere no stock, mas na execução a autoescala divergiu do K2-repetição. A análise completa, as fontes e a regra de
+janela estão em [`K2-pos-231/README.md`](K2-pos-231/README.md).
 
 | | Parada | 20k p50 / p95 | 26k p50 / p95 | 32k p50 / p95 | 5xx | Overselling |
 |---|---|---|---|---|---|---|
@@ -496,9 +497,12 @@ para o A/B limpo. A análise completa e as fontes estão em [`K2-pos-231/README.
 | K2-pos-231 | 32k | 891,1 / 2.875,9 | 1.436,7 / 2.970,8 | 3.963,9 / 5.515,2 | 0 | 0 |
 
 **Leitura:**
-- Com a #231 o b1 passa do 20k e para no mesmo 32k do K2-repetição, com latência menor nos degraus anteriores.
-- O limite provável agora, não isolado, é o lock da linha quente no Dell: o pool real de 245 ficou cheio, com até 239 sessões esperando lock, e o
-  Dell ficou com CPU e disco sobrando.
+- **Ponto de parada:** a #231 não o mudou. Com ela o b1 parou no mesmo 32k do K2-repetição, que, sem a #231, também tinha passado do 20k.
+- **Latência:** bem menor no 20k (p50 de 891 contra 1.795 ms) e próxima no 26k (1.437 contra 1.551 ms), com 1 rodada por config. A variação
+  entre rodadas da mesma config é grande: no 20k o K2 deu 2.944 e o K2-repetição 1.795.
+- **Limite provável agora, não isolado:** o lock da linha quente no Dell.
+  - O pool real de 245 ficou cheio, com até 239 sessões esperando lock (`coleta-host`; 236 em `Lock/transactionid` no Dell).
+  - O Dell ficou com CPU e disco sobrando.
 
 ## Versão do harness por bloco
 
