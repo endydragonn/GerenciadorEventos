@@ -1,0 +1,33 @@
+2026-11-02 23:32:16 [soak S2b] pre-check no cluster kind-gerenciador: perfil results/perfil-S2b.json, bloco S2, cadastros esperados 54649
+2026-11-02 23:32:17 [soak S2b] ok: notification -> Mailpit (MAIL_HOST=mailpit, MAIL_PASSWORD vazio, sem spring.mail), sem ScaledObject do stock, Hikari do stock 245, autoescalados no minReplicaCount (1 por padrao) e prontos, MP_MAX_MESSAGES >= 2x 54649, bloco S2 com ADMISSION_X_RPM=4000 e alvo do KEDA = 0,5 x X
+[ ok ] regra 'TCC soak mailpit 8025 - bloqueio': Block, entrada, TCP 8025, todo o IPv4 menos o gerador 192.168.68.54, todo o IPv6
+[ ok ] regra 'TCC soak mailpit 8025 - gerador': Allow, entrada, TCP 8025, so o gerador 192.168.68.54, perfil Any
+2026-11-02 23:32:19 [soak S2b] ok: regra de firewall da 8025 confere (Block de todo o IPv4 menos o gerador 192.168.68.54 e Allow so do gerador)
+2026-11-02 23:32:19 [soak S2b] relogios (adiantamento contra time.windows.com, + = relogio adiantado): host=+1.479 s, no=+1.528 s, gerador=+2.390 s
+2026-11-02 23:32:19 [soak S2b] relogios: maior diferenca entre os relogios = 0.911 s
+2026-11-02 23:32:19 [soak S2b] ok: GET sem credencial = 401 (basic auth do Mailpit ligada)
+2026-11-02 23:32:20 [soak S2b] mailpit_inicio=0
+2026-11-03 01:39:52 [soak S2b] 1. lag_notification=0 (group notification drenado)
+2026-11-03 01:40:02 [soak S2b] 2/3. Mailpit com 54648 mensagens no total; cadastros 2xx esperados: 54648
+mailpit: 54648 mensagens do bloco (54648 enderecos) para 54648 cadastros esperados; perdidas 0, duplicadas toleradas 0, duplicadas nao toleradas 0, extras 0, From fora de @example.com: 0
+2026-11-03 01:40:03 [soak S2b] criterio 1 (e-mail): ok
+carga entregue: todos os tipos com >= 90% das iteracoes do perfil
+2026-11-03 01:40:03 [soak S2b] carga entregue: ok
+2026-11-03 01:40:10 [soak S2b] 4. verificar-rpm (prefixo Soak-446582): codigo 0
+restartCount do mailpit no bloco: 0 reinicio(s), 0 pod(s) trocado(s) (1356 amostras)
+2026-11-03 01:40:10 [soak S2b] minReplicaCount dos ScaledObjects no cluster vivo: admission=2,backend=1,catalog=1,identity=1,notification=1,reservation=1,
+criterio 2 admission    (minimo 2) subidas avaliadas 0, descidas avaliadas 3, violacoes 0
+criterio 2 backend      (minimo 1) subidas avaliadas 3, descidas avaliadas 3, violacoes 0
+criterio 2 catalog      (minimo 1) subidas avaliadas 2, descidas avaliadas 4, violacoes 0
+criterio 2 identity     (minimo 1) subidas avaliadas 1, descidas avaliadas 1, violacoes 0
+criterio 2 notification (minimo 1) subidas avaliadas 0, descidas avaliadas 0, violacoes 0
+criterio 2 reservation  (minimo 1) subidas avaliadas 3, descidas avaliadas 4, violacoes 0
+criterio 2 stock        (minimo 1) subidas avaliadas 0, descidas avaliadas 0, violacoes 0
+2026-11-03 01:40:11 [soak S2b] criterio 2 (autoescala acompanha a carga): ok
+criterio 3 (troca de replica sem erro): 12 respostas 5xx e 0 com status 0 (erro de transporte) fora de tipo=mailpit {"cadastro": {"c0": 0, "c5xx": 0}, "escrita": {"c0": 0, "c5xx": 0}, "leitura": {"c0": 0, "c5xx": 0}, "login": {"c0": 0, "c5xx": 0}, "reserva": {"c0": 0, "c5xx": 12}}
+   [ERRO] minuto 77 (03:51:08Z) reserva  5xx 12, status 0 0
+          nenhum pod saiu neste minuto (+-5s, supondo os relogios do gerador e do host sincronizados): a causa provavelmente NAO e troca de replica
+2026-11-03 01:40:11 [soak S2b] criterio 3: REPROVOU (5xx ou status 0 fora de tipo=mailpit; os minutos e os pods que sairam neles estao acima)
+fila (S2): reserva com 629962 respostas 202 e 41323 respostas 429
+2026-11-03 01:40:11 [soak S2b] criterio 4 (gerador valido: RAM livre >= 1 GB, sem Insufficient VUs fora do S2, memoria do k6 estavel) e a verificacao do gerador: nao sai deste script; confira descartadas no por-minuto
+2026-11-03 01:40:11 [soak S2b] RESULTADO: bloco REPROVADO (1 verificacao(oes))

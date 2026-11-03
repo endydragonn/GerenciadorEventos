@@ -15,3 +15,10 @@ nodes:
         hostPort: 8088
         listenAddress: "0.0.0.0"
         protocol: TCP
+      # API do Mailpit do overlay `soak` (#232): NodePort 30825 -> host 8025. Publicada em 0.0.0.0 em TODO cluster criado com este arquivo, mas só tem Service por trás no `soak`
+      # (nos demais o Docker abre a porta e a conexão é recusada). Quem a expõe de verdade é a regra de firewall do Windows restrita ao IP do gerador (Projeto/carga/soak/firewall-mailpit.ps1).
+      # Mudar isto exige RECRIAR o cluster (`cluster.sh down` + `up`): o kind não altera portas de um nó existente.
+      - containerPort: 30825
+        hostPort: 8025
+        listenAddress: "0.0.0.0"
+        protocol: TCP

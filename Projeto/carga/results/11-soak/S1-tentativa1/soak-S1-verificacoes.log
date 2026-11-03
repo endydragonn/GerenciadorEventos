@@ -1,0 +1,28 @@
+2026-11-02 02:23:54 [soak S1] pre-check no cluster kind-gerenciador: perfil results/perfil-S1.json, bloco S1, cadastros esperados 37254
+2026-11-02 02:23:54 [soak S1] ok: notification -> Mailpit (MAIL_HOST=mailpit, MAIL_PASSWORD vazio, sem spring.mail), sem ScaledObject do stock, Hikari do stock 245, autoescalados em 1 replica pronta, MP_MAX_MESSAGES >= 2x 37254, bloco S1 com ADMISSION_X_RPM=56000 e alvo do KEDA = 0,5 x X
+[ ok ] regra 'TCC soak mailpit 8025 - bloqueio': Block, entrada, TCP 8025, todo o IPv4 menos o gerador 192.168.68.54, todo o IPv6
+[ ok ] regra 'TCC soak mailpit 8025 - gerador': Allow, entrada, TCP 8025, so o gerador 192.168.68.54, perfil Any
+2026-11-02 02:23:56 [soak S1] ok: regra de firewall da 8025 confere (Block de todo o IPv4 menos o gerador 192.168.68.54 e Allow so do gerador)
+2026-11-02 02:23:57 [soak S1] relogios (adiantamento contra time.windows.com, + = relogio adiantado): host=+1.776 s, no=+1.810 s, gerador=+2.563 s
+2026-11-02 02:23:57 [soak S1] relogios: maior diferenca entre os relogios = 0.787 s
+2026-11-02 02:23:57 [soak S1] ok: GET sem credencial = 401 (basic auth do Mailpit ligada)
+2026-11-02 02:23:57 [soak S1] mailpit_inicio=0
+2026-11-02 04:30:10 [soak S1] 1. lag_notification=0 (group notification drenado)
+2026-11-02 04:30:10 [soak S1] 2/3. Mailpit com 0 mensagens no total; cadastros 2xx esperados: 0
+mailpit: 0 mensagens do bloco (0 enderecos) para 0 cadastros esperados; perdidas 0, duplicadas toleradas 0, duplicadas nao toleradas 0, extras 0, From fora de @example.com: 0
+2026-11-02 04:30:10 [soak S1] criterio 1 (e-mail): ok
+2026-11-02 04:30:20 [soak S1] 4. verificar-rpm (prefixo Soak-370785): codigo 0
+restartCount do mailpit no bloco: 0 reinicio(s), 0 pod(s) trocado(s) (1385 amostras)
+criterio 2 reservation: FORA do criterio no S1 (X=56k: alvo do KEDA 28k RPM, nunca alcancado de proposito; o reservation fica em 1 replica)
+criterio 2 admission    subidas avaliadas 5, descidas avaliadas 5, violacoes 0
+criterio 2 backend      subidas avaliadas 1, descidas avaliadas 2, violacoes 0
+criterio 2 catalog      subidas avaliadas 2, descidas avaliadas 6, violacoes 0
+criterio 2 identity     subidas avaliadas 4, descidas avaliadas 2, violacoes 0
+criterio 2 notification subidas avaliadas 0, descidas avaliadas 0, violacoes 0
+criterio 2 stock        subidas avaliadas 0, descidas avaliadas 0, violacoes 0
+2026-11-02 04:30:21 [soak S1] criterio 2 (autoescala acompanha a carga): ok
+criterio 3 (troca de replica sem erro): 0 respostas 5xx e 0 com status 0 (erro de transporte) fora de tipo=mailpit {"cadastro": {"c0": 0, "c5xx": 0}, "escrita": {"c0": 0, "c5xx": 0}, "leitura": {"c0": 0, "c5xx": 0}, "login": {"c0": 0, "c5xx": 0}, "reserva": {"c0": 0, "c5xx": 0}}
+2026-11-02 04:30:21 [soak S1] criterio 3 (troca de replica sem erro): ok
+fila (S1): reserva com 0 respostas 202 e 0 respostas 429 (S1: X=56k, a fila nao deve ligar; so registrado)
+2026-11-02 04:30:21 [soak S1] criterio 4 (gerador valido: RAM livre >= 1 GB, sem Insufficient VUs fora do S2, memoria do k6 estavel) e a verificacao do gerador: nao sai deste script; confira descartadas no por-minuto
+2026-11-02 04:30:21 [soak S1] RESULTADO: bloco APROVADO nos criterios 1 a 3 (rode o limpar-banco antes do proximo bloco)

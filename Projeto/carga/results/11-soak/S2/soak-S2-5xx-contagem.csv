@@ -1,0 +1,6 @@
+name,method,status,minuto_utc,amostras
+/bff/event-wallets/admission,GET,503,08:01,232
+/bff/event-wallets/admission,GET,503,08:30,1
+/bff/event-wallets/admission,GET,503,09:12,224
+/bff/event-wallets/admission,GET,503,09:54,3
+/bff/event-wallets/admission,GET,503,09:55,4

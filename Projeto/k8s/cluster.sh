@@ -15,7 +15,7 @@
 #                                       instalado por helm: istio/base + istio/istiod), `c` = balanceamento no cliente (módulo Maven client-lb + Services headless),
 #                                       `nenhuma` = a base pura (Service L4 do Kubernetes), o controle. Trocar de trilha = `down` + `up --trilha <outra>`.
 #                                       Desde a etapa 4 o `up` instala (helm, versões de chart FIXAS, --wait) o metrics-server e o KEDA (todas as trilhas) e aplica os ScaledObjects da
-#                                       autoescala (D5): reservation pelo adm:hot do admission, notification pelo lag, os demais por CPU (6 ScaledObjects: o stock é FIXO em 1 réplica, #231). K8S_<SVC>_MIN/_MAX (default 1/3), K8S_DESCE_SEG (120),
+#                                       autoescala (D5): reservation pelo adm:hot do admission, notification pelo lag, os demais por CPU (6 ScaledObjects: o stock é FIXO em 1 réplica, #231). K8S_<SVC>_MIN/_MAX (default 1/3; admission 2/3, #235), K8S_DESCE_SEG (120),
 #                                       K8S_CPU_ALVO (50) e AUTOESCALA_NOTIFICATION_LAG (100) viram o patch gerado; o alvo do reservation é 0,5 x o ADMISSION_X_RPM que o admission recebe.
 #    guarda --trilha ...                só confere o isolamento do overlay e2e/carga (Secrets e NodePort) com a trilha somada; não cria nada
 #    imagem <img...>                    carrega imagens avulsas no nó (o e2e usa para o pod auxiliar)
@@ -28,11 +28,17 @@
 #    status                             nós, pods e serviços
 #    down                               `kind delete cluster` (antes de qualquer medição no host: o cluster disputa CPU e RAM)
 #
-#  Variáveis: K8S_NOME (gerenciador | gerenciador-e2e*), K8S_OVERLAY (base | e2e | completa | carga | rodada), K8S_ESPERA (900, segundos de cada espera), SLIM_TAG (a das *.slim; resolvida
+#  Variáveis: K8S_NOME (gerenciador | gerenciador-e2e*), K8S_OVERLAY (base | e2e | completa | carga | rodada | soak), K8S_ESPERA (900, segundos de cada espera), SLIM_TAG (a das *.slim; resolvida
 #  pelo compose como nos outros scripts: shell > Projeto/.env > latest).
 #  Overlays: base (Secrets REAIS, só no cluster `gerenciador`), e2e (Mailpit, credenciais efêmeras, sem NodePort), completa (imagens completas gerenciador-eventos-<svc>:latest no lugar das slim;
 #  Secrets REAIS, só em `gerenciador`; SLIM_TAG não vale; exige K8S_PERMITIR_LATEST=1), carga (= e2e + SEED_ENABLED=true no gateway, para o dry-run; Secrets do override do e2e, nunca o SMTP real).
 #  rodada (#228) = base (Secrets REAIS, NodePort 30081/30088) + SEED_ENABLED=true no gateway, para a medição com o gerador da rede local; só em `gerenciador`.
+#  soak (#232) = rodada + Mailpit (componente k8s/overlays/mailpit) + SMTP do notification apontado para ele (MAIL_HOST=mailpit, MAIL_PORT=1025, MAIL_SMTP_AUTH=false, MAIL_STARTTLS=false,
+#  MAIL_USERNAME=soak@example.com, MAIL_PASSWORD="") + API do Mailpit na NodePort 30825 (host 8025, kind.yaml: exige cluster novo). Para o teste longo com cadastro: NENHUM e-mail real sai. `guarda`/`up` leem o
+#  render e ABORTAM (nada é criado) se qualquer um dos seis valores faltar ou estiver errado, se o Secret env-notification trouxer SPRING_MAIL_*, se o render não tiver exatamente 1 Deployment mailpit
+#  com MP_UI_AUTH, ou se MAILPIT_AUTH=<usuário>:<senha> (efêmera, >= 16 caracteres de senha, fora do repo, NUNCA impressa) não estiver no ambiente: o `up` a grava no Secret mailpit-auth.
+#  O gatilho do soak é POR BLOCO e vem do ambiente: ADMISSION_X_RPM=56000 (S1) ou 4000 (S2) no `up` (o admission o recebe pelo Secret env-admission e o alvo do KEDA do reservation = 0,5 x X da MESMA variável);
+#  ao trocar de bloco sem `down`, reinicie o admission (o envFrom não recarrega). O verificar-soak.sh pre confere o X vivo e o alvo (spec 2026-11-01-teste-longo-soak-design.md, "Decisões").
 #  K8S_DB_REMOTO=<ip>:<porta> (#228, sem default, IPv4): o Postgres fica numa máquina dedicada (componente k8s/overlays/db-remoto: sem StatefulSet db nem PVC nem ConfigMaps de init;
 #  Service db sem selector + EndpointSlice para o IP e a porta dados). Só com overlay de Secrets reais (base | completa | rodada). Sem a variável, nada muda. Trocar de modo = `down` + `up`.
 #  O overlay rodada também leva o pool real do Supavisor em 245 e, com o db no cluster, max_connections=300 (os do bloco 1 da R5 no compose). K8S_POOLS=r5 (#228) soma o componente
@@ -100,7 +106,9 @@ case "$OVERLAY" in
     carga) OVERLAY_DIR="k8s/overlays/carga"; COMPOSE_E2E=1 ;; # e2e + SEED_ENABLED: Secrets do override do e2e (Mailpit, credenciais efêmeras), nunca o SMTP real (P2)
     rodada) case "$NOME" in gerenciador-e2e*) abortar "overlay 'rodada' leva os Secrets REAIS (Projeto/.env): não vai para o cluster '$NOME' (use K8S_OVERLAY=e2e)." ;; esac
           OVERLAY_DIR="k8s/overlays/rodada"; COMPOSE_E2E=0 ;; # base + SEED_ENABLED, NodePort como no base (#228)
-    *)    abortar "K8S_OVERLAY='$OVERLAY' inválido (base | e2e | completa | carga | rodada)." ;;
+    soak) case "$NOME" in gerenciador-e2e*) abortar "overlay 'soak' leva os Secrets REAIS (Projeto/.env): não vai para o cluster '$NOME' (use K8S_OVERLAY=e2e)." ;; esac
+          OVERLAY_DIR="k8s/overlays/soak"; COMPOSE_E2E=0 ;; # rodada + Mailpit e o SMTP do notification nele (#232); a guarda abaixo prova os seis valores no render
+    *)    abortar "K8S_OVERLAY='$OVERLAY' inválido (base | e2e | completa | carga | rodada | soak)." ;;
 esac
 # db remoto (#228): K8S_DB_REMOTO=<ip>:<porta>, IPv4, sem default. Validado aqui, antes de qualquer outra coisa.
 DB_REMOTO="${K8S_DB_REMOTO:-}"; DB_IP=""; DB_PORTA=""
@@ -189,7 +197,11 @@ montar_selecao() {
     done
     for s in $AUTOESCALADOS; do
         S="$(echo "$s" | tr 'a-z' 'A-Z')"; vmin="K8S_${S}_MIN"; vmax="K8S_${S}_MAX"
-        min="${!vmin:-1}"; max="${!vmax:-$([ "$POOLS" = r5 ] && echo 1 || echo 3)}"
+        max="${!vmax:-$([ "$POOLS" = r5 ] && echo 1 || echo 3)}"
+        # mínimo do admission = 2 (#235: com 1 pod só, o degrau da rampa passa dos timeouts de 200 ms do Redis/RabbitMQ antes de o KEDA ter outro pronto e a consulta da fila dá 503);
+        # só o DEFAULT acompanha um teto 1 (K8S_ADMISSION_MAX=1, K8S_POOLS=r5): um K8S_ADMISSION_MIN explícito segue na validação abaixo
+        dmin=1; [ "$s" != admission ] || { dmin=2; [[ "$max" =~ ^[0-9]+$ ]] && [ "$max" -eq 1 ] && dmin="$max"; }
+        min="${!vmin:-$dmin}"
         # teto 3: a conta do Supavisor (4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 245 = 1497 <= 1500, README "Pool do Supavisor") supõe no máximo 3 réplicas por serviço escalável + 1 em término, e o stock fixo em 1; acima disso, refazer a conta
         inteiro_entre "$vmin" "$min" 1 3; inteiro_entre "$vmax" "$max" 1 3
         [ "$min" -le "$max" ] || abortar "$vmin ($min) maior que $vmax ($max)."
@@ -341,7 +353,7 @@ guardar() { # isolamento do overlay e2e: Secrets (gerar_env) e NodePort; qualque
         fi
         ok "Secrets do overlay e2e: notification -> mailpit:1025 sem auth/senha, credenciais efêmeras no admission, X baixo; manifests sem NodePort"
     fi
-    if [ "$POOLS" = r5 ] || [ "$OVERLAY" = rodada ] || [ -n "$DB_REMOTO" ]; then # o que vai ser aplicado, lido do render (nada de valor fixo aqui)
+    if [ "$POOLS" = r5 ] || [ "$OVERLAY" = rodada ] || [ "$OVERLAY" = soak ] || [ -n "$DB_REMOTO" ]; then # o que vai ser aplicado, lido do render (nada de valor fixo aqui)
         rd="$(kubectl kustomize "$OVERLAY_DIR" | tr -d '\r')" || abortar "o kustomize do overlay falhou: nada foi criado."
     fi
     if [ "$POOLS" = r5 ]; then
@@ -352,19 +364,36 @@ guardar() { # isolamento do overlay e2e: Secrets (gerar_env) e NodePort; qualque
         soma="$(printf '%s\n' "$hk" | tr ' ' '\n' | sed -n 's/.*=//p' | awk '{s += $1} END {print s + 0}')"
         ok "pools R5 (réplica única, lidos do render): ${hk}| workers=${w:-?} | maxReplicaCount=1 x$n (soma dos Hikari no Supavisor $soma, limite 1500)"
     fi
-    if [ "$OVERLAY" = rodada ]; then
+    if [ "$OVERLAY" = rodada ] || [ "$OVERLAY" = soak ]; then
         local pr mc np sd
         pr="$(valores_env "$rd" POOLER_DEFAULT_POOL_SIZE | sed 's/.*=//')"
         mc="$(printf '%s\n' "$rd" | grep -o 'max_connections=[0-9]*' | head -1)"
         np="$(printf '%s\n' "$rd" | sed -n 's/^ *nodePort: //p' | paste -sd' ' -)"
         sd="$(valores_env "$rd" SEED_ENABLED | grep '^backend=' | sed 's/.*=//')"
-        ok "overlay rodada (lido do render): pool real=${pr:-?}${mc:+, $mc (db do cluster)}, nodePort ${np:-nenhum}, SEED_ENABLED=${sd:-?}"
+        ok "overlay $OVERLAY (lido do render): pool real=${pr:-?}${mc:+, $mc (db do cluster)}, nodePort ${np:-nenhum}, SEED_ENABLED=${sd:-?}"
     fi
+    [ "$OVERLAY" != soak ] || guardar_soak "$rd"
     if [ -n "$DB_REMOTO" ]; then # db remoto (#228): o render TEM de trazer a EndpointSlice do IP dado (que o StatefulSet db saiu e o Service ficou sem selector, o selftest confere)
         { printf '%s\n' "$rd" | grep -q '^kind: EndpointSlice$' && printf '%s\n' "$rd" | grep -q -- "- $DB_IP\$"; } \
             || abortar "o componente db-remoto não está aplicado: o render não tem a EndpointSlice com $DB_IP (nada foi criado)."
         ok "db remoto: o render tem a EndpointSlice db-remoto $DB_IP:$DB_PORTA (Service db sem selector e StatefulSet db fora, conferidos no cluster.selftest.sh; o Supavisor e os Secrets não mudam)"
     fi
+}
+
+# guardar_soak <render> (#232): nenhum e-mail real. FAIL-CLOSED, antes de criar qualquer coisa: o `env` do Deployment notification do render TEM de trazer, cada um UMA vez, com `value` literal, os
+# seis valores do Mailpit (o `env` vence o envFrom, que ainda carrega as credenciais do Gmail do Secret: sem a entrada, valeria a REAL; MAIL_PASSWORD="" precisa ser o literal vazio, nunca ausente nem
+# valueFrom); nem o env do render nem o Secret env-notification podem trazer SPRING_MAIL_* / spring.mail.* nem SPRING_APPLICATION_JSON / JAVA_TOOL_OPTIONS / JDK_JAVA_OPTIONS com spring.mail (o relaxed binding
+# e as opções da JVM venceriam o ${MAIL_HOST} do application.properties); o render tem exatamente 1 Deployment mailpit com MP_UI_AUTH
+# (basic auth) e a variável MAILPIT_AUTH (usuário:senha efêmera) existe. Só imprime NOMES e o que faltou, nunca valores de segredo.
+guardar_soak() {
+    local out
+    [[ "${MAILPIT_AUTH:-}" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9._~+-]{16,}$ ]] || abortar "overlay soak: MAILPIT_AUTH=<usuário>:<senha> não está no ambiente (ou a senha tem menos de 16 caracteres / caracteres fora de A-Za-z0-9._~+-): é a credencial efêmera do Mailpit, gerada por bloco, fora do repo. Nada foi criado."
+    # a guarda lê o render (stdin) e as CHAVES do Secret env-notification (argv[1]; os valores nunca são lidos): SPRING_MAIL_*, spring.mail.* e as variáveis de opções da JVM vencem o MAIL_HOST.
+    # O código do guarda-soak.py vai por `-c "$(<arquivo)"` (e não `python $SCRIPT_DIR/guarda-soak.py`) para não depender do caminho do script no formato do Git Bash, que o python do Windows pode
+    # não resolver; o stdin fica livre para o render. O argv[1] usa $TMPW (já convertido com cygpath no Windows).
+    out="$(printf '%s\n' "$1" | "$PY" -c "$(<"$SCRIPT_DIR/guarda-soak.py")" "$TMPW/env-notification")" \
+        || { echo "$out"; abortar "overlay soak: o SMTP do notification NÃO aponta só para o Mailpit no render: nada foi criado (um e-mail real poderia sair)."; }
+    ok "soak: notification -> mailpit:1025 (MAIL_SMTP_AUTH=false, MAIL_STARTTLS=false, MAIL_USERNAME=soak@example.com, MAIL_PASSWORD vazio), sem SPRING_MAIL_*, 1 Deployment mailpit com basic auth, MAILPIT_AUTH presente"
 }
 
 imagens_do_cluster() {
@@ -526,6 +555,11 @@ configmaps_e_segredos() {
     fi
     kn create configmap pooler-exs --from-file=pooler-upsert.exs=supabase/volumes/pooler/pooler-upsert.exs --dry-run=client -o yaml | kn apply -f - >/dev/null || abortar "configmap pooler-exs."
     gerar_env || abortar "gerar os env-files falhou."
+    if [ "$OVERLAY" = soak ]; then # credencial efêmera do Mailpit (#232): da variável de ambiente para o Secret por arquivo temporário (chmod 700 em $TMP); nunca em argumento nem em log
+        printf 'MP_UI_AUTH=%s\n' "$MAILPIT_AUTH" > "$TMP/env-mailpit-auth"
+        kn create secret generic mailpit-auth --from-env-file="$TMPW/env-mailpit-auth" --dry-run=client -o yaml | kn apply -f - >/dev/null || abortar "secret mailpit-auth."
+        echo "   secret mailpit-auth: 1 variável"
+    fi
     local c n
     for c in $COMPONENTES; do
         kn create secret generic "env-$c" --from-env-file="$TMPW/env-$c" --dry-run=client -o yaml | kn apply -f - >/dev/null || abortar "secret env-$c."
@@ -556,6 +590,33 @@ podar_stock_antigo() { # #231: o apply não poda; num cluster de antes o ScaledO
     kn delete scaledobject stock --ignore-not-found >/dev/null || abortar "não consegui apagar o ScaledObject stock de um cluster anterior à #231."
 }
 
+# lag total do group notification (rpk group describe: TOTAL-LAG); -1 se o group não existe/está Dead, o kubectl/rpk falhou ou a saída não é um número
+lag_notification() {
+    kn exec -i sts/redpanda -c redpanda -- rpk group describe notification 2>/dev/null | tr -d '\r' \
+        | awk '/^STATE/ {st = $2} /^TOTAL-LAG/ {lag = $2} END { if (st == "Dead" || lag == "" || lag !~ /^[0-9]+$/) print -1; else print lag }'
+}
+
+# Guarda da poda do Mailpit (#232), FAIL-CLOSED e SEM efeito colateral: roda no `up` logo depois do criar_cluster, antes de configmaps, Secrets, helm, label e apply. Só vale para overlay SEM Mailpit
+# (base, rodada, completa): o apply tira o patch de SMTP do notification, e os pods novos dele consumiriam o backlog (soak-*@example.com) mandando e-mail REAL pelo Gmail. Lê o lag do group
+# notification quando o Mailpit ainda existe OU quando o env VIVO do Deployment notification ainda aponta para ele (MAIL_HOST=mailpit, mesmo sem o Mailpit: foi apagado à mão); lag > 0, ilegível
+# (-1: group Dead, Redpanda fora, kubectl/rpk falhou) ou qualquer erro de API ao consultar aborta. LIMITE CONHECIDO: lag 0 só cobre o que já foi PUBLICADO no tópico; um event_outbox do identity
+# ainda não publicado pelo relay (janela pequena, logo após o último cadastro) não aparece. Com o Redpanda fora o lag já vira -1 e aborta. Não há consulta ao banco: a janela é aceita.
+checar_poda_mailpit() {
+    case "$OVERLAY" in e2e|carga|soak) return 0 ;; esac
+    local existe mh
+    existe="$(kn get deploy mailpit --ignore-not-found -o name)" || abortar "não consegui consultar o Mailpit no cluster (kubectl get deploy mailpit falhou): sem saber se ele existe e se o notification tem backlog, não aplico nada (fail-closed)."
+    mh="$(kn get deploy notification --ignore-not-found -o jsonpath='{.spec.template.spec.containers[*].env[?(@.name=="MAIL_HOST")].value}')" || abortar "não consegui ler o env vivo do Deployment notification (kubectl get deploy notification falhou): sem saber se ele ainda aponta para o Mailpit, não aplico nada (fail-closed)."
+    if [ -n "$existe" ] || [[ " $mh " == *" mailpit "* ]]; then
+        local lag; lag="$(lag_notification)"
+        [ "$lag" = 0 ] || abortar "o Mailpit ainda está no cluster (ou o notification ainda aponta para ele: MAIL_HOST='$mh') e o lag do group notification é '$lag' (-1 = ilegível): trocar de overlay agora faria o notification consumir o backlog do soak (soak-*@example.com) mandando e-mail REAL. Drene no soak (cluster.sh up com o overlay soak e espere o lag 0: verificar-soak.sh pos) ou derrube o cluster (cluster.sh down). Nada foi criado nem alterado."
+    fi
+}
+
+podar_mailpit_antigo() { # #232: o apply não poda; num cluster que subiu com o overlay soak (ou e2e/carga) o Mailpit ficaria de pé com o notification de volta ao SMTP real (Gmail). A guarda (lag) já rodou: checar_poda_mailpit
+    case "$OVERLAY" in e2e|carga|soak) return 0 ;; esac
+    kn delete deploy/mailpit svc/mailpit svc/mailpit-api secret/mailpit-auth --ignore-not-found >/dev/null || abortar "não consegui apagar o Mailpit de um cluster anterior (overlay $OVERLAY não leva Mailpit)."
+}
+
 cmd_up() {
     local trilha="" so=""
     while [ $# -gt 0 ]; do
@@ -572,6 +633,7 @@ cmd_up() {
     guardar
     resolver_tag; ok "tag das slim: ${SLIM_TAG:-n/a (overlay completa)} (a que o compose resolve: shell > Projeto/.env > latest)"
     criar_cluster
+    checar_poda_mailpit # a guarda da poda do Mailpit (lag do notification) ANTES de qualquer Secret, helm, label ou apply: abortar aqui não deixa efeito colateral
     guardar_trilha
     copiar_seccomp
     local imagens=(); mapfile -t imagens < <(imagens_do_cluster | tr -d '\r')
@@ -583,6 +645,7 @@ cmd_up() {
     # b1: o namespace passa a injetar o sidecar (db, Supavisor, Redpanda, Redis, RabbitMQ, Mailpit e o Job particoes têm inject=false nos manifests da trilha)
     [ "$TRILHA" = b1 ] && { k label namespace "$NS" istio-injection=enabled --overwrite >/dev/null || abortar "label istio-injection no namespace $NS falhou."; ok "namespace $NS com istio-injection=enabled"; }
     podar_stock_antigo
+    podar_mailpit_antigo
     if [ -n "$so" ]; then render | kn apply -l "app=$so" -f - || abortar "kubectl apply -l app=$so falhou."
     else render | kn apply -f - || abortar "kubectl apply falhou."; fi
     esperar "$so"

@@ -1,0 +1,44 @@
+2026-11-02 00:36:39 [soak dryS1] pre-check no cluster kind-gerenciador: perfil results/perfil-dryS1.json, bloco S1, cadastros esperados 514
+   [PRE] identity: replicas=2 prontas=2 (esperado 1 e 1 no inicio do bloco)
+2026-11-02 00:36:40 [soak dryS1] ABORTA: pre-check reprovou: NAO rode o k6 neste cluster (e-mail real, #231 ausente, replicas != 1 ou Mailpit pequeno).
+2026-11-02 00:37:37 [soak dryS1] pre-check no cluster kind-gerenciador: perfil results/perfil-dryS1.json, bloco S1, cadastros esperados 514
+2026-11-02 00:37:37 [soak dryS1] ok: notification -> Mailpit (MAIL_HOST=mailpit, MAIL_PASSWORD vazio, sem spring.mail), sem ScaledObject do stock, Hikari do stock 245, autoescalados em 1 replica pronta, MP_MAX_MESSAGES >= 2x 514, bloco S1 com ADMISSION_X_RPM=56000 e alvo do KEDA = 0,5 x X
+[ ok ] regra 'TCC soak mailpit 8025 - bloqueio': Block, entrada, TCP 8025, todo o IPv4 menos o gerador 192.168.68.54, todo o IPv6
+2026-11-02 00:37:39 [soak dryS1] ok: regra de firewall da 8025 confere (Block de todo o IPv4 menos o gerador 192.168.68.54)
+2026-11-02 00:37:39 [soak dryS1] relogios (adiantamento contra time.windows.com, + = relogio adiantado): host=+1.593 s, no=+1.636 s, gerador=+2.332 s
+2026-11-02 00:37:39 [soak dryS1] relogios: maior diferenca entre os relogios = 0.739 s
+2026-11-02 00:37:40 [soak dryS1] ok: GET sem credencial = 401 (basic auth do Mailpit ligada)
+2026-11-02 00:37:40 [soak dryS1] mailpit_inicio=0
+2026-11-02 00:47:59 [soak dryS1] pre-check no cluster kind-gerenciador: perfil results/perfil-dryS1.json, bloco S1, cadastros esperados 514
+2026-11-02 00:47:59 [soak dryS1] ok: notification -> Mailpit (MAIL_HOST=mailpit, MAIL_PASSWORD vazio, sem spring.mail), sem ScaledObject do stock, Hikari do stock 245, autoescalados em 1 replica pronta, MP_MAX_MESSAGES >= 2x 514, bloco S1 com ADMISSION_X_RPM=56000 e alvo do KEDA = 0,5 x X
+[ ok ] regra 'TCC soak mailpit 8025 - bloqueio': Block, entrada, TCP 8025, todo o IPv4 menos o gerador 192.168.68.54, todo o IPv6
+2026-11-02 00:48:01 [soak dryS1] ok: regra de firewall da 8025 confere (Block de todo o IPv4 menos o gerador 192.168.68.54)
+2026-11-02 00:48:01 [soak dryS1] relogios (adiantamento contra time.windows.com, + = relogio adiantado): host=+1.611 s, no=+1.646 s, gerador=+2.332 s
+2026-11-02 00:48:01 [soak dryS1] relogios: maior diferenca entre os relogios = 0.721 s
+2026-11-02 00:48:01 [soak dryS1] ok: GET sem credencial = 401 (basic auth do Mailpit ligada)
+2026-11-02 00:48:02 [soak dryS1] mailpit_inicio=0
+2026-11-02 01:03:40 [soak dryS1] pre-check no cluster kind-gerenciador: perfil results/perfil-dryS1.json, bloco S1, cadastros esperados 514
+2026-11-02 01:03:41 [soak dryS1] ok: notification -> Mailpit (MAIL_HOST=mailpit, MAIL_PASSWORD vazio, sem spring.mail), sem ScaledObject do stock, Hikari do stock 245, autoescalados em 1 replica pronta, MP_MAX_MESSAGES >= 2x 514, bloco S1 com ADMISSION_X_RPM=56000 e alvo do KEDA = 0,5 x X
+[ ok ] regra 'TCC soak mailpit 8025 - bloqueio': Block, entrada, TCP 8025, todo o IPv4 menos o gerador 192.168.68.54, todo o IPv6
+[ ok ] regra 'TCC soak mailpit 8025 - gerador': Allow, entrada, TCP 8025, so o gerador 192.168.68.54, perfil Any
+2026-11-02 01:03:43 [soak dryS1] ok: regra de firewall da 8025 confere (Block de todo o IPv4 menos o gerador 192.168.68.54 e Allow so do gerador)
+2026-11-02 01:03:43 [soak dryS1] relogios (adiantamento contra time.windows.com, + = relogio adiantado): host=+1.639 s, no=+1.678 s, gerador=+2.332 s
+2026-11-02 01:03:43 [soak dryS1] relogios: maior diferenca entre os relogios = 0.693 s
+2026-11-02 01:03:44 [soak dryS1] ok: GET sem credencial = 401 (basic auth do Mailpit ligada)
+2026-11-02 01:03:44 [soak dryS1] mailpit_inicio=0
+2026-11-02 01:16:02 [soak dryS1] 1. lag_notification=0 (group notification drenado)
+2026-11-02 01:16:02 [soak dryS1] 2/3. Mailpit com 513 mensagens no total; cadastros 2xx esperados: 513
+mailpit: 513 mensagens do bloco (513 enderecos) para 513 cadastros esperados; perdidas 0, duplicadas toleradas 0, duplicadas nao toleradas 0, extras 0, From fora de @example.com: 0
+2026-11-02 01:16:02 [soak dryS1] criterio 1 (e-mail): ok
+2026-11-02 01:16:07 [soak dryS1] 4. verificar-rpm (prefixo Soak-364888): codigo 0
+restartCount do mailpit no bloco: 0 reinicio(s), 0 pod(s) trocado(s) (131 amostras)
+criterio 2 reservation: FORA do criterio no S1 (X=56k: alvo do KEDA 28k RPM, nunca alcancado de proposito; o reservation fica em 1 replica)
+criterio 2 notification subidas avaliadas 0, descidas avaliadas 0, violacoes 0
+criterio 2 stock        subidas avaliadas 0, descidas avaliadas 0, violacoes 0
+   [aviso] nenhum episodio de subida/descida avaliado: a autoescala nao foi exercitada neste bloco (criterio vacuo)
+2026-11-02 01:16:07 [soak dryS1] criterio 2 (autoescala acompanha a carga): ok
+criterio 3 (troca de replica sem erro): 0 respostas 5xx e 0 com status 0 (erro de transporte) fora de tipo=mailpit {"cadastro": {"c0": 0, "c5xx": 0}, "escrita": {"c0": 0, "c5xx": 0}, "leitura": {"c0": 0, "c5xx": 0}, "login": {"c0": 0, "c5xx": 0}, "reserva": {"c0": 0, "c5xx": 0}}
+2026-11-02 01:16:07 [soak dryS1] criterio 3 (troca de replica sem erro): ok
+fila (S1): reserva com 0 respostas 202 e 0 respostas 429 (S1: X=56k, a fila nao deve ligar; so registrado)
+2026-11-02 01:16:07 [soak dryS1] criterio 4 (gerador valido: RAM livre >= 1 GB, sem Insufficient VUs fora do S2, memoria do k6 estavel) e a verificacao do gerador: nao sai deste script; confira descartadas no por-minuto
+2026-11-02 01:16:07 [soak dryS1] RESULTADO: bloco APROVADO nos criterios 1 a 3 (rode o limpar-banco antes do proximo bloco)

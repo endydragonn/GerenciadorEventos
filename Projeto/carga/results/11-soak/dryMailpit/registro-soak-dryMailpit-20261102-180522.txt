@@ -1,0 +1,30 @@
+coleta soak-dryMailpit iniciada em 2026-11-02T21:05:22Z (project gerenciador-eventos)
+containers backend: backend-7ccb666848-xc56r 
+containers reservation: reservation-5b76c577c7-frxb5 
+containers identity: identity-747c8b88c7-w4xcj 
+containers catalog: catalog-55bc7bb4b7-mxdwk 
+containers admission: admission-7765cdbc4c-27lgk admission-7765cdbc4c-ptzj4 
+containers notification: notification-7cf9f488b7-2tpwc 
+containers lb: 
+saga: ORPHAN_MS=30000 (limiar de saga_orfas desta coleta; lido do RESERVATION_SAGA_ORPHAN_MS do reservation ou 30000)
+ambiente deste shell (AUTOESCALA_*, ADMISSION_*; exporte aqui os do scaler/up):
+backend (container deploy/backend):
+  RESERVATION_READPATH=
+reservation (container deploy/reservation):
+  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=200
+  SERVER_TOMCAT_THREADS_MAX=
+  RESERVATION_SAGA_ORPHAN_MS=
+  RESERVATION_SAGA_REAPER_SCAN_MS=
+stock (container deploy/stock):
+  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=245
+admission (container deploy/admission):
+  ADMISSION_X_RPM=
+  ADMISSION_RESERVATION_REPLICAS=
+  ADMISSION_QUEUE_ON=
+  ADMISSION_SYNC_BELOW=
+  ADMISSION_WORKER_CONCURRENCY=
+  ADMISSION_QUEUE_TTL_MS=
+  ADMISSION_QUEUE_MAX_LENGTH=
+  ADMISSION_MAX_WAITING_PER_USER=
+  ADMISSION_WINDOW_MS=
+  ADMISSION_BUCKET_MS=

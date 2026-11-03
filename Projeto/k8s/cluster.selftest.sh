@@ -17,7 +17,7 @@ export KREAL="$(command -v kubectl)"   # o kubectl de verdade (so para o render 
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 P="$T/Projeto"; mkdir -p "$P/k8s" "$P/supabase" "$T/bin-falso"
 cp -r "$AQUI/base" "$AQUI/overlays" "$AQUI/cluster.sh" "$P/k8s/"
-cp "$AQUI/lib-db-cliente.sh" "$AQUI/db-cliente.yaml" "$P/k8s/" 2>/dev/null
+cp "$AQUI/lib-db-cliente.sh" "$AQUI/db-cliente.yaml" "$AQUI/guarda-soak.py" "$P/k8s/" 2>/dev/null
 : > "$P/.env"; : > "$P/supabase/.env"
 JSON="$T/compose.json"
 cat > "$JSON" <<'EOF'
@@ -137,6 +137,31 @@ confere "K8S_POOLS invalido (so r5 ou vazio)" "$([ "$rc" -ne 0 ] && echo "$saida
 confere "db-cliente.yaml: sem envFrom (nao monta o env-db inteiro)" "$(grep -c 'envFrom' "$AQUI/db-cliente.yaml")" "0"
 confere "db-cliente.yaml: secretKeyRef so de APP_DB_USER, APP_DB_PASSWORD, POSTGRES_PASSWORD, POSTGRES_DB (env-db) e POOLER_TENANT_ID (env-supabase-pooler)" "$(grep -c 'secretKeyRef: {' "$AQUI/db-cliente.yaml")|$(grep -o 'key: [A-Z_]*' "$AQUI/db-cliente.yaml" | sort | tr '\n' ' ')" "5|key: APP_DB_PASSWORD key: APP_DB_USER key: POOLER_TENANT_ID key: POSTGRES_DB key: POSTGRES_PASSWORD "
 
+# --- 2c2. minimo do admission (#235): default 2 (o 503 da consulta da fila na rampa vinha de 1 pod so), acompanhando o teto quando ele e 1; valor explicito vale, com a validacao de 1 a 3 e MIN <= MAX
+min_so() { "$PY" -c '
+import re, sys
+for d in sys.stdin.read().split("\n---\n"):
+    if re.search(r"^kind: ScaledObject$", d, re.M) and re.search(r"^metadata:\n(?:  .*\n)*?  name: " + sys.argv[1] + "$", d, re.M): print(re.search(r"minReplicaCount: (\d+)", d).group(1))
+' "$1" | tr -d '\r'; }
+mins() { for s in admission backend identity catalog reservation notification; do echo "$1" | min_so $s; done | tr '\n' ','; }
+confere "admission (#235): default minReplicaCount 2 no render; os outros 5 seguem em 1" "$(mins "$r_rod")" "2,1,1,1,1,1,"
+confere "admission (#235): base/autoescala.yaml com minReplicaCount 2 (o default do cluster.sh e o mesmo)" "$(cat "$P/k8s/base/autoescala.yaml" | min_so admission)" "2"
+r_am1="$(rodar env K8S_OVERLAY=rodada K8S_ADMISSION_MAX=1 bash "$SH" renderizar --trilha nenhuma)"
+confere "admission (#235): K8S_ADMISSION_MAX=1 sem MIN: o default acompanha o teto (min 1, max 1)" "$(echo "$r_am1" | min_so admission)|$(echo "$r_am1" | grep -c 'maxReplicaCount: 1')" "1|1"
+saida="$(rodar env K8S_OVERLAY=rodada K8S_ADMISSION_MAX=1 bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "admission (#235): K8S_ADMISSION_MAX=1 sem MIN: o guarda nao aborta por MIN > MAX" "$rc" "0"
+confere "admission (#235): K8S_POOLS=r5 (teto 1 por padrao) sem MIN: min 1" "$(mins "$r_r5")" "1,1,1,1,1,1,"
+saida="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "admission (#235): K8S_POOLS=r5 sem nenhuma variavel de MIN/MAX: o guarda aceita" "$rc" "0"
+for v in 1 3; do
+    confere "admission (#235): K8S_ADMISSION_MIN=$v explicito vale (MAX default 3)" "$(rodar env K8S_OVERLAY=rodada K8S_ADMISSION_MIN=$v bash "$SH" renderizar --trilha nenhuma | min_so admission)" "$v"
+done
+confere "admission (#235): K8S_ADMISSION_MIN=2 e K8S_ADMISSION_MAX=2 explicitos" "$(rodar env K8S_OVERLAY=rodada K8S_ADMISSION_MIN=2 K8S_ADMISSION_MAX=2 bash "$SH" renderizar --trilha nenhuma | min_so admission)" "2"
+for v in "K8S_ADMISSION_MIN=0" "K8S_ADMISSION_MIN=4" "K8S_ADMISSION_MIN=3 K8S_ADMISSION_MAX=2" "K8S_ADMISSION_MIN=2 K8S_ADMISSION_MAX=1" "K8S_POOLS=r5 K8S_ADMISSION_MIN=2"; do
+    saida="$(rodar env K8S_OVERLAY=rodada $v bash "$SH" guarda --trilha nenhuma)"; rc=$?
+    confere "admission (#235): '$v' recusado (a validacao de 1 a 3 e MIN <= MAX segue valendo)" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'K8S_ADMISSION_MIN' && echo sim || echo nao)" "sim"
+done
+
 # --- 2d. as linhas [ok] do guarda leem os valores do render (nao imprimem valores fixos): muda o componente na copia temporaria e o guarda acompanha
 sed -i 's/value: "1000"/value: "777"/' "$P/k8s/overlays/pools-r5/kustomization.yaml"
 saida="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 bash "$SH" guarda --trilha nenhuma)"
@@ -146,6 +171,84 @@ saida="$(rodar env K8S_OVERLAY=rodada K8S_POOLS=r5 bash "$SH" guarda --trilha ne
 confere "guarda: pools R5 lidos do render (Hikari, workers 32, pool real 245, ScaledObjects com max 1, x6: o stock nao tem)" "$(echo "$saida" | grep 'pools R5' | grep -c 'reservation=1000 stock=250 identity=100 catalog=100 backend=10 notification=3.*workers=32.*maxReplicaCount=1 x6')|$(echo "$saida" | grep 'overlay rodada' | grep -c 'pool real=245')" "1|1"
 saida="$(rodar env K8S_OVERLAY=rodada bash "$SH" guarda --trilha nenhuma)"
 confere "guarda: rodada com o db no cluster mostra o max_connections lido do render" "$(echo "$saida" | grep 'overlay rodada' | grep -c 'max_connections=300')" "1"
+
+# --- 2e. overlay soak (#232): nenhum e-mail real. Mailpit como componente, os seis valores do SMTP do notification fail-closed no render, MAILPIT_AUTH, SPRING_MAIL_*
+export MAILPIT_AUTH="soak:CANARIOsenhaSecreta123"
+rodar_soak() { rodar env K8S_OVERLAY=soak MAILPIT_AUTH="${MAILPIT_AUTH_TESTE-$MAILPIT_AUTH}" "$@"; }
+r_soak="$(rodar_soak bash "$SH" renderizar --trilha nenhuma)"
+confere "soak: exatamente 1 Deployment mailpit no render, com MP_UI_AUTH vindo de Secret (nao literal)" "$(echo "$r_soak" | docs_de | grep -c '^Deployment/mailpit$')|$(echo "$r_soak" | grep -c 'name: MP_UI_AUTH')|$(echo "$r_soak" | grep -A3 'name: MP_UI_AUTH' | grep -c 'secretKeyRef')" "1|1|1"
+confere "soak: notification com MAIL_PASSWORD de valor VAZIO literal (value: \"\")" "$(echo "$r_soak" | grep -A1 'name: MAIL_PASSWORD' | grep -c 'value: \"\"')" "1"
+confere "soak: NodePort 30825 so no Service mailpit-api (a 1025 do SMTP nao sai); 30081/30088 como no rodada" "$(echo "$r_soak" | grep -c 'nodePort: 30825')$(echo "$r_soak" | grep -c 'nodePort: 30081')$(echo "$r_soak" | grep -c 'nodePort: 30088')$(echo "$r_soak" | docs_de | grep -c '^Service/mailpit-api$')" "1111"
+confere "soak: rodada continua sem Mailpit e o e2e tem o Mailpit sem auth nem NodePort (componente compartilhado)" "$(echo "$r_rod" | docs_de | grep -c '^Deployment/mailpit$')|$(rodar env K8S_OVERLAY=e2e bash "$SH" renderizar --trilha nenhuma | docs_de | grep -c '^Deployment/mailpit$')|$(rodar env K8S_OVERLAY=e2e bash "$SH" renderizar --trilha nenhuma | grep -c 'MP_UI_AUTH\|nodePort')" "0|1|0"
+# gatilho por bloco (decisao C): o alvo do KEDA do reservation sai do ADMISSION_X_RPM do ambiente (a MESMA variavel que o admission recebe): 0,5 x X
+confere "soak: X=56000 (S1, o padrao) -> targetValue do KEDA do reservation 28000" "$(echo "$r_soak" | grep -c 'targetValue: "28000"')" "1"
+sed 's/"ADMISSION_X_RPM":"56000"/"ADMISSION_X_RPM":"4000"/' "$JSON" > "$T/compose-x4000.json"
+r_s2="$(rodar env FAKE_COMPOSE_JSON="$T/compose-x4000.json" K8S_OVERLAY=soak MAILPIT_AUTH="$MAILPIT_AUTH" bash "$SH" renderizar --trilha nenhuma)"
+confere "soak: X=4000 (S2) -> targetValue do KEDA do reservation 2000 (e nao 28000)" "$(echo "$r_s2" | grep -c 'targetValue: "2000"')$(echo "$r_s2" | grep -c 'targetValue: "28000"')" "10"
+saida="$(rodar env FAKE_COMPOSE_JSON="$T/compose-x4000.json" K8S_OVERLAY=soak MAILPIT_AUTH="$MAILPIT_AUTH" bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "soak: a guarda aceita o gatilho do S2 (X=4000)" "$rc" "0"
+saida="$(rodar_soak bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "soak: guarda aceita o render certo (codigo 0) e mostra a linha do soak" "$rc|$(echo "$saida" | grep -c 'soak: notification -> mailpit:1025')" "0|1"
+confere "soak: a credencial do Mailpit nunca aparece na saida da guarda (canario)" "$(echo "$saida" | grep -c CANARIO)" "0"
+for tr in c b1; do
+    saida="$(rodar_soak bash "$SH" guarda --trilha $tr)"; rc=$?
+    confere "soak: guarda aceita com a trilha $tr" "$rc" "0"
+done
+# os SEIS valores, cada um ausente e errado: o guarda sai != 0 com "nada foi criado" (a copia temporaria do overlay e restaurada a cada caso)
+cp "$P/k8s/overlays/soak/kustomization.yaml" "$T/soak-kustomization.orig"
+errado_de() { case "$1" in MAIL_HOST) echo smtp.gmail.com ;; MAIL_PORT) echo '"587"' ;; MAIL_SMTP_AUTH) echo '"true"' ;; MAIL_STARTTLS) echo '"true"' ;; MAIL_USERNAME) echo conta.real@gmail.com ;; MAIL_PASSWORD) echo '"senha-real"' ;; esac; }
+for var in MAIL_HOST MAIL_PORT MAIL_SMTP_AUTH MAIL_STARTTLS MAIL_USERNAME MAIL_PASSWORD; do
+    sed -i "/{name: $var,/d" "$P/k8s/overlays/soak/kustomization.yaml"
+    saida="$(rodar_soak bash "$SH" guarda --trilha nenhuma)"; rc=$?
+    confere "soak: $var AUSENTE aborta (codigo != 0, cita a variavel, 'nada foi criado')" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q "$var" && echo "$saida" | grep -q 'nada foi criado' && echo sim || echo nao)" "sim"
+    cp "$T/soak-kustomization.orig" "$P/k8s/overlays/soak/kustomization.yaml"
+    sed -i "s|^\( *- {name: $var, value: \).*|\1$(errado_de $var)}|" "$P/k8s/overlays/soak/kustomization.yaml"
+    saida="$(rodar_soak bash "$SH" guarda --trilha nenhuma)"; rc=$?
+    confere "soak: $var ERRADO aborta (codigo != 0, cita a variavel, 'nada foi criado')" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q "$var" && echo "$saida" | grep -q 'nada foi criado' && echo sim || echo nao)" "sim"
+    cp "$T/soak-kustomization.orig" "$P/k8s/overlays/soak/kustomization.yaml"
+done
+saida="$(rodar_soak bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "soak: overlay restaurado depois dos 12 casos (guarda volta a aceitar)" "$rc" "0"
+# MAIL_PASSWORD vindo de valueFrom (Secret) e MAIL_HOST duplicado tambem abortam
+sed -i 's|^\( *- {name: MAIL_PASSWORD, value: ""}\)|                  - name: MAIL_PASSWORD\n                    valueFrom: {secretKeyRef: {name: env-notification, key: MAIL_PASSWORD}}|' "$P/k8s/overlays/soak/kustomization.yaml"
+saida="$(rodar_soak bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "soak: MAIL_PASSWORD de valueFrom (a senha real do Secret) aborta" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'MAIL_PASSWORD' && echo sim || echo nao)" "sim"
+cp "$T/soak-kustomization.orig" "$P/k8s/overlays/soak/kustomization.yaml"
+# o Mailpit sem basic auth no render
+sed -i '/name: MP_UI_AUTH/,/secretKeyRef/d' "$P/k8s/overlays/soak/kustomization.yaml"
+saida="$(rodar_soak bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "soak: Mailpit sem MP_UI_AUTH no render aborta" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'MP_UI_AUTH' && echo sim || echo nao)" "sim"
+cp "$T/soak-kustomization.orig" "$P/k8s/overlays/soak/kustomization.yaml"
+# Secret env-notification com SPRING_MAIL_*: o relaxed binding venceria o MAIL_HOST
+sed 's/"notification":{"environment":{}}/"notification":{"environment":{"SPRING_MAIL_HOST":"smtp.gmail.com"}}/' "$JSON" > "$T/compose-springmail.json"
+saida="$(rodar env FAKE_COMPOSE_JSON="$T/compose-springmail.json" K8S_OVERLAY=soak MAILPIT_AUTH="$MAILPIT_AUTH" bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "soak: SPRING_MAIL_* no Secret env-notification aborta ('nada foi criado')" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'SPRING_MAIL' && echo "$saida" | grep -q 'nada foi criado' && echo sim || echo nao)" "sim"
+# a mesma familia por outros caminhos: chave spring.mail.* (com ponto) no Secret, variaveis de opcoes da JVM no Secret, e no env do render (SPRING_MAIL_* literal, SPRING_APPLICATION_JSON e JAVA_TOOL_OPTIONS com spring.mail)
+for chave in '"spring.mail.host":"smtp.gmail.com"' '"JAVA_TOOL_OPTIONS":"-Dspring.mail.host=smtp.gmail.com"' '"SPRING_APPLICATION_JSON":"{}"'; do
+    sed "s/\"notification\":{\"environment\":{}}/\"notification\":{\"environment\":{$chave}}/" "$JSON" > "$T/compose-sm2.json"
+    saida="$(rodar env FAKE_COMPOSE_JSON="$T/compose-sm2.json" K8S_OVERLAY=soak MAILPIT_AUTH="$MAILPIT_AUTH" bash "$SH" guarda --trilha nenhuma)"; rc=$?
+    confere "soak: chave $(echo "$chave" | cut -d'"' -f2) no Secret env-notification aborta ('nada foi criado')" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q "$(echo "$chave" | cut -d'"' -f2)" && echo "$saida" | grep -q 'nada foi criado' && echo sim || echo nao)" "sim"
+done
+for linha in '{name: SPRING_MAIL_PORT, value: "25"}' '{name: SPRING_APPLICATION_JSON, value: "{\"spring.mail.host\":\"smtp.gmail.com\"}"}' '{name: JAVA_TOOL_OPTIONS, value: "-Dspring.mail.host=smtp.gmail.com"}' '{name: JDK_JAVA_OPTIONS, value: "-Dspring.mail.host=smtp.gmail.com"}'; do
+    cp "$T/soak-kustomization.orig" "$P/k8s/overlays/soak/kustomization.yaml"
+    nome="$(echo "$linha" | sed 's/{name: \([A-Z_]*\),.*/\1/')"
+    awk -v nova="                  - $linha" '{print} /\{name: MAIL_PORT,/ && !f {print nova; f=1}' "$T/soak-kustomization.orig" > "$P/k8s/overlays/soak/kustomization.yaml"
+    saida="$(rodar_soak bash "$SH" guarda --trilha nenhuma)"; rc=$?
+    confere "soak: $nome no env do notification (render) aborta ('nada foi criado')" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q "$nome" && echo "$saida" | grep -q 'nada foi criado' && echo sim || echo nao)" "sim"
+done
+cp "$T/soak-kustomization.orig" "$P/k8s/overlays/soak/kustomization.yaml"
+# JAVA_TOOL_OPTIONS legitimo (trilha C: java.security) continua passando
+awk -v nova='                  - {name: JAVA_TOOL_OPTIONS, value: "-Djava.security.properties=/etc/java-security/java.security"}' '{print} /\{name: MAIL_PORT,/ && !f {print nova; f=1}' "$T/soak-kustomization.orig" > "$P/k8s/overlays/soak/kustomization.yaml"
+saida="$(rodar_soak bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "soak: JAVA_TOOL_OPTIONS sem spring.mail (o da trilha C) passa" "$rc" "0"
+cp "$T/soak-kustomization.orig" "$P/k8s/overlays/soak/kustomization.yaml"
+# MAILPIT_AUTH ausente, com senha curta ou com espaco; soak no cluster do e2e
+for ruim in "" "soak:curta" "soak:com espaco na senha 12345678"; do
+    saida="$(rodar env K8S_OVERLAY=soak MAILPIT_AUTH_TESTE="$ruim" MAILPIT_AUTH="$ruim" bash "$SH" guarda --trilha nenhuma)"; rc=$?
+    confere "soak: MAILPIT_AUTH invalida (${ruim:+com valor ruim}${ruim:-vazia}) aborta sem imprimir o valor" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'MAILPIT_AUTH' && ! echo "$saida" | grep -q 'senha 12345678' && echo sim || echo nao)" "sim"
+done
+saida="$(rodar_soak env K8S_NOME=gerenciador-e2e-x bash "$SH" guarda --trilha nenhuma)"; rc=$?
+confere "soak: overlay soak (Secrets REAIS) nao vai para o cluster gerenciador-e2e*" "$([ "$rc" -ne 0 ] && echo "$saida" | grep -q 'soak' && echo sim || echo nao)" "sim"
 
 # --- 3. kubectl falso: psql (local x remoto), senha fora dos argumentos, --context em todo comando, db-teste
 cat > "$T/bin-falso/kubectl" <<'EOF'
@@ -191,7 +294,7 @@ confere "db-teste: cluster sem db remoto (sem EndpointSlice) recusa com codigo 1
 lib_cmd() { # lib_cmd <K8S_DB_REMOTO ou vazio> <funcao a chamar>
     ( cd "$P" && PATH="$T/bin-falso:$PATH" CLUSTER_LIB=1 K8S_DB_REMOTO="$1" bash -c '
         . k8s/cluster.sh
-        kubectl() { echo "kubectl $(printf "%s " "$@" | tr "\n" " ")" >> "$FAKE_LOG"; case "$*" in *"get deploy mailpit"*) return 1 ;; esac; return 0; }
+        kubectl() { echo "kubectl $(printf "%s " "$@" | tr "\n" " ")" >> "$FAKE_LOG"; case "$*" in *"get deploy mailpit --ignore-not-found"*) return 0 ;; *"get deploy mailpit"*) return 1 ;; esac; return 0; }
         gerar_env() { for c in $COMPONENTES; do : > "$TMP/env-$c"; done; }
         ESPERA=1
         '"$2"' ' >/dev/null 2>&1 )
@@ -204,11 +307,82 @@ confere "esperar, db remoto: NAO espera o sts/db; o resto segue" "$(grep -c 'sts
 confere "configmaps, db no cluster: db-sql e db-app-init criados (como hoje)" "$(grep -c 'create configmap db-sql' "$FAKE_LOG")$(grep -c 'create configmap db-app-init' "$FAKE_LOG")" "11"
 : > "$FAKE_LOG"; lib_cmd "192.168.68.50:5433" configmaps_e_segredos
 confere "configmaps, db remoto: sem db-sql nem db-app-init; pooler-exs e os Secrets seguem" "$(grep -c 'configmap db-' "$FAKE_LOG")$(grep -c 'create configmap pooler-exs' "$FAKE_LOG")$(grep -c 'create secret generic env-db ' "$FAKE_LOG")" "011"
+# soak (#232): o Secret mailpit-auth sai de MAILPIT_AUTH por arquivo temporario; a credencial nunca vai em argumento (o kubectl falso registra os argumentos)
+: > "$FAKE_LOG"; K8S_OVERLAY=soak lib_cmd "" configmaps_e_segredos
+confere "configmaps, soak: cria o Secret mailpit-auth por --from-env-file, sem a credencial em nenhum argumento (canario)" "$(grep -c 'create secret generic mailpit-auth --from-env-file=' "$FAKE_LOG")$(grep -c 'CANARIO' "$FAKE_LOG")" "10"
+: > "$FAKE_LOG"; lib_cmd "" configmaps_e_segredos
+confere "configmaps, sem soak: nenhum Secret mailpit-auth" "$(grep -c 'mailpit-auth' "$FAKE_LOG")" "0"
 
 # #231: o `up` apaga o ScaledObject stock de um cluster de antes (o apply nao poda), sempre com --context e namespace
 : > "$FAKE_LOG"; lib_cmd "" podar_stock_antigo
 confere "podar_stock_antigo: delete scaledobject stock --ignore-not-found, com --context kind-gerenciador e -n gerenciador" "$(grep -c '^kubectl --context kind-gerenciador -n gerenciador delete scaledobject stock --ignore-not-found ' "$FAKE_LOG")$(grep -vc '^kubectl --context kind-gerenciador ' "$FAKE_LOG")" "10"
 confere "cmd_up chama a poda do stock antes do apply do render" "$(awk '/^cmd_up\(\)/ {d=1} d && /podar_stock_antigo$/ {p=NR} d && /render \| kn apply/ {a=NR} END {print (p && a && p < a) ? "sim" : "nao"}' "$P/k8s/cluster.sh")" "sim"
+
+# #232: o up com overlay SEM Mailpit apaga o do cluster de antes (o apply nao poda): senao o Mailpit ficaria de pe e, trocando de overlay sem `down`, o notification voltaria ao SMTP real
+: > "$FAKE_LOG"; K8S_OVERLAY=rodada lib_cmd "" podar_mailpit_antigo
+confere "podar_mailpit_antigo (rodada): delete deploy/mailpit svc/mailpit svc/mailpit-api secret/mailpit-auth --ignore-not-found, com --context e -n" "$(grep -c '^kubectl --context kind-gerenciador -n gerenciador delete deploy/mailpit svc/mailpit svc/mailpit-api secret/mailpit-auth --ignore-not-found ' "$FAKE_LOG")$(grep -vc '^kubectl --context kind-gerenciador ' "$FAKE_LOG")" "10"
+for ov in base completa; do
+    : > "$FAKE_LOG"; K8S_OVERLAY=$ov lib_cmd "" podar_mailpit_antigo
+    confere "podar_mailpit_antigo ($ov): tambem apaga" "$(grep -c 'delete deploy/mailpit' "$FAKE_LOG")" "1"
+done
+for ov in soak e2e carga; do
+    : > "$FAKE_LOG"; K8S_OVERLAY=$ov lib_cmd "" podar_mailpit_antigo
+    confere "podar_mailpit_antigo ($ov): overlay COM Mailpit nao apaga nada" "$(grep -c 'delete' "$FAKE_LOG")" "0"
+done
+confere "cmd_up chama a poda do Mailpit antes do apply do render" "$(awk '/^cmd_up\(\)/ {d=1} d && /podar_mailpit_antigo$/ {p=NR} d && /render \| kn apply/ {a=NR} END {print (p && a && p < a) ? "sim" : "nao"}' "$P/k8s/cluster.sh")" "sim"
+
+# #232, fail-closed: Mailpit ainda de pe (ou o env VIVO do notification ainda em MAIL_HOST=mailpit) + backlog no group notification (bloco soak abortado) -> sem `down`, o up com overlay sem Mailpit
+# tiraria o patch de SMTP e o notification consumiria o backlog soak-*@example.com pelo Gmail. Backlog > 0 ou lag ilegivel ABORTA (checar_poda_mailpit, antes de qualquer efeito); lag 0 segue.
+# A checagem nunca apaga nada (o delete e do podar_mailpit_antigo, testado acima).
+poda_com_lag() { # poda_com_lag <saida do rpk | FALHA> <mailpit: sim|nao|ERRO> <MAIL_HOST vivo do notification: texto|ERRO>: imprime "<codigo>|<deletes>|<leituras do lag>"
+    : > "$FAKE_LOG"
+    ( cd "$P" && PATH="$T/bin-falso:$PATH" CLUSTER_LIB=1 K8S_OVERLAY=rodada FAKE_RPK="$1" FAKE_MAILPIT="$2" FAKE_MAILHOST="$3" bash -c '
+        . k8s/cluster.sh
+        kubectl() { echo "kubectl $(printf "%s " "$@" | tr "
+" " ")" >> "$FAKE_LOG"
+            case "$*" in
+                *"get deploy mailpit --ignore-not-found"*) [ "$FAKE_MAILPIT" = ERRO ] && return 1; [ "$FAKE_MAILPIT" = sim ] && echo deployment.apps/mailpit; return 0 ;;
+                *"get deploy notification --ignore-not-found"*"MAIL_HOST"*) [ "$FAKE_MAILHOST" = ERRO ] && return 1; printf "%s" "$FAKE_MAILHOST"; return 0 ;;
+                *"rpk group describe notification"*) [ "$FAKE_RPK" = FALHA ] && return 1; printf "%b" "$FAKE_RPK"; return 0 ;;
+            esac; return 0; }
+        checar_poda_mailpit' >/dev/null 2>&1 ); echo "$?|$(grep -c ' delete ' "$FAKE_LOG")|$(grep -c 'rpk group describe notification' "$FAKE_LOG")"
+}
+LAG7='GROUP notification
+STATE Stable
+TOTAL-LAG 7
+'
+LAG0='GROUP notification
+STATE Stable
+TOTAL-LAG 0
+'
+confere "checagem: Mailpit de pe e lag 7 -> aborta (1)" "$(poda_com_lag "$LAG7" sim smtp.gmail.com)" "1|0|1"
+confere "checagem: Mailpit de pe e lag ilegivel (kubectl/rpk falhou) -> aborta (1)" "$(poda_com_lag FALHA sim smtp.gmail.com)" "1|0|1"
+confere "checagem: Mailpit de pe e group Dead -> aborta (1)" "$(poda_com_lag 'STATE Dead
+TOTAL-LAG 0
+' sim smtp.gmail.com)" "1|0|1"
+confere "checagem: Mailpit de pe e saida sem TOTAL-LAG -> aborta (1)" "$(poda_com_lag 'nada
+' sim smtp.gmail.com)" "1|0|1"
+confere "checagem: Mailpit de pe e lag 0 -> segue (0)" "$(poda_com_lag "$LAG0" sim smtp.gmail.com)" "0|0|1"
+confere "checagem: sem Mailpit e notification em smtp.gmail.com nem le o lag (0)" "$(poda_com_lag "$LAG7" nao smtp.gmail.com)" "0|0|0"
+confere "checagem: sem Mailpit e sem o env MAIL_HOST no notification (default Gmail) nem le o lag (0)" "$(poda_com_lag "$LAG7" nao '')" "0|0|0"
+# o env VIVO do notification ainda em mailpit decide, mesmo sem o Mailpit (apagado a mao)
+confere "checagem: SEM Mailpit mas notification com MAIL_HOST=mailpit e lag 7 -> aborta (1)" "$(poda_com_lag "$LAG7" nao mailpit)" "1|0|1"
+confere "checagem: SEM Mailpit mas notification com MAIL_HOST=mailpit e lag ilegivel -> aborta (1)" "$(poda_com_lag FALHA nao mailpit)" "1|0|1"
+confere "checagem: SEM Mailpit mas notification com MAIL_HOST=mailpit e lag 0 -> segue (0)" "$(poda_com_lag "$LAG0" nao mailpit)" "0|0|1"
+confere "checagem: MAIL_HOST=mailpit entre varios containers (valores separados por espaco) tambem conta" "$(poda_com_lag "$LAG7" nao 'smtp.gmail.com mailpit')" "1|0|1"
+confere "checagem: MAIL_HOST so parecido (mailpit2) nao conta" "$(poda_com_lag "$LAG7" nao mailpit2)" "0|0|0"
+confere "checagem: erro de API ao consultar se o Mailpit existe aborta (1) e nao le o lag (fail-closed)" "$(poda_com_lag "$LAG0" ERRO smtp.gmail.com)" "1|0|0"
+confere "checagem: erro de API ao ler o env vivo do notification aborta (1) e nao le o lag (fail-closed)" "$(poda_com_lag "$LAG0" nao ERRO)" "1|0|0"
+for ov in e2e carga soak; do
+    : > "$FAKE_LOG"; ( cd "$P" && PATH="$T/bin-falso:$PATH" CLUSTER_LIB=1 K8S_OVERLAY=$ov bash -c '. k8s/cluster.sh; kubectl() { echo "kubectl $*" >> "$FAKE_LOG"; return 1; }; checar_poda_mailpit' >/dev/null 2>&1 ); rc=$?
+    confere "checagem ($ov): overlay COM Mailpit nem consulta o cluster (0)" "$rc|$(wc -l < "$FAKE_LOG" | tr -d ' ')" "0|0"
+done
+# ordem no cmd_up: a checagem vem logo depois do criar_cluster e ANTES de tudo que cria algo (guardar_trilha, imagens, helm, configmaps, Secrets, label, poda, apply); o delete continua depois dos Secrets
+confere "cmd_up: criar_cluster < checar_poda_mailpit < (guardar_trilha, instalar_autoescala, configmaps_e_segredos, autoescala_segredos, label istio, podar_mailpit_antigo, apply)" "$(awk '
+    /^cmd_up\(\)/ {d=1} d && /^    criar_cluster$/ {c=NR} d && /^    checar_poda_mailpit/ {k=NR} d && /^    guardar_trilha$/ {g=NR} d && /^    instalar_autoescala/ {h=NR} d && /^    configmaps_e_segredos$/ {cs=NR}
+    d && /^    autoescala_segredos/ {as=NR} d && /istio-injection=enabled/ {l=NR} d && /^    podar_mailpit_antigo$/ {p=NR} d && /render \| kn apply/ {a=NR}
+    END {print (c && k && c < k && k < g && k < h && k < cs && k < as && k < l && k < p && k < a) ? "sim" : "nao"}' "$P/k8s/cluster.sh")" "sim"
+confere "cmd_up: o delete (podar_mailpit_antigo) continua depois dos Secrets e antes do apply" "$(awk '/^cmd_up\(\)/ {d=1} d && /^    autoescala_segredos/ {as=NR} d && /^    podar_mailpit_antigo$/ {p=NR} d && /render \| kn apply/ {a=NR} END {print (as && p && a && as < p && p < a) ? "sim" : "nao"}' "$P/k8s/cluster.sh")" "sim"
 
 # imagens a carregar no no e o guarda do modo do db no namespace (#228), pelas mesmas funcoes do cluster.sh
 lib_run() { # lib_run <K8S_DB_REMOTO> <label db-remoto do namespace> <comandos...>: imprime a saida; o codigo fica em $?

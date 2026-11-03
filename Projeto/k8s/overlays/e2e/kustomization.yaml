@@ -3,7 +3,8 @@
 # os confere (guarda de isolamento) antes de qualquer apply. Pontos de extensão das próximas etapas: novos overlays nesta pasta (trilhas, carga).
 resources:
   - ../../base
-  - mailpit.yaml
+components:
+  - ../mailpit
 patches:
   - target: {kind: Service, name: backend}
     patch: |-
