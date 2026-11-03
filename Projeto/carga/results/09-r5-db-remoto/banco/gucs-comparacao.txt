@@ -1,0 +1,24 @@
+# GUCs: Dell (R5-db-remoto, lido pelo cliente em 2026-11-01 04:53 UTC, postmaster 04:52:43) x db local da R5
+# db local da R5: mesma imagem supabase/postgres:17.6.1.136; derivado SEM subir o db: /etc/postgresql/postgresql.conf da imagem,
+# volume db-config (conf.d, wal-g.conf, read-replica.conf, supautils.conf: nenhum mexe nessas) e postgresql.auto.conf do volume supabase-db-data (vazio);
+# max_connections pelo command do override rpm (PG_MAX_CONNECTIONS=300).
+GUC                       Dell        R5 local
+max_connections           300         300
+shared_buffers            128MB       128MB
+effective_cache_size      128MB       128MB
+work_mem                  4MB         4MB (default)
+maintenance_work_mem      64MB        64MB (default)
+synchronous_commit        on          on (default)
+wal_level                 logical     logical
+max_wal_size              1GB         1GB (default)
+min_wal_size              80MB        80MB (default)
+checkpoint_timeout        5min        5min (default)
+fsync                     on          on (default)
+wal_buffers               4MB         4MB (auto, 1/32 de shared_buffers)
+full_page_writes          on          on (default)
+random_page_cost          4           4 (default)
+effective_io_concurrency  1           1 (default)
+jit                       on          on (default)
+Diferenca: nenhuma nas GUCs. Diferem disco e CPU. Disco: f_await sob carga no Dell ~0,52 ms (dell/iostat-nvme0n1.txt);
+pg_test_fsync fdatasync do host 0,378-0,421 ms (08-rodada5-saga, uma escrita de 8kB); medidas diferentes, nao comparaveis direto.
+pg_test_fsync do Dell (~0,79 ms): informado pela sessao do Dell, nao versionado.
