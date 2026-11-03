@@ -130,7 +130,7 @@ dry-run semear por `POST /bff/seed`; Secrets do override do e2e, **nunca o SMTP 
   serviço, e o `stock` uma vez só: 4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 245 = **1497 ≤ 1500** (com 3 réplicas e nenhuma em término: 3×200 + 3×10 + 3×3 + 3×50 + 3×50 + 245 = 1184).
   **Máximo acima de 3 em qualquer serviço escalável exige refazer a conta:** o `cluster.sh` recusa `K8S_<SVC>_MAX` acima de 3 (o `cluster.selftest.sh` refaz a soma a partir do render e confere 1497).
   - **Por que o `stock` é fixo, com Hikari 245 e `Recreate` (#231).** A #205 o deixou escalar de 1 a 3 réplicas com Hikari 60 por réplica (para a soma caber nos 1500). O diagnóstico do K2
-    ([`K2-diagnostico`](../carga/results/10-k8s-db-remoto/K2-diagnostico/README.md), diagnóstico 1 contra o teste A) mostrou que esse pool era o gargalo de origem da parada do braço b1 já a 20k: com 60 × 3 o pool
+    ([`K2-diagnostico`](../carga/results/10-k8s-db-remoto/K2-diagnostico/README.md), diagnóstico 1 contra o teste A) mostrou que esse pool era o gargalo de origem da parada do K2 a 20k (no K2-repetição, sem a #231, o b1 passou do 20k e parou no 32k, o mesmo ponto do K2-pos-231, já com ela; ver [`K2-pos-231`](../carga/results/10-k8s-db-remoto/K2-pos-231/README.md)): com 60 × 3 o pool
     esgotava (pending médio 142,6, máximo 237), a entrada do stock levava 729 ms no p50 e a entrada do gateway 5,6 s no p50, com parada; com Hikari 250 e 1 réplica (teste A) o degrau passou
     sem parada, o pending ficou perto de 0 e a entrada do gateway caiu para 160 ms no p50. As réplicas extras não compensam o pool menor: o CAS na linha quente do `eventcap` serializa as reservas
     de qualquer forma. Por isso o `stock` voltou a ser como no K1 e no compose, **1 réplica fixa, sem ScaledObject** (`replicas: 1` no Deployment). O `Recreate` tira o pod velho antes de subir o novo (com o
@@ -288,7 +288,7 @@ Cada coluna é um cluster novo, criado pelo `dry-run.sh`; todos os critérios au
 
 A #205 deixou o `stock` autoescalável de 1 a 3 réplicas (Hikari 60 por réplica) e o dry-run exigia que ele chegasse a 2+ réplicas. A #231 **reverteu isso no cluster**: o `stock` é 1 réplica fixa, Hikari 245,
 `Recreate` e sem ScaledObject, como no K1 e no compose. O motivo e a evidência estão em "Pool do Supavisor" (acima) e em [`K2-diagnostico`](../carga/results/10-k8s-db-remoto/K2-diagnostico/README.md): o pool 60 × 3
-era o gargalo da parada do b1 a 20k, e com 250 × 1 (teste A) o degrau passou. O dry-run da #197 (comando abaixo, sem parâmetro novo) continua o mesmo:
+esgotava e fez o K2 parar a 20k, e com 250 × 1 (teste A) o degrau passou (no K2-repetição, sem a #231, o b1 passou do 20k e parou no 32k, o mesmo ponto do K2-pos-231, já com ela; ver [`K2-pos-231`](../carga/results/10-k8s-db-remoto/K2-pos-231/README.md)). O dry-run da #197 (comando abaixo, sem parâmetro novo) continua o mesmo:
 
 ```bash
 SLIM_TAG=k8s Projeto/k8s/dry-run.sh --trilha nenhuma     # (ou b1 | c)
