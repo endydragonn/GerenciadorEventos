@@ -1,5 +1,7 @@
 # Soak — bloco S2b (issue #232), 2026-11-03
 
+> **Decisão do usuário (2026-11-03): reprovação registrada e aceita, sem re-teste.**
+
 **Resultado: REPROVADO só no critério 3. Foram 12 respostas 503 num único minuto, todas no `GET /bff/event-wallets/admission`. Causa provável, não provada: timeout do Redis no `admission` com o host saturado.**
 
 O S2b repete o S2 depois das duas correções:
