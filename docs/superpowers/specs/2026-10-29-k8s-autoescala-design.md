@@ -290,7 +290,7 @@ O `stock` não aparece na tabela: desde a #231 é 1 réplica fixa, sem ScaledObj
 
 > **Atualização (#231, decisão do usuário, 2026-11-01): no cluster o `stock` voltou a ser como no K1 e no compose, 1 réplica fixa, Hikari 245, `strategy: Recreate` e sem ScaledObject.**
 > O diagnóstico do K2 ([`K2-diagnostico`](../../../Projeto/carga/results/10-k8s-db-remoto/K2-diagnostico/README.md), diagnóstico 1 contra o teste A) mostrou que o Hikari 60 por réplica era o gargalo de origem da parada do
-> braço b1 a 20k: o pool esgotava (pending médio 142,6, máximo 237), o hold levava ~730 ms e a entrada do gateway ~5,6 s no p50. O teste A, que muda só o `stock` (Hikari 250, 1 réplica), passou os 3 minutos
+> K2 a 20k (no K2-repetição, sem a #231, o b1 passou do 20k e parou no 32k, o mesmo ponto do K2-pos-231, já com ela; ver [`K2-pos-231`](../../../Projeto/carga/results/10-k8s-db-remoto/K2-pos-231/README.md)): o pool esgotava (pending médio 142,6, máximo 237), o hold levava ~730 ms e a entrada do gateway ~5,6 s no p50. O teste A, que muda só o `stock` (Hikari 250, 1 réplica), passou os 3 minutos
 > a 20k sem parada, com o p50 da entrada do gateway em 160 ms. As réplicas extras não compensam o pool menor: o CAS na linha quente do `eventcap` serializa as reservas de qualquer forma.
 > **A conta de pools passa a ser** 4×200 + 4×10 + 4×3 + 4×50 + 4×50 + 245 = **1497 ≤ 1500** (o `stock` conta uma vez; `Recreate` evita o pod velho sobreposto ao novo, que com 250 daria 1502 e, com
 > `RollingUpdate`, 1752). O **245** é o pool real do Supavisor no overlay `rodada` (`POOLER_DEFAULT_POOL_SIZE`; em base, e2e e carga é 45): conexão do Hikari acima disso só espera no Supavisor (no teste A, `pg_conexoes` parou em 247). O compose segue com 250.
