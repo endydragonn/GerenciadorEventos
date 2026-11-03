@@ -1,0 +1,51 @@
+# Overlay `soak` (issue #232): o `rodada` (base com Secrets REAIS, NodePort 30081/30088, SEED_ENABLED, pool real do Supavisor 245) + o Mailpit (componente ../mailpit) + o
+# SMTP do `notification` apontado para ele. É o teste longo (2 h) com cadastro: o código de verificação é lido no Mailpit e NENHUM e-mail real sai. O overlay `rodada` NÃO muda
+# (K0, K1 e K2 foram medidos com ele); o `soak` só o estende. O Secret `env-notification` continua com as credenciais do Gmail (é o do .env): quem manda é o `env` do Deployment,
+# que vence o `envFrom`. Por isso os SEIS valores abaixo são fail-closed no `cluster.sh guarda`/`up` (lidos do render: faltar ou errar um deles aborta antes de criar qualquer coisa),
+# e o `verificar-soak` confere de novo no cluster vivo antes do k6. Uma linha por variável (o cluster.selftest.sh apaga/troca cada uma para provar a guarda).
+#   MAIL_PASSWORD="" precisa ser o literal vazio: sem a entrada, a senha REAL do Secret vence.
+# O Mailpit do soak: basic auth (MP_UI_AUTH cobre UI e API) lida do Secret `mailpit-auth`, que o `cluster.sh up` cria a partir da variável de ambiente MAILPIT_AUTH=<usuário>:<senha>
+# (efêmera por bloco, fora do repo, nunca impressa); MP_MAX_MESSAGES com folga (>= 2x o total de cadastros do pior perfil: 2% de 50k RPM x 120 min = 120k) e memória/CPU maiores
+# (o gerador não busca por destinatário, que varre a caixa inteira a cada chamada; o cadastro pagina GET /api/v1/messages, ~3 ms constantes, mas o Mailpit guarda todas as mensagens do bloco). A API sai do cluster por UMA NodePort nova (30825 -> host 8025 no kind.yaml; SMTP 1025 fica só no cluster).
+# O firewall do Windows restringe a 8025 ao IP do gerador (Projeto/carga/soak/firewall-mailpit.ps1); `loadBalancerSourceRanges` não filtra no kind.
+resources:
+  - ../rodada
+  - mailpit-api.yaml
+components:
+  - ../mailpit
+patches:
+  - target: {kind: Deployment, name: notification}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: notification}
+      spec:
+        template:
+          spec:
+            containers:
+              - name: notification
+                env:
+                  - {name: MAIL_HOST, value: mailpit}
+                  - {name: MAIL_PORT, value: "1025"}
+                  - {name: MAIL_SMTP_AUTH, value: "false"}
+                  - {name: MAIL_STARTTLS, value: "false"}
+                  - {name: MAIL_USERNAME, value: soak@example.com}
+                  - {name: MAIL_PASSWORD, value: ""}
+  - target: {kind: Deployment, name: mailpit}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: mailpit}
+      spec:
+        template:
+          spec:
+            containers:
+              - name: mailpit
+                env:
+                  - {name: MP_MAX_MESSAGES, value: "250000"}
+                  - name: MP_UI_AUTH
+                    valueFrom:
+                      secretKeyRef: {name: mailpit-auth, key: MP_UI_AUTH}
+                resources:
+                  requests: {cpu: 200m, memory: 256Mi}
+                  limits: {cpu: "2", memory: 1Gi}

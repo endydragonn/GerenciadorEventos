@@ -1,0 +1,142 @@
+// Logica pura do soak (issue #232), sem k6 e sem open(): o carga-soak.js a importa e o lib-soak.selftest.mjs a testa com node (mesmo padrao do lib-admissao.js).
+
+import { sorteio100 } from '../lib-sorteio.js';
+
+export const TIPOS = ['leitura', 'reserva', 'login', 'cadastro', 'escrita'];
+
+// Fatia dos VUs (maxVUs do k6) de cada cenario. Os fluxos que ESPERAM (reserva acompanhada na fila, cadastro esperando o e-mail) seguram VU por segundos.
+export const FATIA_VUS = { leitura: 0.30, reserva: 0.40, login: 0.10, cadastro: 0.15, escrita: 0.05 };
+
+// Fase (pico | vale) do tipo no instante `segundos` do cenario, pelas fases do perfil (perfil.py). Fora do intervalo cai na ultima fase.
+export function faseEm(fases, segundos) {
+  for (const f of fases) if (segundos >= f.inicio_s && segundos < f.fim_s) return f.pico ? 'pico' : 'vale';
+  return fases[fases.length - 1].pico ? 'pico' : 'vale';
+}
+
+// Minuto do bloco (0 = o primeiro) a partir do tempo decorrido do cenario (ms). E a tag `min` que o agregar.py usa.
+export const minutoEm = (decorridoMs) => Math.max(0, Math.floor(decorridoMs / 60000));
+
+// Enderecos de cadastro: SO @example.com (nenhum e-mail real), unicos por bloco (SUFIXO do seed) e por iteracao (n).
+export const enderecoDoCadastro = (sufixo, n) => `soak-${sufixo}-${n}@example.com`;
+// fone UNIQUE no banco e os blocos rodam sobre o MESMO banco: o telefone depende do SUFIXO e do n, nunca so do n.
+// O gateway (BffUserController, cadastro) exige 10 ou 11 digitos apos limpar o que nao e digito ("Telefone deve conter 10 ou 11 digitos", senao 400): o formato tem EXATAMENTE 11.
+// Formato: [12..99] (2 digitos) + 3 digitos + n com 6 digitos (n ate 999999; o erroParametros recusa o perfil que passa disso). Os 5 primeiros vem de k = (ultimos digitos do sufixo) mod 88000
+// (88 x 1000), entao dois sufixos so colidem se forem iguais mod 88000 (o limpar-banco roda antes de cada bloco: e so defesa). Nunca comeca com "11": todo o seed e "11..."
+// (setup.sh: host "119"+8, attendees "11"+3+6; limpar-banco.sh: sonda "119"+8). Sufixo sem digitos ("T1" no selftest) vale como zero.
+export const foneDoCadastro = (sufixo, n) => {
+  const k = (Number(String(sufixo).replace(/\D/g, '').slice(-9)) || 0) % 88000;
+  return `${12 + Math.floor(k / 1000)}${String(k % 1000).padStart(3, '0')}${String(n).padStart(6, '0')}`;
+};
+
+// Codigo de 6 digitos do e-mail de verificacao ("Código de Verificação: 123456", EmailTemplates do notification); null se nao achar.
+export function extrairCodigo(texto) {
+  const m = /Verifica\S*:\s*(\d{6})/i.exec(String(texto || ''));
+  return m ? m[1] : null;
+}
+
+// Destino da reserva ACEITA (201, ou 202 que chegou a pending): 60% confirma, 10% cancela, 30% expira sozinha (a expiracao devolve a vaga).
+// `sorteio` = sorteio100(i, semente) em [0, 100).
+export function destinoDaReserva(sorteio, pctConfirma = 60, pctCancela = 10) {
+  if (sorteio < pctConfirma) return 'confirma';
+  if (sorteio < pctConfirma + pctCancela) return 'cancela';
+  return 'expira';
+}
+
+// Usuario do host do seed (setup.sh): e-mail carga-host-<sufixo>@example.com, senha CargaTeste#<sufixo>. O preparar-soak o promove a host por SQL (nenhuma rota faz isso).
+export const hostDoSufixo = (sufixo) => ({ email: `carga-host-${sufixo}@example.com`, password: `CargaTeste#${sufixo}` });
+
+// Alvo da iteracao `i` da RESERVA (issue #232, decisao C): com eventos QUENTES, `pctQuente` % das reservas mira UM evento quente (k pequeno, de preferencia 1: e o RPM do evento mais
+// quente que liga o gatilho do admission e o KEDA do reservation) e o resto segue o mapeamento par-unico de sempre (`quente: false`). Nas quentes o par (usuario, evento) se repete,
+// entao o fluxo cancela a reserva logo depois de aceita (o par volta a ficar livre). `insistentes` = os primeiros usuarios do seed, que recebem `pctInsistente` % das quentes
+// para bater no limite de mensagens em espera por usuario do admission (429); os demais usuarios giram em ordem. Deterministico em `i`.
+// -> { quente: true, u, e } (e = indice em `quentes`) | { quente: false }
+export function alvoDaReserva(i, { quentes, pctQuente, insistentes, pctInsistente, usuarios }) {
+  if (!quentes || !quentes.length || sorteio100(i, 11) >= pctQuente) return { quente: false };
+  const ins = Math.min(insistentes, usuarios - 1);
+  const u = ins > 0 && sorteio100(i, 13) < pctInsistente ? i % ins : ins + (i % (usuarios - ins));
+  return { quente: true, u, e: i % quentes.length };
+}
+
+// ---- cadastro: o codigo de verificacao vem das mensagens MAIS NOVAS do Mailpit, nao de uma busca. A busca (`/api/v1/search?query=to:...`) varre a caixa inteira a cada chamada (O(n):
+// ~5 ms com 2 mil mensagens, ~80 ms com 26 mil) e saturou o Mailpit no S2 (o SMTP passou dos 5 s do JavaMail e o consumer reenviou o e-mail). `GET /api/v1/messages?start=&limit=100`
+// (mais novas primeiro) custa ~3 ms constantes. Cada consulta le paginas ate achar o endereco, ate a pagina ficar mais velha que o request-verification, ou ate MAX_PAGINAS.
+export const MAX_PAGINAS = 10;
+export const MARGEM_RELOGIO_MS = 30000;   // folga para a diferenca entre o relogio do gerador (k6) e o do Mailpit (no do cluster)
+
+// Esperas (s) antes de cada consulta ao Mailpit: 2, 2, 4, 4, 4... enquanto a soma nao passar de `tetoS` (MAILPIT_TETO_S).
+export function esperasDaBusca(tetoS) {
+  const esperas = [];
+  for (let soma = 0, e = 2; soma + e <= tetoS; soma += e, e = esperas.length >= 2 ? 4 : 2) esperas.push(e);
+  return esperas;
+}
+
+// RFC3339 do `Created` do Mailpit (ate 9 casas de fracao) -> epoch ms. Corta/completa a fracao em 3 casas (nem todo parser de Date aceita 6 ou 9); ilegivel = NaN.
+export const quandoMs = (txt) => Date.parse(String(txt).replace(/\.(\d+)/, (_, f) => `.${(f + '000').slice(0, 3)}`));
+
+// Uma pagina de `GET /api/v1/messages` (mais novas primeiro): acha a mensagem cujo `To` tem `email` (sem diferenciar caixa) ou decide se vale ler a proxima (`pagina` = indice desta, de 0).
+// Para quando a pagina veio vazia, quando a mais antiga e anterior a `desdeMs` menos a margem (o e-mail so existe depois do request-verification) ou ao chegar em MAX_PAGINAS.
+// -> { msg, continua }
+export function acharNaPagina(mensagens, email, desdeMs, pagina) {
+  const alvo = email.toLowerCase();
+  const msg = mensagens.find((m) => (m.To || []).some((t) => String(t.Address || '').toLowerCase() === alvo)) || null;
+  const maisAntiga = Math.min(...mensagens.map((m) => quandoMs(m.Created)));   // NaN (data ilegivel) nunca para: sobra o teto de paginas
+  return { msg, continua: !msg && mensagens.length > 0 && pagina + 1 < MAX_PAGINAS && !(maisAntiga < desdeMs - MARGEM_RELOGIO_MS) };
+}
+
+// Tipos que o perfil roda: os 5, ou so o de `perfil.so` (perfil.py --so, o dry do Mailpit); os ausentes nao rodam.
+export const tiposDo = (perfil) => (perfil.so ? [perfil.so] : TIPOS);
+
+// Mensagem do 1o problema nos parametros, ou null.
+export function erroParametros(p) {
+  if (!p.perfil || !p.perfil.tipos) return 'PERFIL_FILE invalido: sem "tipos" (gere com soak/perfil.py).';
+  for (const t of tiposDo(p.perfil)) {
+    if (!p.perfil.tipos[t] || !Array.isArray(p.perfil.tipos[t].stages) || !p.perfil.tipos[t].stages.length || !Array.isArray(p.perfil.tipos[t].fases)) {
+      return `PERFIL_FILE sem stages/fases do tipo ${t}.`;
+    }
+  }
+  if (p.perfil.total_cadastros_esperado > 999999) return `PERFIL_FILE com total_cadastros_esperado ${p.perfil.total_cadastros_esperado} > 999999: o telefone do cadastro (foneDoCadastro) so tem 6 digitos para o n.`;
+  if (!(p.maxVus >= 20)) return `MAX_VUS invalido: ${p.maxVus} (>= 20).`;
+  if (!p.mailpitUrl || !/^https?:\/\//.test(p.mailpitUrl)) return 'MAILPIT_URL ausente ou invalida (http://<host>:<porta>).';
+  if (!/^[A-Za-z0-9._-]+:[A-Za-z0-9._~+-]{16,}$/.test(p.mailpitAuth || '')) return 'MAILPIT_AUTH ausente ou fora do formato (variavel de ambiente <usuario>:<senha de >= 16 caracteres A-Za-z0-9._~+-; nunca por -e).';
+  if (!/^[A-Za-z0-9._-]+$/.test(p.sufixo || '')) return `SUFIXO invalido: '${p.sufixo}'.`;
+  if (!/^[A-Za-z0-9-]+$/.test(p.prefixo || '')) return `PREFIXO invalido: '${p.prefixo}'.`;
+  return null;
+}
+
+// scenarios do k6: 5 ramping-arrival-rate em paralelo (timeUnit 1m: o alvo dos stages e RPM de iteracoes), cada um com a tag de cenario `tipo`.
+export function cenarios(perfil, { maxVus, gracefulStopS }) {
+  const sc = {};
+  for (const t of tiposDo(perfil)) {
+    const max = Math.max(5, Math.round(maxVus * FATIA_VUS[t]));
+    sc[t] = {
+      executor: 'ramping-arrival-rate',
+      exec: t,
+      startRate: 0,
+      timeUnit: '1m',
+      stages: perfil.tipos[t].stages,
+      preAllocatedVUs: Math.max(2, Math.ceil(max / 2)),
+      maxVUs: max,
+      gracefulStop: `${gracefulStopS}s`,
+      tags: { tipo: t },
+    };
+  }
+  return sc;
+}
+
+// Termo da busca de leitura que acerta O(1) evento. `GET /bff/events/search?term=` e um LIKE '%termo%' no nome: o prefixo do bloco acertaria os milhares de eventos do seed
+// (respostas de centenas de KB a 20% da leitura). O nome do seed e <PREFIXO>-E<k>, k = 1..N: com k > N/10 nenhum outro nome comeca com o mesmo texto (E201 nao e prefixo de nada
+// quando N = 2000), entao o termo acerta exatamente 1 evento. `sorteio` em [0, 1).
+export function termoDeBusca(prefixo, nEventos, sorteio) {
+  const piso = Math.floor(nEventos / 10);
+  const k = piso + 1 + Math.floor(sorteio * (nEventos - piso));
+  return `${prefixo}-E${Math.min(k, nEventos)}`;
+}
+
+// Motivo do 400 da reserva, pelo corpo (texto puro do backend: "Evento lotado" do stock, "Vinculo ja existente" do reservation, o resto = id invalido etc.).
+// Tolera acento, caixa, corpo nulo ou JSON (procura o trecho no texto todo). Vira a tag `motivo` do Counter reserva_400.
+export function motivoDo400(corpo) {
+  const t = String(corpo == null ? '' : corpo).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (t.includes('lotado')) return 'lotado';
+  if (t.includes('vinculo')) return 'vinculo';
+  return 'outro';
+}

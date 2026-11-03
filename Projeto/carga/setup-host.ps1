@@ -11,7 +11,7 @@
     Remove-NetFirewallRule -DisplayName 'TCC postgres 5433'
   - sobe a stack com o override de carga (read path cas|naive, lag do read model, log de SQL desligado)
   - espera o backend ficar saudavel e mostra os IPs para usar no gerador
-  - com -ComposeExtras (issue #178): mais overrides DEPOIS do de carga, ex. docker-compose.slim.yml e docker-compose.autoescala.yml (braco C). Paths
+  - com -ComposeExtras (issue #178): mais overrides DEPOIS do de carga, ex. docker-compose.completa.yml (imagens completas; as slim sao o padrao desde a #197, gerar antes) e docker-compose.autoescala.yml (braco C). Paths
     relativos a Projeto\. A autoescala vem por ultimo de proposito (Hikari do reservation 300 por replica, e nao 1000 do override de carga).
     O scaler (autoescala\scaler.sh) tem de usar os MESMOS -f e o mesmo ambiente: o script imprime a linha. As replicas passam a se chamar
     <project>-<servico>-<n> e o kit as acha por label (lib-servicos.ps1).
@@ -158,7 +158,7 @@ Test-HikariDoReservation -Arquivos $arquivos
 if (@($ComposeExtras | Where-Object { $_ -match 'autoescala' }).Count -gt 0) {
     Write-Host ''
     Write-Host 'Braco C: rode o scaler no MESMO ambiente e com os MESMOS -f (Git Bash; Ctrl+C encerra; PARE-O antes de limpar o banco):' -ForegroundColor Cyan
-    Write-Host ("  AUTOESCALA_COMPOSE_ARQUIVOS='{0}' Projeto/autoescala/scaler.sh" -f (Get-ArquivosDoScaler -Projeto $Projeto -Arquivos $arquivos))
+    Write-Host ("  {1}AUTOESCALA_COMPOSE_ARQUIVOS='{0}' Projeto/autoescala/scaler.sh" -f (Get-ArquivosDoScaler -Projeto $Projeto -Arquivos $arquivos), $(if ($env:SLIM_TAG) { "SLIM_TAG=$($env:SLIM_TAG) " } else { '' }))
     Write-Host '  (as variaveis do up valem para as replicas novas: RESERVATION_READPATH, AUTOESCALA_*; AUTOESCALA_X_RPM = ADMISSION_X_RPM). Registre os AUTOESCALA_* na rodada.'
 }
 

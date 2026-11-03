@@ -63,6 +63,13 @@
 #    pgss-<rotulo>-<ts>.csv         top 25 do pg_stat_statements por tempo total, desde o reset
 #                                   feito no inicio desta coleta
 #
+#    MODO CLUSTER (issue #228): com CARGA_K8S=<contexto kubectl> (ex.: kind-gerenciador) a coleta le o cluster Kubernetes (Projeto/k8s) no lugar do compose, sem Docker; sem a
+#    variavel nada disto e carregado. As MESMAS 36 colunas. Todo kubectl leva --context $CARGA_K8S (nunca o current-context), namespace gerenciador. psql = sts/db (db no cluster) ou
+#    o pod cliente db-cliente (db remoto; senha lida DENTRO do pod: k8s/lib-db-cliente.sh); rpk/redis-cli/rabbitmqctl por `kubectl exec` (sts/redpanda, deploy/redis, deploy/rabbitmq);
+#    repl_* = readyReplicas de cada Deployment; ORPHAN_MS e as variaveis do registro lidos do Deployment reservation; saga.timing por `kubectl logs -l app=reservation --since-time`.
+#    Todas as 36 colunas tem equivalente (redis_replicas = a chave adm:replicas, que no cluster o proprio admission grava com o readyReplicas do reservation: ADMISSION_K8S_REPLICAS_ENABLED).
+#    Limites: a latencia dos passos (saga.timing) so cobre os pods que ainda existem no fim do bloco (um pod que a autoescala removeu leva os logs junto); o `lb` e o stand-by nao existem.
+#
 #  Uso:  ./coleta-host.sh [rotulo] [duracao_s]      (duracao 0 = ate o Ctrl+C)
 #  Env:  INTERVALO_S (1), CONTAINER_DB (gerenciador-db), CONTAINER_RPK (gerenciador-redpanda),
 #        PG_ADMIN (supabase_admin: cria a extensao e reseta o pg_stat_statements),
@@ -82,6 +89,11 @@ PG_ADMIN="${PG_ADMIN:-supabase_admin}"
 CONTAINER_REDIS="${CONTAINER_REDIS:-gerenciador-redis}"
 CONTAINER_RABBIT="${CONTAINER_RABBIT:-gerenciador-rabbitmq}"
 PROJETO="${PROJETO:-gerenciador-eventos}"
+if [ -n "${CARGA_K8S:-}" ]; then # modo cluster (#228): a lib do pod cliente do banco e os alvos do kubectl exec no lugar dos containers
+    # shellcheck source=../k8s/lib-db-cliente.sh
+    . "${K8S_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../k8s/lib-db-cliente.sh}"
+    CONTAINER_RPK=sts/redpanda; CONTAINER_REDIS=deploy/redis; CONTAINER_RABBIT=deploy/rabbitmq
+fi
 EVENTOS_CADA_S="${EVENTOS_CADA_S:-5}"
 ADMISSION_WINDOW_MS="${ADMISSION_WINDOW_MS:-200}"
 TIMEOUT_S="${TIMEOUT_S:-5}"
@@ -189,6 +201,61 @@ dexect() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' timeout "$((TIMEOUT_S + 2)
 psql_db() { dexec exec -i "$CONTAINER_DB" psql -h localhost -U "$PG_ADMIN" -d meu_banco -v ON_ERROR_STOP=1 -At -F, -c "$1"; }
 # a amostra: as colunas da R4 (-c 1) e as contagens da saga (-c 2) no MESMO exec; com ON_ERROR_STOP o 2o -c que falha (stack sem a saga) nao tira a saida do 1o
 psql_amostra() { dexec exec -i "$CONTAINER_DB" psql -h localhost -U "$PG_ADMIN" -d meu_banco -v ON_ERROR_STOP=1 -At -F, -c "$SQL_AMOSTRA" -c "$SQL_SAGA"; }
+# "<servico> <Status>" de cada container do project (a coleta de replicas) e as linhas do saga.timing de TODAS as replicas do reservation desde o inicio da coleta
+repl_status() { timeout "$TIMEOUT_S" docker ps --filter "label=com.docker.compose.project=$PROJETO" --format '{{.Label "com.docker.compose.service"}} {{.Status}}' 2>/dev/null; }
+# valor de uma variavel de ambiente do servico (<alvo> <VAR>): compose = `printenv` no container (de sempre); cluster (redefinida abaixo) = o literal do SPEC do Deployment
+leitura_env() { dexect exec "$1" printenv "$2" 2>/dev/null | tr -d '\r'; }
+logs_saga() {
+    local c
+    for c in $(dexec ps -aq --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=reservation" | tr -d '\r'); do
+        MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' timeout 120 docker logs --since "$INICIO_ISO" "$c" 2>&1
+    done
+}
+
+if [ -n "${CARGA_K8S:-}" ]; then # modo cluster (#228): redefine o que fala com o Docker (a ultima definicao vence); nada daqui roda sem CARGA_K8S
+    # exec [-i] <alvo> cmd... -> K8S_ARGV (o kubectl completo, SEMPRE com --context)
+    k8s_exec_argv() {
+        shift # "exec"
+        local i=(); [ "${1:-}" = -i ] && { i=(-i); shift; }
+        local alvo="$1"; shift
+        K8S_ARGV=(kubectl --context "$CARGA_K8S" -n gerenciador exec ${i[@]+"${i[@]}"} "$alvo" -c "${alvo#*/}" -- "$@") # -c <container> = o nome do alvo (sem "Defaulted container" no stderr)
+    }
+    # traduz o subconjunto de verbos do docker que a coleta usa: exec e ps (so por label do servico: -q/-aq -> deploy/<svc>; --format {{.Names}} -> os pods)
+    dexec() {
+        case "${1:-}" in
+            exec) k8s_exec_argv "$@"; MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "${K8S_ARGV[@]}" ;;
+            ps) local a svc=""
+                for a in "$@"; do case "$a" in label=com.docker.compose.service=*) svc="${a##*=}" ;; esac; done
+                case "$*" in
+                    *'{{.Names}}'*) kubectl --context "$CARGA_K8S" -n gerenciador get pods -l "app=$svc" -o name 2>/dev/null | sed 's#^pod/##' ;;
+                    *) echo "deploy/$svc" ;;
+                esac ;;
+            *) return 1 ;;
+        esac
+    }
+    dexect() { k8s_exec_argv "$@"; MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' timeout "$((TIMEOUT_S + 2))" "${K8S_ARGV[@]}"; }
+    psql_db() { db_psql "$CARGA_K8S" "$PG_ADMIN" -v ON_ERROR_STOP=1 -At -F, -c "$1"; }
+    psql_amostra() { db_psql "$CARGA_K8S" "$PG_ADMIN" -v ON_ERROR_STOP=1 -At -F, -c "$SQL_AMOSTRA" -c "$SQL_SAGA"; }
+    # "<servico> Up" por replica PRONTA (o formato que contar_replicas le); Deployment sem pronta = "<servico> Down"; kubectl fora = saida vazia (-1)
+    repl_status() {
+        timeout "$TIMEOUT_S" kubectl --context "$CARGA_K8S" -n gerenciador get deploy -o jsonpath='{range .items[*]}{.metadata.name} {.status.readyReplicas}{"\n"}{end}' 2>/dev/null \
+            | awk 'NF>=1 { if ($2+0 > 0) for (i = 0; i < $2; i++) print $1 " Up"; else print $1 " Down" }'
+    }
+    # As imagens slim NAO tem printenv nem sh: o env sai do spec do Deployment (o container tem o nome do Deployment). Literal = o valor; valueFrom (Secret/ConfigMap) = o marcador
+    # <de Secret/ConfigMap> (o valor do Secret NUNCA e lido); ausente do spec = vazio. O filtro usa aspas simples (sem as duplas, que o Windows mangla).
+    leitura_env() {
+        local alvo="$1" var="$2" svc out v vf f
+        svc="${alvo#*/}"
+        f="{.spec.template.spec.containers[?(@.name=='$svc')].env[?(@.name=='$var')]"
+        out="$(timeout "$((TIMEOUT_S + 2))" kubectl --context "$CARGA_K8S" -n gerenciador get "$alvo" -o jsonpath="$f.value}@@@$f.valueFrom}" 2>/dev/null | tr -d '\r')" || out=""
+        v="${out%%@@@*}"; vf="${out#*@@@}"
+        if [ -n "$v" ]; then echo "$v"; elif [ -n "$vf" ]; then echo "<de Secret/ConfigMap>"; fi
+    }
+    logs_saga() { kubectl --context "$CARGA_K8S" -n gerenciador logs -l app=reservation --since-time "$INICIO_ISO" --tail=-1 --max-log-requests=10 -c reservation 2>&1; }   # -c: sem "Defaulted container" misturado (2>&1) no que o percentis_timing le
+    # local x remoto decidido UMA vez e o pod cliente garantido UMA vez, AQUI no processo principal (os psql abaixo rodam em $(...) e herdam as variaveis): depois disso cada psql e 1 kubectl (o exec).
+    # Erro ao ler o sts/db aborta a coleta antes do 1o CSV.
+    db_psql_preparar "$CARGA_K8S" || exit 1
+fi
 
 RESULTS="$(cd "$(dirname "$0")" && pwd)/results"
 mkdir -p "$RESULTS"
@@ -222,7 +289,7 @@ descobre_orphan_ms() {
     local c v="${ORPHAN_MS:-}"
     if [ -z "$v" ]; then
         c="$(dexec ps -q --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=reservation" | head -1 | tr -d '\r')"
-        [ -n "$c" ] && v="$(dexect exec "$c" printenv RESERVATION_SAGA_ORPHAN_MS 2>/dev/null | tr -d '\r')"
+        [ -n "$c" ] && v="$(leitura_env "$c" RESERVATION_SAGA_ORPHAN_MS)"
     fi
     case "$v" in ''|*[!0-9]*) v=30000 ;; esac
     ORPHAN_MS="$v"
@@ -269,7 +336,7 @@ escreve_registro() {
             c="$(dexec ps -q --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=$svc" | head -1 | tr -d '\r')"
             [ -n "$c" ] || continue
             echo "$svc (container $c):"
-            for v in $vars; do echo "  $v=$(dexec exec "$c" printenv "$v" 2>/dev/null | tr -d '\r')"; done
+            for v in $vars; do echo "  $v=$(leitura_env "$c" "$v")"; done
         done
     } > "$REGISTRO"
 }
@@ -312,9 +379,7 @@ resumo_saga() {
             echo "fim do bloco: devolucao_pendente ${dp:--1}, orfa_inversa ${oi:--1}, sagas_reserving ${rs:--1}, sagas_compensating ${rc:--1}"
         else echo "consulta do estado no fim do bloco falhou (stack sem a saga ou sem o stock?)"; fi
         # latencia dos passos: logger saga.timing de TODAS as replicas do reservation (o braco C tem varias; -a inclui a que o scaler parou no meio do bloco), desde o inicio da coleta
-        tim="$(for c in $(dexec ps -aq --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=reservation" | tr -d '\r'); do
-                   MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' timeout 120 docker logs --since "$INICIO_ISO" "$c" 2>&1
-               done | percentis_timing)"
+        tim="$(logs_saga | percentis_timing)"
         if [ -n "$tim" ]; then
             echo "latencia dos passos (logger saga.timing, replicas do reservation no project):"
             printf '%s\n' "$tim" | sed 's/^/  /'
@@ -358,7 +423,7 @@ while [ "$DURACAO_S" -eq 0 ] || [ "$(date +%s)" -lt "$FIM" ]; do
       printf '%s\n' "$o" | tr -d '\r' | rabbit_do_list_queues > "$TMPD/rabbit" ) &
     scan=0; [ $(( t0 / 1000 - ULT_SCAN )) -ge "$EVENTOS_CADA_S" ] && { scan=1; ULT_SCAN=$(( t0 / 1000 )); }
     ( o="$(amostra_redis "$scan")" || o=""; printf '%s\n' "$o" | redis_resumo "$ADMISSION_WINDOW_MS" > "$TMPD/redis" ) &
-    ( o="$(timeout "$TIMEOUT_S" docker ps --filter "label=com.docker.compose.project=$PROJETO" --format '{{.Label "com.docker.compose.service"}} {{.Status}}' 2>/dev/null)" || o=""
+    ( o="$(repl_status)" || o=""
       printf '%s\n' "$o" | tr -d '\r' | contar_replicas > "$TMPD/repl" ) &
     # lag dos groups do stock: UM rpk (multi-group), em paralelo com o resto como as outras coletas lentas (estourou = -1 -1)
     ( o="$(dexect exec "$CONTAINER_RPK" timeout 3 rpk group describe stock stock-catalog 2>/dev/null)" || o=""

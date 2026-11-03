@@ -1,0 +1,15 @@
+# EndpointSlice manual do Service `db` (sem selector): o label kubernetes.io/service-name liga a slice ao Service e o nome da porta (`pg`) tem de ser o do Service.
+# IP e porta são placeholders trocados pelo `cluster.sh` (ver o kustomization.yaml deste componente).
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: db-remoto
+  labels:
+    kubernetes.io/service-name: db
+    endpointslice.kubernetes.io/managed-by: gerenciador-db-remoto
+addressType: IPv4
+ports:
+  - {name: pg, protocol: TCP, port: 5433}
+endpoints:
+  - addresses: ["192.0.2.1"]
+    conditions: {ready: true}

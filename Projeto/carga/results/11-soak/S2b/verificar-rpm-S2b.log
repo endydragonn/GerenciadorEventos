@@ -1,0 +1,16 @@
+﻿===== 2026-11-03 01:40:07 | prefixo Soak-446582 | config:  /  / 
+ eventos | reservas_ativas | capacidade_total | eventos_com_overselling | overselling_total 
+---------+-----------------+------------------+-------------------------+-------------------
+   30252 |           23872 |          3845100 |                       0 |                 0
+(1 row)
+
+  status   | count 
+-----------+-------
+ cancelled |  6021
+ confirmed | 23872
+ expired   | 11901
+(3 rows)
+
+===== 2026-11-03 01:40:10 | saga prefixo Soak-446582 (limite 45s) | config:  /  / 
+sagas convergidas (velhas 0, hold held com saga compensated 0, devolucao pendente 0, orfa inversa 0, quant divergente 0).
+

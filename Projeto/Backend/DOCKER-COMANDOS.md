@@ -10,8 +10,8 @@ Este guia contém todos os comandos necessários para trabalhar com o projeto us
 # 0. Apontar para o compose principal (db = supabase/postgres; exige Projeto/supabase/.env)
 $env:COMPOSE_FILE = "../docker-compose.yml"   # bash: export COMPOSE_FILE=../docker-compose.yml
 
-# 1. Subir os containers (banco + backend)
-docker compose up -d --build
+# 1. Subir os containers (banco + backend). Os serviços Java rodam as imagens slim (#197): gere-as antes com ../slim/gerar-imagens-slim.sh
+docker compose up -d
 
 # 2. Aguardar inicialização (15 segundos)
 Start-Sleep -Seconds 15
@@ -60,11 +60,15 @@ docker compose down -v
 ### Reconstruir Imagens
 
 ```bash
-# Rebuild completo (use após mudanças no código)
-docker compose build --no-cache
+# Serviços Java (use após mudanças no código): regerar a imagem slim do serviço tocado e subir
+../slim/gerar-imagens-slim.sh backend
+docker compose up -d backend
 
-# Rebuild e subir
-docker compose up -d --build
+# Depurar com a imagem completa (build do Dockerfile; override docker-compose.completa.yml)
+docker compose -f ../docker-compose.yml -f ../docker-compose.completa.yml up -d --build backend
+
+# Frontend (único com build no compose base)
+docker compose build --no-cache frontend && docker compose up -d frontend
 ```
 
 ---
@@ -341,7 +345,7 @@ docker compose down
 ```bash
 # Remover tudo e reconstruir
 docker compose down -v
-docker compose build --no-cache
+../slim/gerar-imagens-slim.sh   # regera as imagens slim dos serviços Java (o compose não as constrói mais)
 docker compose up -d
 sleep 15
 ./run-tests.sh
@@ -388,7 +392,7 @@ sleep 15
 ```bash
 # Garantir que tudo funciona
 docker compose down -v
-docker compose build --no-cache
+../slim/gerar-imagens-slim.sh   # regera as imagens slim dos serviços Java (o compose não as constrói mais)
 docker compose up -d
 sleep 15
 ./run-tests.sh

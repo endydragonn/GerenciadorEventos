@@ -5,7 +5,7 @@ profile gerenciador-e2e-slim-backend-apparmor-profile flags=(attach_disconnected
 
   /opt/java/openjdk/bin/java rix,
 
-  /tmp/hsperfdata_root/18 w,
+  /tmp/hsperfdata_root/17 w,
 
   /app/app.jar r,
   /etc/alternatives/awk r,
@@ -343,9 +343,9 @@ profile gerenciador-e2e-slim-backend-apparmor-profile flags=(attach_disconnected
   /opt/java/openjdk/lib/tzdb.dat r,
   /opt/java/openjdk/release r,
   /run r,
-  /tmp/tomcat-docbase.8081.10090750657303350993 r,
-  /tmp/tomcat.8081.5486043885861081704 r,
-  /tmp/tomcat.8081.5486043885861081704/work/Tomcat/localhost/ROOT r,
+  /tmp/tomcat-docbase.8081.3009339392822283719 r,
+  /tmp/tomcat.8081.16158417222122313774 r,
+  /tmp/tomcat.8081.16158417222122313774/work/Tomcat/localhost/ROOT r,
   /usr/bin/awk r,
   /usr/bin/bash r,
   /usr/bin/cat r,

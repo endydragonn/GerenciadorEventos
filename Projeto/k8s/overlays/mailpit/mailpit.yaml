@@ -1,0 +1,49 @@
+# Captador de e-mail do e2e (o mesmo `mailpit` do override e2e do compose): SMTP 1025 e API/UI 8025, só dentro do cluster. O `notification` aponta
+# para ele (MAIL_HOST=mailpit, sem auth, sem STARTTLS, sem senha: vem do Secret gerado com o override e2e).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailpit
+  labels: {app: mailpit}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mailpit}
+  template:
+    metadata:
+      labels: {app: mailpit}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: mailpit
+          image: axllent/mailpit:v1.31.6
+          imagePullPolicy: IfNotPresent
+          env:
+            # o padrao do Mailpit guarda so as 500 ultimas mensagens: o dry-run de carga (issue #197) manda milhares de e-mails e confere um a um
+            - {name: MP_MAX_MESSAGES, value: "50000"}
+          ports:
+            - {name: smtp, containerPort: 1025}
+            - {name: http, containerPort: 8025}
+          readinessProbe:
+            exec:
+              command: ["/mailpit", "readyz"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 10
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailpit
+  labels: {app: mailpit}
+spec:
+  selector: {app: mailpit}
+  ports:
+    - {name: smtp, port: 1025, targetPort: smtp}
+    - {name: http, port: 8025, targetPort: http}

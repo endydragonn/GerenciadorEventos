@@ -1,0 +1,7 @@
+﻿time="2026-11-01T17:22:02-03:00" level=info msg="setup: 1000/1000 logins ok; 64 eventos; 64000 pares unicos; 1 
+degraus usam 60001; mapeamento sequencial; acompanha 5% (consulta 1000 ms, teto 35 s); graceful 45 s; parada p95 > 
+5000 ms em janela de 60 s (SETUP_S 90; logins levaram 28.3 s)" source=console
+ 
+
+resumo por degrau:
+  degrau_20000: reservas=60001 5xx_reservas=0 5xx_confirma=0 outros=0 descartadas=0 p50=163.8ms p95=2168.5ms p99=3519.1ms p95_max_janela=3474.0ms 202=3042 acomp=137 admitidas=45 rejected=92 timed_out=0 sem_estado=0 429=0 admitir_p95=3546ms fim_a_fim_p95=2735ms

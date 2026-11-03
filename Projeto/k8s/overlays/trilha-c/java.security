@@ -1,0 +1,4 @@
+# Cache de DNS da JVM na trilha C (issue #197). Passado por JAVA_TOOL_OPTIONS=-Djava.security.properties=<este arquivo> (com um "=" só: soma ao java.security do JDK).
+# Um pod que sai do Service some do DNS headless e, daqui, da JVM em até 5 s; um endereço que não resolve não fica em cache negativo além de 1 s.
+networkaddress.cache.ttl=5
+networkaddress.cache.negative.ttl=1

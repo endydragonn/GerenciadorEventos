@@ -1,0 +1,30 @@
+# Pod cliente do banco (issue #228), usado só quando o Postgres está FORA do cluster (componente `db-remoto`): `cluster.sh psql`, `cluster.sh db-teste` e o kit de carga
+# em modo cluster (CARGA_K8S) fazem `kubectl exec` nele. NÃO faz parte do kustomize: é criado sob demanda (lib-db-cliente.sh: `kubectl apply` + espera Ready) e some com o `cluster.sh down`.
+# As senhas vêm dos Secrets `env-db` (APP_DB_USER/APP_DB_PASSWORD/POSTGRES_PASSWORD/POSTGRES_DB) e `env-supabase-pooler` (POOLER_TENANT_ID), chave a chave (secretKeyRef), como variáveis de ambiente DO POD,
+# lidas dentro do `sh -c` do exec: nunca em argumento nem em log. Mesma imagem do `db` (psql 17). `sidecar.istio.io/inject: "false"` (a trilha b1 injeta no namespace).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: db-cliente
+  labels: {app: db-cliente, sidecar.istio.io/inject: "false"}
+spec:
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: db-cliente
+      image: supabase/postgres:17.6.1.136
+      imagePullPolicy: IfNotPresent
+      command: ["sleep", "infinity"]
+      # SO as chaves que o psql e o db-teste leem (secretKeyRef; nunca o Secret inteiro: o env-db leva JWT_SECRET etc.)
+      env:
+        - {name: APP_DB_USER, valueFrom: {secretKeyRef: {name: env-db, key: APP_DB_USER}}}
+        - {name: APP_DB_PASSWORD, valueFrom: {secretKeyRef: {name: env-db, key: APP_DB_PASSWORD}}}
+        - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: env-db, key: POSTGRES_PASSWORD}}}
+        - {name: POSTGRES_DB, valueFrom: {secretKeyRef: {name: env-db, key: POSTGRES_DB}}}
+        - {name: POOLER_TENANT_ID, valueFrom: {secretKeyRef: {name: env-supabase-pooler, key: POOLER_TENANT_ID}}}
+      resources:
+        requests: {cpu: 10m, memory: 32Mi}
+        limits: {cpu: 500m, memory: 256Mi}

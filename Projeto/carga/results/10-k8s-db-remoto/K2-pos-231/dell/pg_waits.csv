@@ -1,0 +1,925 @@
+2026-11-03T09:49:10.758Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:12.837Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:14.890Z,idle,Client,ClientRead,5,0
+2026-11-03T09:49:14.890Z,idle in transaction,Client,ClientRead,2,0.0
+2026-11-03T09:49:16.944Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:18.998Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:21.512Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:23.103Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:25.154Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:27.206Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:29.258Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:31.311Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:33.362Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:35.415Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:37.466Z,idle,Client,ClientRead,6,0
+2026-11-03T09:49:37.466Z,idle in transaction,Client,ClientRead,1,0.0
+2026-11-03T09:49:39.519Z,idle,Client,ClientRead,7,0
+2026-11-03T09:49:41.571Z,idle,Client,ClientRead,8,0
+2026-11-03T09:49:43.623Z,idle,Client,ClientRead,10,0
+2026-11-03T09:49:45.675Z,idle,Client,ClientRead,10,0
+2026-11-03T09:49:47.726Z,idle,Client,ClientRead,10,0
+2026-11-03T09:49:49.783Z,idle,Client,ClientRead,10,0
+2026-11-03T09:49:51.836Z,idle,Client,ClientRead,10,0
+2026-11-03T09:49:53.887Z,idle,Client,ClientRead,8,0
+2026-11-03T09:49:53.887Z,active,,,1,0.0
+2026-11-03T09:49:53.887Z,idle in transaction,,,1,0.0
+2026-11-03T09:49:55.939Z,idle,Client,ClientRead,10,0
+2026-11-03T09:49:57.992Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:00.461Z,idle,Client,ClientRead,9,0
+2026-11-03T09:50:00.461Z,idle in transaction,Client,ClientRead,1,0.0
+2026-11-03T09:50:02.977Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:04.151Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:06.203Z,idle,Client,ClientRead,8,0
+2026-11-03T09:50:06.203Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:50:06.203Z,idle,,,1,0
+2026-11-03T09:50:08.254Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:10.309Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:12.360Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:14.411Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:16.464Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:18.517Z,idle,Client,ClientRead,8,0
+2026-11-03T09:50:18.517Z,idle in transaction,Client,ClientRead,2,0.0
+2026-11-03T09:50:20.568Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:22.619Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:24.670Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:26.721Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:28.773Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:30.827Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:32.878Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:34.929Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:36.981Z,idle,Client,ClientRead,9,0
+2026-11-03T09:50:36.981Z,idle in transaction,Client,ClientRead,1,0.0
+2026-11-03T09:50:39.324Z,idle,Client,ClientRead,8,0
+2026-11-03T09:50:39.324Z,idle in transaction,Client,ClientRead,2,0.0
+2026-11-03T09:50:41.831Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:43.135Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:45.186Z,idle,Client,ClientRead,7,0
+2026-11-03T09:50:45.186Z,idle in transaction,Client,ClientRead,3,0.0
+2026-11-03T09:50:47.237Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:49.288Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:51.339Z,idle,Client,ClientRead,6,0
+2026-11-03T09:50:51.339Z,idle in transaction,Client,ClientRead,4,0.0
+2026-11-03T09:50:53.390Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:55.442Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:57.493Z,idle,Client,ClientRead,10,0
+2026-11-03T09:50:59.544Z,idle,Client,ClientRead,10,0
+2026-11-03T09:51:01.594Z,idle,Client,ClientRead,10,0
+2026-11-03T09:51:03.646Z,idle,Client,ClientRead,10,0
+2026-11-03T09:51:05.697Z,idle,Client,ClientRead,7,0
+2026-11-03T09:51:05.697Z,idle in transaction,Client,ClientRead,3,0.0
+2026-11-03T09:51:07.748Z,idle,Client,ClientRead,10,0
+2026-11-03T09:51:09.805Z,idle,Client,ClientRead,10,0
+2026-11-03T09:51:11.856Z,idle,Client,ClientRead,7,0
+2026-11-03T09:51:11.856Z,idle in transaction,Client,ClientRead,6,0.0
+2026-11-03T09:51:11.856Z,active,IO,WalSync,1,0.0
+2026-11-03T09:51:11.856Z,active,Lock,transactionid,1,0.0
+2026-11-03T09:51:11.856Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:51:13.910Z,active,Lock,transactionid,40,0.6
+2026-11-03T09:51:13.910Z,idle in transaction,Client,ClientRead,19,0.9
+2026-11-03T09:51:13.910Z,idle,Client,ClientRead,13,0
+2026-11-03T09:51:13.910Z,active,Lock,tuple,2,0.3
+2026-11-03T09:51:13.910Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:51:13.910Z,active,IO,WalSync,1,0.0
+2026-11-03T09:51:13.910Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:51:13.910Z,idle in transaction,,,1,0.1
+2026-11-03T09:51:15.966Z,active,Lock,transactionid,67,0.8
+2026-11-03T09:51:15.966Z,idle,Client,ClientRead,39,0
+2026-11-03T09:51:15.966Z,idle in transaction,Client,ClientRead,7,1.3
+2026-11-03T09:51:15.966Z,active,Lock,tuple,4,0.5
+2026-11-03T09:51:15.966Z,idle,,,1,0
+2026-11-03T09:51:18.251Z,active,Lock,transactionid,93,0.9
+2026-11-03T09:51:18.251Z,idle,Client,ClientRead,31,0
+2026-11-03T09:51:18.251Z,idle in transaction,Client,ClientRead,9,0.9
+2026-11-03T09:51:18.251Z,active,Lock,tuple,3,0.3
+2026-11-03T09:51:18.251Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:51:20.808Z,active,Lock,transactionid,136,2.9
+2026-11-03T09:51:20.808Z,idle,Client,ClientRead,16,0
+2026-11-03T09:51:20.808Z,active,Lock,tuple,4,0.6
+2026-11-03T09:51:20.808Z,idle in transaction,Client,ClientRead,3,1.3
+2026-11-03T09:51:20.808Z,idle in transaction,IO,WalSync,1,0.0
+2026-11-03T09:51:20.808Z,idle,,,1,0
+2026-11-03T09:51:20.808Z,idle in transaction,,,1,0.0
+2026-11-03T09:51:20.808Z,active,Client,ClientRead,1,3.0
+2026-11-03T09:51:22.140Z,idle,Client,ClientRead,202,0
+2026-11-03T09:51:22.140Z,idle in transaction,Client,ClientRead,8,5.1
+2026-11-03T09:51:22.140Z,active,Lock,transactionid,2,1.0
+2026-11-03T09:51:24.202Z,active,Lock,transactionid,152,1.2
+2026-11-03T09:51:24.202Z,idle,Client,ClientRead,48,0
+2026-11-03T09:51:24.202Z,idle in transaction,Client,ClientRead,17,7.1
+2026-11-03T09:51:24.202Z,active,Lock,tuple,4,0.8
+2026-11-03T09:51:26.261Z,active,Lock,tuple,135,3.2
+2026-11-03T09:51:26.261Z,idle,Client,ClientRead,106,0
+2026-11-03T09:51:26.261Z,idle in transaction,Client,ClientRead,3,9.2
+2026-11-03T09:51:26.261Z,active,Client,ClientRead,2,1.2
+2026-11-03T09:51:26.261Z,active,Lock,transactionid,1,0.8
+2026-11-03T09:51:28.329Z,active,Lock,transactionid,230,1.8
+2026-11-03T09:51:28.329Z,idle,Client,ClientRead,5,0
+2026-11-03T09:51:28.329Z,active,Lock,tuple,4,1.6
+2026-11-03T09:51:28.329Z,idle in transaction,Client,ClientRead,3,0.0
+2026-11-03T09:51:28.329Z,active,,,1,0.0
+2026-11-03T09:51:28.329Z,idle in transaction,IO,WalSync,1,1.2
+2026-11-03T09:51:28.329Z,active,Client,ClientRead,1,11.3
+2026-11-03T09:51:28.329Z,idle,,,1,0
+2026-11-03T09:51:28.329Z,idle in transaction,,,1,0.0
+2026-11-03T09:51:30.390Z,active,Lock,transactionid,140,1.1
+2026-11-03T09:51:30.390Z,active,Lock,tuple,46,3.8
+2026-11-03T09:51:30.390Z,active,LWLock,LockManager,40,0.5
+2026-11-03T09:51:30.390Z,idle in transaction,Client,ClientRead,10,1.5
+2026-11-03T09:51:30.390Z,idle,Client,ClientRead,8,0
+2026-11-03T09:51:30.390Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:51:30.390Z,idle,,,1,0
+2026-11-03T09:51:30.390Z,active,,,1,0.5
+2026-11-03T09:51:32.463Z,active,Lock,tuple,178,2.5
+2026-11-03T09:51:32.463Z,idle,Client,ClientRead,43,0
+2026-11-03T09:51:32.463Z,idle in transaction,Client,ClientRead,24,3.2
+2026-11-03T09:51:32.463Z,active,Lock,transactionid,1,0.3
+2026-11-03T09:51:32.463Z,idle in transaction,,,1,0.0
+2026-11-03T09:51:34.523Z,active,Lock,transactionid,139,1.9
+2026-11-03T09:51:34.523Z,active,LWLock,LockManager,91,1.9
+2026-11-03T09:51:34.523Z,idle in transaction,Client,ClientRead,5,5.3
+2026-11-03T09:51:34.523Z,active,Lock,tuple,4,0.6
+2026-11-03T09:51:34.523Z,idle,Client,ClientRead,4,0
+2026-11-03T09:51:34.523Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:51:34.523Z,active,,,2,0.1
+2026-11-03T09:51:36.591Z,idle,Client,ClientRead,219,0
+2026-11-03T09:51:36.591Z,active,Lock,transactionid,20,0.3
+2026-11-03T09:51:36.591Z,idle in transaction,Client,ClientRead,3,7.3
+2026-11-03T09:51:36.591Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:51:36.591Z,active,Lock,tuple,1,0.0
+2026-11-03T09:51:36.591Z,active,IO,WalSync,1,0.0
+2026-11-03T09:51:36.591Z,idle,,,1,0
+2026-11-03T09:51:38.649Z,active,Lock,transactionid,123,0.6
+2026-11-03T09:51:38.649Z,idle,Client,ClientRead,87,0
+2026-11-03T09:51:38.649Z,idle in transaction,Client,ClientRead,29,1.5
+2026-11-03T09:51:38.649Z,active,Lock,tuple,7,0.3
+2026-11-03T09:51:38.649Z,idle in transaction,IO,WalWrite,1,0.4
+2026-11-03T09:51:40.708Z,active,Lock,tuple,174,2.7
+2026-11-03T09:51:40.708Z,idle,Client,ClientRead,37,0
+2026-11-03T09:51:40.708Z,idle in transaction,Client,ClientRead,23,3.5
+2026-11-03T09:51:40.708Z,active,LWLock,WALWrite,7,0.0
+2026-11-03T09:51:40.708Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:51:40.708Z,active,,,2,0.0
+2026-11-03T09:51:40.708Z,active,Lock,transactionid,1,0.4
+2026-11-03T09:51:40.708Z,active,IO,WalSync,1,0.0
+2026-11-03T09:51:42.771Z,active,Lock,transactionid,194,1.6
+2026-11-03T09:51:42.771Z,idle,Client,ClientRead,42,0
+2026-11-03T09:51:42.771Z,idle in transaction,Client,ClientRead,6,5.6
+2026-11-03T09:51:42.771Z,active,Lock,tuple,5,1.3
+2026-11-03T09:51:44.835Z,idle,Client,ClientRead,196,0
+2026-11-03T09:51:44.835Z,active,Lock,transactionid,32,0.3
+2026-11-03T09:51:44.835Z,idle in transaction,Client,ClientRead,10,0.5
+2026-11-03T09:51:44.835Z,active,Lock,tuple,7,0.3
+2026-11-03T09:51:44.835Z,idle,IO,WalSync,1,0
+2026-11-03T09:51:44.835Z,idle in transaction,Lock,tuple,1,0.0
+2026-11-03T09:51:46.892Z,idle,Client,ClientRead,242,0
+2026-11-03T09:51:46.892Z,idle in transaction,Client,ClientRead,4,2.5
+2026-11-03T09:51:46.892Z,active,IO,WalSync,1,0.0
+2026-11-03T09:51:48.948Z,active,Lock,transactionid,190,1.4
+2026-11-03T09:51:48.948Z,active,LWLock,LockManager,21,1.5
+2026-11-03T09:51:48.948Z,idle,Client,ClientRead,18,0
+2026-11-03T09:51:48.948Z,idle in transaction,Client,ClientRead,9,4.6
+2026-11-03T09:51:48.948Z,active,Lock,tuple,5,0.8
+2026-11-03T09:51:48.948Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:51:48.948Z,active,IO,WalSync,1,0.0
+2026-11-03T09:51:48.948Z,idle in transaction,,,1,0.0
+2026-11-03T09:51:48.948Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:51:51.216Z,active,Lock,transactionid,156,1.0
+2026-11-03T09:51:51.216Z,idle,Client,ClientRead,82,0
+2026-11-03T09:51:51.216Z,idle in transaction,Client,ClientRead,8,0.6
+2026-11-03T09:51:51.216Z,active,Lock,tuple,1,0.0
+2026-11-03T09:51:53.821Z,active,Lock,tuple,190,3.1
+2026-11-03T09:51:53.821Z,idle in transaction,Client,ClientRead,30,2.2
+2026-11-03T09:51:53.821Z,idle,Client,ClientRead,26,0
+2026-11-03T09:51:53.821Z,active,Lock,transactionid,1,1.1
+2026-11-03T09:51:55.139Z,active,Lock,transactionid,205,1.7
+2026-11-03T09:51:55.139Z,active,LWLock,LockManager,26,1.7
+2026-11-03T09:51:55.139Z,idle in transaction,Client,ClientRead,7,4.3
+2026-11-03T09:51:55.139Z,active,Lock,tuple,3,0.7
+2026-11-03T09:51:55.139Z,idle,Client,ClientRead,2,0
+2026-11-03T09:51:55.139Z,idle in transaction,LWLock,WALWrite,1,0.2
+2026-11-03T09:51:55.139Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:51:55.139Z,idle in transaction,IO,WalSync,1,0.0
+2026-11-03T09:51:55.139Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:51:57.213Z,active,Lock,transactionid,178,2.6
+2026-11-03T09:51:57.213Z,active,Lock,tuple,42,3.7
+2026-11-03T09:51:57.213Z,idle in transaction,Client,ClientRead,15,6.3
+2026-11-03T09:51:57.213Z,idle,Client,ClientRead,8,0
+2026-11-03T09:51:57.213Z,active,,,1,0
+2026-11-03T09:51:57.213Z,idle in transaction,LWLock,WALWrite,1,0.0
+2026-11-03T09:51:57.213Z,active,LWLock,LockManager,1,0.0
+2026-11-03T09:51:57.213Z,idle,,,1,0
+2026-11-03T09:51:57.213Z,idle in transaction,IO,WalSync,1,0.5
+2026-11-03T09:51:59.279Z,active,Lock,transactionid,230,2.7
+2026-11-03T09:51:59.279Z,idle in transaction,Client,ClientRead,8,8.4
+2026-11-03T09:51:59.279Z,active,Lock,tuple,4,2.6
+2026-11-03T09:51:59.279Z,idle,Client,ClientRead,4,0
+2026-11-03T09:51:59.279Z,active,LWLock,LockManager,1,0.0
+2026-11-03T09:52:01.345Z,active,LWLock,LockManager,171,1.4
+2026-11-03T09:52:01.345Z,active,Lock,transactionid,65,1.4
+2026-11-03T09:52:01.345Z,idle in transaction,Client,ClientRead,6,1.0
+2026-11-03T09:52:01.345Z,active,,,2,0.2
+2026-11-03T09:52:01.345Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:52:01.345Z,idle,Client,ClientRead,1,0
+2026-11-03T09:52:01.345Z,idle in transaction,,,1,0.0
+2026-11-03T09:52:03.420Z,active,LWLock,LockManager,216,0.8
+2026-11-03T09:52:03.420Z,active,Lock,transactionid,18,0.7
+2026-11-03T09:52:03.420Z,idle in transaction,Client,ClientRead,3,3.1
+2026-11-03T09:52:03.420Z,active,Client,ClientRead,2,0.7
+2026-11-03T09:52:03.420Z,idle in transaction,,,2,2.4
+2026-11-03T09:52:03.420Z,active,,,2,0.4
+2026-11-03T09:52:03.420Z,idle,Client,ClientRead,1,0
+2026-11-03T09:52:03.420Z,idle,,,1,0
+2026-11-03T09:52:03.420Z,active,LWLock,BufferContent,1,0.1
+2026-11-03T09:52:03.420Z,active,Lock,tuple,1,0.7
+2026-11-03T09:52:05.487Z,active,Lock,tuple,157,2.8
+2026-11-03T09:52:05.487Z,idle,Client,ClientRead,52,0
+2026-11-03T09:52:05.487Z,idle in transaction,Client,ClientRead,37,5.2
+2026-11-03T09:52:05.487Z,active,Lock,transactionid,1,0.8
+2026-11-03T09:52:07.541Z,active,LWLock,LockManager,133,2.1
+2026-11-03T09:52:07.541Z,active,Lock,transactionid,99,2.1
+2026-11-03T09:52:07.541Z,idle,Client,ClientRead,5,0
+2026-11-03T09:52:07.541Z,idle in transaction,Client,ClientRead,5,7.2
+2026-11-03T09:52:07.541Z,active,Lock,tuple,4,1.8
+2026-11-03T09:52:07.541Z,active,,,1,1.3
+2026-11-03T09:52:09.601Z,active,Lock,transactionid,117,1.9
+2026-11-03T09:52:09.601Z,active,Lock,tuple,110,4.1
+2026-11-03T09:52:09.601Z,idle in transaction,Client,ClientRead,12,8.6
+2026-11-03T09:52:09.601Z,idle,Client,ClientRead,6,0
+2026-11-03T09:52:09.601Z,active,IO,WalSync,1,0.3
+2026-11-03T09:52:09.601Z,active,LWLock,LockManager,1,0.3
+2026-11-03T09:52:11.659Z,active,Lock,transactionid,233,2.5
+2026-11-03T09:52:11.659Z,idle in transaction,Client,ClientRead,7,3.3
+2026-11-03T09:52:11.659Z,idle,Client,ClientRead,3,0
+2026-11-03T09:52:11.659Z,idle,,,2,0
+2026-11-03T09:52:11.659Z,active,Lock,tuple,1,0.0
+2026-11-03T09:52:11.659Z,idle in transaction,IO,WalWrite,1,1.2
+2026-11-03T09:52:13.737Z,idle,Client,ClientRead,245,0
+2026-11-03T09:52:13.737Z,idle in transaction,Client,ClientRead,2,5.3
+2026-11-03T09:52:15.794Z,idle,Client,ClientRead,244,0
+2026-11-03T09:52:15.794Z,idle in transaction,Client,ClientRead,2,1.0
+2026-11-03T09:52:15.794Z,active,Client,ClientRead,1,1.1
+2026-11-03T09:52:17.847Z,idle,Client,ClientRead,245,0
+2026-11-03T09:52:17.847Z,idle in transaction,Client,ClientRead,2,1.3
+2026-11-03T09:52:19.900Z,idle,Client,ClientRead,245,0
+2026-11-03T09:52:19.900Z,idle in transaction,Client,ClientRead,2,0.4
+2026-11-03T09:52:21.954Z,idle,Client,ClientRead,245,0
+2026-11-03T09:52:21.954Z,idle in transaction,,,1,2.4
+2026-11-03T09:52:21.954Z,idle in transaction,Client,ClientRead,1,2.2
+2026-11-03T09:52:24.880Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:24.880Z,idle in transaction,,,1,1.7
+2026-11-03T09:52:26.612Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:26.612Z,idle in transaction,,,1,1.4
+2026-11-03T09:52:28.112Z,idle,Client,ClientRead,245,0
+2026-11-03T09:52:28.112Z,idle in transaction,,,1,1.1
+2026-11-03T09:52:28.112Z,idle in transaction,Client,ClientRead,1,0.0
+2026-11-03T09:52:30.165Z,idle,Client,ClientRead,245,0
+2026-11-03T09:52:30.165Z,idle in transaction,Client,ClientRead,2,0.8
+2026-11-03T09:52:32.218Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:32.218Z,idle in transaction,Client,ClientRead,1,0.6
+2026-11-03T09:52:34.271Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:34.271Z,idle in transaction,Client,ClientRead,1,0.4
+2026-11-03T09:52:36.323Z,idle,Client,ClientRead,245,0
+2026-11-03T09:52:36.323Z,idle in transaction,,,1,2.5
+2026-11-03T09:52:36.323Z,idle in transaction,Client,ClientRead,1,0.0
+2026-11-03T09:52:38.376Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:38.376Z,idle in transaction,Client,ClientRead,1,2.0
+2026-11-03T09:52:40.429Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:40.429Z,idle in transaction,Client,ClientRead,1,1.2
+2026-11-03T09:52:42.482Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:42.482Z,idle in transaction,Client,ClientRead,1,1.0
+2026-11-03T09:52:44.534Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:44.534Z,idle in transaction,Client,ClientRead,1,0.6
+2026-11-03T09:52:46.587Z,idle,Client,ClientRead,245,0
+2026-11-03T09:52:46.587Z,idle in transaction,,,1,0.3
+2026-11-03T09:52:46.587Z,idle in transaction,Client,ClientRead,1,0.0
+2026-11-03T09:52:48.640Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:48.640Z,idle in transaction,Client,ClientRead,1,2.4
+2026-11-03T09:52:50.692Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:50.692Z,idle in transaction,Client,ClientRead,1,2.0
+2026-11-03T09:52:52.746Z,idle,Client,ClientRead,245,0
+2026-11-03T09:52:52.746Z,idle in transaction,Client,ClientRead,2,1.7
+2026-11-03T09:52:54.803Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:54.803Z,idle in transaction,Client,ClientRead,1,1.4
+2026-11-03T09:52:56.855Z,idle,Client,ClientRead,246,0
+2026-11-03T09:52:56.855Z,idle in transaction,Client,ClientRead,1,1.2
+2026-11-03T09:52:58.907Z,active,Lock,transactionid,233,1.9
+2026-11-03T09:52:58.907Z,idle,Client,ClientRead,4,0
+2026-11-03T09:52:58.907Z,active,Lock,tuple,4,1.2
+2026-11-03T09:52:58.907Z,idle in transaction,Client,ClientRead,2,3.3
+2026-11-03T09:52:58.907Z,active,IO,WalSync,1,1.7
+2026-11-03T09:52:58.907Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:52:58.907Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:52:58.907Z,active,,,1,0.0
+2026-11-03T09:53:00.978Z,active,LWLock,LockManager,144,1.2
+2026-11-03T09:53:00.978Z,active,Lock,transactionid,89,1.2
+2026-11-03T09:53:00.978Z,idle in transaction,Client,ClientRead,5,0.5
+2026-11-03T09:53:00.978Z,active,Lock,tuple,2,0.9
+2026-11-03T09:53:00.978Z,active,,,2,0.9
+2026-11-03T09:53:00.978Z,idle,Client,ClientRead,2,0
+2026-11-03T09:53:00.978Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:53:00.978Z,idle,LWLock,WALWrite,1,0
+2026-11-03T09:53:00.978Z,active,IO,WalSync,1,0.0
+2026-11-03T09:53:03.492Z,active,Lock,transactionid,216,0.7
+2026-11-03T09:53:03.492Z,active,LWLock,LockManager,15,0.7
+2026-11-03T09:53:03.492Z,active,,,4,0.6
+2026-11-03T09:53:03.492Z,active,Lock,tuple,3,0.0
+2026-11-03T09:53:03.492Z,active,IO,WalSync,2,0.0
+2026-11-03T09:53:03.492Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:53:03.492Z,idle,Client,ClientRead,2,0
+2026-11-03T09:53:03.492Z,idle in transaction,Client,ClientRead,2,2.6
+2026-11-03T09:53:03.492Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:53:05.119Z,active,LWLock,LockManager,121,0.3
+2026-11-03T09:53:05.119Z,active,Lock,transactionid,118,0.3
+2026-11-03T09:53:05.119Z,idle in transaction,Client,ClientRead,3,0.0
+2026-11-03T09:53:05.119Z,active,,,2,0.1
+2026-11-03T09:53:05.119Z,active,Client,ClientRead,1,4.7
+2026-11-03T09:53:05.119Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:53:05.119Z,idle,Client,ClientRead,1,0
+2026-11-03T09:53:07.186Z,active,Lock,tuple,138,2.3
+2026-11-03T09:53:07.186Z,active,Lock,transactionid,91,2.2
+2026-11-03T09:53:07.186Z,idle,Client,ClientRead,7,0
+2026-11-03T09:53:07.186Z,idle in transaction,Client,ClientRead,5,1.2
+2026-11-03T09:53:07.186Z,idle in transaction,,,3,0.8
+2026-11-03T09:53:07.186Z,idle in transaction,IO,WalSync,1,0.0
+2026-11-03T09:53:07.186Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:53:07.186Z,active,,,1,0.0
+2026-11-03T09:53:09.247Z,active,Lock,tuple,168,2.2
+2026-11-03T09:53:09.247Z,idle,Client,ClientRead,43,0
+2026-11-03T09:53:09.247Z,idle in transaction,Client,ClientRead,32,2.9
+2026-11-03T09:53:09.247Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:53:09.247Z,active,Lock,transactionid,1,0.7
+2026-11-03T09:53:09.247Z,idle in transaction,,,1,0.0
+2026-11-03T09:53:11.307Z,active,Lock,tuple,216,2.0
+2026-11-03T09:53:11.307Z,idle in transaction,Client,ClientRead,14,5.0
+2026-11-03T09:53:11.307Z,idle,Client,ClientRead,11,0
+2026-11-03T09:53:11.307Z,idle,,,2,0
+2026-11-03T09:53:11.307Z,idle in transaction,,,2,0.0
+2026-11-03T09:53:11.307Z,active,Lock,transactionid,1,0.3
+2026-11-03T09:53:11.307Z,active,IO,WalSync,1,0.1
+2026-11-03T09:53:13.389Z,active,LWLock,LockManager,143,1.7
+2026-11-03T09:53:13.389Z,active,Lock,transactionid,90,1.7
+2026-11-03T09:53:13.389Z,idle,Client,ClientRead,4,0
+2026-11-03T09:53:13.389Z,idle in transaction,Client,ClientRead,4,1.0
+2026-11-03T09:53:13.389Z,active,,,2,0.6
+2026-11-03T09:53:13.389Z,idle,IO,WalSync,1,0
+2026-11-03T09:53:13.389Z,idle in transaction,,,1,0.0
+2026-11-03T09:53:13.389Z,active,Lock,tuple,1,0.0
+2026-11-03T09:53:13.389Z,idle in transaction,LWLock,WALWrite,1,1.3
+2026-11-03T09:53:15.462Z,active,LWLock,LockManager,187,1.4
+2026-11-03T09:53:15.462Z,active,Lock,transactionid,49,1.4
+2026-11-03T09:53:15.462Z,idle,Client,ClientRead,2,0
+2026-11-03T09:53:15.462Z,active,Lock,tuple,2,0.1
+2026-11-03T09:53:15.462Z,idle in transaction,Client,ClientRead,2,3.0
+2026-11-03T09:53:15.462Z,idle in transaction,IO,WalSync,1,0.0
+2026-11-03T09:53:15.462Z,active,Client,ClientRead,1,0.1
+2026-11-03T09:53:15.462Z,idle,,,1,0
+2026-11-03T09:53:15.462Z,idle in transaction,,,1,0.0
+2026-11-03T09:53:15.462Z,active,,,1,1.0
+2026-11-03T09:53:17.534Z,active,LWLock,LockManager,145,1.1
+2026-11-03T09:53:17.534Z,active,Lock,transactionid,86,1.0
+2026-11-03T09:53:17.534Z,active,,,6,0.9
+2026-11-03T09:53:17.534Z,idle,Client,ClientRead,4,0
+2026-11-03T09:53:17.534Z,active,Client,ClientRead,3,0.4
+2026-11-03T09:53:17.534Z,idle in transaction,Client,ClientRead,3,5.1
+2026-11-03T09:53:19.613Z,active,Lock,transactionid,234,0.7
+2026-11-03T09:53:19.613Z,idle in transaction,Client,ClientRead,7,1.7
+2026-11-03T09:53:19.613Z,idle,Client,ClientRead,4,0
+2026-11-03T09:53:19.613Z,active,,,1,0.0
+2026-11-03T09:53:19.613Z,active,Lock,tuple,1,0.5
+2026-11-03T09:53:21.690Z,active,Lock,transactionid,124,2.3
+2026-11-03T09:53:21.690Z,active,Lock,tuple,100,2.8
+2026-11-03T09:53:21.690Z,idle,Client,ClientRead,7,0
+2026-11-03T09:53:21.690Z,idle in transaction,Client,ClientRead,7,3.6
+2026-11-03T09:53:21.690Z,idle,,,2,0
+2026-11-03T09:53:21.690Z,idle in transaction,LWLock,WALWrite,2,0.1
+2026-11-03T09:53:21.690Z,idle in transaction,,,2,1.8
+2026-11-03T09:53:21.690Z,idle,LWLock,WALWrite,1,0
+2026-11-03T09:53:21.690Z,active,IO,WalSync,1,0.0
+2026-11-03T09:53:21.690Z,idle in transaction,Lock,tuple,1,0.0
+2026-11-03T09:53:23.766Z,active,Lock,tuple,146,2.5
+2026-11-03T09:53:23.766Z,active,Lock,transactionid,53,1.4
+2026-11-03T09:53:23.766Z,idle in transaction,Client,ClientRead,42,5.6
+2026-11-03T09:53:23.766Z,idle,Client,ClientRead,4,0
+2026-11-03T09:53:23.766Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:53:23.766Z,idle in transaction,,,1,1.3
+2026-11-03T09:53:25.845Z,active,Lock,tuple,161,2.2
+2026-11-03T09:53:25.845Z,idle,Client,ClientRead,61,0
+2026-11-03T09:53:25.845Z,idle in transaction,Client,ClientRead,18,3.4
+2026-11-03T09:53:25.845Z,active,Client,ClientRead,4,0.0
+2026-11-03T09:53:25.845Z,active,IO,WalSync,1,0.0
+2026-11-03T09:53:25.845Z,active,Lock,transactionid,1,2.1
+2026-11-03T09:53:25.845Z,idle in transaction,,,1,0.0
+2026-11-03T09:53:27.907Z,active,Lock,tuple,192,2.0
+2026-11-03T09:53:27.907Z,idle,Client,ClientRead,33,0
+2026-11-03T09:53:27.907Z,idle in transaction,Client,ClientRead,20,5.5
+2026-11-03T09:53:27.907Z,active,,,1,0.0
+2026-11-03T09:53:27.907Z,active,Lock,transactionid,1,1.3
+2026-11-03T09:53:29.975Z,active,LWLock,LockManager,151,1.7
+2026-11-03T09:53:29.975Z,active,Lock,transactionid,77,1.7
+2026-11-03T09:53:29.975Z,idle,Client,ClientRead,4,0
+2026-11-03T09:53:29.975Z,idle in transaction,Client,ClientRead,4,0.2
+2026-11-03T09:53:29.975Z,active,Lock,tuple,3,0.6
+2026-11-03T09:53:29.975Z,active,,,2,1.3
+2026-11-03T09:53:29.975Z,idle in transaction,,,2,0.7
+2026-11-03T09:53:29.975Z,idle in transaction,LWLock,LockManager,1,5.1
+2026-11-03T09:53:29.975Z,active,Client,ClientRead,1,0.2
+2026-11-03T09:53:29.975Z,idle,,,1,0
+2026-11-03T09:53:29.975Z,idle in transaction,IO,WalSync,1,0.0
+2026-11-03T09:53:32.576Z,active,LWLock,LockManager,194,1.7
+2026-11-03T09:53:32.576Z,active,Lock,transactionid,39,1.7
+2026-11-03T09:53:32.576Z,idle in transaction,Client,ClientRead,5,2.8
+2026-11-03T09:53:32.576Z,active,Client,ClientRead,4,1.4
+2026-11-03T09:53:32.576Z,active,Lock,tuple,3,0.4
+2026-11-03T09:53:32.576Z,idle,Client,ClientRead,1,0
+2026-11-03T09:53:32.576Z,active,,,1,0.7
+2026-11-03T09:53:34.141Z,active,LWLock,LockManager,136,1.4
+2026-11-03T09:53:34.141Z,active,Lock,transactionid,95,1.4
+2026-11-03T09:53:34.141Z,active,Lock,tuple,3,1.0
+2026-11-03T09:53:34.141Z,active,,,2,1.2
+2026-11-03T09:53:34.141Z,active,Client,ClientRead,2,0.8
+2026-11-03T09:53:34.141Z,idle in transaction,Client,ClientRead,2,3.4
+2026-11-03T09:53:34.141Z,idle in transaction,LWLock,WALWrite,2,0.5
+2026-11-03T09:53:34.141Z,idle in transaction,,,1,4.9
+2026-11-03T09:53:34.141Z,idle in transaction,Lock,tuple,1,0.0
+2026-11-03T09:53:34.141Z,idle in transaction,IO,WalSync,1,0.0
+2026-11-03T09:53:34.141Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:53:34.141Z,idle,Client,ClientRead,1,0
+2026-11-03T09:53:36.223Z,active,Lock,transactionid,233,1.2
+2026-11-03T09:53:36.223Z,idle,Client,ClientRead,6,0
+2026-11-03T09:53:36.223Z,active,Client,ClientRead,3,0.8
+2026-11-03T09:53:36.223Z,idle in transaction,Client,ClientRead,3,0.4
+2026-11-03T09:53:36.223Z,active,,,1,0.0
+2026-11-03T09:53:36.223Z,active,Lock,tuple,1,0.1
+2026-11-03T09:53:38.305Z,active,Lock,transactionid,214,1.0
+2026-11-03T09:53:38.305Z,active,LWLock,LockManager,17,1.0
+2026-11-03T09:53:38.305Z,active,Lock,tuple,5,0.9
+2026-11-03T09:53:38.305Z,idle in transaction,Client,ClientRead,4,2.8
+2026-11-03T09:53:38.305Z,idle,Client,ClientRead,3,0
+2026-11-03T09:53:38.305Z,active,IO,WalSync,2,0.7
+2026-11-03T09:53:38.305Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:53:38.305Z,active,,,1,0.0
+2026-11-03T09:53:40.381Z,active,LWLock,LockManager,171,0.7
+2026-11-03T09:53:40.381Z,active,Lock,transactionid,43,0.7
+2026-11-03T09:53:40.381Z,idle,Client,ClientRead,24,0
+2026-11-03T09:53:40.381Z,idle in transaction,Client,ClientRead,4,4.9
+2026-11-03T09:53:40.381Z,active,Lock,tuple,2,0.7
+2026-11-03T09:53:40.381Z,active,,,2,0.5
+2026-11-03T09:53:40.381Z,active,Client,ClientRead,1,0.1
+2026-11-03T09:53:42.458Z,active,LWLock,LockManager,196,0.6
+2026-11-03T09:53:42.458Z,active,Lock,transactionid,35,0.6
+2026-11-03T09:53:42.458Z,idle in transaction,Client,ClientRead,5,6.4
+2026-11-03T09:53:42.458Z,idle,Client,ClientRead,3,0
+2026-11-03T09:53:42.458Z,active,,,2,0.5
+2026-11-03T09:53:42.458Z,active,Client,ClientRead,2,0.2
+2026-11-03T09:53:42.458Z,active,LWLock,WALWrite,2,0.0
+2026-11-03T09:53:42.458Z,active,Lock,tuple,1,0.5
+2026-11-03T09:53:42.458Z,active,IO,WalSync,1,0.0
+2026-11-03T09:53:44.547Z,active,Lock,tuple,121,2.6
+2026-11-03T09:53:44.547Z,active,Lock,transactionid,106,2.7
+2026-11-03T09:53:44.547Z,idle in transaction,Client,ClientRead,9,2.0
+2026-11-03T09:53:44.547Z,idle,Client,ClientRead,7,0
+2026-11-03T09:53:44.547Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:53:44.547Z,active,,,1,0.0
+2026-11-03T09:53:44.547Z,idle,,,1,0
+2026-11-03T09:53:46.617Z,active,Lock,tuple,173,2.2
+2026-11-03T09:53:46.617Z,idle in transaction,Client,ClientRead,35,4.0
+2026-11-03T09:53:46.617Z,idle,Client,ClientRead,34,0
+2026-11-03T09:53:46.617Z,active,LWLock,WALWrite,3,0.0
+2026-11-03T09:53:46.617Z,active,IO,WalSync,1,0.0
+2026-11-03T09:53:46.617Z,active,Lock,transactionid,1,0.6
+2026-11-03T09:53:48.678Z,active,Lock,tuple,218,1.9
+2026-11-03T09:53:48.678Z,idle in transaction,Client,ClientRead,18,5.3
+2026-11-03T09:53:48.678Z,idle,Client,ClientRead,6,0
+2026-11-03T09:53:48.678Z,active,,,1,0.0
+2026-11-03T09:53:48.678Z,idle,,,1,0
+2026-11-03T09:53:48.678Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:53:48.678Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:53:48.678Z,active,Lock,transactionid,1,0.1
+2026-11-03T09:53:50.743Z,active,Lock,transactionid,235,1.6
+2026-11-03T09:53:50.743Z,idle in transaction,Client,ClientRead,9,2.3
+2026-11-03T09:53:50.743Z,idle,,,1,0
+2026-11-03T09:53:50.743Z,idle,Client,ClientRead,1,0
+2026-11-03T09:53:50.743Z,idle in transaction,,,1,0.0
+2026-11-03T09:53:52.819Z,active,Lock,transactionid,134,1.5
+2026-11-03T09:53:52.819Z,active,LWLock,LockManager,98,1.5
+2026-11-03T09:53:52.819Z,active,,,3,1.0
+2026-11-03T09:53:52.819Z,idle in transaction,Client,ClientRead,2,4.4
+2026-11-03T09:53:52.819Z,idle,Client,ClientRead,2,0
+2026-11-03T09:53:52.819Z,idle,LWLock,WALWrite,1,0
+2026-11-03T09:53:52.819Z,idle in transaction,,,1,2.8
+2026-11-03T09:53:52.819Z,idle in transaction,Lock,transactionid,1,0.0
+2026-11-03T09:53:52.819Z,idle in transaction,LWLock,WALWrite,1,0.2
+2026-11-03T09:53:52.819Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:53:52.819Z,active,IO,WalSync,1,0.0
+2026-11-03T09:53:52.819Z,active,Lock,tuple,1,0.0
+2026-11-03T09:53:52.819Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:53:54.908Z,active,Lock,transactionid,209,1.2
+2026-11-03T09:53:54.908Z,active,LWLock,LockManager,27,1.2
+2026-11-03T09:53:54.908Z,idle in transaction,Client,ClientRead,6,4.9
+2026-11-03T09:53:54.908Z,idle,Client,ClientRead,3,0
+2026-11-03T09:53:54.908Z,active,,,2,0.2
+2026-11-03T09:53:56.992Z,active,Lock,transactionid,232,1.0
+2026-11-03T09:53:56.992Z,idle,Client,ClientRead,7,0
+2026-11-03T09:53:56.992Z,idle in transaction,Client,ClientRead,6,2.9
+2026-11-03T09:53:56.992Z,active,Lock,tuple,2,0.7
+2026-11-03T09:53:59.803Z,idle,Client,ClientRead,245,0
+2026-11-03T09:53:59.803Z,idle in transaction,Client,ClientRead,2,3.7
+2026-11-03T09:53:59.803Z,active,Timeout,VacuumTruncate,1,1.6
+2026-11-03T09:54:01.135Z,idle,Client,ClientRead,245,0
+2026-11-03T09:54:01.135Z,idle in transaction,Client,ClientRead,2,2.2
+2026-11-03T09:54:01.135Z,active,Timeout,VacuumTruncate,1,3.7
+2026-11-03T09:54:03.188Z,idle,Client,ClientRead,244,0
+2026-11-03T09:54:03.188Z,idle in transaction,Client,ClientRead,3,1.5
+2026-11-03T09:54:05.244Z,idle,Client,ClientRead,245,0
+2026-11-03T09:54:05.244Z,idle in transaction,,,1,0.7
+2026-11-03T09:54:05.244Z,idle in transaction,Client,ClientRead,1,1.2
+2026-11-03T09:54:07.297Z,idle,Client,ClientRead,245,0
+2026-11-03T09:54:07.297Z,idle in transaction,Client,ClientRead,2,0.9
+2026-11-03T09:54:09.350Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:09.350Z,idle in transaction,Client,ClientRead,1,2.1
+2026-11-03T09:54:11.403Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:11.403Z,idle in transaction,Client,ClientRead,1,1.4
+2026-11-03T09:54:13.460Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:13.460Z,idle in transaction,Client,ClientRead,1,0.6
+2026-11-03T09:54:15.513Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:15.513Z,idle in transaction,Client,ClientRead,1,2.7
+2026-11-03T09:54:17.565Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:17.565Z,idle in transaction,Client,ClientRead,1,1.9
+2026-11-03T09:54:19.618Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:19.618Z,idle in transaction,Client,ClientRead,1,1.3
+2026-11-03T09:54:21.671Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:21.671Z,idle in transaction,Client,ClientRead,1,0.6
+2026-11-03T09:54:23.724Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:23.724Z,idle in transaction,Client,ClientRead,1,2.7
+2026-11-03T09:54:25.777Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:25.777Z,idle in transaction,Client,ClientRead,1,1.7
+2026-11-03T09:54:27.834Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:27.834Z,idle in transaction,Client,ClientRead,1,1.6
+2026-11-03T09:54:29.886Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:29.886Z,idle in transaction,Client,ClientRead,1,1.2
+2026-11-03T09:54:31.938Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:31.938Z,idle in transaction,Client,ClientRead,1,0.9
+2026-11-03T09:54:33.992Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:33.992Z,idle in transaction,,,1,0.6
+2026-11-03T09:54:36.458Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:36.458Z,idle in transaction,Client,ClientRead,1,0.4
+2026-11-03T09:54:38.991Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:38.991Z,idle in transaction,Client,ClientRead,1,0.1
+2026-11-03T09:54:40.151Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:40.151Z,idle in transaction,Client,ClientRead,1,2.2
+2026-11-03T09:54:42.204Z,idle,Client,ClientRead,246,0
+2026-11-03T09:54:42.204Z,idle in transaction,Client,ClientRead,1,1.4
+2026-11-03T09:54:44.258Z,active,Lock,transactionid,224,1.2
+2026-11-03T09:54:44.258Z,active,LWLock,LockManager,9,1.2
+2026-11-03T09:54:44.258Z,idle in transaction,,,4,0.0
+2026-11-03T09:54:44.258Z,idle in transaction,Client,ClientRead,3,0.1
+2026-11-03T09:54:44.258Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:54:44.258Z,active,Lock,tuple,2,0.1
+2026-11-03T09:54:44.258Z,idle,Client,ClientRead,1,0
+2026-11-03T09:54:44.258Z,idle,,,1,0
+2026-11-03T09:54:44.258Z,active,LWLock,WALWrite,1,0.9
+2026-11-03T09:54:46.327Z,active,Lock,transactionid,232,1.1
+2026-11-03T09:54:46.327Z,idle in transaction,Client,ClientRead,6,2.2
+2026-11-03T09:54:46.327Z,idle,Client,ClientRead,3,0
+2026-11-03T09:54:46.327Z,active,Lock,tuple,2,0.4
+2026-11-03T09:54:46.327Z,idle in transaction,LWLock,WALWrite,1,0.7
+2026-11-03T09:54:46.327Z,active,LWLock,LockManager,1,0.0
+2026-11-03T09:54:46.327Z,idle in transaction,,,1,0.0
+2026-11-03T09:54:46.327Z,active,,,1,0.0
+2026-11-03T09:54:48.400Z,active,LWLock,LockManager,148,0.9
+2026-11-03T09:54:48.400Z,active,Lock,transactionid,81,0.9
+2026-11-03T09:54:48.400Z,idle in transaction,Client,ClientRead,6,4.3
+2026-11-03T09:54:48.400Z,active,Lock,tuple,6,0.8
+2026-11-03T09:54:48.400Z,idle,Client,ClientRead,2,0
+2026-11-03T09:54:48.400Z,active,,,2,0.4
+2026-11-03T09:54:48.400Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:54:48.400Z,idle,,,1,0
+2026-11-03T09:54:50.466Z,active,Lock,transactionid,132,0.8
+2026-11-03T09:54:50.466Z,active,LWLock,LockManager,100,0.9
+2026-11-03T09:54:50.466Z,idle in transaction,Client,ClientRead,4,1.2
+2026-11-03T09:54:50.466Z,active,,,3,0.4
+2026-11-03T09:54:50.466Z,idle in transaction,LWLock,WALWrite,2,0.0
+2026-11-03T09:54:50.466Z,idle,,,2,0
+2026-11-03T09:54:50.466Z,idle,Client,ClientRead,1,0
+2026-11-03T09:54:50.466Z,idle in transaction,,,1,0.4
+2026-11-03T09:54:50.466Z,active,Lock,tuple,1,0.0
+2026-11-03T09:54:50.466Z,active,IO,WalSync,1,0.0
+2026-11-03T09:54:52.535Z,active,Lock,transactionid,232,0.7
+2026-11-03T09:54:52.535Z,idle in transaction,Client,ClientRead,5,0.1
+2026-11-03T09:54:52.535Z,active,Lock,tuple,3,0.7
+2026-11-03T09:54:52.535Z,active,,,3,0.0
+2026-11-03T09:54:52.535Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:54:52.535Z,idle,Client,ClientRead,1,0
+2026-11-03T09:54:52.535Z,idle in transaction,,,1,3.3
+2026-11-03T09:54:52.535Z,active,IO,WalSync,1,0.0
+2026-11-03T09:54:54.609Z,active,LWLock,LockManager,103,0.4
+2026-11-03T09:54:54.609Z,active,Lock,transactionid,67,2.4
+2026-11-03T09:54:54.609Z,active,Lock,tuple,56,2.8
+2026-11-03T09:54:54.609Z,idle in transaction,Client,ClientRead,11,5.3
+2026-11-03T09:54:54.609Z,idle,Client,ClientRead,7,0
+2026-11-03T09:54:54.609Z,active,,,2,0.4
+2026-11-03T09:54:54.609Z,active,IO,WalSync,1,0.0
+2026-11-03T09:54:56.669Z,active,Lock,transactionid,160,0.3
+2026-11-03T09:54:56.669Z,active,Lock,tuple,68,2.5
+2026-11-03T09:54:56.669Z,idle in transaction,Client,ClientRead,7,4.2
+2026-11-03T09:54:56.669Z,idle,Client,ClientRead,6,0
+2026-11-03T09:54:56.669Z,active,LWLock,WALWrite,3,0.0
+2026-11-03T09:54:56.669Z,active,,,2,1.4
+2026-11-03T09:54:56.669Z,active,IO,WalWrite,1,0.0
+2026-11-03T09:54:58.749Z,active,Lock,tuple,133,2.3
+2026-11-03T09:54:58.749Z,active,Lock,transactionid,98,1.7
+2026-11-03T09:54:58.749Z,idle in transaction,Client,ClientRead,6,3.5
+2026-11-03T09:54:58.749Z,idle,Client,ClientRead,3,0
+2026-11-03T09:54:58.749Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:54:58.749Z,idle,,,2,0
+2026-11-03T09:54:58.749Z,active,IO,WalSync,1,0.0
+2026-11-03T09:54:58.749Z,active,LWLock,WALWrite,1,0.1
+2026-11-03T09:54:58.749Z,idle in transaction,,,1,2.1
+2026-11-03T09:54:58.749Z,active,Timeout,VacuumTruncate,1,1.0
+2026-11-03T09:55:00.820Z,active,Lock,tuple,136,2.1
+2026-11-03T09:55:00.820Z,active,Lock,transactionid,91,1.2
+2026-11-03T09:55:00.820Z,idle in transaction,Client,ClientRead,13,2.0
+2026-11-03T09:55:00.820Z,idle,Client,ClientRead,6,0
+2026-11-03T09:55:00.820Z,active,IO,WalSync,1,0.0
+2026-11-03T09:55:00.820Z,active,Timeout,VacuumTruncate,1,3.1
+2026-11-03T09:55:02.880Z,active,Lock,tuple,163,2.2
+2026-11-03T09:55:02.880Z,idle,Client,ClientRead,48,0
+2026-11-03T09:55:02.880Z,idle in transaction,Client,ClientRead,23,4.1
+2026-11-03T09:55:02.880Z,active,Client,ClientRead,6,0.0
+2026-11-03T09:55:02.880Z,active,LWLock,WALWrite,3,0.0
+2026-11-03T09:55:02.880Z,idle,,,1,0
+2026-11-03T09:55:02.880Z,active,Lock,transactionid,1,1.6
+2026-11-03T09:55:02.880Z,active,IO,WalSync,1,0.0
+2026-11-03T09:55:02.880Z,idle in transaction,LWLock,WALWrite,1,0.0
+2026-11-03T09:55:04.938Z,active,Lock,tuple,183,2.0
+2026-11-03T09:55:04.938Z,idle,Client,ClientRead,44,0
+2026-11-03T09:55:04.938Z,idle in transaction,Client,ClientRead,16,4.1
+2026-11-03T09:55:04.938Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:55:04.938Z,active,IO,WalSync,1,0.0
+2026-11-03T09:55:04.938Z,active,Lock,transactionid,1,0.3
+2026-11-03T09:55:06.996Z,active,Lock,tuple,180,1.8
+2026-11-03T09:55:06.996Z,idle,Client,ClientRead,38,0
+2026-11-03T09:55:06.996Z,idle in transaction,Client,ClientRead,20,3.0
+2026-11-03T09:55:06.996Z,active,LWLock,WALWrite,3,0.0
+2026-11-03T09:55:06.996Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:55:06.996Z,idle in transaction,,,2,0.8
+2026-11-03T09:55:06.996Z,active,Lock,transactionid,1,1.3
+2026-11-03T09:55:06.996Z,active,IO,WalSync,1,0.0
+2026-11-03T09:55:09.603Z,active,Lock,tuple,228,1.8
+2026-11-03T09:55:09.603Z,idle in transaction,Client,ClientRead,9,5.1
+2026-11-03T09:55:09.603Z,idle,Client,ClientRead,6,0
+2026-11-03T09:55:09.603Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:55:09.603Z,active,Lock,transactionid,1,1.3
+2026-11-03T09:55:09.603Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:55:11.135Z,active,Lock,transactionid,207,1.8
+2026-11-03T09:55:11.135Z,active,LWLock,LockManager,25,1.6
+2026-11-03T09:55:11.135Z,idle in transaction,Client,ClientRead,7,5.0
+2026-11-03T09:55:11.135Z,active,Lock,tuple,3,0.7
+2026-11-03T09:55:11.135Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:55:11.135Z,idle,Client,ClientRead,2,0
+2026-11-03T09:55:11.135Z,active,IO,WalSync,1,0.0
+2026-11-03T09:55:13.204Z,active,Lock,transactionid,180,1.6
+2026-11-03T09:55:13.204Z,active,LWLock,LockManager,53,1.6
+2026-11-03T09:55:13.204Z,idle in transaction,Client,ClientRead,6,3.0
+2026-11-03T09:55:13.204Z,active,Lock,tuple,3,0.3
+2026-11-03T09:55:13.204Z,idle,Client,ClientRead,2,0
+2026-11-03T09:55:13.204Z,idle in transaction,LWLock,WALWrite,1,0.0
+2026-11-03T09:55:13.204Z,active,IO,WalSync,1,1.4
+2026-11-03T09:55:13.204Z,active,,,1,0.0
+2026-11-03T09:55:15.284Z,active,Lock,transactionid,161,1.2
+2026-11-03T09:55:15.284Z,active,LWLock,LockManager,74,1.2
+2026-11-03T09:55:15.284Z,idle in transaction,,,5,5.1
+2026-11-03T09:55:15.284Z,active,,,2,1.2
+2026-11-03T09:55:15.284Z,idle,Client,ClientRead,2,0
+2026-11-03T09:55:15.284Z,idle,IO,WalSync,1,0
+2026-11-03T09:55:15.284Z,active,Lock,tuple,1,1.2
+2026-11-03T09:55:15.284Z,idle in transaction,Client,ClientRead,1,0.0
+2026-11-03T09:55:17.350Z,active,LWLock,LockManager,185,1.2
+2026-11-03T09:55:17.350Z,active,Lock,transactionid,45,1.2
+2026-11-03T09:55:17.350Z,idle in transaction,Client,ClientRead,6,1.7
+2026-11-03T09:55:17.350Z,active,,,4,1.1
+2026-11-03T09:55:17.350Z,active,Client,ClientRead,3,0.5
+2026-11-03T09:55:17.350Z,active,Lock,tuple,2,0.0
+2026-11-03T09:55:17.350Z,idle,Client,ClientRead,1,0
+2026-11-03T09:55:17.350Z,idle in transaction,IO,WalSync,1,0.0
+2026-11-03T09:55:19.429Z,active,Lock,transactionid,149,1.2
+2026-11-03T09:55:19.429Z,active,LWLock,LockManager,80,1.2
+2026-11-03T09:55:19.429Z,idle in transaction,Client,ClientRead,8,2.6
+2026-11-03T09:55:19.429Z,active,,,4,1.0
+2026-11-03T09:55:19.429Z,active,Client,ClientRead,3,0.4
+2026-11-03T09:55:19.429Z,active,Lock,tuple,2,0.5
+2026-11-03T09:55:19.429Z,idle,Client,ClientRead,1,0
+2026-11-03T09:55:21.513Z,active,Lock,transactionid,204,1.0
+2026-11-03T09:55:21.513Z,active,LWLock,LockManager,24,1.0
+2026-11-03T09:55:21.513Z,idle,Client,ClientRead,8,0
+2026-11-03T09:55:21.513Z,idle in transaction,Client,ClientRead,8,4.7
+2026-11-03T09:55:21.513Z,idle,LWLock,LockManager,1,0
+2026-11-03T09:55:21.513Z,idle in transaction,IO,WalSync,1,0.0
+2026-11-03T09:55:21.513Z,active,Lock,tuple,1,0.0
+2026-11-03T09:55:23.584Z,active,Lock,transactionid,158,0.9
+2026-11-03T09:55:23.584Z,active,LWLock,LockManager,73,0.9
+2026-11-03T09:55:23.584Z,idle in transaction,Client,ClientRead,6,0.0
+2026-11-03T09:55:23.584Z,idle,Client,ClientRead,2,0
+2026-11-03T09:55:23.584Z,idle in transaction,,,2,0.0
+2026-11-03T09:55:23.584Z,active,Client,ClientRead,2,1.4
+2026-11-03T09:55:23.584Z,idle in transaction,IO,WalSync,1,0.0
+2026-11-03T09:55:23.584Z,active,IO,WalSync,1,0.6
+2026-11-03T09:55:23.584Z,active,LWLock,WALWrite,1,0.0
+2026-11-03T09:55:23.584Z,active,,,1,0.6
+2026-11-03T09:55:25.666Z,active,Lock,transactionid,234,0.7
+2026-11-03T09:55:25.666Z,idle,Client,ClientRead,6,0
+2026-11-03T09:55:25.666Z,idle in transaction,Client,ClientRead,5,3.5
+2026-11-03T09:55:25.666Z,active,IO,WalSync,1,0.0
+2026-11-03T09:55:25.666Z,active,Lock,tuple,1,0.7
+2026-11-03T09:55:27.740Z,active,Lock,transactionid,236,0.7
+2026-11-03T09:55:27.740Z,idle in transaction,Client,ClientRead,5,0.3
+2026-11-03T09:55:27.740Z,idle,Client,ClientRead,4,0
+2026-11-03T09:55:27.740Z,active,Lock,tuple,1,0.2
+2026-11-03T09:55:27.740Z,idle,,,1,0
+2026-11-03T09:55:29.813Z,active,Lock,tuple,113,2.7
+2026-11-03T09:55:29.813Z,idle,Client,ClientRead,72,0
+2026-11-03T09:55:29.813Z,idle in transaction,Client,ClientRead,20,2.1
+2026-11-03T09:55:29.813Z,active,Client,ClientRead,14,0.0
+2026-11-03T09:55:29.813Z,active,Lock,transactionid,11,2.6
+2026-11-03T09:55:29.813Z,idle,,,7,0
+2026-11-03T09:55:29.813Z,idle,LWLock,WALWrite,4,0
+2026-11-03T09:55:29.813Z,active,,,2,0.0
+2026-11-03T09:55:29.813Z,active,LWLock,WALWrite,2,0.0
+2026-11-03T09:55:29.813Z,idle,IO,WalSync,1,0
+2026-11-03T09:55:29.813Z,idle in transaction,LWLock,WALWrite,1,0.2
+2026-11-03T09:55:31.876Z,active,Lock,tuple,166,2.2
+2026-11-03T09:55:31.876Z,idle,Client,ClientRead,69,0
+2026-11-03T09:55:31.876Z,idle in transaction,Client,ClientRead,10,4.1
+2026-11-03T09:55:31.876Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:55:31.876Z,active,Lock,transactionid,1,0.7
+2026-11-03T09:55:33.932Z,active,Lock,tuple,185,2.0
+2026-11-03T09:55:33.932Z,idle,Client,ClientRead,40,0
+2026-11-03T09:55:33.932Z,idle in transaction,Client,ClientRead,17,0.9
+2026-11-03T09:55:33.932Z,active,LWLock,WALWrite,3,0.0
+2026-11-03T09:55:33.932Z,active,IO,WalSync,1,0.0
+2026-11-03T09:55:33.932Z,active,Lock,transactionid,1,1.7
+2026-11-03T09:55:35.990Z,active,Lock,tuple,209,1.8
+2026-11-03T09:55:35.990Z,idle,Client,ClientRead,18,0
+2026-11-03T09:55:35.990Z,idle in transaction,Client,ClientRead,13,2.7
+2026-11-03T09:55:35.990Z,idle,,,2,0
+2026-11-03T09:55:35.990Z,idle in transaction,,,2,0.0
+2026-11-03T09:55:35.990Z,active,Lock,transactionid,1,0.4
+2026-11-03T09:55:35.990Z,idle,LWLock,WALWrite,1,0
+2026-11-03T09:55:35.990Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:55:38.531Z,active,Lock,transactionid,158,1.8
+2026-11-03T09:55:38.531Z,active,LWLock,LockManager,73,1.7
+2026-11-03T09:55:38.531Z,active,Lock,tuple,5,1.5
+2026-11-03T09:55:38.531Z,idle in transaction,Client,ClientRead,4,4.8
+2026-11-03T09:55:38.531Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:55:38.531Z,idle in transaction,,,2,0.0
+2026-11-03T09:55:38.531Z,active,IO,WalSync,1,0.0
+2026-11-03T09:55:38.531Z,idle,Client,ClientRead,1,0
+2026-11-03T09:55:38.531Z,active,,,1,1.4
+2026-11-03T09:55:40.124Z,active,Lock,transactionid,233,1.6
+2026-11-03T09:55:40.124Z,idle in transaction,,,2,2.6
+2026-11-03T09:55:40.124Z,idle in transaction,Client,ClientRead,2,0.0
+2026-11-03T09:55:40.124Z,active,Lock,tuple,2,0.2
+2026-11-03T09:55:40.124Z,active,Client,ClientRead,2,0.8
+2026-11-03T09:55:40.124Z,idle,,,2,0
+2026-11-03T09:55:40.124Z,idle in transaction,LWLock,WALWrite,1,1.4
+2026-11-03T09:55:40.124Z,active,IO,WalSync,1,0.0
+2026-11-03T09:55:40.124Z,idle,Client,ClientRead,1,0
+2026-11-03T09:55:40.124Z,idle in transaction,Lock,tuple,1,0.0
+2026-11-03T09:55:42.200Z,active,Lock,transactionid,152,1.5
+2026-11-03T09:55:42.200Z,active,LWLock,LockManager,83,1.5
+2026-11-03T09:55:42.200Z,idle in transaction,Client,ClientRead,4,4.7
+2026-11-03T09:55:42.200Z,idle,Client,ClientRead,3,0
+2026-11-03T09:55:42.200Z,idle,IO,WalSync,1,0
+2026-11-03T09:55:42.200Z,idle in transaction,LWLock,LockManager,1,0.0
+2026-11-03T09:55:42.200Z,active,Lock,tuple,1,1.4
+2026-11-03T09:55:42.200Z,active,LWLock,WALWrite,1,0.4
+2026-11-03T09:55:42.200Z,idle,,,1,0
+2026-11-03T09:55:44.280Z,active,Lock,transactionid,234,1.5
+2026-11-03T09:55:44.280Z,idle in transaction,Client,ClientRead,8,5.0
+2026-11-03T09:55:44.280Z,idle,Client,ClientRead,5,0
+2026-11-03T09:55:46.373Z,active,Lock,transactionid,199,0.9
+2026-11-03T09:55:46.373Z,active,LWLock,LockManager,28,0.9
+2026-11-03T09:55:46.373Z,active,,,4,0.9
+2026-11-03T09:55:46.373Z,idle in transaction,Client,ClientRead,3,2.9
+2026-11-03T09:55:46.373Z,active,LWLock,WALWrite,3,0.0
+2026-11-03T09:55:46.373Z,active,Lock,tuple,3,0.8
+2026-11-03T09:55:46.373Z,active,Client,ClientRead,2,0.0
+2026-11-03T09:55:46.373Z,idle,LWLock,WALWrite,2,0
+2026-11-03T09:55:46.373Z,idle,,,1,0
+2026-11-03T09:55:46.373Z,active,IO,WalSync,1,0.0
+2026-11-03T09:55:46.373Z,idle,Client,ClientRead,1,0
+2026-11-03T09:55:48.455Z,idle,Client,ClientRead,245,0
+2026-11-03T09:55:48.455Z,idle in transaction,Client,ClientRead,2,3.7
+2026-11-03T09:55:50.511Z,idle,Client,ClientRead,245,0
+2026-11-03T09:55:50.511Z,idle in transaction,Client,ClientRead,2,1.8
+2026-11-03T09:55:52.567Z,idle,Client,ClientRead,245,0
+2026-11-03T09:55:52.567Z,idle in transaction,Client,ClientRead,2,1.0
+2026-11-03T09:55:54.621Z,idle,Client,ClientRead,246,0
+2026-11-03T09:55:54.621Z,idle in transaction,Client,ClientRead,1,2.7
+2026-11-03T09:55:56.674Z,idle,Client,ClientRead,245,0
+2026-11-03T09:55:56.674Z,idle in transaction,Client,ClientRead,2,1.9
+2026-11-03T09:55:58.727Z,idle,Client,ClientRead,246,0
+2026-11-03T09:55:58.727Z,idle in transaction,Client,ClientRead,1,0.7
+2026-11-03T09:56:00.782Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:00.782Z,idle in transaction,Client,ClientRead,1,0.2
+2026-11-03T09:56:02.839Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:02.839Z,idle in transaction,Client,ClientRead,1,2.3
+2026-11-03T09:56:04.892Z,idle,Client,ClientRead,245,0
+2026-11-03T09:56:04.892Z,idle in transaction,Client,ClientRead,2,1.8
+2026-11-03T09:56:06.948Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:06.948Z,idle in transaction,Client,ClientRead,1,1.4
+2026-11-03T09:56:09.224Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:09.224Z,idle in transaction,Client,ClientRead,1,1.0
+2026-11-03T09:56:11.557Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:11.557Z,idle in transaction,Client,ClientRead,1,0.6
+2026-11-03T09:56:13.113Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:13.113Z,idle in transaction,Client,ClientRead,1,0.1
+2026-11-03T09:56:15.166Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:15.166Z,idle in transaction,Client,ClientRead,1,2.2
+2026-11-03T09:56:17.219Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:17.219Z,idle in transaction,Client,ClientRead,1,1.0
+2026-11-03T09:56:19.278Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:19.278Z,idle in transaction,Client,ClientRead,1,3.0
+2026-11-03T09:56:21.332Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:21.332Z,idle in transaction,,,1,1.7
+2026-11-03T09:56:23.386Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:23.386Z,idle in transaction,Client,ClientRead,1,0.7
+2026-11-03T09:56:25.440Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:25.440Z,idle in transaction,Client,ClientRead,1,2.8
+2026-11-03T09:56:27.494Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:27.494Z,active,Client,ClientRead,1,1.6
+2026-11-03T09:56:29.547Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:29.547Z,idle in transaction,Client,ClientRead,1,0.3
+2026-11-03T09:56:31.600Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:31.600Z,idle in transaction,Client,ClientRead,1,2.4
+2026-11-03T09:56:33.653Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:33.653Z,idle in transaction,Client,ClientRead,1,1.0
+2026-11-03T09:56:35.706Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:35.706Z,idle in transaction,Client,ClientRead,1,3.0
+2026-11-03T09:56:37.761Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:37.761Z,idle in transaction,Client,ClientRead,1,1.8
+2026-11-03T09:56:39.818Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:39.818Z,idle in transaction,Client,ClientRead,1,1.1
+2026-11-03T09:56:41.871Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:41.871Z,idle in transaction,Client,ClientRead,1,0.4
+2026-11-03T09:56:43.924Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:43.924Z,idle in transaction,Client,ClientRead,1,2.5
+2026-11-03T09:56:45.978Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:45.978Z,idle in transaction,Client,ClientRead,1,1.7
+2026-11-03T09:56:48.326Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:48.326Z,idle in transaction,Client,ClientRead,1,0.5
+2026-11-03T09:56:50.860Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:50.860Z,idle in transaction,Client,ClientRead,1,2.5
+2026-11-03T09:56:52.138Z,idle,Client,ClientRead,245,0
+2026-11-03T09:56:52.138Z,idle in transaction,,,1,0.0
+2026-11-03T09:56:52.138Z,idle in transaction,Client,ClientRead,1,1.6
+2026-11-03T09:56:54.192Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:54.192Z,idle in transaction,Client,ClientRead,1,0.3
+2026-11-03T09:56:56.246Z,idle,Client,ClientRead,246,0
+2026-11-03T09:56:56.246Z,idle in transaction,Client,ClientRead,1,2.3
+2026-11-03T09:56:58.298Z,idle,Client,ClientRead,244,0
+2026-11-03T09:56:58.298Z,idle in transaction,Client,ClientRead,3,1.3
+2026-11-03T09:57:00.352Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:00.352Z,idle in transaction,Client,ClientRead,1,0.2
+2026-11-03T09:57:02.405Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:02.405Z,idle in transaction,Client,ClientRead,1,2.3
+2026-11-03T09:57:04.458Z,idle,Client,ClientRead,245,0
+2026-11-03T09:57:04.458Z,active,Client,ClientRead,1,0.0
+2026-11-03T09:57:04.458Z,idle in transaction,Client,ClientRead,1,1.3
+2026-11-03T09:57:06.511Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:06.511Z,idle in transaction,Client,ClientRead,1,3.3
+2026-11-03T09:57:08.564Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:08.564Z,idle in transaction,Client,ClientRead,1,1.9
+2026-11-03T09:57:10.619Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:10.619Z,idle in transaction,Client,ClientRead,1,1.4
+2026-11-03T09:57:12.674Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:12.674Z,idle in transaction,Client,ClientRead,1,1.4
+2026-11-03T09:57:14.728Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:14.728Z,idle in transaction,Client,ClientRead,1,1.5
+2026-11-03T09:57:16.782Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:16.782Z,idle in transaction,Client,ClientRead,1,1.4
+2026-11-03T09:57:18.840Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:18.840Z,idle in transaction,Client,ClientRead,1,1.4
+2026-11-03T09:57:20.893Z,idle,Client,ClientRead,245,0
+2026-11-03T09:57:20.893Z,idle in transaction,Client,ClientRead,2,1.1
+2026-11-03T09:57:22.947Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:22.947Z,idle in transaction,,,1,1.1
+2026-11-03T09:57:25.162Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:25.162Z,idle in transaction,Client,ClientRead,1,0.9
+2026-11-03T09:57:27.548Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:27.548Z,idle in transaction,Client,ClientRead,1,0.8
+2026-11-03T09:57:29.109Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:29.109Z,idle in transaction,Client,ClientRead,1,0.7
+2026-11-03T09:57:31.166Z,idle,Client,ClientRead,245,0
+2026-11-03T09:57:31.166Z,idle in transaction,Client,ClientRead,2,0.4
+2026-11-03T09:57:33.220Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:33.220Z,idle in transaction,,,1,1.2
+2026-11-03T09:57:35.274Z,idle,Client,ClientRead,245,0
+2026-11-03T09:57:35.274Z,idle in transaction,Client,ClientRead,2,1.0
+2026-11-03T09:57:37.329Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:37.329Z,idle in transaction,Client,ClientRead,1,0.5
+2026-11-03T09:57:39.384Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:39.384Z,idle in transaction,Client,ClientRead,1,0.4
+2026-11-03T09:57:41.440Z,idle,Client,ClientRead,246,0
+2026-11-03T09:57:41.440Z,idle in transaction,Client,ClientRead,1,0.2

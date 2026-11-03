@@ -1,0 +1,70 @@
+# Procedência: e4f862f (K2) vs ada814b (K2-pos-231, topo da Issue-232)
+# Comando nos dois: K8S_ADMISSION_MIN=1 (só no ada814b) K8S_OVERLAY=rodada SLIM_TAG=k8s K8S_DB_REMOTO=192.168.68.50:5433 Projeto/k8s/cluster.sh renderizar --trilha b1
+# A manifest do K2-repetição (a7da861) é a mesma do e4f862f.
+--- e4f862f (K2)
++++ ada814b (K2-pos-231)
+@@ -1223,14 +1223,12 @@
+   name: stock
+   namespace: gerenciador
+ spec:
++  replicas: 1
+   selector:
+     matchLabels:
+       app: stock
+   strategy:
+-    rollingUpdate:
+-      maxSurge: 0
+-      maxUnavailable: 1
+-    type: RollingUpdate
++    type: Recreate
+   template:
+     metadata:
+       annotations:
+@@ -1249,7 +1247,7 @@
+       containers:
+       - env:
+         - name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE
+-          value: "60"
++          value: "245"
+         - name: MANAGEMENT_SERVER_PORT
+           value: "8090"
+         - name: MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED
+@@ -1834,38 +1832,3 @@
+       valueLocation: rpm
+     metricType: AverageValue
+     type: metrics-api
+----
+-apiVersion: keda.sh/v1alpha1
+-kind: ScaledObject
+-metadata:
+-  labels:
+-    app: stock
+-  name: stock
+-  namespace: gerenciador
+-spec:
+-  advanced:
+-    horizontalPodAutoscalerConfig:
+-      behavior:
+-        scaleDown:
+-          policies:
+-          - periodSeconds: 60
+-            type: Pods
+-            value: 1
+-          stabilizationWindowSeconds: 120
+-        scaleUp:
+-          policies:
+-          - periodSeconds: 15
+-            type: Pods
+-            value: 1
+-          stabilizationWindowSeconds: 0
+-  maxReplicaCount: 3
+-  minReplicaCount: 1
+-  pollingInterval: 5
+-  scaleTargetRef:
+-    name: stock
+-  triggers:
+-  - metadata:
+-      containerName: stock
+-      value: "50"
+-    metricType: Utilization
+-    type: cpu

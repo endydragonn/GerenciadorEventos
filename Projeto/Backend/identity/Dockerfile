@@ -4,6 +4,7 @@
 FROM maven:3.9.7-eclipse-temurin-21-jammy AS build
 WORKDIR /build
 COPY pom.xml checkstyle.xml checkstyle-suppressions.xml ./
+COPY client-lb ./client-lb
 COPY shared ./shared
 COPY identity-client ./identity-client
 COPY identity ./identity

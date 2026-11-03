@@ -1,0 +1,32 @@
+# Overlay `rodada` (issue #228): a base (Secrets REAIS do Projeto/.env, NodePort 30081/30088 -> host 8081/8088 pelo kind.yaml, o gerador da rede local chega no gateway)
+# + `SEED_ENABLED=true` no gateway, para o kit de carga semear por POST /bff/seed e a sonda do limpar-banco.sh logar. É a base com o seed ligado, como o
+# docker-compose.carga.yml faz no compose. Leva os Secrets REAIS: o `cluster.sh` só o aceita no cluster `gerenciador` (nunca no `gerenciador-e2e*`). Soma-se às
+# trilhas e ao componente db-remoto como a base.
+resources:
+  - ../../base
+patches:
+  - target: {kind: Deployment, name: backend}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: backend}
+      spec:
+        template:
+          spec:
+            containers:
+              - name: backend
+                env:
+                  - {name: SEED_ENABLED, value: "true"}
+  # Pool real do Supavisor 245 e max_connections 300 no db, os do bloco 1 da R5 (carga/rpm/docker-compose.rpm.yml: PG_POOLER_POOL_SIZE 245 = 300 - 55, PG_MAX_CONNECTIONS 300), para a
+  # comparação com o compose valer. O `env` do Deployment vence o `envFrom` (o 45 do compose vem do Secret env-supabase-pooler). O max_connections vale para o db DENTRO do cluster (K0);
+  # com o db remoto (K1/K2) o componente db-remoto tira o StatefulSet e o banco remoto já roda com 300. Os pools de réplica única (Hikari/workers) são do componente pools-r5 (K8S_POOLS=r5).
+  - target: {kind: Deployment, name: supabase-pooler}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: supabase-pooler}
+      spec: {template: {spec: {containers: [{name: supabase-pooler, env: [{name: POOLER_DEFAULT_POOL_SIZE, value: "245"}]}]}}}
+  - target: {kind: StatefulSet, name: db}
+    patch: |-
+      - {op: add, path: /spec/template/spec/containers/0/args/-, value: "-c"}
+      - {op: add, path: /spec/template/spec/containers/0/args/-, value: "max_connections=300"}

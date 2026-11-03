@@ -1,0 +1,20 @@
+{
+    "escada":  "Deg-337214",
+    "run_id":  337214,
+    "commit":  "c4379be",
+    "commit_completo":  "c4379be6e2d74b42f7b9dcc5c4d7e8e3fa38e128",
+    "duracao_s":  180,
+    "mapeamento":  "sequencial",
+    "braco":  "cas",
+    "max_connections":  300,
+    "pool_hikari":  200,
+    "arranjo":  "k8s-K2diag+b1+autoescala-1a3+slim+saga+pools-cluster+db-remoto+accesslog",
+    "pct_acompanha":  5,
+    "consulta_ms":  1000,
+    "teto_consulta_s":  35,
+    "params_autoescala":  "",
+    "usuarios":  1000,
+    "eventos":  64,
+    "resumo_no_gerador":  "Projeto/carga/results/summary-degraus-337214.json",
+    "linha_k6":  "k6 run --quiet -e \u0027BASE_URL=http://192.168.68.64:8081\u0027 -e \u0027RPMS=20000\u0027 -e \u0027DURACAO_S=180\u0027 -e \u0027USUARIOS=1000\u0027 -e \u0027SUFIXO=337214\u0027 -e \u0027EVENT_IDS=869-932\u0027 -e \u0027SUMMARY_FILE=Projeto/carga/results/summary-degraus-337214.json\u0027 -e \u0027PCT_CONFIRMA=100\u0027 -e \u0027MAX_VUS=3000\u0027 -e \u0027MAPEAMENTO=sequencial\u0027 -e \u0027PCT_ACOMPANHA=5\u0027 -e \u0027CONSULTA_MS=1000\u0027 -e \u0027TETO_CONSULTA_S=35\u0027 -e \u0027PARADA_P95_MS=5000\u0027 -e \u0027PARADA_JANELA_S=60\u0027 -e \u0027SETUP_S=90\u0027 -e \u0027IDEMPOTENCY_KEY=0\u0027 -e \u0027RUN_ID=337214\u0027 Projeto/carga/degraus/carga-degraus.js"
+}

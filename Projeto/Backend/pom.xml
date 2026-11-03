@@ -19,9 +19,10 @@
          event sourcing), desde a #33 "reservation-client" (contrato HTTP do serviço reservation: DTOs + cliente) e, desde a
          #35, "catalog-client" (contrato HTTP do serviço catalog), desde a #36, "identity-client" (contrato HTTP do serviço identity) e,
          desde a #41, "admission-client" (contrato HTTP do serviço admission) e, desde a #47, "stock-client" (contrato HTTP do
-         serviço stock). -->
+         serviço stock) e, desde a #197 (trilha C), "client-lb" (balanceamento no cliente que os 5 *-client usam). -->
     <modules>
         <module>shared</module>
+        <module>client-lb</module>
         <module>reservation-client</module>
         <module>stock-client</module>
         <module>catalog-client</module>
@@ -48,6 +49,11 @@
             <dependency>
                 <groupId>com.example.demo</groupId>
                 <artifactId>shared</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.example.demo</groupId>
+                <artifactId>client-lb</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

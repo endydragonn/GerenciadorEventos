@@ -53,3 +53,15 @@ Projeto/supabase/volumes/snippets/
 Projeto/frontend/.dart_tool/
 Projeto/frontend/pubspec.lock
 Projeto/frontend/.flutter-plugins*
+
+# Saída local do cluster Kubernetes (CSV de réplicas do dry-run, etc.; issue #197)
+Projeto/k8s/saida/
+
+# Teste longo (soak, #232): o CSV bruto do k6 (~1 GB por bloco) fica no gerador; so o perfil e o soak-<id>-por-minuto.csv entram no repo (as amostras do cluster e do host sao diagnostico)
+soak-*-k6.csv
+soak-*-k6.csv.gz
+Projeto/carga/results/**/soak-*-replicas.csv
+Projeto/carga/results/**/soak-*-pods.csv
+
+# bytecode do Python (kit de carga)
+__pycache__/

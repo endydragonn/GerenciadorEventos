@@ -1,0 +1,381 @@
+{
+ "duracao_s": 2400,
+ "fatias_pct": {
+  "cadastro": 2,
+  "escrita": 1,
+  "leitura": 60,
+  "login": 7,
+  "reserva": 30
+ },
+ "id": "dryMailpit",
+ "por_minuto": [
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 540.0
+   },
+   "minuto": 0
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 900.0
+   },
+   "minuto": 1
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 900.0
+   },
+   "minuto": 2
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 900.0
+   },
+   "minuto": 3
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 900.0
+   },
+   "minuto": 4
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 900.0
+   },
+   "minuto": 5
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 900.0
+   },
+   "minuto": 6
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 900.0
+   },
+   "minuto": 7
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 900.0
+   },
+   "minuto": 8
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 899.928
+   },
+   "minuto": 9
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 870.172
+   },
+   "minuto": 10
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 854.0
+   },
+   "minuto": 11
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 854.0
+   },
+   "minuto": 12
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 854.0
+   },
+   "minuto": 13
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 854.0
+   },
+   "minuto": 14
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 854.0
+   },
+   "minuto": 15
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 854.0
+   },
+   "minuto": 16
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 756.541
+   },
+   "minuto": 17
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 153.475
+   },
+   "minuto": 18
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 19
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 20
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 21
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 22
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 23
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 24
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 102.715
+   },
+   "minuto": 25
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 553.451
+   },
+   "minuto": 26
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 882.0
+   },
+   "minuto": 27
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 882.0
+   },
+   "minuto": 28
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 882.0
+   },
+   "minuto": 29
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 882.0
+   },
+   "minuto": 30
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 882.0
+   },
+   "minuto": 31
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 627.244
+   },
+   "minuto": 32
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.606
+   },
+   "minuto": 33
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 34
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 35
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 36
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 37
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 38
+  },
+  {
+   "cadastro": {
+    "pico": false,
+    "rpm": 100.0
+   },
+   "minuto": 39
+  }
+ ],
+ "semente": 257867,
+ "so": "cadastro",
+ "teto_rpm": 50000,
+ "tipos": {
+  "cadastro": {
+   "fases": [
+    {
+     "fim_s": 597,
+     "inicio_s": 0,
+     "pico": true,
+     "rampa_s": 48,
+     "rpm": 900
+    },
+    {
+     "fim_s": 1053,
+     "inicio_s": 597,
+     "pico": true,
+     "rampa_s": 48,
+     "rpm": 854
+    },
+    {
+     "fim_s": 1555,
+     "inicio_s": 1053,
+     "pico": false,
+     "rampa_s": 47,
+     "rpm": 100
+    },
+    {
+     "fim_s": 1939,
+     "inicio_s": 1555,
+     "pico": true,
+     "rampa_s": 60,
+     "rpm": 882
+    },
+    {
+     "fim_s": 2400,
+     "inicio_s": 1939,
+     "pico": false,
+     "rampa_s": 43,
+     "rpm": 100
+    }
+   ],
+   "stages": [
+    {
+     "duration": "48s",
+     "target": 900
+    },
+    {
+     "duration": "549s",
+     "target": 900
+    },
+    {
+     "duration": "48s",
+     "target": 854
+    },
+    {
+     "duration": "408s",
+     "target": 854
+    },
+    {
+     "duration": "47s",
+     "target": 100
+    },
+    {
+     "duration": "455s",
+     "target": 100
+    },
+    {
+     "duration": "60s",
+     "target": 882
+    },
+    {
+     "duration": "324s",
+     "target": 882
+    },
+    {
+     "duration": "43s",
+     "target": 100
+    },
+    {
+     "duration": "418s",
+     "target": 100
+    }
+   ],
+   "teto_rpm": 1000
+  }
+ },
+ "total_cadastros_esperado": 22539
+}

@@ -1,0 +1,13 @@
+# API/UI do Mailpit do soak para fora do cluster (issue #232): NodePort 30825 -> kind.yaml -> host 8025 (0.0.0.0). Só a 8025: o SMTP (1025) não sai do cluster.
+# Exposta de verdade só com a regra de firewall do Windows (IP do gerador) + basic auth do Mailpit; sem trilha b1 ou com ela, o Mailpit fica sem sidecar (patch da trilha).
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailpit-api
+  labels: {app: mailpit}
+spec:
+  type: NodePort
+  externalTrafficPolicy: Cluster
+  selector: {app: mailpit}
+  ports:
+    - {name: http, port: 8025, targetPort: http, nodePort: 30825}

@@ -1,0 +1,20 @@
+{
+    "escada":  "Deg-296361",
+    "run_id":  296361,
+    "commit":  "a826c8d",
+    "commit_completo":  "a826c8da88b53a0cb9fb9fcc492a3bf7ad142fd6",
+    "duracao_s":  60,
+    "mapeamento":  "sequencial",
+    "braco":  "cas",
+    "max_connections":  300,
+    "pool_hikari":  1000,
+    "arranjo":  "k8s-K0+nenhuma+autoescala-1+slim+saga+pools-r5+db-cluster",
+    "pct_acompanha":  5,
+    "consulta_ms":  1000,
+    "teto_consulta_s":  35,
+    "params_autoescala":  "",
+    "usuarios":  1000,
+    "eventos":  868,
+    "resumo_no_gerador":  "Projeto/carga/results/summary-degraus-296361.json",
+    "linha_k6":  "k6 run --quiet -e \u0027BASE_URL=http://192.168.68.64:8081\u0027 -e \u0027RPMS=20000,26000,32000,38000,44000,50000,56000,62000,68000,74000,80000,86000,92000,98000\u0027 -e \u0027DURACAO_S=60\u0027 -e \u0027USUARIOS=1000\u0027 -e \u0027SUFIXO=296361\u0027 -e \u0027EVENT_IDS=1-868\u0027 -e \u0027SUMMARY_FILE=Projeto/carga/results/summary-degraus-296361.json\u0027 -e \u0027PCT_CONFIRMA=100\u0027 -e \u0027MAX_VUS=3000\u0027 -e \u0027MAPEAMENTO=sequencial\u0027 -e \u0027PCT_ACOMPANHA=5\u0027 -e \u0027CONSULTA_MS=1000\u0027 -e \u0027TETO_CONSULTA_S=35\u0027 -e \u0027PARADA_P95_MS=5000\u0027 -e \u0027PARADA_JANELA_S=60\u0027 -e \u0027SETUP_S=90\u0027 -e \u0027IDEMPOTENCY_KEY=0\u0027 -e \u0027RUN_ID=296361\u0027 Projeto/carga/degraus/carga-degraus.js"
+}

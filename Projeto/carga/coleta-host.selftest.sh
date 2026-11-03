@@ -170,5 +170,77 @@ rod6="$(mktemp -d)"; cp "$(dirname "$0")/coleta-host.sh" "$rod6/"
 confere "resumo falhou: o pgss sai" "$([ -n "$(ls "$rod6"/results/pgss-resumofalha-*.csv 2>/dev/null)" ] && echo sim || echo nao)" "sim"
 confere "resumo falhou: o resumo antigo do CSV sai" "$(grep -c 'lag_projecao_ms' "$rod6/saida.txt")" "1"
 confere "resumo falhou: o resumo da saga registra as 3 consultas que falharam" "$(grep -c 'falhou' "$(ls "$rod6"/results/resumo-saga-resumofalha-*.txt | head -1)")" "3"
+# --- MODO CLUSTER (#228): CARGA_K8S=<contexto>, um `kubectl` falso no PATH (e um `docker` falso que so registra se alguem o chamar). As mesmas 36 colunas, todas com equivalente.
+fk="$(mktemp -d)"; export FAKE_K_LOG="$fk/kubectl.log" FAKE_D_LOG="$fk/docker.log"; : > "$FAKE_K_LOG"; : > "$FAKE_D_LOG"
+printf '#!/usr/bin/env bash\necho "docker $*" >> "$FAKE_D_LOG"\nexit 1\n' > "$fk/docker"
+cat > "$fk/kubectl" <<'FAKEK'
+#!/usr/bin/env bash
+args="$*"
+printf '%s\n' "kubectl $(printf '%s ' "$@" | tr '\n' ' ')" | cut -c1-900 >> "$FAKE_K_LOG"   # uma escrita por chamada, linha curta (as coletas rodam em paralelo: uma linha longa podia ser partida no meio)
+case "$args" in
+  *"get sts/db"*) [ "${FAKE_DB_ERRO:-0}" = 1 ] && exit 1; [ "${FAKE_DB_REMOTO:-0}" = 1 ] && exit 0; echo "statefulset.apps/db" ;;
+  *"get deploy -o jsonpath"*) printf 'backend 1\nreservation 2\nidentity 1\ncatalog 1\nadmission 0\nnotification 1\nstock 1\nfrontend 1\n' ;;
+  *"get pods -l app=reservation"*) printf 'reservation-aaa\nreservation-bbb\n' ;;
+  *"get pods -l app="*) ;;
+  *"logs -l app=reservation"*) printf '2026-10-29 12:00:01 DEBUG saga.timing - tx1_ms=10 stock_ms=20 tx2_ms=5 total_ms=40\n2026-10-29 12:00:03 DEBUG saga.timing - tx1_ms=20 stock_ms=30 tx2_ms=6 total_ms=60\n' ;;
+  *psql*"CREATE EXTENSION"*) echo "2026-10-29T12:00:00.000000Z" ;;
+  *psql*pg_stat_statements*) exit 0 ;;
+  *psql*"date_trunc('minute'"*) printf '2026-10-29 12:01,3,1\n' ;;
+  *psql*percentile_cont*) printf 'resolver_inline,3,10,20,25\ndevolucao,4,5,9,12\n' ;;
+  *psql*devolucao_pendente*) echo "0,0,2,1" ;;
+  *psql*pg_stat_activity*) echo "12,3,4,5,40,2,30,1,0,777"; case "$args" in *"12345 milliseconds"*) echo "7,3,2" ;; *) echo "99,99,99" ;; esac ;;
+  *psql*) echo "12,3,4,5,40,2,30,1,0,777" ;;
+  *"rpk group describe stock"*) printf 'GROUP        stock\nSTATE        Stable\nTOTAL-LAG    4\n\nGROUP        stock-catalog\nSTATE        Stable\nTOTAL-LAG    2\n' ;;
+  *"rpk group describe"*) echo "TOTAL-LAG    9" ;;
+  *rabbitmqctl*) printf 'admission.requests\t5\t1\t10\nadmission.timed_out\t0\t0\t1\n' ;;
+  *redis-cli*) printf 'H 41000 2 99\nS\nC adm:cnt:7:1 30\nM adm:mode:7 4\n' ;;
+  # env do spec do Deployment (as imagens slim nao tem printenv nem sh): "<literal>@@@<valueFrom>". Literal, valueFrom (Secret) e ausente.
+  *"get deploy/reservation -o jsonpath"*RESERVATION_SAGA_ORPHAN_MS*) echo '12345@@@' ;;
+  *"get deploy/"*"-o jsonpath"*SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE*) echo '1000@@@' ;;
+  *"get deploy/"*"-o jsonpath"*SERVER_TOMCAT_THREADS_MAX*) echo '@@@{"secretKeyRef":{"key":"X","name":"env-reservation"}}' ;;
+  *"get deploy/"*"-o jsonpath"*) echo '@@@' ;;
+  *) exit 0 ;;
+esac
+FAKEK
+chmod +x "$fk/docker" "$fk/kubectl"
+K8S_LIB_REAL="$(cd "$(dirname "$0")" && pwd)/../k8s/lib-db-cliente.sh"
+rodk="$(mktemp -d)"; cp "$(dirname "$0")/coleta-host.sh" "$rodk/"
+( cd "$rodk" && PATH="$fk:$PATH" CARGA_K8S=kind-gerenciador K8S_LIB="$K8S_LIB_REAL" APP_DB_PASSWORD=CANARIO-APP POSTGRES_PASSWORD=CANARIO-PG REDIS_PASSWORD=CANARIO-REDIS \
+    INTERVALO_S=1 EVENTOS_CADA_S=1 bash ./coleta-host.sh k8s 5 >/dev/null 2>&1 )
+csvk="$(ls "$rodk"/results/coleta-host-k8s-*.csv 2>/dev/null | head -1)"
+confere "k8s: o CSV tem cabecalho + amostras" "$([ -n "$csvk" ] && [ "$(wc -l < "$csvk")" -ge 3 ] && echo sim || echo nao)" "sim"
+confere "k8s: toda linha tem 36 colunas (o cabecalho e o mesmo)" "$(awk -F, '{print NF}' "$csvk" | sort -u | tr '\n' ' ')" "36 "
+confere "k8s: walletevent_ins, fila, delta, redis (inclusive adm:replicas, que o admission grava no cluster) e replicas por Deployment (readyReplicas)" "$(tail -n 1 "$csvk" | cut -d, -f14-30)" "777,5,1,10,0,0,41000,2,99,1,4,1,2,1,1,0,1"
+confere "k8s: lags dos groups (stock/stock-catalog) e a saga (limiar ORPHAN_MS=12345 lido do Deployment reservation)" "$(tail -n 1 "$csvk" | cut -d, -f32-36)" "4,2,7,3,2"
+confere "k8s: nenhuma chamada ao docker" "$(grep -c '' "$FAKE_D_LOG")" "0"
+confere "k8s: todo kubectl exec leva -c <container> (pod com init container nao imprime 'Defaulted container' no stderr)" "$(grep -c ' exec ' "$FAKE_K_LOG" | awk '{print ($1>=8)?"sim":"nao"}')$(grep ' exec ' "$FAKE_K_LOG" | grep -vc ' -c ')" "sim0"
+confere "k8s: db no cluster: local x remoto decidido UMA vez por processo (1 get sts/db em N amostras), sem apply nem wait" "$(grep -c 'get sts/db' "$FAKE_K_LOG")$(grep -c 'apply -f' "$FAKE_K_LOG")$(grep -c 'wait --for' "$FAKE_K_LOG")" "100"
+confere "k8s: depois da decisao, cada psql da coleta e UM kubectl (o exec): todas as outras chamadas ao banco somam 1 get" "$(grep -c 'exec -i sts/db' "$FAKE_K_LOG" | awk '{print ($1>=4)?"sim":"nao"}')$(grep -c 'sts/db' "$FAKE_K_LOG" | awk -v n="$(grep -c 'exec -i sts/db' "$FAKE_K_LOG")" '{print ($1==n+1)?"sim":"nao"}')" "simsim"
+confere "k8s: todo kubectl leva --context kind-gerenciador -n gerenciador (log nao vazio)" "$([ -s "$FAKE_K_LOG" ] && grep -vc '^kubectl --context kind-gerenciador -n gerenciador ' "$FAKE_K_LOG")" "0"
+confere "k8s: a senha do ambiente do shell nunca vira argumento" "$(grep -c 'CANARIO' "$FAKE_K_LOG")" "0"
+confere "k8s: db no cluster: psql pelo sts/db, nunca pelo pod cliente" "$(grep -c 'exec -i sts/db' "$FAKE_K_LOG" | awk '{print ($1>=3)?"sim":"nao"}')$(grep -c 'db-cliente' "$FAKE_K_LOG")" "sim0"
+confere "k8s: o psql de admin (supabase_admin) usa a POSTGRES_PASSWORD DENTRO do pod" "$(grep -c 'sh supabase_admin localhost' "$FAKE_K_LOG" | awk '{print ($1>=3)?"sim":"nao"}')" "sim"
+confere "k8s: rabbit e redis por kubectl exec (deploy/rabbitmq e deploy/redis) sob timeout" "$(grep -c 'exec deploy/rabbitmq -c rabbitmq -- timeout 5 rabbitmqctl' "$FAKE_K_LOG" | awk '{print ($1>=1)?"sim":"nao"}')$(grep -c 'exec deploy/redis -c redis -- timeout 5 sh -c' "$FAKE_K_LOG" | awk '{print ($1>=1)?"sim":"nao"}')" "simsim"
+confere "k8s: rpk por kubectl exec no sts/redpanda" "$(grep -c 'exec sts/redpanda -c redpanda -- timeout 3 rpk group describe reservation ' "$FAKE_K_LOG" | awk '{print ($1>=1)?"sim":"nao"}')" "sim"
+rsk="$(ls "$rodk"/results/resumo-saga-k8s-*.txt 2>/dev/null | head -1)"
+confere "k8s: latencia dos passos pelo kubectl logs -l app=reservation --since-time (2 linhas)" "$(grep -E '^  tx1_ms:' "${rsk:-/dev/null}")|$(grep -c 'logs -l app=reservation --since-time 2026-10-29T12:00:00.000000Z' "$FAKE_K_LOG" | awk '{print ($1>=1)?"sim":"nao"}')" "  tx1_ms: n 2 p50 10 p95 20 max 20 (ms)|sim"
+rgk="$(ls "$rodk"/results/registro-k8s-*.txt | head -1)"
+confere "k8s: registro le o env do SPEC do Deployment (literal), sem exec/printenv (a imagem slim nao tem)" "$(grep -c 'SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=1000' "$rgk" | awk '{print ($1>=1)?"sim":"nao"}')$(grep -c 'printenv' "$FAKE_K_LOG")" "sim0"
+confere "k8s: variavel que vem de valueFrom/Secret sai como <de Secret/ConfigMap> (o valor do Secret nunca e lido: nenhum get secret)" "$(grep -c 'SERVER_TOMCAT_THREADS_MAX=<de Secret/ConfigMap>' "$rgk" | awk '{print ($1>=1)?"sim":"nao"}')$(grep -ci 'get secret' "$FAKE_K_LOG")" "sim0"
+confere "k8s: variavel ausente do spec vira valor vazio no registro" "$(grep -c '^  RESERVATION_READPATH=$' "$rgk")" "1"
+confere "k8s: registro da rodada sem segredo e com o limiar" "$(grep -c 'PASSWORD' "$(ls "$rodk"/results/registro-k8s-*.txt | head -1)")$(grep -c 'ORPHAN_MS=12345' "$(ls "$rodk"/results/registro-k8s-*.txt | head -1)" | awk '{print ($1>=1)?"sim":"nao"}')" "0sim"
+
+: > "$FAKE_K_LOG"; rodk2="$(mktemp -d)"; cp "$(dirname "$0")/coleta-host.sh" "$rodk2/"
+( cd "$rodk2" && PATH="$fk:$PATH" FAKE_DB_REMOTO=1 CARGA_K8S=kind-gerenciador K8S_LIB="$K8S_LIB_REAL" INTERVALO_S=1 EVENTOS_CADA_S=1 bash ./coleta-host.sh k8sremoto 3 >/dev/null 2>&1 )
+csvk2="$(ls "$rodk2"/results/coleta-host-k8sremoto-*.csv 2>/dev/null | head -1)"
+confere "k8s db remoto: o CSV segue com 36 colunas e o banco lido (walletevent_ins 777)" "$(awk -F, '{print NF}' "$csvk2" | sort -u | tr '\n' ' ')$(tail -n 1 "$csvk2" | cut -d, -f14)" "36 777"
+confere "k8s db remoto: 1 get sts/db, o pod cliente aplicado e esperado UMA vez (nao por amostra)" "$(grep -c 'get sts/db' "$FAKE_K_LOG")$(grep -c 'apply -f' "$FAKE_K_LOG")$(grep -c 'wait --for=condition=Ready pod/db-cliente' "$FAKE_K_LOG")" "111"
+confere "k8s db remoto: psql pelo pod db-cliente (aplicado e Ready), nunca pelo sts/db; todo kubectl com --context" "$(grep -c 'exec -i pod/db-cliente' "$FAKE_K_LOG" | awk '{print ($1>=3)?"sim":"nao"}')$(grep -c 'exec -i sts/db' "$FAKE_K_LOG")$(grep -vc '^kubectl --context kind-gerenciador ' "$FAKE_K_LOG")" "sim00"
+# erro ao ler o sts/db (nao e "nao existe"): a coleta NAO comeca (nada de cair para "remoto")
+: > "$FAKE_K_LOG"; rodk3="$(mktemp -d)"; cp "$(dirname "$0")/coleta-host.sh" "$rodk3/"
+( cd "$rodk3" && PATH="$fk:$PATH" FAKE_DB_ERRO=1 CARGA_K8S=kind-gerenciador K8S_LIB="$K8S_LIB_REAL" INTERVALO_S=1 bash ./coleta-host.sh k8serro 2 >/dev/null 2>&1 ); rc=$?
+confere "k8s: erro no get sts/db: a coleta aborta antes do 1o CSV e sem criar o pod cliente" "$([ "$rc" -ne 0 ] && echo sim || echo nao)$(ls "$rodk3"/results/coleta-host-k8serro-*.csv 2>/dev/null | wc -l | tr -d ' ')$(grep -c 'apply -f\|db-cliente' "$FAKE_K_LOG")" "sim00"
+rm -rf "$fk" "$rodk" "$rodk2" "$rodk3"
+unset FAKE_K_LOG FAKE_D_LOG
 rm -rf "$fake" "$rod" "$rod2" "$rod3" "$rod4" "$rod5" "$rod6"
 [ "$falhas" -eq 0 ] && echo "selftest coleta-host: OK" || { echo "selftest coleta-host: $falhas falha(s)"; exit 1; }

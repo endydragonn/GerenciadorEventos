@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: identity
+  labels: {app: identity}
+spec:
+  # sem `replicas`: a autoescala (KEDA/HPA, issue #197 etapa 4) é dona da contagem; reaplicar o manifest não a volta para 1
+  selector:
+    matchLabels: {app: identity}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
+  template:
+    metadata:
+      labels: {app: identity}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: espera
+          image: busybox:1.37.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              for alvo in supabase-pooler:6543 redpanda:9092; do
+                host="${alvo%%:*}"; porta="${alvo##*:}"
+                until timeout 5 nc -w 2 "$host" "$porta" </dev/null; do echo "aguardando $alvo"; sleep 2; done
+              done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+      containers:
+        - name: identity
+          image: gerenciador-eventos-identity.slim:latest
+          imagePullPolicy: Never
+          envFrom:
+            - secretRef: {name: env-identity}
+          env:
+            - {name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE, value: "50"}
+            - {name: MANAGEMENT_SERVER_PORT, value: "8090"}
+            - {name: MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED, value: "true"}
+            - {name: MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE, value: "readinessState"}
+          ports:
+            - {name: http, containerPort: 8084}
+            - {name: mgmt, containerPort: 8090}
+          startupProbe:
+            httpGet: {path: /actuator/health/readiness, port: mgmt}
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 45
+          readinessProbe:
+            httpGet: {path: /actuator/health/readiness, port: mgmt}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: {path: /actuator/health/liveness, port: mgmt}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          lifecycle:
+            preStop:
+              sleep: {seconds: 20}
+          securityContext:
+            seccompProfile: {type: Localhost, localhostProfile: profiles/identity-seccomp.json}
+          resources:
+            requests: {cpu: 500m, memory: 768Mi}
+            limits: {cpu: "2", memory: 1536Mi}
+          volumeMounts:
+            - {name: identity-keys, mountPath: /var/lib/identity}
+      volumes:
+        - name: identity-keys
+          persistentVolumeClaim: {claimName: identity-keys}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: identity
+  labels: {app: identity}
+spec:
+  selector: {app: identity}
+  ports:
+    - {name: http, port: 8084, targetPort: http}
+---
+# Chave de assinatura do JWT (JWK RSA, criada com link(2) no 1º boot). Com um nó só, todas as réplicas montam o mesmo diretório (#112).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: identity-keys
+  labels: {app: identity}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard
+  resources:
+    requests: {storage: 100Mi}

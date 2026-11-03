@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.gerenciador.eventos.clientlb.ClientLb;
+
 /**
  * Bean do {@link StockClient} de quem chama o serviço stock: o reservation (orquestra a saga e lê a capacidade) e o catalog (mexe na
  * capacidade; o bean é, ao mesmo tempo, o {@code EventCapacityApi} que ele injeta). Tudo por env var (nomes no application.properties
@@ -23,9 +25,11 @@ public class StockClientConfig {
             @Value("${stock.client.connect-timeout-ms:2000}") long connectTimeoutMs,
             @Value("${stock.client.connection-request-timeout-ms:5000}") long connectionRequestTimeoutMs,
             @Value("${stock.client.response-timeout-ms:10000}") long responseTimeoutMs,
-            @Value("${stock.client.evict-idle-ms:20000}") long evictIdleMs) {
+            @Value("${stock.client.evict-idle-ms:20000}") long evictIdleMs,
+            @Value("${client.lb.enabled:false}") boolean lbAtivo,
+            @Value("${client.lb.ttl-ms:15000}") long lbTtlMs) {
         return new StockClient(baseUrl, internalToken, maxConnections, Duration.ofMillis(connectTimeoutMs),
                 Duration.ofMillis(connectionRequestTimeoutMs), Duration.ofMillis(responseTimeoutMs),
-                Duration.ofMillis(evictIdleMs));
+                Duration.ofMillis(evictIdleMs), new ClientLb(lbAtivo, lbTtlMs));
     }
 }

@@ -1,0 +1,23 @@
+# Componente `db-remoto` (issue #228): o Postgres fica FORA do cluster (numa máquina dedicada, como na #227 do compose). O `cluster.sh up` o soma ao overlay
+# escolhido quando K8S_DB_REMOTO=<ip>:<porta> está definido (sem a variável, este componente não entra e nada muda). O que ele faz:
+#  - remove o StatefulSet `db` (e com ele o PVC `dados-db-0`, que vinha do volumeClaimTemplates); os ConfigMaps de init (`db-sql`, `db-app-init`) não são
+#    criados pelo `cluster.sh` neste modo;
+#  - troca o Service `db` por um Service SEM selector (mesma porta 5432) com uma EndpointSlice para o IP e a porta dados. O Supavisor (POSTGRES_HOST=db,
+#    POSTGRES_PORT=5432), o init `espera` dele (`nc db 5432`) e os Secrets dos serviços não mudam.
+# O IP e a porta da EndpointSlice abaixo são PLACEHOLDERS (192.0.2.1 é o TEST-NET-1, não roteável: aplicado sem o `cluster.sh`, o banco simplesmente não responde);
+# o `cluster.sh` os troca por K8S_DB_REMOTO num patch gerado, e `cluster.sh guarda`/`renderizar` mostram o resultado.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - endpointslice.yaml
+patches:
+  - patch: |-
+      $patch: delete
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: db
+  - target: {kind: Service, name: db}
+    patch: |-
+      - {op: remove, path: /spec/selector}
+      - {op: replace, path: /spec/ports/0/targetPort, value: 5433}

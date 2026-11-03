@@ -1,0 +1,50 @@
+# Override da imagem COMPLETA dos serviços Java (issue #197, D7), para depuração. O padrão do docker-compose.yml são as imagens enxutas
+# (`gerenciador-eventos-<serviço>.slim`, geradas por slim/gerar-imagens-slim.sh); este override devolve o `build:` do Dockerfile e a imagem completa:
+#   docker compose -f docker-compose.yml -f docker-compose.completa.yml up -d --build <serviço>
+# `image: !reset null` e `pull_policy: !reset null` são obrigatórios: sem eles o `image: ...slim:...` do base sobrevive ao merge e o build gordo seria
+# TAGUEADO COM O NOME slim (sobrescrevendo a imagem enxuta existente). Sem `image`, o compose volta ao nome padrão `<project>-<serviço>`, o que o
+# `fat_de()` do gerar-imagens-slim.sh espera. Healthchecks, env e volumes não mudam (vêm do docker-compose.yml).
+
+services:
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: monolito/Dockerfile
+    image: !reset null
+    pull_policy: !reset null
+  identity:
+    build:
+      context: ./Backend
+      dockerfile: identity/Dockerfile
+    image: !reset null
+    pull_policy: !reset null
+  catalog:
+    build:
+      context: ./Backend
+      dockerfile: catalog/Dockerfile
+    image: !reset null
+    pull_policy: !reset null
+  reservation:
+    build:
+      context: ./Backend
+      dockerfile: reservation/Dockerfile
+    image: !reset null
+    pull_policy: !reset null
+  stock:
+    build:
+      context: ./Backend
+      dockerfile: stock/Dockerfile
+    image: !reset null
+    pull_policy: !reset null
+  notification:
+    build:
+      context: ./Backend
+      dockerfile: notification/Dockerfile
+    image: !reset null
+    pull_policy: !reset null
+  admission:
+    build:
+      context: ./Backend
+      dockerfile: admission/Dockerfile
+    image: !reset null
+    pull_policy: !reset null

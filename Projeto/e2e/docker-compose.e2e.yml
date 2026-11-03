@@ -1,5 +1,6 @@
 # Override da suíte e2e (issue #37), usado SÓ por e2e/run-e2e.sh:
 #   docker compose -p gerenciador-e2e -f docker-compose.yml -f e2e/docker-compose.e2e.yml up -d --build --wait
+# (os 7 serviços Java rodam as imagens slim do base, ou as completas com E2E_COMPLETA=1: ver o cabeçalho do run-e2e.sh)
 # Sobe a stack inteira num project TEMPORÁRIO, isolado da stack real e sem mandar e-mail de verdade. Não altera nenhum default do
 # compose normal. O isolamento é conferido pelo run-e2e.sh (`config`) ANTES do `up`.
 

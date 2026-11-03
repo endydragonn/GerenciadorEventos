@@ -62,6 +62,7 @@ import { sleep } from 'k6';
 import exec from 'k6/execution';
 import { Counter, Trend } from 'k6/metrics';
 import { erroMapeamento, parDe } from './lib-mapeamento.js';
+import { sorteio100 } from '../lib-sorteio.js';
 import {
   acompanhar, avaliarParada, classificarReserva, erroParametros, esperaDoSetup, gracefulS, indiceJanela, limiaresParada, setupTimeoutS,
   idsDeEventos, situacaoDoDegrau, textoParada, usuariosDoSufixo,
@@ -226,16 +227,6 @@ export function setup() {
   }
   console.log(`setup: ${ok}/${USERS.length} logins ok; ${EVENTS.length} eventos; ${MAX_PARES} pares unicos; ${PLANO.length} degraus usam ${TOTAL_PARES}; mapeamento ${MAPEAMENTO}; acompanha ${PCT_ACOMPANHA}% (consulta ${CONSULTA_MS} ms, teto ${TETO_CONSULTA_S} s); graceful ${GRACEFUL_S} s; parada ${PARADA_P95_MS > 0 ? `p95 > ${PARADA_P95_MS} ms em janela de ${PARADA_JANELA_S} s (SETUP_S ${SETUP_S}${loginsS >= 0 ? `; logins levaram ${loginsS} s` : ''})` : 'desligada'}`);
   return sessoes;
-}
-
-// Sorteio deterministico em [0, 100) a partir de (indice, semente): decide quais aceitas confirmar
-// sem consumir Math.random.
-function sorteio100(i, semente) {
-  let h = Math.imul(i ^ Math.imul(semente, 0x9e3779b1), 0x85ebca6b);
-  h ^= h >>> 13;
-  h = Math.imul(h, 0xc2b2ae35);
-  h ^= h >>> 16;
-  return (h >>> 0) % 100;
 }
 
 // Finaliza a reserva aceita: POST /bff/event-wallets/confirm (pending -> confirmed).

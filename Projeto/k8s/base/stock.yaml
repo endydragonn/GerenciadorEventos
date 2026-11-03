@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stock
+  labels: {app: stock}
+spec:
+  # UMA réplica fixa, fora da autoescala (#231, como no K1 e no compose): sem ScaledObject, sem HPA. O CAS na linha quente do `eventcap` serializa as reservas, então réplicas
+  # extras não ajudam, e o Hikari 60 x 3 da #205 esgotava o pool (diagnóstico do K2: Projeto/carga/results/10-k8s-db-remoto/K2-diagnostico/). `Recreate`: o pod velho sai
+  # ANTES do novo subir (sem sobreposição segurando conexões), que é o que a conta do Supavisor (1497 <= 1500, Projeto/k8s/README.md, "Pool do Supavisor") pressupõe.
+  replicas: 1
+  selector:
+    matchLabels: {app: stock}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels: {app: stock}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: espera
+          image: busybox:1.37.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              for alvo in supabase-pooler:6543 redpanda:9092; do
+                host="${alvo%%:*}"; porta="${alvo##*:}"
+                until timeout 5 nc -w 2 "$host" "$porta" </dev/null; do echo "aguardando $alvo"; sleep 2; done
+              done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+        - name: seek
+          image: docker.redpanda.com/redpandadata/redpanda:v26.2.4
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -eo pipefail
+              export RPK_BROKERS=redpanda:9092
+              # o tópico só vale com 3 partições (Job `particoes`): assinar antes dele deixaria o consumer até 300 s sem ver as outras
+              until [ "$(rpk topic list | awk -v t=reservation.wallet '$1 == t {print $2}')" = "3" ]; do echo "aguardando reservation.wallet com 3 partições"; sleep 2; done
+              # falha do rpk (broker fora) ABORTA aqui (set -e): nunca cai no seek por "não consegui listar"
+              grupos="$(rpk group list)"
+              if awk 'NR > 1 && $2 == "stock" {achou=1} END {exit !achou}' <<<"$grupos"; then
+                echo "group stock já existe: offsets mantidos"
+              else
+                rpk group seek stock --to end --topics reservation.wallet --allow-new-topics
+              fi
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+      containers:
+        - name: stock
+          image: gerenciador-eventos-stock.slim:latest
+          imagePullPolicy: Never
+          envFrom:
+            - secretRef: {name: env-stock}
+          env:
+            # 245 = o pool real do Supavisor no overlay `rodada` (POOLER_DEFAULT_POOL_SIZE; em base, e2e e carga é 45): conexão do Hikari acima disso só espera no Supavisor (teste A do K2: pg_conexoes parou em 247). O compose segue com 250
+            - {name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE, value: "245"}
+            - {name: MANAGEMENT_SERVER_PORT, value: "8090"}
+            - {name: MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED, value: "true"}
+            - {name: MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE, value: "readinessState"}
+          ports:
+            - {name: http, containerPort: 8086}
+            - {name: mgmt, containerPort: 8090}
+          startupProbe:
+            httpGet: {path: /actuator/health/readiness, port: mgmt}
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 45
+          readinessProbe:
+            httpGet: {path: /actuator/health/readiness, port: mgmt}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: {path: /actuator/health/liveness, port: mgmt}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          lifecycle:
+            preStop:
+              sleep: {seconds: 20}
+          securityContext:
+            seccompProfile: {type: Localhost, localhostProfile: profiles/stock-seccomp.json}
+          resources:
+            requests: {cpu: 500m, memory: 768Mi}
+            limits: {cpu: "2", memory: 1536Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stock
+  labels: {app: stock}
+spec:
+  selector: {app: stock}
+  ports:
+    - {name: http, port: 8086, targetPort: http}

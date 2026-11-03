@@ -1,0 +1,56 @@
+# Services HEADLESS da trilha C (issue #197): sem IP virtual, o DNS devolve o IP de cada pod PRONTO (publishNotReadyAddresses = false, o default). É o que o
+# `DnsResolver` round-robin do `client-lb` resolve. Os Services normais (`reservation`, `stock`...) continuam existindo, para a entrada e para quem não usa o client-lb.
+apiVersion: v1
+kind: Service
+metadata:
+  name: reservation-pods
+  labels: {trilha: c}
+spec:
+  clusterIP: None
+  selector: {app: reservation}
+  ports:
+    - {name: http, port: 8082, targetPort: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stock-pods
+  labels: {trilha: c}
+spec:
+  clusterIP: None
+  selector: {app: stock}
+  ports:
+    - {name: http, port: 8086, targetPort: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-pods
+  labels: {trilha: c}
+spec:
+  clusterIP: None
+  selector: {app: catalog}
+  ports:
+    - {name: http, port: 8083, targetPort: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: identity-pods
+  labels: {trilha: c}
+spec:
+  clusterIP: None
+  selector: {app: identity}
+  ports:
+    - {name: http, port: 8084, targetPort: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admission-pods
+  labels: {trilha: c}
+spec:
+  clusterIP: None
+  selector: {app: admission}
+  ports:
+    - {name: http, port: 8085, targetPort: http}

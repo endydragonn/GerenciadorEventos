@@ -1,0 +1,388 @@
+{
+ "duracao_s": 600,
+ "fatias_pct": {
+  "cadastro": 2,
+  "escrita": 1,
+  "leitura": 60,
+  "login": 7,
+  "reserva": 30
+ },
+ "id": "dryS1",
+ "por_minuto": [
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 27.45
+   },
+   "escrita": {
+    "pico": true,
+    "rpm": 15.75
+   },
+   "leitura": {
+    "pico": true,
+    "rpm": 1090.6
+   },
+   "login": {
+    "pico": false,
+    "rpm": 15.75
+   },
+   "minuto": 0,
+   "reserva": {
+    "pico": false,
+    "rpm": 47.25
+   }
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 54.0
+   },
+   "escrita": {
+    "pico": true,
+    "rpm": 21.0
+   },
+   "leitura": {
+    "pico": true,
+    "rpm": 1722.0
+   },
+   "login": {
+    "pico": false,
+    "rpm": 21.0
+   },
+   "minuto": 1,
+   "reserva": {
+    "pico": false,
+    "rpm": 90.0
+   }
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 54.0
+   },
+   "escrita": {
+    "pico": true,
+    "rpm": 21.0
+   },
+   "leitura": {
+    "pico": true,
+    "rpm": 1722.0
+   },
+   "login": {
+    "pico": false,
+    "rpm": 21.0
+   },
+   "minuto": 2,
+   "reserva": {
+    "pico": false,
+    "rpm": 90.0
+   }
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 54.0
+   },
+   "escrita": {
+    "pico": true,
+    "rpm": 21.0
+   },
+   "leitura": {
+    "pico": true,
+    "rpm": 1722.0
+   },
+   "login": {
+    "pico": false,
+    "rpm": 21.0
+   },
+   "minuto": 3,
+   "reserva": {
+    "pico": true,
+    "rpm": 220.075
+   }
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 54.0
+   },
+   "escrita": {
+    "pico": true,
+    "rpm": 21.0
+   },
+   "leitura": {
+    "pico": true,
+    "rpm": 1722.0
+   },
+   "login": {
+    "pico": false,
+    "rpm": 21.0
+   },
+   "minuto": 4,
+   "reserva": {
+    "pico": true,
+    "rpm": 644.7
+   }
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 54.0
+   },
+   "escrita": {
+    "pico": true,
+    "rpm": 21.704
+   },
+   "leitura": {
+    "pico": true,
+    "rpm": 1722.0
+   },
+   "login": {
+    "pico": false,
+    "rpm": 21.0
+   },
+   "minuto": 5,
+   "reserva": {
+    "pico": true,
+    "rpm": 649.0
+   }
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 54.0
+   },
+   "escrita": {
+    "pico": true,
+    "rpm": 23.896
+   },
+   "leitura": {
+    "pico": true,
+    "rpm": 1722.0
+   },
+   "login": {
+    "pico": false,
+    "rpm": 21.0
+   },
+   "minuto": 6,
+   "reserva": {
+    "pico": true,
+    "rpm": 649.0
+   }
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 54.0
+   },
+   "escrita": {
+    "pico": true,
+    "rpm": 24.0
+   },
+   "leitura": {
+    "pico": true,
+    "rpm": 1722.0
+   },
+   "login": {
+    "pico": false,
+    "rpm": 21.0
+   },
+   "minuto": 7,
+   "reserva": {
+    "pico": true,
+    "rpm": 649.0
+   }
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 54.0
+   },
+   "escrita": {
+    "pico": true,
+    "rpm": 24.0
+   },
+   "leitura": {
+    "pico": true,
+    "rpm": 1722.0
+   },
+   "login": {
+    "pico": false,
+    "rpm": 21.0
+   },
+   "minuto": 8,
+   "reserva": {
+    "pico": true,
+    "rpm": 649.0
+   }
+  },
+  {
+   "cadastro": {
+    "pico": true,
+    "rpm": 54.0
+   },
+   "escrita": {
+    "pico": true,
+    "rpm": 24.0
+   },
+   "leitura": {
+    "pico": true,
+    "rpm": 1722.0
+   },
+   "login": {
+    "pico": false,
+    "rpm": 21.0
+   },
+   "minuto": 9,
+   "reserva": {
+    "pico": true,
+    "rpm": 649.0
+   }
+  }
+ ],
+ "semente": 116402,
+ "teto_rpm": 3000,
+ "tipos": {
+  "cadastro": {
+   "fases": [
+    {
+     "fim_s": 600,
+     "inicio_s": 0,
+     "pico": true,
+     "rampa_s": 59,
+     "rpm": 54
+    }
+   ],
+   "stages": [
+    {
+     "duration": "59s",
+     "target": 54
+    },
+    {
+     "duration": "541s",
+     "target": 54
+    }
+   ],
+   "teto_rpm": 60
+  },
+  "escrita": {
+   "fases": [
+    {
+     "fim_s": 321,
+     "inicio_s": 0,
+     "pico": true,
+     "rampa_s": 30,
+     "rpm": 21
+    },
+    {
+     "fim_s": 600,
+     "inicio_s": 321,
+     "pico": true,
+     "rampa_s": 54,
+     "rpm": 24
+    }
+   ],
+   "stages": [
+    {
+     "duration": "30s",
+     "target": 21
+    },
+    {
+     "duration": "291s",
+     "target": 21
+    },
+    {
+     "duration": "54s",
+     "target": 24
+    },
+    {
+     "duration": "225s",
+     "target": 24
+    }
+   ],
+   "teto_rpm": 30
+  },
+  "leitura": {
+   "fases": [
+    {
+     "fim_s": 600,
+     "inicio_s": 0,
+     "pico": true,
+     "rampa_s": 44,
+     "rpm": 1722
+    }
+   ],
+   "stages": [
+    {
+     "duration": "44s",
+     "target": 1722
+    },
+    {
+     "duration": "556s",
+     "target": 1722
+    }
+   ],
+   "teto_rpm": 1800
+  },
+  "login": {
+   "fases": [
+    {
+     "fim_s": 600,
+     "inicio_s": 0,
+     "pico": false,
+     "rampa_s": 30,
+     "rpm": 21
+    }
+   ],
+   "stages": [
+    {
+     "duration": "30s",
+     "target": 21
+    },
+    {
+     "duration": "570s",
+     "target": 21
+    }
+   ],
+   "teto_rpm": 210
+  },
+  "reserva": {
+   "fases": [
+    {
+     "fim_s": 207,
+     "inicio_s": 0,
+     "pico": false,
+     "rampa_s": 57,
+     "rpm": 90
+    },
+    {
+     "fim_s": 600,
+     "inicio_s": 207,
+     "pico": true,
+     "rampa_s": 39,
+     "rpm": 649
+    }
+   ],
+   "stages": [
+    {
+     "duration": "57s",
+     "target": 90
+    },
+    {
+     "duration": "150s",
+     "target": 90
+    },
+    {
+     "duration": "39s",
+     "target": 649
+    },
+    {
+     "duration": "354s",
+     "target": 649
+    }
+   ],
+   "teto_rpm": 900
+  }
+ },
+ "total_cadastros_esperado": 514
+}
