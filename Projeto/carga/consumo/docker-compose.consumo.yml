@@ -1,0 +1,52 @@
+# Override da medição de consumo de subida (carga/consumo/medir-consumo.sh, fase `servicos`):
+#   docker compose -p gerenciador-consumo -f docker-compose.yml -f carga/consumo/docker-compose.consumo.yml ...
+# Stack atual num project ISOLADO: sem container_name, sem porta no host, rede <project>_default e e-mail num captador
+# (nenhum e-mail real). Nenhuma variável de desempenho muda: tudo o mais é o compose base (diferente do override do e2e,
+# que encurta o reaper da saga e baixa o X do admission).
+services:
+  db: &isolado
+    container_name: !reset null
+    ports: !reset []
+  redpanda: *isolado
+  backend: *isolado
+  identity: *isolado
+  catalog: *isolado
+  reservation: *isolado
+  stock: *isolado
+  stock-seek: *isolado
+  redis: *isolado
+  rabbitmq: *isolado
+  admission: *isolado
+  notification-seek: *isolado
+  frontend: *isolado
+  supabase-pooler: *isolado
+  meta: *isolado
+  kong: *isolado
+  studio:
+    <<: *isolado
+    volumes: !reset []
+    tmpfs:
+      - /app/snippets
+
+  mailpit:
+    image: axllent/mailpit:v1.31.6
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: "no"
+
+  notification:
+    <<: *isolado
+    environment:
+      MAIL_HOST: mailpit
+      MAIL_PORT: "1025"
+      MAIL_SMTP_AUTH: "false"
+      MAIL_STARTTLS: "false"
+      MAIL_USERNAME: consumo-notification@example.com
+      MAIL_PASSWORD: ""
+
+networks:
+  default:
+    name: !reset null

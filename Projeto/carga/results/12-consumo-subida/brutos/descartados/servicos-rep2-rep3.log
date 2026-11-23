@@ -1,0 +1,21 @@
+[20:29:46] fase=servicos rep=2 project=gerenciador-consumo saída=carga/results/12-consumo-subida/brutos/servicos-rep2.csv
+[20:29:48] passo 0: vazio (só a VM e o amostrador)
+[20:29:48]   assentando 60s e medindo 30s (vazio)
+[20:31:23] infra: db
+ Network gerenciador-consumo_default Creating 
+ Volume gerenciador-consumo_db-config Creating 
+ Volume gerenciador-consumo_db-config Creating 
+ Network gerenciador-consumo_default Creating 
+ Volume gerenciador-consumo_supabase-db-data Creating 
+ Volume gerenciador-consumo_supabase-db-data Creating 
+ Volume gerenciador-consumo_db-config Created 
+ Volume gerenciador-consumo_db-config Created 
+ Volume gerenciador-consumo_supabase-db-data Created 
+ Volume gerenciador-consumo_supabase-db-data Created 
+ Network gerenciador-consumo_default Created 
+ Network gerenciador-consumo_default Created 
+ Container gerenciador-consumo-db-1 Creating 
+ Container gerenciador-consumo-db-1 Created 
+ Container gerenciador-consumo-db-1 Starting 
+ Container gerenciador-consumo-db-1 Started 
+db não ficou pronto em 300s (running/starting)

@@ -1,0 +1,320 @@
+[20:32:57] fase=servicos rep=2 project=gerenciador-consumo saída=carga/results/12-consumo-subida/brutos/servicos-rep2.csv
+[20:32:58] passo 0: vazio (só a VM e o amostrador)
+[20:32:58]   assentando 60s e medindo 30s (vazio)
+[20:34:33] infra: db
+ Network gerenciador-consumo_default Creating 
+ Network gerenciador-consumo_default Creating 
+ Volume gerenciador-consumo_supabase-db-data Creating 
+ Volume gerenciador-consumo_db-config Creating 
+ Volume gerenciador-consumo_db-config Creating 
+ Volume gerenciador-consumo_supabase-db-data Creating 
+ Volume gerenciador-consumo_db-config Created 
+ Volume gerenciador-consumo_db-config Created 
+ Volume gerenciador-consumo_supabase-db-data Created 
+ Volume gerenciador-consumo_supabase-db-data Created 
+ Network gerenciador-consumo_default Created 
+ Network gerenciador-consumo_default Created 
+ Container gerenciador-consumo-db-1 Creating 
+ Container gerenciador-consumo-db-1 Created 
+ Container gerenciador-consumo-db-1 Starting 
+ Container gerenciador-consumo-db-1 Started 
+[20:34:40]   db pronto: t_pronto/jvm/cpu_boot = 6.6,,1.6
+[20:34:40]   assentando 60s e medindo 30s (db)
+[20:36:15] infra: supabase-pooler
+ Container gerenciador-consumo-supabase-pooler-1 Creating 
+ Container gerenciador-consumo-supabase-pooler-1 Created 
+ Container gerenciador-consumo-supabase-pooler-1 Starting 
+ Container gerenciador-consumo-supabase-pooler-1 Started 
+[20:36:22]   supabase-pooler pronto: t_pronto/jvm/cpu_boot = 6.6,,10.9
+[20:36:22]   assentando 60s e medindo 30s (supabase-pooler)
+[20:37:57] infra: redpanda
+ Volume gerenciador-consumo_redpanda-data Creating 
+ Volume gerenciador-consumo_redpanda-data Creating 
+ Volume gerenciador-consumo_redpanda-data Created 
+ Volume gerenciador-consumo_redpanda-data Created 
+ Container gerenciador-consumo-redpanda-1 Creating 
+ Container gerenciador-consumo-redpanda-1 Created 
+ Container gerenciador-consumo-redpanda-1 Starting 
+ Container gerenciador-consumo-redpanda-1 Started 
+[20:38:04]   redpanda pronto: t_pronto/jvm/cpu_boot = 6.5,,0.2
+[20:38:04]   assentando 60s e medindo 30s (redpanda)
+[20:39:39] infra: redis
+ Container gerenciador-consumo-redis-1 Creating 
+ Container gerenciador-consumo-redis-1 Created 
+ Container gerenciador-consumo-redis-1 Starting 
+ Container gerenciador-consumo-redis-1 Started 
+[20:39:46]   redis pronto: t_pronto/jvm/cpu_boot = 6.4,,0.1
+[20:39:46]   assentando 60s e medindo 30s (redis)
+[20:41:21] infra: rabbitmq
+ Container gerenciador-consumo-rabbitmq-1 Creating 
+ Container gerenciador-consumo-rabbitmq-1 Created 
+ Container gerenciador-consumo-rabbitmq-1 Starting 
+ Container gerenciador-consumo-rabbitmq-1 Started 
+[20:41:28]   rabbitmq pronto: t_pronto/jvm/cpu_boot = 6.4,,7.2
+[20:41:28]   assentando 60s e medindo 30s (rabbitmq)
+[20:43:03] infra: mailpit
+ Container gerenciador-consumo-mailpit-1 Creating 
+ Container gerenciador-consumo-mailpit-1 Created 
+ Container gerenciador-consumo-mailpit-1 Starting 
+ Container gerenciador-consumo-mailpit-1 Started 
+[20:43:05]   mailpit pronto: t_pronto/jvm/cpu_boot = 1.5,,0.1
+[20:43:05]   assentando 60s e medindo 30s (mailpit)
+ Container gerenciador-consumo-stock-seek-1 Creating 
+ Container gerenciador-consumo-notification-seek-1 Creating 
+ Container gerenciador-consumo-stock-seek-1 Created 
+ Container gerenciador-consumo-notification-seek-1 Created 
+ Container gerenciador-consumo-notification-seek-1 Starting 
+ Container gerenciador-consumo-stock-seek-1 Starting 
+ Container gerenciador-consumo-notification-seek-1 Started 
+ Container gerenciador-consumo-stock-seek-1 Started 
+[20:44:43] serviço: identity
+ Volume gerenciador-consumo_identity-keys Creating 
+ Volume gerenciador-consumo_identity-keys Creating 
+ Volume gerenciador-consumo_identity-keys Created 
+ Volume gerenciador-consumo_identity-keys Created 
+ Container gerenciador-consumo-identity-1 Creating 
+ Container gerenciador-consumo-identity-1 Created 
+ Container gerenciador-consumo-identity-1 Starting 
+ Container gerenciador-consumo-identity-1 Started 
+[20:44:50]   identity pronto: t_pronto/jvm/cpu_boot = 4.9,3.2,13.8
+[20:44:50]   assentando 60s e medindo 30s (identity)
+[20:46:25] serviço: catalog
+ Container gerenciador-consumo-catalog-1 Creating 
+ Container gerenciador-consumo-catalog-1 Created 
+ Container gerenciador-consumo-catalog-1 Starting 
+ Container gerenciador-consumo-catalog-1 Started 
+[20:46:31]   catalog pronto: t_pronto/jvm/cpu_boot = 3.3,2.077,10.6
+[20:46:31]   assentando 60s e medindo 30s (catalog)
+[20:48:06] serviço: stock
+ Container gerenciador-consumo-stock-1 Creating 
+ Container gerenciador-consumo-stock-1 Created 
+ Container gerenciador-consumo-stock-1 Starting 
+ Container gerenciador-consumo-stock-1 Started 
+[20:48:13]   stock pronto: t_pronto/jvm/cpu_boot = 3.4,2.148,10.5
+[20:48:13]   assentando 60s e medindo 30s (stock)
+[20:49:48] serviço: reservation
+ Container gerenciador-consumo-reservation-1 Creating 
+ Container gerenciador-consumo-reservation-1 Created 
+ Container gerenciador-consumo-reservation-1 Starting 
+ Container gerenciador-consumo-reservation-1 Started 
+[20:49:55]   reservation pronto: t_pronto/jvm/cpu_boot = 4.9,2.676,12.5
+[20:49:55]   assentando 60s e medindo 30s (reservation)
+[20:51:30] serviço: admission
+ Container gerenciador-consumo-admission-1 Creating 
+ Container gerenciador-consumo-admission-1 Created 
+ Container gerenciador-consumo-admission-1 Starting 
+ Container gerenciador-consumo-admission-1 Started 
+[20:51:37]   admission pronto: t_pronto/jvm/cpu_boot = 5.0,2.729,12.3
+[20:51:37]   assentando 60s e medindo 30s (admission)
+[20:53:12] serviço: notification
+ Container gerenciador-consumo-notification-1 Creating 
+ Container gerenciador-consumo-notification-1 Created 
+ Container gerenciador-consumo-notification-1 Starting 
+ Container gerenciador-consumo-notification-1 Started 
+[20:53:18]   notification pronto: t_pronto/jvm/cpu_boot = 3.5,1.927,6.4
+[20:53:18]   assentando 60s e medindo 30s (notification)
+[20:54:54] serviço: backend
+ Container gerenciador-consumo-backend-1 Creating 
+ Container gerenciador-consumo-backend-1 Created 
+ Container gerenciador-consumo-backend-1 Starting 
+ Container gerenciador-consumo-backend-1 Started 
+[20:55:00]   backend pronto: t_pronto/jvm/cpu_boot = 5.0,3.583,17.2
+[20:55:00]   assentando 60s e medindo 30s (backend)
+[20:56:36] serviço: frontend
+ Container gerenciador-consumo-frontend-1 Creating 
+ Container gerenciador-consumo-frontend-1 Created 
+ Container gerenciador-consumo-frontend-1 Starting 
+ Container gerenciador-consumo-frontend-1 Started 
+[20:56:43]   frontend pronto: t_pronto/jvm/cpu_boot = 6.4,,0.1
+[20:56:43]   assentando 60s e medindo 30s (frontend)
+[20:58:18] réplica: identity
+ Container gerenciador-consumo-identity-2 Creating 
+ Container gerenciador-consumo-identity-2 Created 
+[20:58:25]   identity+1 pronto: t_pronto/jvm/cpu_boot = 4.8,2.583,12.7
+[20:58:25]   assentando 60s e medindo 30s (identity+1)
+[21:00:00] réplica: catalog
+ Container gerenciador-consumo-catalog-2 Creating 
+ Container gerenciador-consumo-catalog-2 Created 
+[21:00:07]   catalog+1 pronto: t_pronto/jvm/cpu_boot = 3.4,2.345,12.2
+[21:00:07]   assentando 60s e medindo 30s (catalog+1)
+[21:01:42] réplica: reservation
+ Container gerenciador-consumo-reservation-2 Creating 
+ Container gerenciador-consumo-reservation-2 Created 
+[21:01:49]   reservation+1 pronto: t_pronto/jvm/cpu_boot = 4.7,2.626,13.3
+[21:01:49]   assentando 60s e medindo 30s (reservation+1)
+[21:03:24] réplica: admission
+ Container gerenciador-consumo-admission-2 Creating 
+ Container gerenciador-consumo-admission-2 Created 
+[21:03:31]   admission+1 pronto: t_pronto/jvm/cpu_boot = 4.8,2.693,12.3
+[21:03:31]   assentando 60s e medindo 30s (admission+1)
+[21:05:07] réplica: notification
+ Container gerenciador-consumo-notification-2 Creating 
+ Container gerenciador-consumo-notification-2 Created 
+[21:05:13]   notification+1 pronto: t_pronto/jvm/cpu_boot = 3.4,1.633,7.0
+[21:05:13]   assentando 60s e medindo 30s (notification+1)
+[21:06:49] réplica: backend
+ Container gerenciador-consumo-backend-2 Creating 
+ Container gerenciador-consumo-backend-2 Created 
+[21:06:55]   backend+1 pronto: t_pronto/jvm/cpu_boot = 4.9,3.567,16.5
+[21:06:55]   assentando 60s e medindo 30s (backend+1)
+[21:08:31] fim: carga/results/12-consumo-subida/brutos/servicos-rep2.csv
+[21:09:35] fase=servicos rep=3 project=gerenciador-consumo saída=carga/results/12-consumo-subida/brutos/servicos-rep3.csv
+[21:09:36] passo 0: vazio (só a VM e o amostrador)
+[21:09:36]   assentando 60s e medindo 30s (vazio)
+[21:11:11] infra: db
+ Network gerenciador-consumo_default Creating 
+ Network gerenciador-consumo_default Creating 
+ Volume gerenciador-consumo_db-config Creating 
+ Volume gerenciador-consumo_supabase-db-data Creating 
+ Volume gerenciador-consumo_supabase-db-data Creating 
+ Volume gerenciador-consumo_db-config Creating 
+ Volume gerenciador-consumo_db-config Created 
+ Volume gerenciador-consumo_db-config Created 
+ Volume gerenciador-consumo_supabase-db-data Created 
+ Volume gerenciador-consumo_supabase-db-data Created 
+ Network gerenciador-consumo_default Created 
+ Network gerenciador-consumo_default Created 
+ Container gerenciador-consumo-db-1 Creating 
+ Container gerenciador-consumo-db-1 Created 
+ Container gerenciador-consumo-db-1 Starting 
+ Container gerenciador-consumo-db-1 Started 
+[21:11:18]   db pronto: t_pronto/jvm/cpu_boot = 6.6,,1.7
+[21:11:18]   assentando 60s e medindo 30s (db)
+[21:12:53] infra: supabase-pooler
+ Container gerenciador-consumo-supabase-pooler-1 Creating 
+ Container gerenciador-consumo-supabase-pooler-1 Created 
+ Container gerenciador-consumo-supabase-pooler-1 Starting 
+ Container gerenciador-consumo-supabase-pooler-1 Started 
+[21:13:00]   supabase-pooler pronto: t_pronto/jvm/cpu_boot = 6.6,,11.0
+[21:13:00]   assentando 60s e medindo 30s (supabase-pooler)
+[21:14:35] infra: redpanda
+ Volume gerenciador-consumo_redpanda-data Creating 
+ Volume gerenciador-consumo_redpanda-data Creating 
+ Volume gerenciador-consumo_redpanda-data Created 
+ Volume gerenciador-consumo_redpanda-data Created 
+ Container gerenciador-consumo-redpanda-1 Creating 
+ Container gerenciador-consumo-redpanda-1 Created 
+ Container gerenciador-consumo-redpanda-1 Starting 
+ Container gerenciador-consumo-redpanda-1 Started 
+[21:14:42]   redpanda pronto: t_pronto/jvm/cpu_boot = 6.4,,0.2
+[21:14:42]   assentando 60s e medindo 30s (redpanda)
+[21:16:17] infra: redis
+ Container gerenciador-consumo-redis-1 Creating 
+ Container gerenciador-consumo-redis-1 Created 
+ Container gerenciador-consumo-redis-1 Starting 
+ Container gerenciador-consumo-redis-1 Started 
+[21:16:24]   redis pronto: t_pronto/jvm/cpu_boot = 6.4,,0.1
+[21:16:24]   assentando 60s e medindo 30s (redis)
+[21:17:59] infra: rabbitmq
+ Container gerenciador-consumo-rabbitmq-1 Creating 
+ Container gerenciador-consumo-rabbitmq-1 Created 
+ Container gerenciador-consumo-rabbitmq-1 Starting 
+ Container gerenciador-consumo-rabbitmq-1 Started 
+[21:18:06]   rabbitmq pronto: t_pronto/jvm/cpu_boot = 6.5,,7.2
+[21:18:06]   assentando 60s e medindo 30s (rabbitmq)
+[21:19:41] infra: mailpit
+ Container gerenciador-consumo-mailpit-1 Creating 
+ Container gerenciador-consumo-mailpit-1 Created 
+ Container gerenciador-consumo-mailpit-1 Starting 
+ Container gerenciador-consumo-mailpit-1 Started 
+[21:19:43]   mailpit pronto: t_pronto/jvm/cpu_boot = 1.6,,0.1
+[21:19:43]   assentando 60s e medindo 30s (mailpit)
+ Container gerenciador-consumo-stock-seek-1 Creating 
+ Container gerenciador-consumo-notification-seek-1 Creating 
+ Container gerenciador-consumo-stock-seek-1 Created 
+ Container gerenciador-consumo-notification-seek-1 Created 
+ Container gerenciador-consumo-stock-seek-1 Starting 
+ Container gerenciador-consumo-notification-seek-1 Starting 
+ Container gerenciador-consumo-stock-seek-1 Started 
+ Container gerenciador-consumo-notification-seek-1 Started 
+[21:21:21] serviço: identity
+ Volume gerenciador-consumo_identity-keys Creating 
+ Volume gerenciador-consumo_identity-keys Creating 
+ Volume gerenciador-consumo_identity-keys Created 
+ Volume gerenciador-consumo_identity-keys Created 
+ Container gerenciador-consumo-identity-1 Creating 
+ Container gerenciador-consumo-identity-1 Created 
+ Container gerenciador-consumo-identity-1 Starting 
+ Container gerenciador-consumo-identity-1 Started 
+[21:21:28]   identity pronto: t_pronto/jvm/cpu_boot = 4.9,2.933,12.9
+[21:21:28]   assentando 60s e medindo 30s (identity)
+[21:23:03] serviço: catalog
+ Container gerenciador-consumo-catalog-1 Creating 
+ Container gerenciador-consumo-catalog-1 Created 
+ Container gerenciador-consumo-catalog-1 Starting 
+ Container gerenciador-consumo-catalog-1 Started 
+[21:23:09]   catalog pronto: t_pronto/jvm/cpu_boot = 3.4,2.054,10.6
+[21:23:09]   assentando 60s e medindo 30s (catalog)
+[21:24:44] serviço: stock
+ Container gerenciador-consumo-stock-1 Creating 
+ Container gerenciador-consumo-stock-1 Created 
+ Container gerenciador-consumo-stock-1 Starting 
+ Container gerenciador-consumo-stock-1 Started 
+[21:24:51]   stock pronto: t_pronto/jvm/cpu_boot = 3.5,2.199,10.9
+[21:24:51]   assentando 60s e medindo 30s (stock)
+[21:26:26] serviço: reservation
+ Container gerenciador-consumo-reservation-1 Creating 
+ Container gerenciador-consumo-reservation-1 Created 
+ Container gerenciador-consumo-reservation-1 Starting 
+ Container gerenciador-consumo-reservation-1 Started 
+[21:26:33]   reservation pronto: t_pronto/jvm/cpu_boot = 4.9,2.826,13.5
+[21:26:33]   assentando 60s e medindo 30s (reservation)
+[21:28:08] serviço: admission
+ Container gerenciador-consumo-admission-1 Creating 
+ Container gerenciador-consumo-admission-1 Created 
+ Container gerenciador-consumo-admission-1 Starting 
+ Container gerenciador-consumo-admission-1 Started 
+[21:28:15]   admission pronto: t_pronto/jvm/cpu_boot = 5.0,2.737,12.1
+[21:28:15]   assentando 60s e medindo 30s (admission)
+[21:29:50] serviço: notification
+ Container gerenciador-consumo-notification-1 Creating 
+ Container gerenciador-consumo-notification-1 Created 
+ Container gerenciador-consumo-notification-1 Starting 
+ Container gerenciador-consumo-notification-1 Started 
+[21:29:56]   notification pronto: t_pronto/jvm/cpu_boot = 3.5,1.86,6.4
+[21:29:57]   assentando 60s e medindo 30s (notification)
+[21:31:32] serviço: backend
+ Container gerenciador-consumo-backend-1 Creating 
+ Container gerenciador-consumo-backend-1 Created 
+ Container gerenciador-consumo-backend-1 Starting 
+ Container gerenciador-consumo-backend-1 Started 
+[21:31:39]   backend pronto: t_pronto/jvm/cpu_boot = 5.0,3.519,15.6
+[21:31:39]   assentando 60s e medindo 30s (backend)
+[21:33:14] serviço: frontend
+ Container gerenciador-consumo-frontend-1 Creating 
+ Container gerenciador-consumo-frontend-1 Created 
+ Container gerenciador-consumo-frontend-1 Starting 
+ Container gerenciador-consumo-frontend-1 Started 
+[21:33:21]   frontend pronto: t_pronto/jvm/cpu_boot = 6.5,,0.1
+[21:33:21]   assentando 60s e medindo 30s (frontend)
+[21:34:57] réplica: identity
+ Container gerenciador-consumo-identity-2 Creating 
+ Container gerenciador-consumo-identity-2 Created 
+[21:35:03]   identity+1 pronto: t_pronto/jvm/cpu_boot = 4.9,2.678,13.0
+[21:35:03]   assentando 60s e medindo 30s (identity+1)
+[21:36:39] réplica: catalog
+ Container gerenciador-consumo-catalog-2 Creating 
+ Container gerenciador-consumo-catalog-2 Created 
+[21:36:45]   catalog+1 pronto: t_pronto/jvm/cpu_boot = 3.4,2.396,12.2
+[21:36:45]   assentando 60s e medindo 30s (catalog+1)
+[21:38:21] réplica: reservation
+ Container gerenciador-consumo-reservation-2 Creating 
+ Container gerenciador-consumo-reservation-2 Created 
+[21:38:27]   reservation+1 pronto: t_pronto/jvm/cpu_boot = 4.8,2.696,12.3
+[21:38:27]   assentando 60s e medindo 30s (reservation+1)
+[21:40:03] réplica: admission
+ Container gerenciador-consumo-admission-2 Creating 
+ Container gerenciador-consumo-admission-2 Created 
+[21:40:09]   admission+1 pronto: t_pronto/jvm/cpu_boot = 4.8,2.805,13.3
+[21:40:09]   assentando 60s e medindo 30s (admission+1)
+[21:41:45] réplica: notification
+ Container gerenciador-consumo-notification-2 Creating 
+ Container gerenciador-consumo-notification-2 Created 
+[21:41:51]   notification+1 pronto: t_pronto/jvm/cpu_boot = 3.4,1.634,6.6
+[21:41:51]   assentando 60s e medindo 30s (notification+1)
+[21:43:27] réplica: backend
+ Container gerenciador-consumo-backend-2 Creating 
+ Container gerenciador-consumo-backend-2 Created 
+[21:43:34]   backend+1 pronto: t_pronto/jvm/cpu_boot = 5.0,3.707,18.9
+[21:43:34]   assentando 60s e medindo 30s (backend+1)
+[21:45:10] fim: carga/results/12-consumo-subida/brutos/servicos-rep3.csv
