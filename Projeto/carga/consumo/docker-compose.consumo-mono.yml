@@ -1,0 +1,23 @@
+# Override da medição de consumo de subida (carga/consumo/medir-consumo.sh, fase `monolito`), aplicado sobre o
+# docker-compose.yml do monólito pré-#32 (commit 2980675, num git worktree):
+#   docker compose -p gerenciador-consumo-mono -f <worktree>/Projeto/docker-compose.yml -f carga/consumo/docker-compose.consumo-mono.yml ...
+# Project ISOLADO: sem container_name, sem porta no host, rede <project>_default. Nada mais muda.
+services:
+  db: &isolado
+    container_name: !reset null
+    ports: !reset []
+  redpanda: *isolado
+  backend: *isolado
+  frontend: *isolado
+  supabase-pooler: *isolado
+  meta: *isolado
+  kong: *isolado
+  studio:
+    <<: *isolado
+    volumes: !reset []
+    tmpfs:
+      - /app/snippets
+
+networks:
+  default:
+    name: !reset null
