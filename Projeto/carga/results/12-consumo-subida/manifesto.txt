@@ -1,0 +1,39 @@
+data: 2026-11-22 19:11:25 -0300
+HEAD: c09abf031304443f472b3193059bda416006412c
+git status --short Projeto/carga/consumo:
+?? Projeto/carga/consumo/
+commit worktree monolito: 2980675cd3fb4c76be8f70da5d8a448f7a414ac2
+sha256:
+08d49e5fe87abd50578fac0e6b2a9dfa5ef0f9824506e773da9c76c3f7796225 *medir-consumo.sh
+55d39a99dddbcd9e342e78cfd24e6b92fd19de0759deb897eb68060c2d8c6778 *docker-compose.consumo.yml
+f0f1923cff8b7e81aff8d7775e029e7d12697a6373b446da9a55d3b4eadf7874 *docker-compose.consumo-mono.yml
+docker server: 29.8.2
+tempo gerador slim (s, tentativa 2): 471
+imagem -> ID -> tamanho(bytes):
+supabase/postgres:17.6.1.136 -> sha256:f371b5f3f2ac0a05703f33d6e6134515fb2498cab708fb948a0aeb7481467c00 -> 1693904961
+supabase/supavisor:2.9.13 -> sha256:07f1a6098ffc04b80263bca4eb5c3e7bd2e03dfd1fc465aa108d7329000a1a4e -> 1592031509
+docker.redpanda.com/redpandadata/redpanda:v26.2.4 -> sha256:c98c2f04a751e6646012cc701bac5183252cee44c88ba1dfa412e4c7124f2e89 -> 498763694
+redis:7.4.12-alpine -> sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe -> 57976413
+rabbitmq:4.1.8-alpine -> sha256:cd4009416f83d7e5895020cd71b0963f3b8a4dfc3de74bbb6fb3bfe5f81f01e0 -> 255228478
+axllent/mailpit:v1.31.6 -> sha256:23fe39e81bde596a918000b3135c0f85dc8bb4c9ea6be274b051143f3e300387 -> 59843746
+alpine:3.20 -> sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc -> 12102484
+gerenciador-eventos-backend.slim:consumo -> sha256:4f54651b372d8ca80ef715ba0a080d1cc4dd79ef4896f2ed2da9555340608e25 -> 458001476
+gerenciador-eventos-identity.slim:consumo -> sha256:ddcae6d1d53f3f64ecbcead3dc4159a1e4593f9bd0c344231db2eeaadf804f49 -> 390968903
+gerenciador-eventos-catalog.slim:consumo -> sha256:1f65c03d89a19369a3cbb19e995e7e82d7d1a3103effd37eec1038761ef2e353 -> 389139719
+gerenciador-eventos-reservation.slim:consumo -> sha256:7e68d73689616ecceb1f17909cfbfe9524f796d04c1fd6f3a49bb1796b02819f -> 389155310
+gerenciador-eventos-stock.slim:consumo -> sha256:a5f1411eeddcccaccf7724510c0e6d937ba5f50878623e2df65d67ea966d58ca -> 389059621
+gerenciador-eventos-notification.slim:consumo -> sha256:2c1f0b24fe61f9c88c218cdc385c983ac9af89041ce118d8bc1c01b6412c70f1 -> 371780626
+gerenciador-eventos-admission.slim:consumo -> sha256:50db6d068163035d91300a15f2c0632070bf5639d30877177cc26a68f89715c4 -> 370522126
+gerenciador-consumo-frontend -> sha256:2336a42ae599afa1e5fdad4c298a953e2dcb6124b595b9555c933cee398edee1 -> 52336383
+gerenciador-consumo-mono-backend -> sha256:8233194408f09310d38880114c13be851853cab155b5f9258be8b58078afddfb -> 588499297
+
+## Script congelado para as repetições (2026-11-22 19:31:05), depois do ensaio (correções: tópico identity.notification antes dos one-shots; t_pronto,jvm,cpu_boot separados por vírgula)
+4c8d5a4c8045067b01293b4d074fa0543df0c55bc08dceba0a1e39f2700764a0 *carga/consumo/medir-consumo.sh
+55d39a99dddbcd9e342e78cfd24e6b92fd19de0759deb897eb68060c2d8c6778 *carga/consumo/docker-compose.consumo.yml
+f0f1923cff8b7e81aff8d7775e029e7d12697a6373b446da9a55d3b4eadf7874 *carga/consumo/docker-compose.consumo-mono.yml
+
+## 2026-11-22 20:29:30: rep2 de servicos abortou (admission sem abrir a 8085 em 300 s; não reproduziu em 6 subidas isoladas). CSV parcial guardado como descartado-*. Script ganhou só o dump de log/health no timeout (caminho de falha; medição idêntica à da rep1):
+494aeae2da43aac82377a77360413e532fd19be56a2aa79045ff17e7ea2930af *carga/consumo/medir-consumo.sh
+
+## 2026-11-22 20:32:43: causa das duas falhas = bug no prazo do esperar_pronto (awk 'print a+e' formata o epoch com %.6g, arredonda a 10^4 s; o prazo caía no passado e abortava na hora, em ~metade de cada ciclo de 2,8 h). Corrigido com printf %.3f. Só o prazo mudou; rep1 e ensaio rodaram na janela em que o prazo era futuro, medição idêntica. Tentativas descartadas em brutos/descartados/.
+2258b5ffe0a5c1357ff953dae1014916d61cf52b8617fdce0c5ad453ff090205 *carga/consumo/medir-consumo.sh

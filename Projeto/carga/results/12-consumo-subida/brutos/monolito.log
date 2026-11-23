@@ -1,0 +1,159 @@
+[21:46:56] fase=monolito rep=1 project=gerenciador-consumo-mono saída=carga/results/12-consumo-subida/brutos/monolito-rep1.csv
+[21:46:57] passo 0: vazio (só a VM e o amostrador)
+[21:46:57]   assentando 60s e medindo 30s (vazio)
+[21:48:32] infra: db
+ Network gerenciador-consumo-mono_default Creating 
+ Network gerenciador-consumo-mono_default Creating 
+ Volume gerenciador-consumo-mono_supabase-db-data Creating 
+ Volume gerenciador-consumo-mono_db-config Creating 
+ Volume gerenciador-consumo-mono_db-config Creating 
+ Volume gerenciador-consumo-mono_supabase-db-data Creating 
+ Volume gerenciador-consumo-mono_supabase-db-data Created 
+ Volume gerenciador-consumo-mono_supabase-db-data Created 
+ Volume gerenciador-consumo-mono_db-config Created 
+ Volume gerenciador-consumo-mono_db-config Created 
+ Network gerenciador-consumo-mono_default Created 
+ Network gerenciador-consumo-mono_default Created 
+ Container gerenciador-consumo-mono-db-1 Creating 
+ Container gerenciador-consumo-mono-db-1 Created 
+ Container gerenciador-consumo-mono-db-1 Starting 
+ Container gerenciador-consumo-mono-db-1 Started 
+[21:48:39]   db pronto: t_pronto/jvm/cpu_boot = 6.6,,1.7
+[21:48:40]   assentando 60s e medindo 30s (db)
+[21:50:15] infra: supabase-pooler
+ Container gerenciador-consumo-mono-supabase-pooler-1 Creating 
+ Container gerenciador-consumo-mono-supabase-pooler-1 Created 
+ Container gerenciador-consumo-mono-supabase-pooler-1 Starting 
+ Container gerenciador-consumo-mono-supabase-pooler-1 Started 
+[21:50:21]   supabase-pooler pronto: t_pronto/jvm/cpu_boot = 6.6,,11.1
+[21:50:21]   assentando 60s e medindo 30s (supabase-pooler)
+[21:51:57] infra: redpanda
+ Volume gerenciador-consumo-mono_redpanda-data Creating 
+ Volume gerenciador-consumo-mono_redpanda-data Creating 
+ Volume gerenciador-consumo-mono_redpanda-data Created 
+ Volume gerenciador-consumo-mono_redpanda-data Created 
+ Container gerenciador-consumo-mono-redpanda-1 Creating 
+ Container gerenciador-consumo-mono-redpanda-1 Created 
+ Container gerenciador-consumo-mono-redpanda-1 Starting 
+ Container gerenciador-consumo-mono-redpanda-1 Started 
+[21:52:03]   redpanda pronto: t_pronto/jvm/cpu_boot = 6.4,,0.2
+[21:52:03]   assentando 60s e medindo 30s (redpanda)
+[21:53:38] serviço: backend
+ Container gerenciador-consumo-mono-backend-1 Creating 
+ Container gerenciador-consumo-mono-backend-1 Created 
+ Container gerenciador-consumo-mono-backend-1 Starting 
+ Container gerenciador-consumo-mono-backend-1 Started 
+[21:53:44]   backend pronto: t_pronto/jvm/cpu_boot = 4.9,3.828,16.4
+[21:53:44]   assentando 60s e medindo 30s (backend)
+[21:55:19] réplica: backend
+ Container gerenciador-consumo-mono-backend-2 Creating 
+ Container gerenciador-consumo-mono-backend-2 Created 
+[21:55:24]   backend+1 pronto: t_pronto/jvm/cpu_boot = 4.7,3.635,17.1
+[21:55:24]   assentando 60s e medindo 30s (backend+1)
+[21:56:59] fim: carga/results/12-consumo-subida/brutos/monolito-rep1.csv
+[21:58:01] fase=monolito rep=2 project=gerenciador-consumo-mono saída=carga/results/12-consumo-subida/brutos/monolito-rep2.csv
+[21:58:03] passo 0: vazio (só a VM e o amostrador)
+[21:58:03]   assentando 60s e medindo 30s (vazio)
+[21:59:38] infra: db
+ Network gerenciador-consumo-mono_default Creating 
+ Network gerenciador-consumo-mono_default Creating 
+ Volume gerenciador-consumo-mono_db-config Creating 
+ Volume gerenciador-consumo-mono_supabase-db-data Creating 
+ Volume gerenciador-consumo-mono_db-config Creating 
+ Volume gerenciador-consumo-mono_supabase-db-data Creating 
+ Volume gerenciador-consumo-mono_supabase-db-data Created 
+ Volume gerenciador-consumo-mono_supabase-db-data Created 
+ Volume gerenciador-consumo-mono_db-config Created 
+ Volume gerenciador-consumo-mono_db-config Created 
+ Network gerenciador-consumo-mono_default Created 
+ Network gerenciador-consumo-mono_default Created 
+ Container gerenciador-consumo-mono-db-1 Creating 
+ Container gerenciador-consumo-mono-db-1 Created 
+ Container gerenciador-consumo-mono-db-1 Starting 
+ Container gerenciador-consumo-mono-db-1 Started 
+[21:59:45]   db pronto: t_pronto/jvm/cpu_boot = 6.6,,1.6
+[21:59:45]   assentando 60s e medindo 30s (db)
+[22:01:20] infra: supabase-pooler
+ Container gerenciador-consumo-mono-supabase-pooler-1 Creating 
+ Container gerenciador-consumo-mono-supabase-pooler-1 Created 
+ Container gerenciador-consumo-mono-supabase-pooler-1 Starting 
+ Container gerenciador-consumo-mono-supabase-pooler-1 Started 
+[22:01:26]   supabase-pooler pronto: t_pronto/jvm/cpu_boot = 6.6,,11.0
+[22:01:27]   assentando 60s e medindo 30s (supabase-pooler)
+[22:03:02] infra: redpanda
+ Volume gerenciador-consumo-mono_redpanda-data Creating 
+ Volume gerenciador-consumo-mono_redpanda-data Creating 
+ Volume gerenciador-consumo-mono_redpanda-data Created 
+ Volume gerenciador-consumo-mono_redpanda-data Created 
+ Container gerenciador-consumo-mono-redpanda-1 Creating 
+ Container gerenciador-consumo-mono-redpanda-1 Created 
+ Container gerenciador-consumo-mono-redpanda-1 Starting 
+ Container gerenciador-consumo-mono-redpanda-1 Started 
+[22:03:09]   redpanda pronto: t_pronto/jvm/cpu_boot = 6.6,,0.2
+[22:03:09]   assentando 60s e medindo 30s (redpanda)
+[22:04:44] serviço: backend
+ Container gerenciador-consumo-mono-backend-1 Creating 
+ Container gerenciador-consumo-mono-backend-1 Created 
+ Container gerenciador-consumo-mono-backend-1 Starting 
+ Container gerenciador-consumo-mono-backend-1 Started 
+[22:04:49]   backend pronto: t_pronto/jvm/cpu_boot = 4.9,3.87,16.2
+[22:04:49]   assentando 60s e medindo 30s (backend)
+[22:06:24] réplica: backend
+ Container gerenciador-consumo-mono-backend-2 Creating 
+ Container gerenciador-consumo-mono-backend-2 Created 
+[22:06:29]   backend+1 pronto: t_pronto/jvm/cpu_boot = 4.8,3.717,16.8
+[22:06:29]   assentando 60s e medindo 30s (backend+1)
+[22:08:04] fim: carga/results/12-consumo-subida/brutos/monolito-rep2.csv
+[22:09:07] fase=monolito rep=3 project=gerenciador-consumo-mono saída=carga/results/12-consumo-subida/brutos/monolito-rep3.csv
+[22:09:08] passo 0: vazio (só a VM e o amostrador)
+[22:09:08]   assentando 60s e medindo 30s (vazio)
+[22:10:43] infra: db
+ Network gerenciador-consumo-mono_default Creating 
+ Volume gerenciador-consumo-mono_db-config Creating 
+ Volume gerenciador-consumo-mono_db-config Creating 
+ Network gerenciador-consumo-mono_default Creating 
+ Volume gerenciador-consumo-mono_supabase-db-data Creating 
+ Volume gerenciador-consumo-mono_supabase-db-data Creating 
+ Volume gerenciador-consumo-mono_supabase-db-data Created 
+ Volume gerenciador-consumo-mono_supabase-db-data Created 
+ Volume gerenciador-consumo-mono_db-config Created 
+ Volume gerenciador-consumo-mono_db-config Created 
+ Network gerenciador-consumo-mono_default Created 
+ Network gerenciador-consumo-mono_default Created 
+ Container gerenciador-consumo-mono-db-1 Creating 
+ Container gerenciador-consumo-mono-db-1 Created 
+ Container gerenciador-consumo-mono-db-1 Starting 
+ Container gerenciador-consumo-mono-db-1 Started 
+[22:10:50]   db pronto: t_pronto/jvm/cpu_boot = 6.5,,1.6
+[22:10:50]   assentando 60s e medindo 30s (db)
+[22:12:25] infra: supabase-pooler
+ Container gerenciador-consumo-mono-supabase-pooler-1 Creating 
+ Container gerenciador-consumo-mono-supabase-pooler-1 Created 
+ Container gerenciador-consumo-mono-supabase-pooler-1 Starting 
+ Container gerenciador-consumo-mono-supabase-pooler-1 Started 
+[22:12:32]   supabase-pooler pronto: t_pronto/jvm/cpu_boot = 6.6,,11.0
+[22:12:32]   assentando 60s e medindo 30s (supabase-pooler)
+[22:14:07] infra: redpanda
+ Volume gerenciador-consumo-mono_redpanda-data Creating 
+ Volume gerenciador-consumo-mono_redpanda-data Creating 
+ Volume gerenciador-consumo-mono_redpanda-data Created 
+ Volume gerenciador-consumo-mono_redpanda-data Created 
+ Container gerenciador-consumo-mono-redpanda-1 Creating 
+ Container gerenciador-consumo-mono-redpanda-1 Created 
+ Container gerenciador-consumo-mono-redpanda-1 Starting 
+ Container gerenciador-consumo-mono-redpanda-1 Started 
+[22:14:13]   redpanda pronto: t_pronto/jvm/cpu_boot = 6.3,,0.2
+[22:14:13]   assentando 60s e medindo 30s (redpanda)
+[22:15:49] serviço: backend
+ Container gerenciador-consumo-mono-backend-1 Creating 
+ Container gerenciador-consumo-mono-backend-1 Created 
+ Container gerenciador-consumo-mono-backend-1 Starting 
+ Container gerenciador-consumo-mono-backend-1 Started 
+[22:15:54]   backend pronto: t_pronto/jvm/cpu_boot = 4.8,3.83,16.3
+[22:15:54]   assentando 60s e medindo 30s (backend)
+[22:17:29] réplica: backend
+ Container gerenciador-consumo-mono-backend-2 Creating 
+ Container gerenciador-consumo-mono-backend-2 Created 
+[22:17:34]   backend+1 pronto: t_pronto/jvm/cpu_boot = 4.7,3.685,16.5
+[22:17:34]   assentando 60s e medindo 30s (backend+1)
+[22:19:09] fim: carga/results/12-consumo-subida/brutos/monolito-rep3.csv
